@@ -3504,6 +3504,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     print("response=", response)
     assert "keys" in response
@@ -3528,6 +3529,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     print("pagination response=", response)
     assert len(response["keys"]) == 2
@@ -3568,6 +3570,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     print("filtered user_id response=", response)
     assert len(response["keys"]) == 1
@@ -3589,6 +3592,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     assert len(response["keys"]) == 1
     assert _key in response["keys"]

@@ -3630,6 +3630,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             otel_config = OpenTelemetryConfig(
                 exporter=arize_config.protocol,
                 endpoint=arize_config.endpoint,
+                service_name=arize_config.project_name,
             )
 
             os.environ[

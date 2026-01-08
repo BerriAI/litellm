@@ -2,4 +2,7 @@ model_list:
   - model_name: anthropic/*
     litellm_params:
       model: anthropic/*
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
 
