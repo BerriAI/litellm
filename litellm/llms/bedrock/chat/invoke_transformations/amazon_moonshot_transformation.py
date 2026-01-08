@@ -7,7 +7,7 @@ Model format: bedrock/moonshot.kimi-k2-thinking-v1:0
 Reference: https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-bedrock-fully-managed-open-weight-models/
 """
 
-from typing import TYPE_CHECKING, Any, List, Optional
+from typing import TYPE_CHECKING, Any, List, Optional, Union
 import re
 
 import httpx
@@ -18,6 +18,7 @@ from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.moonshot.chat.transformation import MoonshotChatConfig
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.utils import Choices
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -234,7 +235,8 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         # Extract reasoning content from <reasoning> tags
         if model_response.choices and len(model_response.choices) > 0:
             for choice in model_response.choices:
-                if choice.message and choice.message.content:
+                # Only process Choices (not StreamingChoices) which have message attribute
+                if isinstance(choice, Choices) and choice.message and choice.message.content:
                     reasoning_content, main_content = self._extract_reasoning_from_content(
                         choice.message.content
                     )
@@ -248,7 +250,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         return model_response
 
     def get_error_class(
-        self, error_message: str, status_code: int, headers: httpx.Headers
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BedrockError:
         """Return the appropriate error class for Bedrock."""
         return BedrockError(status_code=status_code, message=error_message)
