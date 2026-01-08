@@ -31,8 +31,8 @@ class FocusLiteLLMDatabase:
         """Return usage data for the requested window."""
         client = self._ensure_prisma_client()
 
-        where_clauses = []
-        query_params = []
+        where_clauses: list[str] = []
+        query_params: list[Any] = []
         placeholder_index = 1
         if start_time_utc:
             where_clauses.append(f"dus.updated_at >= ${placeholder_index}::timestamptz")
