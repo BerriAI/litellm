@@ -130,10 +130,7 @@ class FocusLogger(CustomLogger):
 
     async def initialize_focus_export_job(self) -> None:
         """Entry point for scheduler jobs to run export cycle with locking."""
-        try:
-            from litellm.proxy.proxy_server import proxy_logging_obj
-        except ImportError:
-            proxy_logging_obj = None
+        from litellm.proxy.proxy_server import proxy_logging_obj
 
         pod_lock_manager = None
         if proxy_logging_obj is not None:
