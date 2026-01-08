@@ -1,4 +1,4 @@
-from typing import TYPE_CHECKING, Any, Dict, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
 
@@ -168,6 +168,75 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Transform Manus API response to OpenAI-compatible format.
         
         Manus uses camelCase (createdAt) instead of snake_case (created_at).
+        """
+        try:
+            logging_obj.post_call(
+                original_response=raw_response.text,
+                additional_args={"complete_input_dict": {}},
+            )
+            raw_response_json = raw_response.json()
+            
+            # Manus uses camelCase "createdAt" instead of snake_case "created_at"
+            if "createdAt" in raw_response_json and "created_at" not in raw_response_json:
+                raw_response_json["created_at"] = _safe_convert_created_field(
+                    raw_response_json["createdAt"]
+                )
+            
+            # Ensure created_at is set
+            if "created_at" in raw_response_json:
+                raw_response_json["created_at"] = _safe_convert_created_field(
+                    raw_response_json["created_at"]
+                )
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        
+        raw_response_headers = dict(raw_response.headers)
+        processed_headers = process_response_headers(raw_response_headers)
+        
+        try:
+            response = ResponsesAPIResponse(**raw_response_json)
+        except Exception:
+            verbose_logger.debug(
+                f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
+            )
+            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+        
+        # Store processed headers in additional_headers so they get returned to the client
+        response._hidden_params["additional_headers"] = processed_headers
+        response._hidden_params["headers"] = raw_response_headers
+        return response
+
+    def transform_get_response_api_request(
+        self,
+        response_id: str,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the get response API request into a URL and data.
+        
+        Manus API follows OpenAI-compatible format:
+        - GET /v1/responses/{response_id}
+        
+        Reference: https://open.manus.im/docs/openai-compatibility
+        """
+        url = f"{api_base}/{response_id}"
+        data: Dict = {}
+        return url, data
+
+    def transform_get_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        """
+        Transform Manus API GET response to OpenAI-compatible format.
+        
+        Manus uses camelCase (createdAt) instead of snake_case (created_at).
+        Same transformation as transform_response_api_response.
         """
         try:
             logging_obj.post_call(
