@@ -227,6 +227,41 @@ def update_breakdown_metrics(
         )
     )
 
+    # Update endpoint breakdown
+    if record.endpoint:
+        if record.endpoint not in breakdown.endpoints:
+            breakdown.endpoints[record.endpoint] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata={},
+            )
+        breakdown.endpoints[record.endpoint].metrics = update_metrics(
+            breakdown.endpoints[record.endpoint].metrics, record
+        )
+
+        # Update API key breakdown for this endpoint
+        if record.api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
+            breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key] = (
+                KeyMetricWithMetadata(
+                    metrics=SpendMetrics(),
+                    metadata=KeyMetadata(
+                        key_alias=api_key_metadata.get(record.api_key, {}).get(
+                            "key_alias", None
+                        ),
+                        team_id=api_key_metadata.get(record.api_key, {}).get(
+                            "team_id", None
+                        ),
+                    ),
+                )
+            )
+        breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics = (
+            update_metrics(
+                breakdown.endpoints[record.endpoint]
+                .api_key_breakdown[record.api_key]
+                .metrics,
+                record,
+            )
+        )
+
     # Update api key breakdown
     if record.api_key not in breakdown.api_keys:
         breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(

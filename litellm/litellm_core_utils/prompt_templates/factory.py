@@ -930,7 +930,8 @@ def create_anthropic_image_param(
     
     # Check if the image URL is an HTTP/HTTPS URL
     if image_url.startswith("http://") or image_url.startswith("https://"):
-        # For Bedrock invoke, always convert URLs to base64 (Bedrock invoke doesn't support URLs)
+        # For Bedrock invoke and Vertex AI Anthropic, always convert URLs to base64
+        # as these providers don't support URL sources for images
         if is_bedrock_invoke or image_url.startswith("http://"):
             base64_url = convert_url_to_base64(url=image_url)
             image_chunk = convert_to_anthropic_image_obj(
@@ -1496,9 +1497,10 @@ def convert_to_gemini_tool_call_result(
                 content_type = content.get("type", "")
                 if content_type == "text":
                     content_str += content.get("text", "")
-                elif content_type == "input_image":
-                    # Extract image for inline_data (for Computer Use screenshots)
-                    image_url = content.get("image_url", "")
+                elif content_type in ("input_image", "image_url"):
+                    # Extract image for inline_data (for Computer Use screenshots and tool results)
+                    image_url_data = content.get("image_url", "")
+                    image_url = image_url_data.get("url", "") if isinstance(image_url_data, dict) else image_url_data
                     
                     if image_url:
                         # Convert image to base64 blob format for Gemini
@@ -2022,9 +2024,12 @@ def anthropic_messages_pt(  # noqa: PLR0915
                                     "format": image_url_value.get("format"),
                                 }
                             # Bedrock invoke models have format: invoke/...
+                            # Vertex AI Anthropic also doesn't support URL sources for images
                             is_bedrock_invoke = model.lower().startswith("invoke/")
+                            is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
+                            force_base64 = is_bedrock_invoke or is_vertex_ai
                             _anthropic_content_element = create_anthropic_image_param(
-                                image_url_input, format=format, is_bedrock_invoke=is_bedrock_invoke
+                                image_url_input, format=format, is_bedrock_invoke=force_base64
                             ) 
                             _content_element = add_cache_control_to_content(
                                 anthropic_content_element=_anthropic_content_element,
@@ -2132,6 +2137,14 @@ def anthropic_messages_pt(  # noqa: PLR0915
                         assistant_content.append(
                             cast(AnthropicMessagesTextParam, _cached_message)
                         )
+                    # handle server_tool_use blocks (tool search, web search, etc.)
+                    # Pass through as-is since these are Anthropic-native content types
+                    elif m.get("type", "") == "server_tool_use":
+                        assistant_content.append(m)  # type: ignore
+                    # handle tool_search_tool_result blocks
+                    # Pass through as-is since these are Anthropic-native content types
+                    elif m.get("type", "") == "tool_search_tool_result":
+                        assistant_content.append(m)  # type: ignore
             elif (
                 "content" in assistant_content_block
                 and isinstance(assistant_content_block["content"], str)
@@ -3163,6 +3176,11 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
+                arguments_dict = json.loads(arguments) if arguments else {}
+                # Ensure arguments_dict is always a dict (Bedrock requires toolUse.input to be an object)
+                # When some providers return arguments: '""' (JSON-encoded empty string), json.loads returns ""
+                if not isinstance(arguments_dict, dict):
+                    arguments_dict = {}
                 if not arguments or not arguments.strip():
                     arguments_dict = {}
                 else:

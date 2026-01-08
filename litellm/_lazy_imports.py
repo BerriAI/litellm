@@ -34,6 +34,8 @@ from ._lazy_imports_registry import (
     DOTPROMPT_NAMES,
     LLM_CONFIG_NAMES,
     TYPES_NAMES,
+    LLM_PROVIDER_LOGIC_NAMES,
+    UTILS_MODULE_NAMES,
     # Import maps
     _UTILS_IMPORT_MAP,
     _COST_CALCULATOR_IMPORT_MAP,
@@ -45,6 +47,8 @@ from ._lazy_imports_registry import (
     _DOTPROMPT_IMPORT_MAP,
     _TYPES_IMPORT_MAP,
     _LLM_CONFIGS_IMPORT_MAP,
+    _LLM_PROVIDER_LOGIC_IMPORT_MAP,
+    _UTILS_MODULE_IMPORT_MAP,
 )
 
 
@@ -56,6 +60,16 @@ def _get_litellm_globals() -> dict:
     When you do `litellm.some_function`, it gets stored in this dictionary.
     """
     return sys.modules["litellm"].__dict__
+
+
+def _get_utils_globals() -> dict:
+    """
+    Get the globals dictionary of the utils module.
+    
+    This is where we cache imported attributes so we don't import them twice.
+    When you do `litellm.utils.some_function`, it gets stored in this dictionary.
+    """
+    return sys.modules["litellm.utils"].__dict__
 
 # These are special lazy loaders for things that are used internally
 # They're separate from the main lazy import system because they have specific use cases
@@ -181,6 +195,10 @@ def _get_lazy_import_registry() -> dict[str, Callable[[str], Any]]:
             _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_configs
         for name in TYPES_NAMES:
             _LAZY_IMPORT_REGISTRY[name] = _lazy_import_types
+        for name in LLM_PROVIDER_LOGIC_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_llm_provider_logic
+        for name in UTILS_MODULE_NAMES:
+            _LAZY_IMPORT_REGISTRY[name] = _lazy_import_utils_module
     
     return _LAZY_IMPORT_REGISTRY
 
@@ -296,6 +314,48 @@ def _lazy_import_llm_configs(name: str) -> Any:
 def _lazy_import_litellm_logging(name: str) -> Any:
     """Handler for litellm_logging module (Logging, modify_integration)"""
     return _generic_lazy_import(name, _LITELLM_LOGGING_IMPORT_MAP, "Litellm logging")
+
+
+def _lazy_import_llm_provider_logic(name: str) -> Any:
+    """Handler for LLM provider logic functions (get_llm_provider, etc.)"""
+    return _generic_lazy_import(name, _LLM_PROVIDER_LOGIC_IMPORT_MAP, "LLM provider logic")
+
+
+def _lazy_import_utils_module(name: str) -> Any:
+    """
+    Handler for utils module lazy imports.
+    
+    This uses a custom implementation because utils module needs to use
+    _get_utils_globals() instead of _get_litellm_globals() for caching.
+    """
+    # Check if this attribute exists in our map
+    if name not in _UTILS_MODULE_IMPORT_MAP:
+        raise AttributeError(f"Utils module lazy import: unknown attribute {name!r}")
+    
+    # Get the cache (where we store imported things) - use utils globals
+    _globals = _get_utils_globals()
+    
+    # If we've already imported it, just return the cached version
+    if name in _globals:
+        return _globals[name]
+    
+    # Look up where to find this attribute
+    module_path, attr_name = _UTILS_MODULE_IMPORT_MAP[name]
+    
+    # Import the module
+    if module_path.startswith("."):
+        module = importlib.import_module(module_path, package="litellm")
+    else:
+        module = importlib.import_module(module_path)
+    
+    # Get the actual attribute from the module
+    value = getattr(module, attr_name)
+    
+    # Cache it so we don't have to import again next time
+    _globals[name] = value
+    
+    # Return it
+    return value
 
 # ============================================================================
 # SPECIAL HANDLERS

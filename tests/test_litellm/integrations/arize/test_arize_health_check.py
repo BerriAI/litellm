@@ -123,7 +123,8 @@ class TestArizeIntegrationWithProxy:
         with patch.dict(os.environ, {
             "ARIZE_SPACE_KEY": "test-space-123",
             "ARIZE_API_KEY": "test-api-456", 
-            "ARIZE_ENDPOINT": "https://custom.arize.com/v1"
+            "ARIZE_ENDPOINT": "https://custom.arize.com/v1",
+            "ARIZE_PROJECT_NAME": "custom-project",
         }):
             config = ArizeLogger.get_arize_config()
             
@@ -131,13 +132,15 @@ class TestArizeIntegrationWithProxy:
             assert config.api_key == "test-api-456"
             assert config.endpoint == "https://custom.arize.com/v1"
             assert config.protocol == "otlp_grpc"
+            assert config.project_name == "custom-project"
 
     def test_arize_get_config_defaults(self):
         """Test ArizeLogger.get_arize_config() with default endpoint."""
         
         with patch.dict(os.environ, {
             "ARIZE_SPACE_KEY": "test-space-default",
-            "ARIZE_API_KEY": "test-api-default"
+            "ARIZE_API_KEY": "test-api-default",
+            "ARIZE_PROJECT_NAME": "default-project",
         }, clear=True):
             config = ArizeLogger.get_arize_config()
             
@@ -145,6 +148,7 @@ class TestArizeIntegrationWithProxy:
             assert config.api_key == "test-api-default"
             assert config.endpoint == "https://otlp.arize.com/v1"  # Default endpoint
             assert config.protocol == "otlp_grpc"  # Default protocol
+            assert config.project_name == "default-project"
 
     def test_arize_construct_dynamic_headers(self):
         """Test dynamic OTEL headers construction for team/key logging."""

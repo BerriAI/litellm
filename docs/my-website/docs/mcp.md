@@ -17,7 +17,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 ## Overview
 | Feature | Description |
 |---------|-------------|
-| MCP Operations | • List Tools<br/>• Call Tools |
+| MCP Operations | • List Tools<br/>• Call Tools <br/>• Prompts <br/>• Resources |
 | Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | • By Key<br/>• By Team<br/>• By Organization |
 
@@ -110,6 +110,22 @@ For stdio MCP servers, select "Standard Input/Output (stdio)" as the transport t
 <br/>
 <br/>
 
+### OAuth Configuration & Overrides
+
+LiteLLM attempts [OAuth 2.0 Authorization Server Discovery](https://datatracker.ietf.org/doc/html/rfc8414) by default. When you create an MCP server in the UI and set `Authentication: OAuth`, LiteLLM will locate the provider metadata, dynamically register a client, and perform PKCE-based authorization without you providing any additional details.
+
+**Customize the OAuth flow when needed:**
+
+<Image 
+  img={require('../img/mcp_oauth.png')}
+  style={{width: '80%', display: 'block', margin: '0'}}
+/>
+
+- **Provide explicit client credentials** – If the MCP provider does not offer dynamic client registration or you prefer to manage the client yourself, fill in `client_id`, `client_secret`, and the desired `scopes`.
+- **Override discovery URLs** – In some environments, LiteLLM might not be able to reach the provider's metadata endpoints. Use the optional `authorization_url`, `token_url`, and `registration_url` fields to point LiteLLM directly to the correct endpoints.
+
+<br/>
+
 ### Static Headers
 
 Sometimes your MCP server needs specific headers on every request. Maybe it's an API key, maybe it's a custom header the server expects. Instead of configuring auth, you can just set them directly.
@@ -182,6 +198,7 @@ mcp_servers:
   - `http` - Streamable HTTP transport
   - `stdio` - Standard Input/Output transport
 - **Command**: The command to execute for stdio transport (required for stdio)
+- **allow_all_keys**: Set to `true` to make the server available to every LiteLLM API key, even if the key/team doesn't list the server in its MCP permissions.
 - **Args**: Array of arguments to pass to the command (optional for stdio)
 - **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server

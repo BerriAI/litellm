@@ -10,6 +10,16 @@
       "response_type": "ContainerFileListResponse"
     },
     {
+      "name": "upload_container_file",
+      "async_name": "aupload_container_file",
+      "path": "/containers/{container_id}/files",
+      "method": "POST",
+      "path_params": ["container_id"],
+      "query_params": [],
+      "response_type": "ContainerFileObject",
+      "is_multipart": true
+    },
+    {
       "name": "retrieve_container_file",
       "async_name": "aretrieve_container_file",
       "path": "/containers/{container_id}/files/{file_id}",

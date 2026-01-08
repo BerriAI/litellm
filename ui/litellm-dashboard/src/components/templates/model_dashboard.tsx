@@ -1021,7 +1021,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
           {selectedModelId ? (
             <ModelInfoView
               modelId={selectedModelId}
-              editModel={true}
               onClose={() => {
                 setSelectedModelId(null);
                 setEditModel(false);
@@ -1030,8 +1029,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
-              setEditModalVisible={setEditModalVisible}
-              setSelectedModel={setSelectedModel}
               onModelUpdate={(updatedModel) => {
                 // Update the model in the modelData.data array
                 const updatedModelData = {
@@ -1327,7 +1324,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                             getDisplayModelName,
                             handleEditClick,
                             handleRefreshClick,
-                            setEditModel,
                             expandedRows,
                             setExpandedRows,
                           )}

@@ -26,7 +26,6 @@ from typing import (
     overload,
     Type,
 )
-from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm._logging import (
     set_verbose,
@@ -136,6 +135,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "gitlab",
     "cloudzero",
     "posthog",
+    "levo",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -197,6 +197,7 @@ retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
+gigachat_key: Optional[str] = None
 databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -275,6 +276,7 @@ banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
+reasoning_auto_summary: bool = False
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -553,6 +555,10 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+minimax_models: Set = set()
+aws_polly_models: Set = set()
+gigachat_models: Set = set()
+llamagate_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -801,6 +807,14 @@ def add_known_models():
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "minimax":
+            minimax_models.add(key)
+        elif value.get("litellm_provider") == "aws_polly":
+            aws_polly_models.add(key)
+        elif value.get("litellm_provider") == "gigachat":
+            gigachat_models.add(key)
+        elif value.get("litellm_provider") == "llamagate":
+            llamagate_models.add(key)
 
 
 add_known_models()
@@ -1005,6 +1019,10 @@ models_by_provider: dict = {
     "amazon_nova": amazon_nova_models,
     "stability": stability_models,
     "github_copilot": github_copilot_models,
+    "minimax": minimax_models,
+    "aws_polly": aws_polly_models,
+    "gigachat": gigachat_models,
+    "llamagate": llamagate_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1049,8 +1067,8 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 openai_video_generation_models = ["sora-2"]
 
 # timeout is lazy-loaded via __getattr__
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+# get_llm_provider is lazy-loaded via __getattr__
+# remove_index_from_tool_calls is lazy-loaded via __getattr__
 
 # Import KeyManagementSettings here (before utils import) because _key_management_settings
 # is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
@@ -1432,6 +1450,8 @@ if TYPE_CHECKING:
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig
+    from .llms.gigachat.chat.transformation import GigaChatConfig as GigaChatConfig
+    from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig as GigaChatEmbeddingConfig
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
     from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
     from .llms.dashscope.chat.transformation import DashScopeChatConfig as DashScopeChatConfig
@@ -1499,6 +1519,7 @@ if TYPE_CHECKING:
     get_first_chars_messages: Callable[..., str]
     get_provider_fields: Callable[..., List]
     get_valid_models: Callable[..., list]
+    remove_index_from_tool_calls: Callable[..., None]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
@@ -1523,6 +1544,9 @@ if TYPE_CHECKING:
     # Custom logger class (lazy-loaded)
     from litellm.integrations.custom_logger import CustomLogger
     
+    # Datadog LLM observability params (lazy-loaded)
+    from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
+    
     # Logging callback manager class and instance (lazy-loaded)
     from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
     logging_callback_manager: LoggingCallbackManager
@@ -1536,6 +1560,16 @@ if TYPE_CHECKING:
 
 # Track if async client cleanup has been registered (for lazy loading)
 _async_client_cleanup_registered = False
+
+# Eager loading for backwards compatibility with VCR and other HTTP recording tools
+# When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
+# For now, this only affects encoding (tiktoken) as it was the only reported issue
+# See: https://github.com/BerriAI/litellm/issues/18659
+# This ensures encoding is initialized before VCR starts recording HTTP requests
+if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes", "on"):
+    # Load encoding at import time (pre-#18070 behavior)
+    # This ensures encoding is initialized before VCR starts recording
+    from .main import encoding
 
 
 def __getattr__(name: str) -> Any:
@@ -1650,6 +1684,17 @@ def __getattr__(name: str) -> Any:
             LoggingCallbackManager = __getattr__("LoggingCallbackManager")
             _globals["logging_callback_manager"] = LoggingCallbackManager()
         return _globals["logging_callback_manager"]
+    
+    # Lazy load _service_logger module
+    if name == "_service_logger":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "_service_logger" not in _globals:
+            # Import the module lazily
+            import litellm._service_logger
+            _globals["_service_logger"] = litellm._service_logger
+        return _globals["_service_logger"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
