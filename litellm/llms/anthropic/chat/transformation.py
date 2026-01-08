@@ -1265,14 +1265,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_tokens=cache_creation_input_tokens,
             cache_creation_token_details=cache_creation_token_details,
         )
-        completion_token_details = (
-            CompletionTokensDetailsWrapper(
-                reasoning_tokens=token_counter(
-                    text=reasoning_content, count_response_tokens=True
-                )
-            )
+        # Always populate completion_token_details, not just when there's reasoning_content
+        reasoning_tokens = (
+            token_counter(text=reasoning_content, count_response_tokens=True)
             if reasoning_content
-            else None
+            else 0
+        )
+        completion_token_details = CompletionTokensDetailsWrapper(
+            reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else None,
+            text_tokens=completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens,
         )
         total_tokens = prompt_tokens + completion_tokens
 

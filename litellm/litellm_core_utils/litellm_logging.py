@@ -3630,6 +3630,7 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             otel_config = OpenTelemetryConfig(
                 exporter=arize_config.protocol,
                 endpoint=arize_config.endpoint,
+                service_name=arize_config.project_name,
             )
 
             os.environ[
@@ -4799,7 +4800,7 @@ class StandardLoggingPayloadSetup:
         """
         Extract additional header tags for spend tracking based on config.
         """
-        extra_headers: List[str] = litellm.extra_spend_tag_headers or []
+        extra_headers: List[str] = getattr(litellm, "extra_spend_tag_headers", None) or []
         if not extra_headers:
             return None
 

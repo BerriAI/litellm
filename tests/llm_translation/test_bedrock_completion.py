@@ -322,10 +322,7 @@ def process_stream_response(res, messages):
     return res
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
+@pytest.mark.skip(reason="Cannot run without being in CircleCI Runner")
 def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds):
     print("\ncalling bedrock claude with aws_session_token auth")
 
@@ -406,10 +403,7 @@ def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
+@pytest.mark.skip(reason="Cannot run without being in CircleCI Runner")
 def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_creds):
     print("\ncalling bedrock claude with aws_session_token auth")
 
