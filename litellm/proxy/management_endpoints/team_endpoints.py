@@ -100,7 +100,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
     UpdateTeamMemberPermissionsRequest,
 )
-
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 router = APIRouter()
 
 
@@ -696,8 +696,7 @@ async def new_team(  # noqa: PLR0915
     - allowed_passthrough_routes: Optional[List[str]] - List of allowed pass through routes for the team.
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-
-    
+    - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
 
     Returns:
     - team_id: (str) Unique team id - used for tracking spend across multiple keys for same team id.
@@ -911,6 +910,12 @@ async def new_team(  # noqa: PLR0915
             complete_team_data.members_with_roles = []
 
         complete_team_data_dict = complete_team_data.model_dump(exclude_none=True)
+        
+        # Serialize router_settings to JSON (matching key creation pattern)
+        router_settings_value = getattr(data, "router_settings", None)
+        router_settings_json = safe_dumps(router_settings_value) if router_settings_value is not None else safe_dumps({})
+        complete_team_data_dict["router_settings"] = router_settings_json
+        
         complete_team_data_dict = prisma_client.jsonify_team_object(
             db_data=complete_team_data_dict
         )
@@ -1234,7 +1239,7 @@ async def update_team(   # noqa: PLR0915
     Example - update team TPM Limit
     - allowed_vector_store_indexes: Optional[List[dict]] - List of allowed vector store indexes for the key. Example - [{"index_name": "my-index", "index_permissions": ["write", "read"]}]. If specified, the key will only be able to use these specific vector store indexes. Create index, using `/v1/indexes` endpoint.
     - secret_manager_settings: Optional[dict] - Secret manager settings for the team. [Docs](https://docs.litellm.ai/docs/secret_managers/overview)
-
+    - router_settings: Optional[UpdateRouterConfig] - team-specific router settings. Example - {"model_group_retry_policy": {"max_retries": 5}}. IF null or {} then no router settings.
 
     ```
     curl --location 'http://0.0.0.0:4000/team/update' \
@@ -1395,6 +1400,10 @@ async def update_team(   # noqa: PLR0915
             )
             if _model_id is not None:
                 updated_kv["model_id"] = _model_id
+
+        # Serialize router_settings to JSON if present (matching key update pattern)
+        if "router_settings" in updated_kv and updated_kv["router_settings"] is not None:
+            updated_kv["router_settings"] = safe_dumps(updated_kv["router_settings"])
 
         updated_kv = prisma_client.jsonify_team_object(db_data=updated_kv)
         team_row: Optional[LiteLLM_TeamTable] = (
