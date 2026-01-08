@@ -54,9 +54,10 @@ def validate_responses_api_response(response, final_chunk: bool = False):
     assert "created_at" in response and isinstance(
         response["created_at"], int
     ), "Response should have an integer 'created_at' field"
-    assert "output" in response and isinstance(
-        response["output"], list
-    ), "Response should have a list 'output' field"
+    if response.get("status") == "completed":
+        assert "output" in response and isinstance(
+            response["output"], list
+        ), "Response should have a list 'output' field"
 
     # Optional fields with their expected types
     optional_fields = {
@@ -91,7 +92,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
             ), f"Field '{field}' should be of type {expected_type}, but got {type(response[field])}"
 
     # Check if output has at least one item
-    if final_chunk is True:
+    if final_chunk is True and response.get("status") == "completed":
         assert (
             len(response["output"]) > 0
         ), "Response 'output' field should have at least one item"

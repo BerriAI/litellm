@@ -13,6 +13,7 @@ from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
+    ResponseAPIUsage,
     ResponseInputParam,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
@@ -194,6 +195,24 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
+        
+        # Ensure reasoning is an empty dict if not present, OpenAI SDK does not allow None
+        if "reasoning" not in raw_response_json or raw_response_json.get("reasoning") is None:
+            raw_response_json["reasoning"] = {}
+        
+        if "text" not in raw_response_json or raw_response_json.get("text") is None:
+            raw_response_json["text"] = {}
+        
+        if "output" not in raw_response_json or raw_response_json.get("output") is None:
+            raw_response_json["output"] = []
+        
+        # Ensure usage is present with default values if not provided
+        if "usage" not in raw_response_json or raw_response_json.get("usage") is None:
+            raw_response_json["usage"] = ResponseAPIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+            )
         
         try:
             response = ResponsesAPIResponse(**raw_response_json)
