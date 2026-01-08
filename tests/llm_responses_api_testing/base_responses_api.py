@@ -171,48 +171,57 @@ class BaseResponsesAPITest(ABC):
                 elif event.type == "response.completed":
                     response_completed_event = event
 
-        # assert the delta chunks content had len(collected_content_string) > 0
-        # this content is typically rendered on chat ui's
-        assert len(collected_content_string) > 0
-
         # assert the response completed event is not None
         assert response_completed_event is not None
 
         # assert the response completed event has a response
         assert response_completed_event.response is not None
 
-        # assert the response completed event includes the usage
-        assert response_completed_event.response.usage is not None
+        # For async agent APIs (like Manus), the response may be in 'running' state
+        # without content yet - this is valid behavior
+        response_status = response_completed_event.response.status
+        if response_status in ["running", "pending"]:
+            # Running/pending state is acceptable - task started successfully
+            print(f"Response is in '{response_status}' state - async agent API behavior")
+            assert response_completed_event.response.id is not None
+        else:
+            # For completed responses, validate content and usage
+            # assert the delta chunks content had len(collected_content_string) > 0
+            # this content is typically rendered on chat ui's
+            assert len(collected_content_string) > 0
 
-        # basic test assert the usage seems reasonable
-        print(
-            "response_completed_event.response.usage=",
-            response_completed_event.response.usage,
-        )
-        assert (
-            response_completed_event.response.usage.input_tokens > 0
-            and response_completed_event.response.usage.input_tokens < 100
-        )
-        assert (
-            response_completed_event.response.usage.output_tokens > 0
-            and response_completed_event.response.usage.output_tokens < 2000
-        )
-        assert (
-            response_completed_event.response.usage.total_tokens > 0
-            and response_completed_event.response.usage.total_tokens < 2000
-        )
+            # assert the response completed event includes the usage
+            assert response_completed_event.response.usage is not None
 
-        # total tokens should be the sum of input and output tokens
-        assert (
-            response_completed_event.response.usage.total_tokens
-            == response_completed_event.response.usage.input_tokens
-            + response_completed_event.response.usage.output_tokens
-        )
+            # basic test assert the usage seems reasonable
+            print(
+                "response_completed_event.response.usage=",
+                response_completed_event.response.usage,
+            )
+            assert (
+                response_completed_event.response.usage.input_tokens > 0
+                and response_completed_event.response.usage.input_tokens < 100
+            )
+            assert (
+                response_completed_event.response.usage.output_tokens > 0
+                and response_completed_event.response.usage.output_tokens < 2000
+            )
+            assert (
+                response_completed_event.response.usage.total_tokens > 0
+                and response_completed_event.response.usage.total_tokens < 2000
+            )
 
-        # assert the response completed event includes cost when include_cost_in_streaming_usage is True
-        assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
-        assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
-        print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
+            # total tokens should be the sum of input and output tokens
+            assert (
+                response_completed_event.response.usage.total_tokens
+                == response_completed_event.response.usage.input_tokens
+                + response_completed_event.response.usage.output_tokens
+            )
+
+            # assert the response completed event includes cost when include_cost_in_streaming_usage is True
+            assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
+            assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
+            print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
         
         # Reset the setting
         litellm.include_cost_in_streaming_usage = False

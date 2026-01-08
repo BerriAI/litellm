@@ -47,6 +47,19 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
     def custom_llm_provider(self) -> LlmProviders:
         return LlmProviders.MANUS
 
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        """
+        Manus API doesn't support real-time streaming.
+        It returns a task that runs asynchronously.
+        We fake streaming by converting the response into streaming events.
+        """
+        return stream is True
+
     def _extract_agent_profile(self, model: str) -> str:
         """
         Extract agent profile from model name.
