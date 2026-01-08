@@ -3016,6 +3016,7 @@ class LlmProviders(str, Enum):
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
+    MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
