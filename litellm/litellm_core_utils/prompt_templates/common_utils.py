@@ -6,6 +6,7 @@ import io
 import mimetypes
 import re
 from os import PathLike
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -533,6 +534,12 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     # Convert content to bytes
     if isinstance(file_content, (str, PathLike)):
         # If it's a path, open and read the file
+        # Extract filename from path if not already set
+        if filename is None:
+            if isinstance(file_content, PathLike):
+                filename = Path(file_content).name
+            else:
+                filename = Path(str(file_content)).name
         with open(file_content, "rb") as f:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
@@ -550,11 +557,11 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 
     # Use provided content type or guess based on filename
     if not content_type:
-        content_type = (
-            mimetypes.guess_type(filename)[0]
-            if filename
-            else "application/octet-stream"
-        )
+        if filename:
+            guessed_type = mimetypes.guess_type(filename)[0]
+            content_type = guessed_type if guessed_type else "application/octet-stream"
+        else:
+            content_type = "application/octet-stream"
 
     return ExtractedFileData(
         filename=filename,
