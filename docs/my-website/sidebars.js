@@ -420,14 +420,8 @@ const sidebars = {
           ],
         },
         "assistants",
-        {
-          type: "category",
-          label: "/audio",
-          items: [
-            "audio_transcription",
-            "text_to_speech",
-          ]
-        },
+        "audio_transcription",
+        "text_to_speech",
         {
           type: "category",
           label: "/batches",
@@ -477,17 +471,13 @@ const sidebars = {
         "apply_guardrail",
         "bedrock_invoke",
         "interactions",
-        {
-          type: "category",
-          label: "/images",
-          items: [
-            "image_edits",
-            "image_generation",
-            "image_variations",
-          ]
-        },
+        "image_edits",
+        "image_generation",
+        "image_variations",
         "videos",
         "vector_store_files",
+        "vector_stores/create",
+        "vector_stores/search",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
@@ -531,24 +521,12 @@ const sidebars = {
             "proxy/pass_through_guardrails"
           ]
         },
-        {
-          type: "category",
-          label: "/rag",
-          items: [
-            "rag_ingest",
-            "rag_query",
-          ]
-        },
+        "rag_ingest",
+        "rag_query",
         "realtime",
         "rerank",
-        {
-          type: "category",
-          label: "/responses",
-          items: [
-            "response_api",
-            "response_api_compact",
-          ]
-        },
+        "response_api",
+        "response_api_compact",
         {
           type: "category",
           label: "/search",
@@ -566,14 +544,7 @@ const sidebars = {
           ]
         },
         "skills",
-        {
-          type: "category",
-          label: "/vector_stores",
-          items: [
-            "vector_stores/create",
-            "vector_stores/search",
-          ]
-        },
+
       ],
     },
     {

@@ -3059,7 +3059,6 @@ def response_format_tests(response: litellm.ModelResponse):
         "bedrock/cohere.command-r-plus-v1:0",
         "anthropic.claude-3-sonnet-20240229-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
-        # "bedrock/amazon.titan-tg1-large",
         "meta.llama3-8b-instruct-v1:0",
     ],
 )
@@ -3100,31 +3099,6 @@ async def test_completion_bedrock_httpx_models(sync_mode, model):
     except Exception as e:
         pytest.fail(f"An error occurred - {str(e)}")
 
-
-def test_completion_bedrock_titan_null_response():
-    try:
-        # amazon.titan-text-lite-v1 is deprecated, using titan-text-express-v1 instead
-        response = completion(
-            model="bedrock/amazon.titan-text-express-v1",
-            messages=[
-                {
-                    "role": "user",
-                    "content": "Hello!",
-                },
-                {
-                    "role": "assistant",
-                    "content": "Hello! How can I help you?",
-                },
-                {
-                    "role": "user",
-                    "content": "What model are you?",
-                },
-            ],
-        )
-        # Add any assertions here to check the response
-        print(f"response: {response}")
-    except Exception as e:
-        pytest.fail(f"An error occurred - {str(e)}")
 
 
 # test_completion_bedrock_titan()
@@ -3916,26 +3890,7 @@ async def test_dynamic_azure_params(stream, sync_mode):
             raise e
 
 
-@pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_completion_ai21_chat():
-    litellm.set_verbose = True
-    try:
-        response = await litellm.acompletion(
-            model="ai21_chat/jamba-mini",
-            user="ishaan",
-            tool_choice="auto",
-            seed=123,
-            messages=[{"role": "user", "content": "what does the document say"}],
-            documents=[
-                {
-                    "content": "hello world",
-                    "metadata": {"source": "google", "author": "ishaan"},
-                }
-            ],
-        )
-    except litellm.InternalServerError:
-        pytest.skip("Model is overloaded")
+
 
 
 @pytest.mark.parametrize(

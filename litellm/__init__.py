@@ -486,6 +486,7 @@ vertex_mistral_models: Set = set()
 vertex_openai_models: Set = set()
 vertex_minimax_models: Set = set()
 vertex_moonshot_models: Set = set()
+vertex_zai_models: Set = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -557,6 +558,8 @@ stability_models: Set = set()
 github_copilot_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
+gigachat_models: Set = set()
+llamagate_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -662,6 +665,9 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-moonshot_models":
             key = key.replace("vertex_ai/", "")
             vertex_moonshot_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-zai_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_zai_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -809,6 +815,10 @@ def add_known_models():
             minimax_models.add(key)
         elif value.get("litellm_provider") == "aws_polly":
             aws_polly_models.add(key)
+        elif value.get("litellm_provider") == "gigachat":
+            gigachat_models.add(key)
+        elif value.get("litellm_provider") == "llamagate":
+            llamagate_models.add(key)
 
 
 add_known_models()
@@ -944,7 +954,8 @@ models_by_provider: dict = {
     | vertex_language_models
     | vertex_deepseek_models
     | vertex_minimax_models
-    | vertex_moonshot_models,
+    | vertex_moonshot_models
+    | vertex_zai_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
@@ -1015,6 +1026,8 @@ models_by_provider: dict = {
     "github_copilot": github_copilot_models,
     "minimax": minimax_models,
     "aws_polly": aws_polly_models,
+    "gigachat": gigachat_models,
+    "llamagate": llamagate_models,
 }
 
 # mapping for those models which have larger equivalents
