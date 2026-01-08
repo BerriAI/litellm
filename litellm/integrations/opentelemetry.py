@@ -54,38 +54,6 @@ RAW_REQUEST_SPAN_NAME = "raw_gen_ai_request"
 LITELLM_REQUEST_SPAN_NAME = "litellm_request"
 
 
-def _get_litellm_resource():
-    """
-    Create a proper OpenTelemetry Resource that respects OTEL_RESOURCE_ATTRIBUTES
-    while maintaining backward compatibility with LiteLLM-specific environment variables.
-    """
-    from opentelemetry.sdk.resources import OTELResourceDetector, Resource
-
-    # Create base resource attributes with LiteLLM-specific defaults
-    # These will be overridden by OTEL_RESOURCE_ATTRIBUTES if present
-    base_attributes: Dict[str, Optional[str]] = {
-        "service.name": os.getenv("OTEL_SERVICE_NAME", "litellm"),
-        "deployment.environment": os.getenv("OTEL_ENVIRONMENT_NAME", "production"),
-        # Fix the model_id to use proper environment variable or default to service name
-        "model_id": os.getenv(
-            "OTEL_MODEL_ID", os.getenv("OTEL_SERVICE_NAME", "litellm")
-        ),
-    }
-
-    # Create base resource with LiteLLM-specific defaults
-    base_resource = Resource.create(base_attributes)  # type: ignore
-
-    # Create resource from OTEL_RESOURCE_ATTRIBUTES using the detector
-    otel_resource_detector = OTELResourceDetector()
-    env_resource = otel_resource_detector.detect()
-
-    # Merge the resources: env_resource takes precedence over base_resource
-    # This ensures OTEL_RESOURCE_ATTRIBUTES overrides LiteLLM defaults
-    merged_resource = base_resource.merge(env_resource)
-
-    return merged_resource
-
-
 @dataclass
 class OpenTelemetryConfig:
     exporter: Union[str, SpanExporter] = "console"
@@ -93,6 +61,19 @@ class OpenTelemetryConfig:
     headers: Optional[str] = None
     enable_metrics: bool = False
     enable_events: bool = False
+    service_name: Optional[str] = None
+    deployment_environment: Optional[str] = None
+    model_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.service_name:
+            self.service_name = os.getenv("OTEL_SERVICE_NAME", "litellm")
+        if not self.deployment_environment:
+            self.deployment_environment = os.getenv(
+                "OTEL_ENVIRONMENT_NAME", "production"
+            )
+        if not self.model_id:
+            self.model_id = os.getenv("OTEL_MODEL_ID", self.service_name)
 
     @classmethod
     def from_env(cls):
@@ -122,6 +103,9 @@ class OpenTelemetryConfig:
             os.getenv("LITELLM_OTEL_INTEGRATION_ENABLE_EVENTS", "false").lower()
             == "true"
         )
+        service_name = os.getenv("OTEL_SERVICE_NAME", "litellm")
+        deployment_environment = os.getenv("OTEL_ENVIRONMENT_NAME", "production")
+        model_id = os.getenv("OTEL_MODEL_ID", service_name)
 
         if exporter == "in_memory":
             return cls(exporter=InMemorySpanExporter())
@@ -131,6 +115,9 @@ class OpenTelemetryConfig:
             headers=headers,  # example: OTEL_HEADERS=x-honeycomb-team=B85YgLm96***"
             enable_metrics=enable_metrics,
             enable_events=enable_events,
+            service_name=service_name,
+            deployment_environment=deployment_environment,
+            model_id=model_id,
         )
 
 
@@ -173,6 +160,22 @@ class OpenTelemetry(CustomLogger):
         self._init_metrics(meter_provider)
         self._init_logs(logger_provider)
         self._init_otel_logger_on_litellm_proxy()
+
+    @staticmethod
+    def _get_litellm_resource(config: OpenTelemetryConfig):
+        """Create an OpenTelemetry Resource using config-driven defaults."""
+        from opentelemetry.sdk.resources import OTELResourceDetector, Resource
+
+        base_attributes: Dict[str, Optional[str]] = {
+            "service.name": config.service_name,
+            "deployment.environment": config.deployment_environment,
+            "model_id": config.model_id or config.service_name,
+        }
+
+        base_resource = Resource.create(base_attributes)  # type: ignore[arg-type]
+        otel_resource_detector = OTELResourceDetector()
+        env_resource = otel_resource_detector.detect()
+        return base_resource.merge(env_resource)
 
     def _init_otel_logger_on_litellm_proxy(self):
         """
@@ -266,7 +269,7 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.trace import SpanKind
 
         def create_tracer_provider():
-            provider = TracerProvider(resource=_get_litellm_resource())
+            provider = TracerProvider(resource=self._get_litellm_resource(self.config))
             provider.add_span_processor(self._get_span_processor())
             return provider
 
@@ -300,7 +303,8 @@ class OpenTelemetry(CustomLogger):
         def create_meter_provider():
             metric_reader = self._get_metric_reader()
             return MeterProvider(
-                metric_readers=[metric_reader], resource=_get_litellm_resource()
+                metric_readers=[metric_reader],
+                resource=self._get_litellm_resource(self.config),
             )
 
         meter_provider = self._get_or_create_provider(
@@ -355,7 +359,9 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
 
         def create_logger_provider():
-            provider = OTLoggerProvider(resource=_get_litellm_resource())
+            provider = OTLoggerProvider(
+                resource=self._get_litellm_resource(self.config)
+            )
             log_exporter = self._get_log_exporter()
             provider.add_log_record_processor(
                 BatchLogRecordProcessor(log_exporter)  # type: ignore[arg-type]
@@ -606,7 +612,7 @@ class OpenTelemetry(CustomLogger):
         from opentelemetry.sdk.trace import TracerProvider
 
         # Create a temporary tracer provider with dynamic headers
-        temp_provider = TracerProvider(resource=_get_litellm_resource())
+        temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
         temp_provider.add_span_processor(
             self._get_span_processor(dynamic_headers=dynamic_headers)
         )
@@ -987,9 +993,9 @@ class OpenTelemetry(CustomLogger):
 
         # Get the resource from the logger provider
         logger_provider = get_logger_provider()
-        resource = (
-            getattr(logger_provider, "_resource", None) or _get_litellm_resource()
-        )
+        resource = getattr(
+            logger_provider, "_resource", None
+        ) or self._get_litellm_resource(self.config)
 
         parent_ctx = span.get_span_context()
         provider = (kwargs.get("litellm_params") or {}).get(
@@ -1910,7 +1916,9 @@ class OpenTelemetry(CustomLogger):
         )
 
         _split_otel_headers = OpenTelemetry._get_headers_dictionary(self.OTEL_HEADERS)
-        normalized_endpoint = self._normalize_otel_endpoint(self.OTEL_ENDPOINT, "metrics")
+        normalized_endpoint = self._normalize_otel_endpoint(
+            self.OTEL_ENDPOINT, "metrics"
+        )
 
         if self.OTEL_EXPORTER == "console":
             exporter = ConsoleMetricExporter()

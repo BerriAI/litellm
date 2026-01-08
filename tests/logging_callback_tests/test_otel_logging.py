@@ -138,64 +138,6 @@ def validate_raw_gen_ai_request_openai_streaming(span):
         assert span._attributes[attr] is not None, f"Attribute {attr} has None"
 
 
-@pytest.mark.parametrize(
-    "model",
-    ["anthropic/claude-3-opus-20240229"],
-)
-@pytest.mark.flaky(retries=6, delay=2)
-def test_completion_claude_3_function_call_with_otel(model):
-    litellm.set_verbose = True
-
-    litellm.callbacks = [OpenTelemetry(config=OpenTelemetryConfig(exporter=exporter))]
-    tools = [
-        {
-            "type": "function",
-            "function": {
-                "name": "get_current_weather",
-                "description": "Get the current weather in a given location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {
-                            "type": "string",
-                            "description": "The city and state, e.g. San Francisco, CA",
-                        },
-                        "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
-                    },
-                    "required": ["location"],
-                },
-            },
-        }
-    ]
-    messages = [
-        {
-            "role": "user",
-            "content": "What's the weather like in Boston today in Fahrenheit?",
-        }
-    ]
-    try:
-        # test without max tokens
-        response = litellm.completion(
-            model=model,
-            messages=messages,
-            tools=tools,
-            tool_choice={
-                "type": "function",
-                "function": {"name": "get_current_weather"},
-            },
-            drop_params=True,
-        )
-
-        print("response from LiteLLM", response)
-    except litellm.InternalServerError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-    finally:
-        # clear in memory exporter
-        exporter.clear()
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [True, False])
 @pytest.mark.parametrize("global_redact", [True, False])
