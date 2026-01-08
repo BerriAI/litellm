@@ -19,7 +19,7 @@ Looking for Qualifire Guardrails? Check out the [Qualifire Guardrails Integratio
 
 ## Pre-Requisites
 
-1. Create an account on [Qualifire](https://qualifire.ai/)
+1. Create an account on [Qualifire](https://app.qualifire.ai/)
 2. Get your API key and webhook URL from the Qualifire dashboard
 
 ```bash
