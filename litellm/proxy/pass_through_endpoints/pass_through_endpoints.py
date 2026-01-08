@@ -473,9 +473,14 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         logging_obj: LiteLLMLoggingObj,
         _parsed_body: Optional[dict] = None,
         litellm_call_id: Optional[str] = None,
+        forward_metadata: Optional[bool] = False,
     ) -> dict:
         """
         Filter out litellm params from the request body
+
+        Args:
+            forward_metadata: If True, preserve metadata in request body for forwarding to target endpoint.
+                            If False (default), metadata is stripped and only used for LiteLLM-specific logic.
         """
         from litellm.types.utils import all_litellm_params
 
@@ -484,9 +489,10 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
         litellm_params_in_body = {}
         for k in all_litellm_params:
             if k in _parsed_body:
-                # For 'metadata' field, copy it instead of popping to preserve it in the request body
-                # This ensures client metadata is forwarded to the target endpoint
-                if k == "metadata":
+                # For 'metadata' field, conditionally preserve it based on forward_metadata setting
+                # If forward_metadata=True, copy it to preserve in request body for forwarding
+                # If forward_metadata=False (default), pop it to strip from request body
+                if k == "metadata" and forward_metadata:
                     litellm_params_in_body[k] = _parsed_body.get(k, None)
                 else:
                     litellm_params_in_body[k] = _parsed_body.pop(k, None)
@@ -605,6 +611,7 @@ async def pass_through_request(  # noqa: PLR0915
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
     guardrails_config: Optional[dict] = None,
+    forward_metadata: Optional[bool] = False,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -622,6 +629,7 @@ async def pass_through_request(  # noqa: PLR0915
         cost_per_request: Optional field - cost per request to the target endpoint
         custom_llm_provider: Optional field - custom LLM provider for the endpoint
         guardrails_config: Optional field - guardrails configuration for passthrough endpoint
+        forward_metadata: Whether to forward client metadata to the target endpoint
     """
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.proxy.pass_through_endpoints.passthrough_guardrails import (
@@ -738,6 +746,7 @@ async def pass_through_request(  # noqa: PLR0915
             litellm_call_id=litellm_call_id,
             request=request,
             logging_obj=logging_obj,
+            forward_metadata=forward_metadata,
         )
 
         # Store custom_llm_provider in kwargs and logging object if provided
@@ -1076,6 +1085,7 @@ def create_pass_through_route(
     is_streaming_request: Optional[bool] = False,
     query_params: Optional[dict] = None,
     guardrails: Optional[Dict[str, Any]] = None,
+    forward_metadata: Optional[bool] = False,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1145,6 +1155,7 @@ def create_pass_through_route(
                 "merge_query_params": _merge_query_params,
                 "cost_per_request": cost_per_request,
                 "guardrails": None,
+                "forward_metadata": forward_metadata,
             }
 
             if passthrough_params is not None:
@@ -1163,6 +1174,9 @@ def create_pass_through_route(
                 "cost_per_request", cost_per_request
             )
             param_guardrails = target_params.get("guardrails", None)
+            param_forward_metadata = target_params.get(
+                "forward_metadata", forward_metadata
+            )
 
             # Construct the full target URL with subpath if needed
             full_target = (
@@ -1203,6 +1217,7 @@ def create_pass_through_route(
                 cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
                 guardrails_config=cast(Optional[dict], param_guardrails),
+                forward_metadata=cast(Optional[bool], param_forward_metadata),
             )
 
     return endpoint_func
@@ -1838,6 +1853,7 @@ class InitPassThroughEndpointHelpers:
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
+        forward_metadata: Optional[bool] = False,
     ):
         """Add exact path route for pass-through endpoint"""
         route_key = f"{endpoint_id}:exact:{path}"
@@ -1869,6 +1885,7 @@ class InitPassThroughEndpointHelpers:
                 dependencies,
                 cost_per_request=cost_per_request,
                 guardrails=guardrails,
+                forward_metadata=forward_metadata,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
@@ -1888,6 +1905,7 @@ class InitPassThroughEndpointHelpers:
                     "dependencies": dependencies,
                     "cost_per_request": cost_per_request,
                     "guardrails": guardrails,
+                    "forward_metadata": forward_metadata,
                 },
             }
 
@@ -1903,6 +1921,7 @@ class InitPassThroughEndpointHelpers:
         cost_per_request: Optional[float],
         endpoint_id: str,
         guardrails: Optional[dict] = None,
+        forward_metadata: Optional[bool] = False,
     ):
         """Add wildcard route for sub-paths"""
         wildcard_path = f"{path}/{{subpath:path}}"
@@ -1936,6 +1955,7 @@ class InitPassThroughEndpointHelpers:
                 include_subpath=True,
                 cost_per_request=cost_per_request,
                 guardrails=guardrails,
+                forward_metadata=forward_metadata,
             ),
             methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
             dependencies=dependencies,
@@ -1955,6 +1975,7 @@ class InitPassThroughEndpointHelpers:
                     "dependencies": dependencies,
                     "cost_per_request": cost_per_request,
                     "guardrails": guardrails,
+                    "forward_metadata": forward_metadata,
                 },
             }
 
@@ -2133,7 +2154,10 @@ async def initialize_pass_through_endpoints(
 
         # Get guardrails config if present
         _guardrails = endpoint.get("guardrails", None)
-        
+
+        # Get forward_metadata config (default False for backward compatibility)
+        _forward_metadata = endpoint.get("forward_metadata", False)
+
         # Add exact path route
         verbose_proxy_logger.debug(
             "Initializing pass through endpoint: %s (ID: %s)", _path, endpoint_id
@@ -2149,6 +2173,7 @@ async def initialize_pass_through_endpoints(
             cost_per_request=endpoint.get("cost_per_request", None),
             endpoint_id=endpoint_id,
             guardrails=_guardrails,
+            forward_metadata=_forward_metadata,
         )
 
         visited_endpoints.add(f"{endpoint_id}:exact:{_path}")
@@ -2166,6 +2191,7 @@ async def initialize_pass_through_endpoints(
                 cost_per_request=endpoint.get("cost_per_request", None),
                 endpoint_id=endpoint_id,
                 guardrails=_guardrails,
+                forward_metadata=_forward_metadata,
             )
 
             visited_endpoints.add(f"{endpoint_id}:subpath:{_path}")

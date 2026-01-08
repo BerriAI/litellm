@@ -1886,16 +1886,15 @@ async def test_bedrock_router_passthrough_metadata_initialization():
         assert result == mock_response
 
 
-def test_init_kwargs_preserves_metadata_in_body():
+def test_init_kwargs_forward_metadata_toggle():
     """
-    Test that _init_kwargs_for_pass_through_endpoint preserves the metadata field in the request body.
+    Test that _init_kwargs_for_pass_through_endpoint respects the forward_metadata toggle.
 
-    This test verifies the fix for the bug where the metadata field was being removed (popped)
-    from the request body when it should be preserved for forwarding to target endpoints.
-    Providers like Anthropic need the metadata field for features like prompt caching.
-
-    The fix ensures metadata is copied (using .get()) instead of popped, so it remains
-    in _parsed_body for forwarding while also being available in litellm_params.
+    When forward_metadata=False (default):
+        - metadata is stripped from _parsed_body (for LiteLLM-only use like cost tracking tags)
+    When forward_metadata=True:
+        - metadata is preserved in _parsed_body for forwarding to target endpoint
+        - Providers like Anthropic need this for features like prompt caching
     """
     from unittest.mock import MagicMock
 
@@ -1939,35 +1938,58 @@ def test_init_kwargs_preserves_metadata_in_body():
     mock_logging_obj = MagicMock()
     mock_logging_obj.model_call_details = {}
 
-    # Create request body with metadata (simulating Anthropic request with prompt caching)
-    _parsed_body = {
+    # Test Case 1: forward_metadata=False (default) - metadata should be STRIPPED
+    _parsed_body_stripped = {
         "model": "claude-3-opus-20240229",
         "messages": [{"role": "user", "content": "Hello"}],
-        "metadata": {"user_id": "client-user-123", "cache_control": {"type": "ephemeral"}},
+        "metadata": {"user_id": "client-user-123", "tags": ["cost-tracking"]},
         "max_tokens": 1024,
     }
 
-    # Store original metadata for comparison
-    original_metadata = _parsed_body["metadata"].copy()
-
-    # Call the method
     result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
         request=mock_request,
         user_api_key_dict=mock_user_api_key_dict,
         passthrough_logging_payload=passthrough_logging_payload,
         logging_obj=mock_logging_obj,
-        _parsed_body=_parsed_body,
+        _parsed_body=_parsed_body_stripped,
+        forward_metadata=False,  # Default behavior
     )
 
-    # KEY ASSERTION: metadata should still be in _parsed_body after extraction
-    # This is the bug fix - metadata was being popped before, now it's preserved
-    assert "metadata" in _parsed_body, "metadata field should be preserved in _parsed_body for forwarding to target endpoint"
-    assert _parsed_body["metadata"] == original_metadata, "metadata content should be unchanged"
+    # Metadata should be STRIPPED from _parsed_body when forward_metadata=False
+    assert "metadata" not in _parsed_body_stripped, "metadata should be stripped when forward_metadata=False"
+    # Other fields should still be present
+    assert "model" in _parsed_body_stripped
+    assert "messages" in _parsed_body_stripped
+    assert "max_tokens" in _parsed_body_stripped
 
-    # Verify other fields are still present
-    assert "model" in _parsed_body
-    assert "messages" in _parsed_body
-    assert "max_tokens" in _parsed_body
+    # Test Case 2: forward_metadata=True - metadata should be PRESERVED
+    _parsed_body_preserved = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"user_id": "client-user-123", "cache_control": {"type": "ephemeral"}},
+        "max_tokens": 1024,
+    }
+    original_metadata = _parsed_body_preserved["metadata"].copy()
+
+    # Reset mock logging object
+    mock_logging_obj.model_call_details = {}
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_logging_payload,
+        logging_obj=mock_logging_obj,
+        _parsed_body=_parsed_body_preserved,
+        forward_metadata=True,  # Enable forwarding for providers like Anthropic
+    )
+
+    # Metadata should be PRESERVED in _parsed_body when forward_metadata=True
+    assert "metadata" in _parsed_body_preserved, "metadata should be preserved when forward_metadata=True"
+    assert _parsed_body_preserved["metadata"] == original_metadata, "metadata content should be unchanged"
+    # Other fields should still be present
+    assert "model" in _parsed_body_preserved
+    assert "messages" in _parsed_body_preserved
+    assert "max_tokens" in _parsed_body_preserved
 
 
 @pytest.mark.asyncio
