@@ -53,6 +53,7 @@ import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import EndpointUsage from "./EndpointUsage/EndpointUsage";
 
 interface UsagePageProps {
   teams: Team[];
@@ -439,6 +440,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                   <Tab>Model Activity</Tab>
                   <Tab>Key Activity</Tab>
                   <Tab>MCP Server Activity</Tab>
+                  <Tab>Endpoint Activity</Tab>
                 </TabList>
                 <Button
                   onClick={() => setIsGlobalExportModalOpen(true)}
@@ -727,6 +729,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                 </TabPanel>
                 <TabPanel>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
+                </TabPanel>
+                <TabPanel>
+                  <EndpointUsage userSpendData={userSpendData} />
                 </TabPanel>
               </TabPanels>
             </TabGroup>
