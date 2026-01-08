@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -98,7 +98,10 @@ class TestVideoGeneration:
         )
         
         with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_generation_handler.return_value = mock_response
+            # Mock the async_video_generation_handler to return the mock_response
+            mock_handler.async_video_generation_handler = AsyncMock(return_value=mock_response)
+            # Mock video_generation_handler to return the coroutine from async_video_generation_handler
+            mock_handler.video_generation_handler.side_effect = lambda **kwargs: mock_handler.async_video_generation_handler(**kwargs)
             
             import asyncio
             
@@ -507,7 +510,10 @@ class TestVideoGeneration:
         )
         
         with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_status_handler.return_value = mock_response
+            # Mock the async_video_status_handler to return the mock_response
+            mock_handler.async_video_status_handler = AsyncMock(return_value=mock_response)
+            # Mock video_status_handler to return the coroutine from async_video_status_handler
+            mock_handler.video_status_handler.side_effect = lambda **kwargs: mock_handler.async_video_status_handler(**kwargs)
             
             import asyncio
             
