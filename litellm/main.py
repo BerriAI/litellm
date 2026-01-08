@@ -1466,6 +1466,16 @@ def completion(  # type: ignore # noqa: PLR0915
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
+            # Pass through any extra/custom params from kwargs (fixes #18216)
+            # Filter out params already explicitly passed to avoid duplicate keyword argument errors
+            **{k: v for k, v in kwargs.items() if k not in {
+                "litellm_call_id", "text_completion", "azure_ad_token_provider",
+                "user_continue_message", "litellm_trace_id", "litellm_session_id",
+                "litellm_metadata", "drop_params", "merge_reasoning_content_in_choices",
+                "use_litellm_proxy", "azure_ad_token", "tenant_id", "client_id",
+                "client_secret", "azure_username", "azure_password", "azure_scope",
+                "litellm_request_debug",
+            }},
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
