@@ -303,6 +303,26 @@ class PrometheusLogger(CustomLogger):
                 self.get_labels_for_metric("litellm_deployment_failed_fallbacks"),
             )
 
+            ########################################
+            # Deployment Queue Depth Metrics
+            # Track active and queued requests per deployment
+            ########################################
+            self.litellm_deployment_active_requests = self._gauge_factory(
+                "litellm_deployment_active_requests",
+                "Number of requests currently being processed by a deployment (holding semaphore)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_deployment_active_requests"
+                ),
+            )
+
+            self.litellm_deployment_queued_requests = self._gauge_factory(
+                "litellm_deployment_queued_requests",
+                "Number of requests waiting for a deployment slot (waiting on semaphore)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_deployment_queued_requests"
+                ),
+            )
+
             # Callback Logging Failure Metrics
             self.litellm_callback_logging_failures_metric = self._counter_factory(
                 name="litellm_callback_logging_failures_metric",
@@ -1907,6 +1927,35 @@ class PrometheusLogger(CustomLogger):
         self.set_litellm_deployment_state(
             2, litellm_model_name, model_id, api_base, api_provider
         )
+
+    def set_deployment_queue_depth_metrics(
+        self,
+        queue_stats: List[Dict[str, Any]],
+    ) -> None:
+        """
+        Update Prometheus gauges for deployment queue depth.
+
+        Args:
+            queue_stats: List of dicts from Router.get_deployment_queue_stats()
+                Each dict contains: model_id, model_name, model_group,
+                max_concurrent, active, queued
+        """
+        for stat in queue_stats:
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    "litellm_deployment_active_requests"
+                ),
+                enum_values=UserAPIKeyLabelValues(
+                    litellm_model_name=stat.get("model_name", ""),
+                    model_group=stat.get("model_group", ""),
+                ),
+            )
+            self.litellm_deployment_active_requests.labels(**_labels).set(
+                stat.get("active", 0)
+            )
+            self.litellm_deployment_queued_requests.labels(**_labels).set(
+                stat.get("queued", 0)
+            )
 
     def increment_deployment_cooled_down(
         self,

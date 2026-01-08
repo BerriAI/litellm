@@ -8,6 +8,7 @@
 #  Thank you ! We ❤️ you! - Krrish & Ishaan
 
 import asyncio
+from litellm.router_utils.tracked_semaphore import TrackedSemaphore
 import copy
 import enum
 import hashlib
@@ -1578,7 +1579,7 @@ class Router:
                 client_type="max_parallel_requests",
             )
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -2436,7 +2437,7 @@ class Router:
             )
 
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -2548,7 +2549,7 @@ class Router:
             )
 
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -2842,7 +2843,7 @@ class Router:
             )
 
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -2941,7 +2942,7 @@ class Router:
             )
 
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -3205,7 +3206,7 @@ class Router:
             )
 
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -3442,7 +3443,7 @@ class Router:
             )
 
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -3709,7 +3710,7 @@ class Router:
             )
 
             if rpm_semaphore is not None and isinstance(
-                rpm_semaphore, asyncio.Semaphore
+                rpm_semaphore, (asyncio.Semaphore, TrackedSemaphore)
             ):
                 async with rpm_semaphore:
                     """
@@ -7198,6 +7199,43 @@ class Router:
             returned_models += self.model_list
 
         return returned_models
+
+    def get_deployment_queue_stats(self) -> List[Dict[str, Any]]:
+        """
+        Get queue depth statistics for all deployments with max_parallel_requests.
+
+        Returns a list of dicts with:
+        - model_id: The deployment's model ID
+        - model_name: The deployment's litellm model name
+        - model_group: The model group name
+        - max_concurrent: Maximum parallel requests allowed
+        - active: Number of requests currently being processed
+        - queued: Number of requests waiting for a slot
+
+        Only includes deployments using TrackedSemaphore.
+        """
+        stats = []
+        for deployment in self.model_list:
+            model_info = deployment.get("model_info", {})
+            model_id = model_info.get("id")
+            if not model_id:
+                continue
+
+            cache_key = f"{model_id}_max_parallel_requests_client"
+            semaphore = self.cache.get_cache(key=cache_key, local_only=True)
+
+            if semaphore is not None and isinstance(semaphore, TrackedSemaphore):
+                sem_stats = semaphore.stats
+                stats.append({
+                    "model_id": model_id,
+                    "model_name": deployment.get("litellm_params", {}).get("model", ""),
+                    "model_group": deployment.get("model_name", ""),
+                    "max_concurrent": sem_stats.max_concurrent,
+                    "active": sem_stats.active,
+                    "queued": sem_stats.queued,
+                })
+
+        return stats
 
     def get_model_access_groups(
         self,
