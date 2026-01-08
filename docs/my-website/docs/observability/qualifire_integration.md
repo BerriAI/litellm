@@ -4,8 +4,6 @@ import Image from '@theme/IdealImage';
 
 [Qualifire](https://qualifire.ai/) provides real-time Agentic evaluations, guardrails and observability for production AI applications.
 
-<Image img={require('../../img/qualifire.png')} />
-
 **Key Features:**
 
 - **Evaluation** - Systematically assess AI behavior to detect hallucinations, jailbreaks, policy breaches, and other vulnerabilities
@@ -52,7 +50,7 @@ litellm.callbacks = ["qualifire_eval"]
 
 # OpenAI call
 response = litellm.completion(
-  model="gpt-3.5-turbo",
+  model="gpt-5",
   messages=[
     {"role": "user", "content": "Hi 👋 - i'm openai"}
   ]
@@ -78,7 +76,7 @@ general_settings:
 
 environment_variables:
   QUALIFIRE_API_KEY: "your-qualifire-api-key"
-  QUALIFIRE_WEBHOOK_URL: "https://your-qualifire-webhook-url"
+  QUALIFIRE_WEBHOOK_URL: "https://app.qualifire.ai/api/v1/webhooks/evaluations"
 ```
 
 2. Start the proxy
@@ -122,10 +120,3 @@ Once data is in Qualifire, you can:
 - Set up guardrails to block or modify responses in real-time
 - View traces across your entire AI pipeline
 - Track performance and quality metrics over time
-
-## Support & Talk to Founders
-
-- [Schedule Demo 👋](https://calendly.com/d/4mp-gd3-k5k/berriai-1-1-onboarding-litellm-hosted-version)
-- [Community Discord 💭](https://discord.gg/wuPM9dRgDw)
-- Our numbers 📞 +1 (770) 8783-106 / ‭+1 (412) 618-6238‬
-- Our emails ✉️ ishaan@berri.ai / krrish@berri.ai
