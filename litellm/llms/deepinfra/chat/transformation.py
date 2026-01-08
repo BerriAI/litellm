@@ -1,5 +1,5 @@
 import json
-from typing import List, Optional, Tuple, Union
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 import litellm
 from litellm.constants import MIN_NON_ZERO_TEMPERATURE
@@ -155,23 +155,40 @@ class DeepInfraConfig(OpenAIGPTConfig):
         
         return messages
 
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[False] = False
+    ) -> List[AllMessageValues]:
+        ...
+
     def _transform_messages(
         self, messages: List[AllMessageValues], model: str, is_async: bool = False
-    ):
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
         """
         Transform messages for DeepInfra compatibility.
         Handles both sync and async transformations.
         """
-        # First apply parent class transformations
-        parent_result = super()._transform_messages(messages=messages, model=model, is_async=is_async)
-        
         if is_async:
-            # If parent returns a coroutine, we need to await it and then apply our transformations
+            # For async case, create an async function that awaits parent and applies our transformation
             async def _async_transform():
+                # Call parent with is_async=True (literal) for async case
+                parent_result = super(DeepInfraConfig, self)._transform_messages(
+                    messages=messages, model=model, is_async=cast(Literal[True], True)
+                )
                 transformed_messages = await parent_result
                 return self._transform_tool_message_content(transformed_messages)
             return _async_transform()
         else:
+            # Call parent with is_async=False (literal) for sync case
+            parent_result = super()._transform_messages(
+                messages=messages, model=model, is_async=cast(Literal[False], False)
+            )
             # For sync case, parent_result is already the transformed messages
             return self._transform_tool_message_content(parent_result)
 
