@@ -53,6 +53,10 @@ class TestManusResponsesAPITest(BaseResponsesAPITest):
     async def test_cancel_responses_invalid_response_id(self, sync_mode):
         pytest.skip("CANCEL responses is not supported for Manus")
 
+    @pytest.mark.asyncio
+    async def test_multiturn_responses_api(self):
+        pytest.skip("Multiturn responses is not supported for Manus")
+
 
 @pytest.mark.asyncio
 async def test_manus_responses_api_with_agent_profile():
