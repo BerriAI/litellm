@@ -4681,8 +4681,9 @@ class ProxyStartupEvent:
         """
         Initialize the spend tracking and other background jobs
         1. CloudZero Background Job
-        2. Prometheus Background Job
-        3. Key Rotation Background Job
+        2. Focus Background Job
+        3. Prometheus Background Job
+        4. Key Rotation Background Job
 
         Args:
             scheduler: The scheduler to add the background jobs to
@@ -4691,10 +4692,16 @@ class ProxyStartupEvent:
         # CloudZero Background Job
         ########################################################
         from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+        from litellm.integrations.focus.focus_logger import FocusLogger
         from litellm.proxy.spend_tracking.cloudzero_endpoints import is_cloudzero_setup
 
         if await is_cloudzero_setup():
             await CloudZeroLogger.init_cloudzero_background_job(scheduler=scheduler)
+
+        ########################################################
+        # Focus Background Job
+        ########################################################
+        await FocusLogger.init_focus_export_background_job(scheduler=scheduler)
 
         ########################################################
         # Prometheus Background Job
