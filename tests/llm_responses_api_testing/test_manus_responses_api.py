@@ -37,10 +37,7 @@ class TestManusResponsesAPITest(BaseResponsesAPITest):
     async def test_basic_openai_responses_streaming_delete_endpoint(self, sync_mode):
         pytest.skip("DELETE responses is not supported for Manus")
 
-    @pytest.mark.parametrize("sync_mode", [True, False])
-    @pytest.mark.asyncio
-    async def test_basic_openai_responses_get_endpoint(self, sync_mode):
-        pytest.skip("GET responses is not supported for Manus")
+    # GET responses is now supported for Manus
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     @pytest.mark.asyncio
