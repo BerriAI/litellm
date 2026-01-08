@@ -291,6 +291,49 @@ async def google_login(
         return HTMLResponse(content=html_form, status_code=200)
 
 
+def get_roles_from_id_token(id_token: Optional[str]) -> List[str]:
+    """
+    Extract roles from an OIDC id_token JWT.
+
+    Many OIDC providers (including Azure AD when used via Generic SSO) include
+    roles in the 'roles' claim of the id_token rather than in the userinfo endpoint.
+
+    Args:
+        id_token (Optional[str]): The JWT id_token from the SSO provider
+
+    Returns:
+        List[str]: List of role names found in the id_token
+    """
+    if not id_token:
+        verbose_proxy_logger.debug("No id_token provided for role extraction")
+        return []
+
+    try:
+        import jwt
+
+        # Decode the JWT without signature verification
+        # (signature is already verified by fastapi_sso)
+        decoded_token = jwt.decode(id_token, options={"verify_signature": False})
+
+        # Check for 'roles' claim (common in Azure AD and other OIDC providers)
+        roles = decoded_token.get("roles", [])
+
+        if roles and isinstance(roles, list):
+            verbose_proxy_logger.debug(
+                f"Found {len(roles)} role(s) in id_token: {roles}"
+            )
+            return roles
+        else:
+            verbose_proxy_logger.debug(
+                "No roles found in id_token or roles claim is not a list"
+            )
+            return []
+
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error extracting roles from id_token: {e}")
+        return []
+
+
 def generic_response_convertor(
     response,
     jwt_handler: JWTHandler,
@@ -569,6 +612,29 @@ async def get_generic_sso_response(
 
         access_token_str: Optional[str] = generic_sso.access_token
         process_sso_jwt_access_token(access_token_str, sso_jwt_handler, result)
+
+        # Extract roles from id_token if available
+        # This is important for providers like Azure AD that include roles in the id_token
+        # rather than in the userinfo endpoint response
+        id_token_str: Optional[str] = getattr(generic_sso, "id_token", None)
+        if id_token_str and result is not None:
+            id_token_roles = get_roles_from_id_token(id_token_str)
+            if id_token_roles:
+                verbose_proxy_logger.debug(
+                    f"Extracted roles from id_token: {id_token_roles}"
+                )
+                # If result doesn't have a user_role set, try to set it from id_token roles
+                current_user_role = getattr(result, "user_role", None)
+                if current_user_role is None:
+                    # Check if any id_token role is a valid LitellmUserRoles
+                    for role_str in id_token_roles:
+                        role = get_litellm_user_role(role_str)
+                        if role is not None:
+                            result.user_role = role
+                            verbose_proxy_logger.debug(
+                                f"Set user_role to '{role.value}' from id_token roles"
+                            )
+                            break
 
     except Exception as e:
         verbose_proxy_logger.exception(
