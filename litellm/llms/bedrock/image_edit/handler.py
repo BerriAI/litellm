@@ -62,7 +62,7 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: str,
+        prompt: Optional[str],
         model_response: ImageResponse,
         optional_params: dict,
         logging_obj: LitellmLogging,
@@ -127,7 +127,7 @@ class BedrockImageEdit(BaseAWSLLM):
         timeout: Optional[Union[float, httpx.Timeout]],
         model: str,
         logging_obj: LitellmLogging,
-        prompt: str,
+        prompt: Optional[str],
         model_response: ImageResponse,
         client: Optional[AsyncHTTPHandler] = None,
     ) -> ImageResponse:
@@ -163,7 +163,7 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: str,
+        prompt: Optional[str],
         optional_params: dict,
         api_base: Optional[str],
         extra_headers: Optional[dict],
@@ -248,7 +248,7 @@ class BedrockImageEdit(BaseAWSLLM):
         self,
         model: str,
         image: list,
-        prompt: str,
+        prompt: Optional[str],
         optional_params: dict,
     ) -> dict:
         """
@@ -261,7 +261,7 @@ class BedrockImageEdit(BaseAWSLLM):
         """
         config_class = self.get_config_class(model=model)
         config_instance = config_class()
-        request_body = config_instance.transform_image_edit_request(
+        request_body, _ = config_instance.transform_image_edit_request(
             model=model,
             prompt=prompt,
             image=image[0] if image else None,
@@ -276,7 +276,7 @@ class BedrockImageEdit(BaseAWSLLM):
         model_response: ImageResponse,
         model: str,
         logging_obj: LitellmLogging,
-        prompt: str,
+        prompt: Optional[str],
         response: httpx.Response,
         data: dict,
     ) -> ImageResponse:
