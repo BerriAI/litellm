@@ -27,6 +27,7 @@ body:
     attributes:
       label: What part of LiteLLM is this about?
       options:
+        - ''
         - "SDK (litellm Python package)"
         - "Proxy"
         - "UI Dashboard"
