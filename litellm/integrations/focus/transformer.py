@@ -40,7 +40,6 @@ class FocusTransformer:
 
         none_str = pl.lit(None, dtype=pl.Utf8)
         none_dec = pl.lit(None, dtype=pl.Decimal(18, 6))
-        # zero_float = pl.lit(0.0, dtype=pl.Float64)
 
         return frame.select(
             dec(pl.col("spend").fill_null(0.0)).alias("BilledCost"),
@@ -56,26 +55,16 @@ class FocusTransformer:
             pl.lit("Usage-Based").alias("ChargeFrequency"),
             fmt(pl.col("ChargePeriodEnd")).alias("ChargePeriodEnd"),
             fmt(pl.col("ChargePeriodStart")).alias("ChargePeriodStart"),
-            # pl.lit(None).alias("CommitmentDiscountCategory"),
-            # none_str.alias("CommitmentDiscountId"),
-            # none_str.alias("CommitmentDiscountName"),
-            # none_dec.alias("CommitmentDiscountQuantity"),
-            # none_str.alias("CommitmentDiscountUnit"),
-            # none_str.alias("CommitmentDiscountStatus"),
-            # none_str.alias("CommitmentDiscountType"),
             dec(pl.lit(1.0)).alias("ConsumedQuantity"),
             pl.lit("Requests").alias("ConsumedUnit"),
             dec(pl.col("spend").fill_null(0.0)).alias("ContractedCost"),
             none_str.alias("ContractedUnitPrice"),
             dec(pl.col("spend").fill_null(0.0)).alias("EffectiveCost"),
             pl.col("custom_llm_provider").cast(pl.String).alias("InvoiceIssuerName"),
-            # pl.lit("INVOICE-NOT-ISSUED").alias("InvoiceId"),
             none_str.alias("InvoiceId"),
             dec(pl.col("spend").fill_null(0.0)).alias("ListCost"),
             none_dec.alias("ListUnitPrice"),
             none_str.alias("AvailabilityZone"),
-            # none_str.alias("CapacityReservationId"),
-            # none_str.alias("CapacityReservationStatus"),
             pl.lit("USD").alias("PricingCurrency"),
             none_str.alias("PricingCategory"),
             dec(pl.lit(1.0)).alias("PricingQuantity"),
@@ -93,10 +82,6 @@ class FocusTransformer:
             pl.lit("AI and Machine Learning").alias("ServiceCategory"),
             pl.lit("Generative AI").alias("ServiceSubcategory"),
             pl.col("model_group").cast(pl.String).alias("ServiceName"),
-            # none_str.alias("SkuId"),
-            # none_str.alias("SkuPriceId"),
-            # none_str.alias("SkuMeter"),
-            # none_str.alias("SkuPriceDetails"),
             pl.col("team_id").cast(pl.String).alias("SubAccountId"),
             pl.col("team_alias").cast(pl.String).alias("SubAccountName"),
             none_str.alias("SubAccountType"),
