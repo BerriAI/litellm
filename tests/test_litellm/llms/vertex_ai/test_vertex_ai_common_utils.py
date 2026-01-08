@@ -1175,6 +1175,30 @@ def test_vertex_ai_moonshot_uses_openai_handler():
     )
 
 
+def test_vertex_ai_zai_uses_openai_handler():
+    """
+    Ensure ZAI partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "zai-org/glm-4.7-maas"
+    )
+
+
+def test_vertex_ai_zai_is_partner_model():
+    """
+    Ensure ZAI models are detected as Vertex AI partner models.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.is_vertex_partner_model("zai-org/glm-4.7-maas")
+
+
 def test_build_vertex_schema_empty_properties():
     """
     Test _build_vertex_schema handles empty properties objects correctly.
