@@ -1717,6 +1717,68 @@ def completion(  # type: ignore # noqa: PLR0915
                         "api_base": api_base,
                     },
                 )
+        elif custom_llm_provider == "zenmux":
+            # zenmux configs：setting default zenmux base_url and api_key,and add header to recognize calling from litellm
+            api_base = (
+                    api_base
+                    or litellm.api_base
+                    or get_secret("ZENMUX_API_BASE")
+                    or "https://zenmux.ai/api/v1"
+            )
+            api_key = (
+                    api_key
+                    or litellm.api_key
+                    or litellm.zenmux_key
+                    or get_secret("ZENMUX_API_KEY")
+            )
+            zenmux_site_url="https://litellm.ai"
+            zenmux_app_name="litellm"
+            zenmux_headers={
+                "HTTP-Referer": zenmux_site_url,
+                "X-Title": zenmux_app_name,
+            }
+            _headers = headers or litellm.headers
+            if _headers:
+                zenmux_headers.update(_headers)
+            headers=zenmux_headers
+
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    stream=stream,
+                    messages=messages,
+                    acompletion=acompletion,
+                    api_base=api_base,
+                    model_response=model_response,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    custom_llm_provider="zenmux",
+                    timeout=timeout,
+                    headers=headers,
+                    encoding=_get_encoding(),
+                    api_key=api_key,
+                    logging_obj=logging,
+                    client=client,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+            if optional_params.get("stream", False):
+                ## LOGGING
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=response,
+                    additional_args={"headers": headers},
+                )
         elif custom_llm_provider == "deepseek":
             ## COMPLETION CALL
 
