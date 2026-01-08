@@ -34,11 +34,12 @@ class BedrockPassthroughConfig(
         litellm_params: dict,
     ) -> Tuple["URL", str]:
         optional_params = litellm_params.copy()
+        model_id = optional_params.get("model_id", None)
 
         aws_region_name = self._get_aws_region_name(
             optional_params=optional_params,
             model=model,
-            model_id=None,
+            model_id=model_id,
         )
 
         aws_bedrock_runtime_endpoint = optional_params.get("aws_bedrock_runtime_endpoint")
@@ -49,6 +50,12 @@ class BedrockPassthroughConfig(
             endpoint_type="runtime",
         )
 
+        # If model_id is provided (e.g., Application Inference Profile ARN), use it in the endpoint
+        # instead of the translated model name
+        if model_id is not None:
+            # Replace the model name in the endpoint with the model_id
+            import re
+            endpoint = re.sub(r'model/[^/]+/', f'model/{model_id}/', endpoint)
         return self.format_url(endpoint, endpoint_url, request_query_params or {}), endpoint_url
 
     def sign_request(

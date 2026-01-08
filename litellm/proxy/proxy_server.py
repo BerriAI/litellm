@@ -3480,8 +3480,8 @@ class ProxyConfig:
 
         def _deep_merge_dicts(dst: dict, src: dict) -> None:
             """
-            Deep-merge src into dst, skipping None values from src.
-            On conflicts, src (DB) wins.
+            Deep-merge src into dst, skipping None values and empty lists from src.
+            On conflicts, src (DB) wins, but empty lists are treated as "no value" and don't overwrite.
             """
             stack = [(dst, src)]
             while stack:
@@ -3489,6 +3489,9 @@ class ProxyConfig:
                 for k, v in s.items():
                     if v is None:
                         # Preserve existing config when DB value is None (matches prior behavior)
+                        continue
+                    # Skip empty lists - treat them as "no value" to preserve file config
+                    if isinstance(v, list) and len(v) == 0:
                         continue
                     if isinstance(v, dict) and isinstance(d.get(k), dict):
                         stack.append((d[k], v))
@@ -9839,6 +9842,18 @@ async def get_config():  # noqa: PLR0915
         _success_callbacks = _litellm_settings.get("success_callback", [])
         _failure_callbacks = _litellm_settings.get("failure_callback", [])
         _success_and_failure_callbacks = _litellm_settings.get("callbacks", [])
+
+        # Normalize string callbacks to lists
+        def normalize_callback(callback):
+            if isinstance(callback, str):
+                return [callback]
+            elif callback is None:
+                return []
+            return callback
+
+        _success_callbacks = normalize_callback(_success_callbacks)
+        _failure_callbacks = normalize_callback(_failure_callbacks)
+        _success_and_failure_callbacks = normalize_callback(_success_and_failure_callbacks)
 
         _data_to_return = []
         """

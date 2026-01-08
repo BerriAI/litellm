@@ -577,7 +577,13 @@ def responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
-        
+
+        # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
+        if dynamic_api_key is not None:
+            litellm_params.api_key = dynamic_api_key
+        if dynamic_api_base is not None:
+            litellm_params.api_base = dynamic_api_base
+
         #########################################################
         # Update input with provider-specific file IDs if managed files are used
         #########################################################
@@ -1482,6 +1488,12 @@ def compact_responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+
+        # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
+        if dynamic_api_key is not None:
+            litellm_params.api_key = dynamic_api_key
+        if dynamic_api_base is not None:
+            litellm_params.api_base = dynamic_api_base
 
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")

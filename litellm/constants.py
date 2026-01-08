@@ -909,6 +909,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "twelvelabs",
     "openai",
     "stability",
+    "moonshot",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
