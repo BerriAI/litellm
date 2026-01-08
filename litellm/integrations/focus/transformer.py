@@ -35,6 +35,7 @@ class FocusTransformer:
             return col.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
         DEC = pl.Decimal(18, 6)
+
         def dec(col):
             return col.cast(DEC)
 

@@ -14,7 +14,6 @@ from litellm.integrations.custom_logger import CustomLogger
 
 from .database import FocusLiteLLMDatabase
 from .destinations import (
-    FocusDestination,
     FocusDestinationFactory,
     FocusTimeWindow,
 )
@@ -50,9 +49,7 @@ class FocusLogger(CustomLogger):
         self.export_format = (
             export_format or os.getenv("FOCUS_FORMAT") or "parquet"
         ).lower()
-        self.frequency = (
-            frequency or os.getenv("FOCUS_FREQUENCY") or "hourly"
-        ).lower()
+        self.frequency = (frequency or os.getenv("FOCUS_FREQUENCY") or "hourly").lower()
         self.cron_offset_minute = (
             cron_offset_minute
             if cron_offset_minute is not None
@@ -90,7 +87,9 @@ class FocusLogger(CustomLogger):
     ) -> None:
         """Public hook to trigger export immediately."""
         if bool(start_time_utc) ^ bool(end_time_utc):
-            raise ValueError("start_time_utc and end_time_utc must be provided together")
+            raise ValueError(
+                "start_time_utc and end_time_utc must be provided together"
+            )
 
         if start_time_utc and end_time_utc:
             window = FocusTimeWindow(
@@ -160,7 +159,6 @@ class FocusLogger(CustomLogger):
         scheduler: AsyncIOScheduler,
     ) -> None:
         """Register the export cron/interval job with the provided scheduler."""
-        from litellm.integrations.custom_logger import CustomLogger
 
         focus_loggers: List[
             CustomLogger
@@ -168,7 +166,9 @@ class FocusLogger(CustomLogger):
             callback_type=FocusLogger
         )
         if not focus_loggers:
-            verbose_logger.debug("No Focus export logger registered; skipping scheduler")
+            verbose_logger.debug(
+                "No Focus export logger registered; skipping scheduler"
+            )
             return
 
         focus_logger = cast(FocusLogger, focus_loggers[0])
@@ -218,7 +218,9 @@ class FocusLogger(CustomLogger):
 
         normalized = self._transformer.transform(data)
         if normalized.is_empty():
-            verbose_logger.debug("Focus export: normalized data empty for window %s", window)
+            verbose_logger.debug(
+                "Focus export: normalized data empty for window %s", window
+            )
             return
 
         await self._serialize_and_upload(normalized, window)
