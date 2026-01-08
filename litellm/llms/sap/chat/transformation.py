@@ -74,6 +74,7 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
         self.token_creator = None
         self._base_url = None
         self._resource_group = None
+        self._deployment_url_cache = None
 
     def run_env_setup(self, service_key: Optional[str] = None) -> None:
         try:
@@ -107,25 +108,27 @@ class GenAIHubOrchestrationConfig(OpenAIGPTConfig):
             self.run_env_setup()
         return self._resource_group # type: ignore
 
-    @cached_property
+    @property
     def deployment_url(self) -> str:
-        # Keep a short, tight client lifecycle here to avoid fd leaks
-        client = litellm.module_level_client
-        # with httpx.Client(timeout=30) as client:
-        deployments = client.get(
-            f"{self.base_url}/lm/deployments", headers=self.headers
-        ).json()
-        valid: List[Tuple[str, str]] = []
-        for dep in deployments.get("resources", []):
-            if dep.get("scenarioId") == "orchestration":
-                cfg = client.get(
-                    f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
-                    headers=self.headers,
-                ).json()
-                if cfg.get("executableId") == "orchestration":
-                    valid.append((dep["deploymentUrl"], dep["createdAt"]))
-            # newest first
-        return sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        if self._deployment_url_cache is None:
+            # Keep a short, tight client lifecycle here to avoid fd leaks
+            client = litellm.module_level_client
+            # with httpx.Client(timeout=30) as client:
+            deployments = client.get(
+                f"{self.base_url}/lm/deployments", headers=self.headers
+            ).json()
+            valid: List[Tuple[str, str]] = []
+            for dep in deployments.get("resources", []):
+                if dep.get("scenarioId") == "orchestration":
+                    cfg = client.get(
+                        f'{self.base_url}/lm/configurations/{dep["configurationId"]}',
+                        headers=self.headers,
+                    ).json()
+                    if cfg.get("executableId") == "orchestration":
+                        valid.append((dep["deploymentUrl"], dep["createdAt"]))
+                # newest first
+            self._deployment_url_cache = sorted(valid, key=lambda x: x[1], reverse=True)[0][0]
+        return self._deployment_url_cache
 
     @classmethod
     def get_config(cls):

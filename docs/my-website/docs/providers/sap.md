@@ -14,30 +14,86 @@ LiteLLM supports SAP Generative AI Hub's Orchestration Service.
 
 ## Authentication
 
-SAP Generative AI Hub uses service key authentication. You can provide credentials via:
+SAP Generative AI Hub uses a service key for authentication, which can be provided in two ways.
 
-1. **Environment variable** - Set `AICORE_SERVICE_KEY` with your service key JSON
-2. **Direct parameter** - Pass `api_key` with the service key JSON string
+> **Note on Precedence:** If both methods are configured, LiteLLM will prioritize the individual environment variables (`AICORE_AUTH_URL`, `AICORE_CLIENT_ID`, etc.).
 
-```python showLineNumbers title="Environment Variable"
-import os
-os.environ["AICORE_SERVICE_KEY"] = '{"clientid": "...", "clientsecret": "...", ...}'
+<Tabs>
+<TabItem value="individual-vars" label="Recommended: Individual Variables">
+
+Set the following variables in your environment or a `.env` file. This method is recommended for its clarity and ease of use in most environments.
+
+```plaintext title=".env"
+AICORE_AUTH_URL="https://<your-instance>.authentication.sap.hana.ondemand.com/oauth/token"
+AICORE_CLIENT_ID="your-client-id"
+AICORE_CLIENT_SECRET="your-client-secret"
+AICORE_RESOURCE_GROUP="your-resource-group"
+AICORE_BASE_URL="https://api.ai.<your-region>.cfapps.sap.hana.ondemand.com/v2"
 ```
-3. **Environment variables** - Set the following list of credentials in .env file
-<pre>
-AICORE_AUTH_URL = "https://* * * .authentication.sap.hana.ondemand.com/oauth/token",
-AICORE_CLIENT_ID  = " *** ",
-AICORE_CLIENT_SECRET = " *** ",
-AICORE_RESOURCE_GROUP = " *** ",
-AICORE_BASE_URL = "https://api.ai.***.cfapps.sap.hana.ondemand.com/v2"
-</pre>
+
+</TabItem>
+<TabItem value="service-key-json" label="Alternative: JSON Object">
+
+You can provide the entire service key as a single JSON string to the `AICORE_SERVICE_KEY` environment variable. This can be useful in environments where managing a single variable is easier.
+
+The JSON object must include `clientid`, `clientsecret`, `url`, `apiurl`, and `resourcegroup`.
+
+```python showLineNumbers title="Set Environment Variable"
+import os
+import json
+
+service_key = {
+    "clientid": "your-client-id",
+    "clientsecret": "your-client-secret",
+    "url": "https://<your-instance>.authentication.sap.hana.ondemand.com/oauth/token",
+    "apiurl": "https://api.ai.<your-region>.cfapps.sap.hana.ondemand.com/v2",
+    "resourcegroup": "your-resource-group"
+}
+
+os.environ["AICORE_SERVICE_KEY"] = json.dumps(service_key)
+```
+
+</TabItem>
+</Tabs>
+
+> **Note on Model Naming:** SAP AI Core uses a specific naming convention for certain models. For example, Anthropic models are prefixed with `anthropic--` (double dashes), such as `sap/anthropic--claude-4.5-sonnet` and `sap/anthropic--claude-3.5-sonnet`.
+
 ## Usage - LiteLLM Python SDK
+
+The SDK will automatically detect which authentication method you have configured.
+
+<Tabs>
+<TabItem value="sdk-individual-vars" label="With Individual Variables">
+
+If you have set the individual environment variables (`AICORE_AUTH_URL`, etc.), you can make calls directly.
+
+```python showLineNumbers title="SAP Chat Completion"
+from litellm import completion
+
+# Assumes AICORE_AUTH_URL, AICORE_CLIENT_ID, etc. are set in your environment
+response = completion(
+    model="sap/gpt-4",
+    messages=[{"role": "user", "content": "Hello from LiteLLM"}]
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="sdk-service-key-json" label="With JSON Object">
+
+If you are using the `AICORE_SERVICE_KEY` variable, the setup is the same.
 
 ```python showLineNumbers title="SAP Chat Completion"
 from litellm import completion
 import os
+import json
 
-os.environ["AICORE_SERVICE_KEY"] = '{"clientid": "...", "clientsecret": "...", ...}'
+# Set the AICORE_SERVICE_KEY environment variable
+service_key = {
+    "clientid": "...", "clientsecret": "...", "url": "...", 
+    "apiurl": "...", "resourcegroup": "..."
+}
+os.environ["AICORE_SERVICE_KEY"] = json.dumps(service_key)
 
 response = completion(
     model="sap/gpt-4",
@@ -46,50 +102,73 @@ response = completion(
 print(response)
 ```
 
-```python showLineNumbers title="SAP Chat Completion - Streaming"
-from litellm import completion
-import os
-
-os.environ["AICORE_SERVICE_KEY"] = '{"clientid": "...", "clientsecret": "...", ...}'
-
-response = completion(
-    model="sap/gpt-4",
-    messages=[{"role": "user", "content": "Hello from LiteLLM"}],
-    stream=True
-)
-
-for chunk in response:
-    print(chunk.choices[0].delta.content or "", end="")
-```
-
-```python showLineNumbers title="SAP Embedding"
-from litellm import embedding
-import os
-
-os.environ["AICORE_SERVICE_KEY"] = '{"clientid": "...", "clientsecret": "...", ...}'
-
-result = embedding(
-    model="sap/text-embedding-3-small", 
-	input="Answer to the ultimate question of life, the universe, and everything is 42")
-print(result.data[0])
-```
+</TabItem>
+</Tabs>
 
 ## Usage - LiteLLM Proxy
 
-Add to your LiteLLM Proxy config:
+You can configure the proxy to use either authentication method.
+
+<Tabs>
+<TabItem value="proxy-individual-vars" label="Recommended: Individual Variables">
+
+Add the individual environment variables to your `config.yaml`.
 
 ```yaml showLineNumbers title="config.yaml"
 model_list:
-  - model_name: "sap/*"
+  - model_name: gpt-5
     litellm_params:
-      model: "sap/*"
+      model: sap/gpt-5
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: sap/gemini-2.5-pro
+  - model_name: claude-4.5-sonnet
+    litellm_params:
+      model: sap/anthropic--claude-4.5-sonnet
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: sap/text-embedding-3-small
 
-general_settings: 
-  master_key: your-proxy-api-key 
+general_settings:
+  master_key: your-proxy-api-key
 
 environment_variables:
-  AICORE_SERVICE_KEY: '{"clientid": "...", "clientsecret": "...", ...}'
+  AICORE_AUTH_URL: "https://<your-instance>.authentication.sap.hana.ondemand.com/oauth/token"
+  AICORE_CLIENT_ID: "your-client-id"
+  AICORE_CLIENT_SECRET: "your-client-secret"
+  AICORE_RESOURCE_GROUP: "your-resource-group"
+  AICORE_BASE_URL: "https://api.ai.<your-region>.cfapps.sap.hana.ondemand.com/v2"
 ```
+
+</TabItem>
+<TabItem value="proxy-service-key-json" label="Alternative: JSON Object">
+
+Provide the `AICORE_SERVICE_KEY` as a single string in your `config.yaml`.
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-5
+    litellm_params:
+      model: sap/gpt-5
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: sap/gemini-2.5-pro
+  - model_name: claude-4.5-sonnet
+    litellm_params:
+      model: sap/anthropic--claude-4.5-sonnet
+  - model_name: text-embedding-3-small
+    litellm_params:
+      model: sap/text-embedding-3-small
+
+general_settings:
+  master_key: your-proxy-api-key
+
+environment_variables:
+  AICORE_SERVICE_KEY: '{"clientid": "...", "clientsecret": "...", "url": "...", "apiurl": "...", "resourcegroup": "..."}'
+```
+
+</TabItem>
+</Tabs>
 
 Start the proxy:
 
@@ -105,7 +184,7 @@ curl http://localhost:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your-proxy-api-key" \
   -d '{
-    "model": "sap/gpt-4",
+    "model": "gpt-4",
     "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
@@ -122,7 +201,7 @@ client = OpenAI(
 )
 
 response = client.chat.completions.create(
-    model="sap/gpt-4",
+    model="gpt-4",
     messages=[{"role": "user", "content": "Hello"}]
 )
 print(response.choices[0].message.content)
@@ -137,7 +216,7 @@ import litellm
 os.environ["LITELLM_PROXY_API_KEY"] = "your-proxy-api-key"
 litellm.use_litellm_proxy = True  # it is important to set this parameter
 response = litellm.completion(
-    model="sap/gpt-4o",
+    model="gpt-4o",
     messages=[{ "content": "Hello, how are you?","role": "user"}],
     api_base="http://your-proxy-api-base"
 )
@@ -159,4 +238,12 @@ print(response)
 | `tool_choice` | Tool selection behavior |
 | `response_format` | Output format (json_object, json_schema) |
 | `stream` | Enable streaming |
+
+## Supported Models
+
+SAP AI Core provides access to models from multiple providers including OpenAI, Anthropic, Google Gemini, Mistral, Amazon, Meta Llama, and NVIDIA.
+
+For the complete list of available models, refer to the [SAP AI Core Generative AI Hub documentation](https://help.sap.com/docs/sap-ai-core/sap-ai-core-service-guide/models-and-scenarios-in-generative-ai-hub).
+
+> **Note:** Anthropic models use the `anthropic--` prefix (double dashes), such as `sap/anthropic--claude-4.5-sonnet`. Model availability varies by SAP deployment and region.
 

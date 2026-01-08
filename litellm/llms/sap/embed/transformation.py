@@ -73,6 +73,7 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         super().__init__()
         self._access_token_data = {}
         self.token_creator, self.base_url, self.resource_group = get_token_creator()
+        self._deployment_url_cache = None
 
     @property
     def headers(self) -> Dict:
@@ -86,25 +87,27 @@ class GenAIHubEmbeddingConfig(BaseEmbeddingConfig):
         }
         return headers
 
-    @cached_property
+    @property
     def deployment_url(self) -> str:
-        with httpx.Client(timeout=30) as client:
-            valid_deployments = []
-            deployments = client.get(
-                self.base_url + "/lm/deployments", headers=self.headers
-            ).json()
-            for deployment in deployments.get("resources", []):
-                if deployment["scenarioId"] == "orchestration":
-                    config_details = client.get(
-                        self.base_url
-                        + f'/lm/configurations/{deployment["configurationId"]}',
-                        headers=self.headers,
-                    ).json()
-                    if config_details["executableId"] == "orchestration":
-                        valid_deployments.append(
-                            (deployment["deploymentUrl"], deployment["createdAt"])
-                        )
-            return sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
+        if self._deployment_url_cache is None:
+            with httpx.Client(timeout=30) as client:
+                valid_deployments = []
+                deployments = client.get(
+                    self.base_url + "/lm/deployments", headers=self.headers
+                ).json()
+                for deployment in deployments.get("resources", []):
+                    if deployment["scenarioId"] == "orchestration":
+                        config_details = client.get(
+                            self.base_url
+                            + f'/lm/configurations/{deployment["configurationId"]}',
+                            headers=self.headers,
+                        ).json()
+                        if config_details["executableId"] == "orchestration":
+                            valid_deployments.append(
+                                (deployment["deploymentUrl"], deployment["createdAt"])
+                            )
+                self._deployment_url_cache = sorted(valid_deployments, key=lambda x: x[1], reverse=True)[0][0]
+        return self._deployment_url_cache
 
     def get_error_class(self, error_message, status_code, headers):
         return GenAIHubOrchestrationError(status_code, error_message)
