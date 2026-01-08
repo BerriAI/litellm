@@ -859,6 +859,22 @@ class CustomStreamWrapper:
                     delta, model_response.choices[0].delta, attribute
                 )
 
+    def _is_tool_call_streaming_with_non_zero_choice_index(self, choices: List[StreamingChoices]) -> bool:
+        """
+        Handle issue 18535: remap anthropic tool call streaming single choice index from not zero to zero.
+        """
+
+        if (
+            len(choices) == 1
+            and choices[0].index != 0
+            and "delta" in choices[0]
+            and "tool_calls" in choices[0].delta
+            and choices[0].delta.tool_calls is not None
+        ):
+            return True
+        
+        return False
+        
     def return_processed_chunk_logic(  # noqa
         self,
         completion_obj: Dict[str, Any],
@@ -903,14 +919,7 @@ class CustomStreamWrapper:
                             except Exception:
                                 choices.append(StreamingChoices())
 
-                        ## issue 18535: remap anthropic tool call streaming single choice index from not zero to zero.
-                        if (
-                            len(choices) == 1
-                            and choices[0].index != 0
-                            and "delta" in choices[0]
-                            and "tool_calls" in choices[0].delta
-                            and choices[0].delta.tool_calls is not None
-                        ):
+                        if self._is_tool_call_streaming_with_non_zero_choice_index(choices):
                             choices[0].index = 0
 
                         print_verbose(f"choices in streaming: {choices}")
