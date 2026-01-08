@@ -266,6 +266,7 @@ class TestOpenTelemetry(unittest.TestCase):
         self.assertEqual(config.deployment_environment, "production")
         self.assertEqual(config.model_id, "litellm")
 
+
     @patch.dict(os.environ, {}, clear=True)
     def test_open_telemetry_config_custom_service_name(self):
         """Model ID should inherit provided service name when not explicitly set."""
