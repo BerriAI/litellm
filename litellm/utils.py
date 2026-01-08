@@ -49,6 +49,7 @@ from tokenizers import Tokenizer
 import litellm
 
 import litellm.litellm_core_utils
+
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 from litellm._lazy_imports import (
@@ -73,7 +74,6 @@ from litellm.constants import (
 )
 
 
-
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
 _CustomGuardrail = None
@@ -89,6 +89,7 @@ def _get_cached_custom_logger():
     global _CustomLogger
     if _CustomLogger is None:
         from litellm.integrations.custom_logger import CustomLogger
+
         _CustomLogger = CustomLogger
     return _CustomLogger
 
@@ -102,6 +103,7 @@ def _get_cached_custom_guardrail():
     global _CustomGuardrail
     if _CustomGuardrail is None:
         from litellm.integrations.custom_guardrail import CustomGuardrail
+
         _CustomGuardrail = CustomGuardrail
     return _CustomGuardrail
 
@@ -115,6 +117,7 @@ def _get_cached_caching_handler_response():
     global _CachingHandlerResponse
     if _CachingHandlerResponse is None:
         from litellm.caching.caching_handler import CachingHandlerResponse
+
         _CachingHandlerResponse = CachingHandlerResponse
     return _CachingHandlerResponse
 
@@ -128,6 +131,7 @@ def _get_cached_llm_caching_handler():
     global _LLMCachingHandler
     if _LLMCachingHandler is None:
         from litellm.caching.caching_handler import LLMCachingHandler
+
         _LLMCachingHandler = LLMCachingHandler
     return _LLMCachingHandler
 
@@ -146,8 +150,10 @@ def _get_cached_audio_utils():
     global _audio_utils_module
     if _audio_utils_module is None:
         import litellm.litellm_core_utils.audio_utils.utils
+
         _audio_utils_module = litellm.litellm_core_utils.audio_utils.utils
     return _audio_utils_module
+
 
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -205,15 +211,13 @@ from litellm.types.utils import (
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 
-
-
-
-
 try:
     # Python 3.9+
-    with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
-        "anthropic_tokenizer.json"
-    ).open("r", encoding="utf-8") as f:
+    with (
+        resources.files("litellm.litellm_core_utils.tokenizers")
+        .joinpath("anthropic_tokenizer.json")
+        .open("r", encoding="utf-8") as f
+    ):
         json_data = json.load(f)
 except (ImportError, AttributeError, TypeError):
     with resources.open_text(
@@ -252,10 +256,14 @@ from litellm.llms.base_llm.base_utils import (
 if TYPE_CHECKING:
     # Heavy types that are only needed for type checking; avoid importing
     # their modules at runtime during `litellm` import.
-    from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+    from litellm.caching.caching_handler import (
+        CachingHandlerResponse,
+        LLMCachingHandler,
+    )
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.proxy._types import AllowedModelRegion
+
     # Type stubs for lazy-loaded functions to help mypy understand their types
     # These imports allow mypy to understand the types when these are accessed via __getattr__
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
@@ -290,10 +298,13 @@ if TYPE_CHECKING:
     )
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
-    from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
+    from litellm.llms.base_llm.text_to_speech.transformation import (
+        BaseTextToSpeechConfig,
+    )
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
+
     # Type stubs for lazy-loaded functions and classes
     from litellm.litellm_core_utils.cached_imports import (
         get_coroutine_checker,
@@ -337,6 +348,7 @@ if TYPE_CHECKING:
         reset_retry_policy,
     )
     from litellm.secret_managers.main import get_secret
+
     # Type stubs for lazy-loaded config classes and types
     from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
     from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
@@ -620,8 +632,8 @@ def load_credentials_from_list(kwargs: dict):
     Updates kwargs with the credentials if credential_name in kwarg
     """
     # Access CredentialAccessor via module to trigger lazy loading if needed
-    CredentialAccessor = getattr(sys.modules[__name__], 'CredentialAccessor')
-    
+    CredentialAccessor = getattr(sys.modules[__name__], "CredentialAccessor")
+
     credential_name = kwargs.get("litellm_credential_name")
     if credential_name and litellm.credential_list:
         credential_accessor = CredentialAccessor.get_credential_values(credential_name)
@@ -648,7 +660,7 @@ def _is_gemini_model(model: Optional[str], custom_llm_provider: Optional[str]) -
         if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
             return model is not None and "gemini" in model.lower()
         return True
-    
+
     # Check if model name contains gemini
     return model is not None and "gemini" in model.lower()
 
@@ -670,7 +682,7 @@ def _process_assistant_message_tool_calls(
     """
     role = msg_copy.get("role")
     tool_calls = msg_copy.get("tool_calls")
-    
+
     if role == "assistant" and isinstance(tool_calls, list):
         new_tool_calls = []
         for tc in tool_calls:
@@ -683,17 +695,17 @@ def _process_assistant_message_tool_calls(
             else:
                 new_tool_calls.append(tc)
                 continue
-            
+
             # Remove thought signature from ID if present
             if isinstance(tc_dict.get("id"), str):
                 if thought_signature_separator in tc_dict["id"]:
                     tc_dict["id"] = _remove_thought_signature_from_id(
                         tc_dict["id"], thought_signature_separator
                     )
-            
+
             new_tool_calls.append(tc_dict)
         msg_copy["tool_calls"] = new_tool_calls
-    
+
     return msg_copy
 
 
@@ -701,14 +713,12 @@ def _process_tool_message_id(msg_copy: dict, thought_signature_separator: str) -
     """
     Process tool message to remove thought signature from tool_call_id.
     """
-    if msg_copy.get("role") == "tool" and isinstance(
-        msg_copy.get("tool_call_id"), str
-    ):
+    if msg_copy.get("role") == "tool" and isinstance(msg_copy.get("tool_call_id"), str):
         if thought_signature_separator in msg_copy["tool_call_id"]:
             msg_copy["tool_call_id"] = _remove_thought_signature_from_id(
                 msg_copy["tool_call_id"], thought_signature_separator
             )
-    
+
     return msg_copy
 
 
@@ -719,7 +729,7 @@ def _remove_thought_signatures_from_messages(
     Remove thought signatures from tool call IDs in all messages.
     """
     processed_messages = []
-    
+
     for msg in messages:
         # Handle Pydantic models (convert to dict)
         if hasattr(msg, "model_dump"):
@@ -730,17 +740,17 @@ def _remove_thought_signatures_from_messages(
             # Unknown type, keep as is
             processed_messages.append(msg)
             continue
-        
+
         # Process assistant messages with tool_calls
         msg_dict = _process_assistant_message_tool_calls(
             msg_dict, thought_signature_separator
         )
-        
+
         # Process tool messages with tool_call_id
         msg_dict = _process_tool_message_id(msg_dict, thought_signature_separator)
-        
+
         processed_messages.append(msg_dict)
-    
+
     return processed_messages
 
 
@@ -765,7 +775,7 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## LAZY LOAD COROUTINE CHECKER ##
-        get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
+        get_coroutine_checker = getattr(sys.modules[__name__], "get_coroutine_checker")
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
@@ -778,7 +788,9 @@ def function_setup(  # noqa: PLR0915
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
                     callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback, internal_usage_cache=None, llm_router=None  # type: ignore
+                        callback,
+                        internal_usage_cache=None,
+                        llm_router=None,  # type: ignore
                     )
                     if callback is None or any(
                         isinstance(cb, type(callback))
@@ -813,7 +825,7 @@ def function_setup(  # noqa: PLR0915
                     + litellm.failure_callback
                 )
             )
-            get_set_callbacks = getattr(sys.modules[__name__], 'get_set_callbacks')
+            get_set_callbacks = getattr(sys.modules[__name__], "get_set_callbacks")
             get_set_callbacks()(callback_list=callback_list, function_id=function_id)
         ## ASYNC CALLBACKS
         if len(litellm.input_callback) > 0:
@@ -941,7 +953,7 @@ def function_setup(  # noqa: PLR0915
             elif kwargs.get("messages", None):
                 messages = kwargs["messages"]
             ### PRE-CALL RULES ###
-            Rules = getattr(sys.modules[__name__], 'Rules')
+            Rules = getattr(sys.modules[__name__], "Rules")
             if (
                 Rules.has_pre_call_rules()
                 and isinstance(messages, list)
@@ -949,7 +961,6 @@ def function_setup(  # noqa: PLR0915
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
-
                 buffer = StringIO()
                 for m in messages:
                     content = m.get("content", "")
@@ -960,7 +971,7 @@ def function_setup(  # noqa: PLR0915
                     input=buffer.getvalue(),
                     model=model,
                 )
-            
+
             ### REMOVE THOUGHT SIGNATURES FROM TOOL CALL IDS FOR NON-GEMINI MODELS ###
             # Gemini models embed thought signatures in tool call IDs. When sending
             # messages with tool calls to non-Gemini providers, we need to remove these
@@ -976,7 +987,7 @@ def function_setup(  # noqa: PLR0915
 
                     # Get custom_llm_provider to determine target provider
                     custom_llm_provider = kwargs.get("custom_llm_provider")
-                    
+
                     # If custom_llm_provider not in kwargs, try to determine it from the model
                     if not custom_llm_provider and model:
                         try:
@@ -987,18 +998,18 @@ def function_setup(  # noqa: PLR0915
                         except Exception:
                             # If we can't determine the provider, skip this processing
                             pass
-                    
+
                     # Only process if target is NOT a Gemini model
                     if not _is_gemini_model(model, custom_llm_provider):
                         verbose_logger.debug(
                             "Removing thought signatures from tool call IDs for non-Gemini model"
                         )
-                        
+
                         # Process messages to remove thought signatures
                         processed_messages = _remove_thought_signatures_from_messages(
                             messages, THOUGHT_SIGNATURE_SEPARATOR
                         )
-                        
+
                         # Update messages in kwargs or args
                         if "messages" in kwargs:
                             kwargs["messages"] = processed_messages
@@ -1043,9 +1054,7 @@ def function_setup(  # noqa: PLR0915
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
             # Lazy import audio_utils.utils only when needed for transcription calls
             audio_utils = _get_cached_audio_utils()
-            file_checksum = audio_utils.get_audio_file_content_hash(
-                file_obj=_file_obj
-            )
+            file_checksum = audio_utils.get_audio_file_content_hash(file_obj=_file_obj)
             if "metadata" in kwargs:
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
@@ -1074,7 +1083,9 @@ def function_setup(  # noqa: PLR0915
             call_type=call_type,
         ):
             stream = True
-        get_litellm_logging_class = getattr(sys.modules[__name__], 'get_litellm_logging_class')
+        get_litellm_logging_class = getattr(
+            sys.modules[__name__], "get_litellm_logging_class"
+        )
         logging_obj = get_litellm_logging_class()(  # Victim for object pool
             model=model,  # type: ignore
             messages=messages,
@@ -1158,8 +1169,10 @@ def _get_wrapper_num_retries(
     if num_retries is None:
         num_retries = litellm.num_retries
     if kwargs.get("retry_policy", None):
-        get_num_retries_from_retry_policy = getattr(sys.modules[__name__], 'get_num_retries_from_retry_policy')
-        reset_retry_policy = getattr(sys.modules[__name__], 'reset_retry_policy')
+        get_num_retries_from_retry_policy = getattr(
+            sys.modules[__name__], "get_num_retries_from_retry_policy"
+        )
+        reset_retry_policy = getattr(sys.modules[__name__], "reset_retry_policy")
         retry_policy_num_retries = get_num_retries_from_retry_policy(
             exception=exception,
             retry_policy=kwargs.get("retry_policy"),
@@ -1187,7 +1200,7 @@ def _get_wrapper_timeout(
 
 
 def check_coroutine(value) -> bool:
-    get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
+    get_coroutine_checker = getattr(sys.modules[__name__], "get_coroutine_checker")
     return get_coroutine_checker().is_async_callable(value)
 
 
@@ -1263,9 +1276,7 @@ def post_call_processing(
                         isinstance(original_response, ModelResponse)
                         and len(original_response.choices) > 0
                     ):
-                        model_response: Optional[str] = original_response.choices[
-                            0
-                        ].message.content  # type: ignore
+                        model_response: Optional[str] = original_response.choices[0].message.content  # type: ignore
                         if model_response is not None:
                             ### POST-CALL RULES ###
                             rules_obj.post_call_rules(input=model_response, model=model)
@@ -1346,7 +1357,7 @@ def post_call_processing(
 
 
 def client(original_function):  # noqa: PLR0915
-    Rules = getattr(sys.modules[__name__], 'Rules')
+    Rules = getattr(sys.modules[__name__], "Rules")
     rules_obj = Rules()
 
     @wraps(original_function)
@@ -1532,7 +1543,9 @@ def client(original_function):  # noqa: PLR0915
                     )
                 else:
                     # RETURN RESULT
-                    update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
+                    update_response_metadata = getattr(
+                        sys.modules[__name__], "update_response_metadata"
+                    )
                     update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -1576,7 +1589,7 @@ def client(original_function):  # noqa: PLR0915
             # Copy the current context to propagate it to the background thread
             # This is essential for OpenTelemetry span context propagation
             ctx = contextvars.copy_context()
-            executor = getattr(sys.modules[__name__], 'executor')
+            executor = getattr(sys.modules[__name__], "executor")
             executor.submit(
                 ctx.run,
                 logging_obj.success_handler,
@@ -1585,7 +1598,9 @@ def client(original_function):  # noqa: PLR0915
                 end_time,
             )
             # RETURN RESULT
-            update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
+            update_response_metadata = getattr(
+                sys.modules[__name__], "update_response_metadata"
+            )
             update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
@@ -1602,8 +1617,12 @@ def client(original_function):  # noqa: PLR0915
                     kwargs.get("num_retries", None) or litellm.num_retries or None
                 )
                 if kwargs.get("retry_policy", None):
-                    get_num_retries_from_retry_policy = getattr(sys.modules[__name__], 'get_num_retries_from_retry_policy')
-                    reset_retry_policy = getattr(sys.modules[__name__], 'reset_retry_policy')
+                    get_num_retries_from_retry_policy = getattr(
+                        sys.modules[__name__], "get_num_retries_from_retry_policy"
+                    )
+                    reset_retry_policy = getattr(
+                        sys.modules[__name__], "reset_retry_policy"
+                    )
                     num_retries = get_num_retries_from_retry_policy(
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
@@ -1775,7 +1794,9 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
-                    update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
+                    update_response_metadata = getattr(
+                        sys.modules[__name__], "update_response_metadata"
+                    )
                     update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
@@ -1840,7 +1861,9 @@ def client(original_function):  # noqa: PLR0915
                     end_time=end_time,
                 )
 
-            update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
+            update_response_metadata = getattr(
+                sys.modules[__name__], "update_response_metadata"
+            )
             update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
@@ -1916,7 +1939,7 @@ def client(original_function):  # noqa: PLR0915
             setattr(e, "timeout", timeout)
             raise e
 
-    get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
+    get_coroutine_checker = getattr(sys.modules[__name__], "get_coroutine_checker")
     is_coroutine = get_coroutine_checker().is_async_callable(original_function)
 
     # Return the appropriate wrapper based on the original function type
@@ -2088,7 +2111,9 @@ def create_pretrained_tokenizer(
 
     try:
         tokenizer = Tokenizer.from_pretrained(
-            identifier, revision=revision, auth_token=auth_token  # type: ignore
+            identifier,
+            revision=revision,
+            auth_token=auth_token,  # type: ignore
         )
     except Exception as e:
         verbose_logger.error(
@@ -2277,7 +2302,7 @@ def supports_response_schema(
     """
     ## GET LLM PROVIDER ##
     try:
-        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
+        get_llm_provider = getattr(sys.modules[__name__], "get_llm_provider")
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model, custom_llm_provider=custom_llm_provider
         )
@@ -2976,8 +3001,10 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     **kwargs,
 ):
     # Lazy load get_supported_openai_params
-    get_supported_openai_params = getattr(sys.modules[__name__], 'get_supported_openai_params')
-    
+    get_supported_openai_params = getattr(
+        sys.modules[__name__], "get_supported_openai_params"
+    )
+
     # retrieve all parameters passed to the function
     passed_params = locals()
     custom_llm_provider = passed_params.pop("custom_llm_provider", None)
@@ -3250,8 +3277,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "ollama":
-        if 'dimensions' in non_default_params:
-            optional_params['dimensions']=non_default_params.pop('dimensions')
+        if "dimensions" in non_default_params:
+            optional_params["dimensions"] = non_default_params.pop("dimensions")
         if len(non_default_params.keys()) > 0:
             if (
                 litellm.drop_params is True or drop_params is True
@@ -3782,7 +3809,9 @@ def get_optional_params(  # noqa: PLR0915
                     message=f"{custom_llm_provider} does not support parameters: {list(unsupported_params.keys())}, for model={model}. To drop these, set `litellm.drop_params=True` or for proxy:\n\n`litellm_settings:\n drop_params: true`\n. \n If you want to use these params dynamically send allowed_openai_params={list(unsupported_params.keys())} in your request.",
                 )
 
-    get_supported_openai_params = getattr(sys.modules[__name__], 'get_supported_openai_params')
+    get_supported_openai_params = getattr(
+        sys.modules[__name__], "get_supported_openai_params"
+    )
     supported_params = get_supported_openai_params(
         model=model, custom_llm_provider=custom_llm_provider
     )
@@ -4037,7 +4066,7 @@ def get_optional_params(  # noqa: PLR0915
             ),
         )
     elif custom_llm_provider == "bedrock":
-        BedrockModelInfo = getattr(sys.modules[__name__], 'BedrockModelInfo')
+        BedrockModelInfo = getattr(sys.modules[__name__], "BedrockModelInfo")
         bedrock_route = BedrockModelInfo.get_bedrock_route(model)
         bedrock_base_model = BedrockModelInfo.get_base_model(model)
         if bedrock_route == "converse" or bedrock_route == "converse_like":
@@ -4460,12 +4489,10 @@ def get_optional_params(  # noqa: PLR0915
         allowed_openai_params=allowed_openai_params,
     )
 
-    # Apply nested drops from additional_drop_params
+    # Apply drops from additional_drop_params (supports both top-level and nested paths)
     if additional_drop_params:
-        is_nested_path = getattr(sys.modules[__name__], 'is_nested_path')
-        delete_nested_value = getattr(sys.modules[__name__], 'delete_nested_value')
-        nested_paths = [p for p in additional_drop_params if is_nested_path(p)]
-        for path in nested_paths:
+        delete_nested_value = getattr(sys.modules[__name__], "delete_nested_value")
+        for path in additional_drop_params:
             optional_params = delete_nested_value(optional_params, path)
 
     return optional_params
@@ -4513,7 +4540,9 @@ def add_provider_specific_params_to_optional_params(
             else:
                 processed_extra_body = initial_extra_body
 
-            _ensure_extra_body_is_safe = getattr(sys.modules[__name__], '_ensure_extra_body_is_safe')
+            _ensure_extra_body_is_safe = getattr(
+                sys.modules[__name__], "_ensure_extra_body_is_safe"
+            )
             optional_params["extra_body"] = _ensure_extra_body_is_safe(
                 extra_body=processed_extra_body
             )
@@ -4924,7 +4953,7 @@ def get_max_tokens(model: str) -> Optional[int]:
                 return litellm.model_cost[model]["max_output_tokens"]
             elif "max_tokens" in litellm.model_cost[model]:
                 return litellm.model_cost[model]["max_tokens"]
-        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
+        get_llm_provider = getattr(sys.modules[__name__], "get_llm_provider")
         model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         if custom_llm_provider == "huggingface":
             max_tokens = _get_max_position_embeddings(model_name=model)
@@ -5045,7 +5074,7 @@ def _get_potential_model_names(
     if custom_llm_provider is None:
         # Get custom_llm_provider
         try:
-            get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
+            get_llm_provider = getattr(sys.modules[__name__], "get_llm_provider")
             split_model, custom_llm_provider, _, _ = get_llm_provider(model=model)
         except Exception:
             split_model = model
@@ -5768,7 +5797,7 @@ def validate_environment(  # noqa: PLR0915
         }
     ## EXTRACT LLM PROVIDER - if model name provided
     try:
-        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
+        get_llm_provider = getattr(sys.modules[__name__], "get_llm_provider")
         _, custom_llm_provider, _, _ = get_llm_provider(model=model)
     except Exception:
         custom_llm_provider = None
@@ -6331,7 +6360,7 @@ def register_prompt_template(
     complete_model = model
     potential_models = [complete_model]
     try:
-        get_llm_provider = getattr(sys.modules[__name__], 'get_llm_provider')
+        get_llm_provider = getattr(sys.modules[__name__], "get_llm_provider")
         model = get_llm_provider(model=model)[0]
         potential_models.append(model)
     except Exception:
@@ -6417,7 +6446,7 @@ class TextCompletionStreamWrapper:
         except StopIteration:
             raise StopIteration
         except Exception as e:
-            exception_type = getattr(sys.modules[__name__], 'exception_type')
+            exception_type = getattr(sys.modules[__name__], "exception_type")
             raise exception_type(
                 model=self.model,
                 custom_llm_provider=self.custom_llm_provider or "",
@@ -6911,7 +6940,7 @@ def get_valid_models(
         # init litellm_params
         #################################
         from litellm.types.router import LiteLLM_Params
-        
+
         if litellm_params is None:
             litellm_params = LiteLLM_Params(model="")
         if api_key is not None:
@@ -7041,14 +7070,20 @@ def _get_base_model_from_metadata(model_call_details=None):
             return _base_model
         metadata = litellm_params.get("metadata", {})
 
-        _get_base_model_from_litellm_call_metadata = getattr(sys.modules[__name__], '_get_base_model_from_litellm_call_metadata')
-        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(metadata=metadata)
+        _get_base_model_from_litellm_call_metadata = getattr(
+            sys.modules[__name__], "_get_base_model_from_litellm_call_metadata"
+        )
+        base_model_from_metadata = _get_base_model_from_litellm_call_metadata(
+            metadata=metadata
+        )
         if base_model_from_metadata is not None:
             return base_model_from_metadata
 
         # Also check litellm_metadata (used by Responses API and other generic API calls)
         litellm_metadata = litellm_params.get("litellm_metadata", {})
-        _get_base_model_from_litellm_call_metadata = getattr(sys.modules[__name__], '_get_base_model_from_litellm_call_metadata')
+        _get_base_model_from_litellm_call_metadata = getattr(
+            sys.modules[__name__], "_get_base_model_from_litellm_call_metadata"
+        )
         return _get_base_model_from_litellm_call_metadata(metadata=litellm_metadata)
     return None
 
@@ -7460,12 +7495,11 @@ class ProviderConfigManager:
             litellm.LlmProviders.COHERE_CHAT == provider
             or litellm.LlmProviders.COHERE == provider
         ):
-            CohereModelInfo = getattr(sys.modules[__name__], 'CohereModelInfo')
+            CohereModelInfo = getattr(sys.modules[__name__], "CohereModelInfo")
             route = CohereModelInfo.get_cohere_route(model)
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
             else:
-
                 return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
@@ -7513,7 +7547,7 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXAIConfig()
         elif litellm.LlmProviders.EMPOWER == provider:
             return litellm.EmpowerChatConfig()
-        elif litellm.LlmProviders.MINIMAX == provider:            
+        elif litellm.LlmProviders.MINIMAX == provider:
             return litellm.MinimaxChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
@@ -8314,8 +8348,8 @@ class ProviderConfigManager:
             from litellm.llms.vertex_ai.ocr.common_utils import get_vertex_ai_ocr_config
 
             return get_vertex_ai_ocr_config(model=model)
-        
-        MistralOCRConfig = getattr(sys.modules[__name__], 'MistralOCRConfig')
+
+        MistralOCRConfig = getattr(sys.modules[__name__], "MistralOCRConfig")
         PROVIDER_TO_CONFIG_MAP = {
             litellm.LlmProviders.MISTRAL: MistralOCRConfig,
         }
@@ -8456,7 +8490,9 @@ def get_end_user_id_for_cost_tracking(
 
     service_type: "litellm_logging" or "prometheus" - used to allow prometheus only disable cost tracking.
     """
-    get_litellm_metadata_from_kwargs = getattr(sys.modules[__name__], 'get_litellm_metadata_from_kwargs')
+    get_litellm_metadata_from_kwargs = getattr(
+        sys.modules[__name__], "get_litellm_metadata_from_kwargs"
+    )
     _metadata = cast(
         dict, get_litellm_metadata_from_kwargs(dict(litellm_params=litellm_params))
     )
@@ -8752,12 +8788,12 @@ def __getattr__(name: str) -> Any:
     """Lazy import handler for utils module with cached registry for improved performance."""
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from litellm._lazy_imports import _get_lazy_import_registry
-    
+
     registry = _get_lazy_import_registry()
-    
+
     # Check if name is in registry and call the cached handler function
     if name in registry:
         handler_func = registry[name]
         return handler_func(name)
-    
+
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
