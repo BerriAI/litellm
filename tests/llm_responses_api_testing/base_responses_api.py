@@ -460,7 +460,13 @@ class BaseResponsesAPITest(ABC):
         # Additional assertions specific to tool calls
         assert response is not None
         assert "output" in response
-        assert len(response["output"]) > 0
+        # For async agent APIs (like Manus), the response may be in 'running' state
+        # without output yet - this is valid behavior
+        if response.get("status") in ["running", "pending"]:
+            print(f"Response is in '{response.get('status')}' state - async agent API behavior")
+            assert response.get("id") is not None
+        else:
+            assert len(response["output"]) > 0
 
     @pytest.mark.asyncio
     async def test_responses_api_multi_turn_with_reasoning_and_structured_output(self):
