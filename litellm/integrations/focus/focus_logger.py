@@ -228,9 +228,7 @@ class FocusLogger(CustomLogger):
         now_utc = now.astimezone(timezone.utc)
         if self.frequency == "hourly":
             end_time = now_utc.replace(minute=0, second=0, microsecond=0)
-            # start_time = end_time - timedelta(hours=1)
-            # Temporary override: export data since start of day instead of last hour
-            start_time = end_time.replace(hour=0)
+            start_time = end_time - timedelta(hours=1)
         elif self.frequency == "daily":
             end_time = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
             start_time = end_time - timedelta(days=1)

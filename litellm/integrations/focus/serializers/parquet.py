@@ -19,5 +19,4 @@ class FocusParquetSerializer(FocusSerializer):
         target = frame if not frame.is_empty() else pl.DataFrame(schema=frame.schema)
         buffer = io.BytesIO()
         target.write_parquet(buffer, compression="snappy")
-        print(target.head(5)) # debug
         return buffer.getvalue()
