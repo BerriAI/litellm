@@ -691,6 +691,29 @@ async def test_streaming_completion_start_time(logging_obj: Logging):
     )
 
 
+@pytest.mark.asyncio
+async def test_vertex_streaming_bad_request_not_midstream(logging_obj: Logging):
+    """Ensure Vertex bad request errors surface as 400, not mid-stream fallbacks."""
+    from litellm.llms.vertex_ai.common_utils import VertexAIError
+
+    async def _raise_bad_request(**kwargs):
+        raise VertexAIError(status_code=400, message="invalid maxOutputTokens", headers=None)
+
+    response = CustomStreamWrapper(
+        completion_stream=None,
+        model="gemini-3-pro-preview",
+        logging_obj=logging_obj,
+        custom_llm_provider="vertex_ai_beta",
+        make_call=_raise_bad_request,
+    )
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        await response.__anext__()
+
+    assert getattr(excinfo.value, "status_code", None) == 400
+    assert "invalid maxOutputTokens" in str(excinfo.value)
+
+
 def test_streaming_handler_with_created_time_propagation(
     initialized_custom_stream_wrapper: CustomStreamWrapper, logging_obj: Logging
 ):

@@ -21,12 +21,52 @@ Looking for how to use Code Interpreter? See the [Code Interpreter Guide](/docs/
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/v1/containers/{container_id}/files` | POST | Upload file to container |
 | `/v1/containers/{container_id}/files` | GET | List files in container |
 | `/v1/containers/{container_id}/files/{file_id}` | GET | Get file metadata |
 | `/v1/containers/{container_id}/files/{file_id}/content` | GET | Download file content |
 | `/v1/containers/{container_id}/files/{file_id}` | DELETE | Delete file |
 
 ## LiteLLM Python SDK
+
+### Upload Container File
+
+Upload files directly to a container session. This is useful when `/chat/completions` or `/responses` sends files to the container but the input file type is limited to PDF. This endpoint lets you work with other file types like CSV, Excel, Python scripts, etc.
+
+```python showLineNumbers title="upload_container_file.py"
+from litellm import upload_container_file
+
+# Upload a CSV file
+file = upload_container_file(
+    container_id="cntr_123...",
+    file=("data.csv", open("data.csv", "rb").read(), "text/csv"),
+    custom_llm_provider="openai"
+)
+
+print(f"Uploaded: {file.id}")
+print(f"Path: {file.path}")
+```
+
+**Async:**
+
+```python showLineNumbers title="aupload_container_file.py"
+from litellm import aupload_container_file
+
+file = await aupload_container_file(
+    container_id="cntr_123...",
+    file=("script.py", b"print('hello world')", "text/x-python"),
+    custom_llm_provider="openai"
+)
+```
+
+**Supported file formats:**
+- CSV (`.csv`)
+- Excel (`.xlsx`)
+- Python scripts (`.py`)
+- JSON (`.json`)
+- Markdown (`.md`)
+- Text files (`.txt`)
+- And more...
 
 ### List Container Files
 
@@ -102,6 +142,40 @@ print(f"Deleted: {result.deleted}")
 
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
+
+### Upload File
+
+<Tabs>
+<TabItem value="openai-sdk" label="OpenAI SDK">
+
+```python showLineNumbers title="upload_file.py"
+from openai import OpenAI
+
+client = OpenAI(
+    api_key="sk-1234",
+    base_url="http://localhost:4000"
+)
+
+file = client.containers.files.create(
+    container_id="cntr_123...",
+    file=open("data.csv", "rb")
+)
+
+print(f"Uploaded: {file.id}")
+print(f"Path: {file.path}")
+```
+
+</TabItem>
+<TabItem value="curl" label="curl">
+
+```bash showLineNumbers title="upload_file.sh"
+curl "http://localhost:4000/v1/containers/cntr_123.../files" \
+    -H "Authorization: Bearer sk-1234" \
+    -F file="@data.csv"
+```
+
+</TabItem>
+</Tabs>
 
 ### List Files
 
@@ -235,6 +309,13 @@ curl -X DELETE "http://localhost:4000/v1/containers/cntr_123.../files/cfile_456.
 </Tabs>
 
 ## Parameters
+
+### Upload File
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `container_id` | string | Yes | Container ID |
+| `file` | FileTypes | Yes | File to upload. Can be a tuple of (filename, content, content_type), file-like object, or bytes |
 
 ### List Files
 
