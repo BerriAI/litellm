@@ -50,6 +50,23 @@
         "interactions": true
       }
     },
+    "aibadgr": {
+      "display_name": "AI Badgr (`aibadgr`)",
+      "url": "https://docs.litellm.ai/docs/providers/aibadgr",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": false,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true
+      }
+    },
     "ai21": {
       "display_name": "AI21 (`ai21`)",
       "url": "https://docs.litellm.ai/docs/providers/ai21",

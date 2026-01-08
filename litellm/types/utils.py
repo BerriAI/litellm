@@ -3011,6 +3011,7 @@ class LlmProviders(str, Enum):
     STABILITY = "stability"
     HEROKU = "heroku"
     AIML = "aiml"
+    AIBADGR = "aibadgr"
     COMETAPI = "cometapi"
     OCI = "oci"
     AUTO_ROUTER = "auto_router"

@@ -623,6 +623,7 @@ openai_compatible_providers: List = [
     "hyperbolic",
     "vercel_ai_gateway",
     "aiml",
+    "aibadgr",
     "wandb",
     "cometapi",
     "clarifai",
