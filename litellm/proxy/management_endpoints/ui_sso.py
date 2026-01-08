@@ -539,6 +539,7 @@ async def get_generic_sso_response(
     ],  # sso specific jwt handler - used for restricted sso group access control
     generic_client_id: str,
     redirect_url: str,
+    return_raw_sso_response: bool = False,
 ) -> Tuple[Union[OpenID, dict], Optional[dict]]:  # return received response
     # make generic sso provider
     from fastapi_sso.sso.base import DiscoveryDocument
@@ -617,24 +618,31 @@ async def get_generic_sso_response(
         # This is important for providers like Azure AD that include roles in the id_token
         # rather than in the userinfo endpoint response
         id_token_str: Optional[str] = getattr(generic_sso, "id_token", None)
-        if id_token_str and result is not None:
+        id_token_roles: List[str] = []
+        if id_token_str:
             id_token_roles = get_roles_from_id_token(id_token_str)
             if id_token_roles:
                 verbose_proxy_logger.debug(
                     f"Extracted roles from id_token: {id_token_roles}"
                 )
                 # If result doesn't have a user_role set, try to set it from id_token roles
-                current_user_role = getattr(result, "user_role", None)
-                if current_user_role is None:
-                    # Check if any id_token role is a valid LitellmUserRoles
-                    for role_str in id_token_roles:
-                        role = get_litellm_user_role(role_str)
-                        if role is not None:
-                            result.user_role = role
-                            verbose_proxy_logger.debug(
-                                f"Set user_role to '{role.value}' from id_token roles"
-                            )
-                            break
+                if result is not None:
+                    current_user_role = getattr(result, "user_role", None)
+                    if current_user_role is None:
+                        # Check if any id_token role is a valid LitellmUserRoles
+                        for role_str in id_token_roles:
+                            role = get_litellm_user_role(role_str)
+                            if role is not None:
+                                result.user_role = role
+                                verbose_proxy_logger.debug(
+                                    f"Set user_role to '{role.value}' from id_token roles"
+                                )
+                                break
+
+        # If user is trying to get the raw SSO response for debugging, include id_token roles
+        if return_raw_sso_response and received_response is not None:
+            received_response["id_token_roles"] = id_token_roles
+            return received_response, received_response
 
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -2850,6 +2858,7 @@ async def debug_sso_callback(request: Request):
             generic_client_id=generic_client_id,
             redirect_url=redirect_url,
             sso_jwt_handler=sso_jwt_handler,
+            return_raw_sso_response=True,
         )
 
     # If result is None, return a basic error message
