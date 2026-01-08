@@ -8,14 +8,12 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
     _safe_convert_created_field,
 )
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponseInputParam,
-    ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
 )
 from litellm.types.router import GenericLiteLLMParams
