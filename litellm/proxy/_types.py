@@ -633,6 +633,7 @@ class LiteLLMRoutes(enum.Enum):
         "/user/available_users",
         "/user/available_roles",
         "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         "/team/daily/activity",
         "/tag/daily/activity",
         "/tag/list",
