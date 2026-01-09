@@ -173,7 +173,7 @@ spec:
           {{- toYaml .Values.startupProbe | nindent 12 }}
           {{- else }}
             httpGet:
-              path: /health/startup
+              path: /health/readiness
               port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
           {{- end }}
           resources:
