@@ -1811,6 +1811,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
         reasoning_content: Optional[str] = None
+        thought_signatures: Optional[Any] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:
