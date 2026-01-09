@@ -549,3 +549,228 @@ def test_truncation_preserves_beginning_and_end():
     kept_chars = expected_start_chars + expected_end_chars
     expected_skipped = total_chars - kept_chars
     assert str(expected_skipped) in truncated_content
+
+
+@pytest.mark.parametrize("turn_off_message_logging", [True, False])
+def test_proxy_server_request_redaction(turn_off_message_logging: bool):
+    """
+    Test that proxy_server_request messages are redacted when turn_off_message_logging is enabled.
+    
+    This test verifies the fix for GitHub issue #16336:
+    https://github.com/BerriAI/litellm/issues/16336
+    
+    When turn_off_message_logging is True, both the response AND the proxy_server_request
+    should be redacted in the spend logs.
+    """
+    from litellm.constants import REDACTED_BY_LITELM_STRING
+    
+    # Set up litellm global setting
+    original_setting = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = turn_off_message_logging
+    
+    try:
+        # Mock request data
+        request_messages = [
+            {"role": "system", "content": "You are a helpful assistant."},
+            {"role": "user", "content": "What is the capital of France?"}
+        ]
+        
+        # Mock response data
+        response_obj = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1234567890,
+            "model": "gpt-4.1-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "The capital of France is Paris."
+                    },
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 10,
+                "total_tokens": 30
+            }
+        }
+        
+        # Build kwargs with proxy_server_request
+        kwargs = {
+            "model": "gpt-4.1-mini",
+            "messages": request_messages,
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "sk-test-key",
+                    "user_api_key_user_id": "test-user",
+                },
+                "proxy_server_request": {
+                    "method": "POST",
+                    "url": "http://localhost:4000/chat/completions",
+                    "body": {
+                        "model": "gpt-4.1-mini",
+                        "messages": request_messages,
+                        "temperature": 0.7
+                    }
+                }
+            },
+            "call_type": "acompletion",
+            "response_cost": 0.0001,
+        }
+        
+        # Add dynamic params for per-request override (if needed)
+        if turn_off_message_logging:
+            kwargs["standard_callback_dynamic_params"] = {
+                "turn_off_message_logging": turn_off_message_logging
+            }
+        
+        # Generate spend logs payload
+        import datetime
+        start_time = datetime.datetime.now()
+        end_time = start_time + datetime.timedelta(seconds=1)
+        
+        # Set store_prompts_in_spend_logs to True so proxy_server_request is stored
+        from litellm.proxy.proxy_server import general_settings
+        original_store_prompts = general_settings.get("store_prompts_in_spend_logs", False)
+        general_settings["store_prompts_in_spend_logs"] = True
+        
+        try:
+            payload = get_logging_payload(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time
+            )
+            
+            # Parse the proxy_server_request JSON string
+            proxy_request_str = payload.get("proxy_server_request", "{}")
+            proxy_request = json.loads(proxy_request_str) if proxy_request_str != "{}" else {}
+            
+            if turn_off_message_logging:
+                # When redaction is enabled, messages should be redacted
+                if proxy_request:
+                    assert "messages" in proxy_request
+                    assert len(proxy_request["messages"]) == 1
+                    assert proxy_request["messages"][0]["role"] == "user"
+                    assert proxy_request["messages"][0]["content"] == REDACTED_BY_LITELM_STRING
+            else:
+                # When redaction is disabled, messages should be preserved
+                if proxy_request:
+                    assert "messages" in proxy_request
+                    assert len(proxy_request["messages"]) == 2
+                    assert proxy_request["messages"][0]["content"] == "You are a helpful assistant."
+                    assert proxy_request["messages"][1]["content"] == "What is the capital of France?"
+        
+        finally:
+            # Restore original setting
+            general_settings["store_prompts_in_spend_logs"] = original_store_prompts
+            
+    finally:
+        # Restore original litellm setting
+        litellm.turn_off_message_logging = original_setting
+
+
+def test_proxy_server_request_redaction_with_header():
+    """
+    Test that proxy_server_request is redacted when x-litellm-enable-message-redaction header is set.
+    
+    This test verifies that per-request redaction via header also works for proxy_server_request.
+    """
+    from litellm.constants import REDACTED_BY_LITELM_STRING
+    
+    # Set global setting to False
+    original_setting = litellm.turn_off_message_logging
+    litellm.turn_off_message_logging = False
+    
+    try:
+        # Mock request data
+        request_messages = [
+            {"role": "user", "content": "Sensitive data that should be redacted"}
+        ]
+        
+        # Mock response data
+        response_obj = {
+            "id": "chatcmpl-test",
+            "object": "chat.completion",
+            "created": 1234567890,
+            "model": "gpt-4.1-mini",
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "Response content"
+                    },
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15
+            }
+        }
+        
+        # Build kwargs with proxy_server_request and redaction header
+        kwargs = {
+            "model": "gpt-4.1-mini",
+            "messages": request_messages,
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": "sk-test-key",
+                    "headers": {
+                        "x-litellm-enable-message-redaction": "true"
+                    }
+                },
+                "proxy_server_request": {
+                    "method": "POST",
+                    "url": "http://localhost:4000/chat/completions",
+                    "body": {
+                        "model": "gpt-4.1-mini",
+                        "messages": request_messages,
+                    }
+                }
+            },
+            "call_type": "acompletion",
+            "response_cost": 0.0001,
+        }
+        
+        # Generate spend logs payload
+        import datetime
+        start_time = datetime.datetime.now()
+        end_time = start_time + datetime.timedelta(seconds=1)
+        
+        # Set store_prompts_in_spend_logs to True
+        from litellm.proxy.proxy_server import general_settings
+        original_store_prompts = general_settings.get("store_prompts_in_spend_logs", False)
+        general_settings["store_prompts_in_spend_logs"] = True
+        
+        try:
+            payload = get_logging_payload(
+                kwargs=kwargs,
+                response_obj=response_obj,
+                start_time=start_time,
+                end_time=end_time
+            )
+            
+            # Parse the proxy_server_request JSON string
+            proxy_request_str = payload.get("proxy_server_request", "{}")
+            proxy_request = json.loads(proxy_request_str) if proxy_request_str != "{}" else {}
+            
+            # Messages should be redacted due to the header
+            if proxy_request:
+                assert "messages" in proxy_request
+                assert len(proxy_request["messages"]) == 1
+                assert proxy_request["messages"][0]["role"] == "user"
+                assert proxy_request["messages"][0]["content"] == REDACTED_BY_LITELM_STRING
+        
+        finally:
+            # Restore original setting
+            general_settings["store_prompts_in_spend_logs"] = original_store_prompts
+            
+    finally:
+        # Restore original litellm setting
+        litellm.turn_off_message_logging = original_setting

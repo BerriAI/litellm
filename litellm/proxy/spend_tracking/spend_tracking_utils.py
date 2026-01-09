@@ -435,7 +435,7 @@ def get_logging_payload(  # noqa: PLR0915
             ),
             response=_get_response_for_spend_logs_payload(standard_logging_payload),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
-                metadata=metadata, litellm_params=litellm_params
+                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -639,12 +639,47 @@ def _sanitize_request_body_for_spend_logs_payload(
     return {k: _sanitize_value(v) for k, v in request_body.items()}
 
 
+def _redact_messages_in_request_body(request_body: dict) -> dict:
+    """
+    Redact messages in the request body.
+    
+    This handles various request formats (chat completions, completions, etc.)
+    and redacts the user-provided content.
+    """
+    import copy
+    
+    # Create a shallow copy to avoid modifying the original
+    redacted_body = copy.copy(request_body)
+    
+    # Redact messages in chat completion requests
+    if "messages" in redacted_body and isinstance(redacted_body["messages"], list):
+        redacted_body["messages"] = [
+            {"role": "user", "content": REDACTED_BY_LITELM_STRING}
+        ]
+    
+    # Redact prompt in completion requests
+    if "prompt" in redacted_body:
+        redacted_body["prompt"] = REDACTED_BY_LITELM_STRING
+    
+    # Redact input in other request types (embeddings, etc.)
+    if "input" in redacted_body:
+        if isinstance(redacted_body["input"], str):
+            redacted_body["input"] = REDACTED_BY_LITELM_STRING
+        elif isinstance(redacted_body["input"], list):
+            redacted_body["input"] = [REDACTED_BY_LITELM_STRING]
+    
+    return redacted_body
+
+
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
+    kwargs: Optional[dict] = None,
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
+    
+    If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
         _proxy_server_request = cast(
@@ -652,6 +687,21 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+            
+            # Check if message redaction should be applied
+            if kwargs is not None:
+                from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+                
+                # Build model_call_details dict to check redaction settings
+                model_call_details = {
+                    "litellm_params": litellm_params,
+                    "standard_callback_dynamic_params": kwargs.get("standard_callback_dynamic_params"),
+                }
+                
+                # If redaction is enabled, redact messages in the request body
+                if should_redact_message_logging(model_call_details):
+                    _request_body = _redact_messages_in_request_body(_request_body)
+            
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
