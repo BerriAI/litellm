@@ -239,6 +239,36 @@ class PrometheusLogger(CustomLogger):
                 ),
                 buckets=LATENCY_BUCKETS,
             )
+
+            # Request queue time metric
+            self.litellm_request_queue_time_metric = self._histogram_factory(
+                "litellm_request_queue_time_seconds",
+                "Time spent in request queue before processing starts (seconds)",
+                labelnames=self.get_labels_for_metric(
+                    "litellm_request_queue_time_seconds"
+                ),
+                buckets=LATENCY_BUCKETS,
+            )
+
+            # Guardrail metrics
+            self.litellm_guardrail_latency_metric = self._histogram_factory(
+                "litellm_guardrail_latency_seconds",
+                "Latency (seconds) for guardrail execution",
+                labelnames=["guardrail_name", "status", "error_type", "hook_type"],
+                buckets=LATENCY_BUCKETS,
+            )
+
+            self.litellm_guardrail_errors_total = self._counter_factory(
+                "litellm_guardrail_errors_total",
+                "Total number of errors encountered during guardrail execution",
+                labelnames=["guardrail_name", "error_type", "hook_type"],
+            )
+
+            self.litellm_guardrail_requests_total = self._counter_factory(
+                "litellm_guardrail_requests_total",
+                "Total number of guardrail invocations",
+                labelnames=["guardrail_name", "status", "hook_type"],
+            )
             # llm api provider budget metrics
             self.litellm_provider_remaining_budget_metric = self._gauge_factory(
                 "litellm_provider_remaining_budget_metric",
@@ -1262,6 +1292,22 @@ class PrometheusLogger(CustomLogger):
                 total_time_seconds
             )
 
+        # request queue time (time from arrival to processing start)
+        _litellm_params = kwargs.get("litellm_params", {}) or {}
+        queue_time_seconds = _litellm_params.get("metadata", {}).get(
+            "queue_time_seconds"
+        )
+        if queue_time_seconds is not None and queue_time_seconds >= 0:
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_request_queue_time_seconds"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_request_queue_time_metric.labels(**_labels).observe(
+                queue_time_seconds
+            )
+
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         from litellm.types.utils import StandardLoggingPayload
 
@@ -1814,6 +1860,50 @@ class PrometheusLogger(CustomLogger):
                 )
             )
             return
+
+    def _record_guardrail_metrics(
+        self,
+        guardrail_name: str,
+        latency_seconds: float,
+        status: str,
+        error_type: Optional[str],
+        hook_type: str,
+    ):
+        """
+        Record guardrail metrics for prometheus.
+
+        Args:
+            guardrail_name: Name of the guardrail
+            latency_seconds: Execution latency in seconds
+            status: "success" or "error"
+            error_type: Type of error if any, None otherwise
+            hook_type: "pre_call", "during_call", or "post_call"
+        """
+        try:
+            # Record latency
+            self.litellm_guardrail_latency_metric.labels(
+                guardrail_name=guardrail_name,
+                status=status,
+                error_type=error_type or "none",
+                hook_type=hook_type,
+            ).observe(latency_seconds)
+
+            # Record request count
+            self.litellm_guardrail_requests_total.labels(
+                guardrail_name=guardrail_name,
+                status=status,
+                hook_type=hook_type,
+            ).inc()
+
+            # Record error count if there was an error
+            if status == "error" and error_type:
+                self.litellm_guardrail_errors_total.labels(
+                    guardrail_name=guardrail_name,
+                    error_type=error_type,
+                    hook_type=hook_type,
+                ).inc()
+        except Exception as e:
+            verbose_logger.debug(f"Error recording guardrail metrics: {str(e)}")
 
     @staticmethod
     def _get_exception_class_name(exception: Exception) -> str:
