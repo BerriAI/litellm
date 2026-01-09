@@ -47,7 +47,6 @@ from tiktoken import Encoding
 from tokenizers import Tokenizer
 
 import litellm
-
 import litellm.litellm_core_utils
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
@@ -7946,6 +7945,8 @@ class ProviderConfigManager:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
+        elif LlmProviders.BEDROCK == provider:
+            return litellm.llms.bedrock.common_utils.BedrockModelInfo()
         return None
 
     @staticmethod
