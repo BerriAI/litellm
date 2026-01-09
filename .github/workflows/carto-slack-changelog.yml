@@ -258,6 +258,9 @@ jobs:
           prompt: |
             # ROLE: Senior Staff AI Augmentation Engineer
 
+            **YOUR TASK:** Analyze PR/release data and write TWO files: `slack_message.txt` and `slack_thread.txt`
+            **IMPORTANT:** You MUST use the Write tool to create both files before finishing.
+
             You are analyzing changes to CARTO's LiteLLM fork. Your job is to provide
             **GROUNDED INSIGHTS** - analysis backed by evidence from the actual data,
             not just reformatted summaries.
@@ -405,7 +408,15 @@ jobs:
             - Main message: under 1000 chars
             - Thread: 1500-2500 chars
 
-            NOW: Read the data files, investigate if needed, and write both `slack_message.txt` and `slack_thread.txt`.
+            ## CRITICAL: OUTPUT REQUIRED
+
+            You MUST create these two files in the current working directory before finishing:
+            1. `slack_message.txt` - Main Slack message (under 1000 chars)
+            2. `slack_thread.txt` - Thread reply (1500-2500 chars)
+
+            Use the Write tool to create each file. Do NOT skip this step.
+
+            NOW: Read the data files, analyze, and IMMEDIATELY write both files.
         timeout-minutes: 10
         env:
           ANTHROPIC_VERTEX_PROJECT_ID: carto-ci-resources
