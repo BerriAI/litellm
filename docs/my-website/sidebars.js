@@ -798,6 +798,7 @@ const sidebars = {
         "completion/audio",
         "completion/document_understanding",
         "completion/drop_params",
+        "embedding/embedding_chunking",
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
