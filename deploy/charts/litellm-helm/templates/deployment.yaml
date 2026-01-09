@@ -138,7 +138,7 @@ spec:
           args:
             - --config
             - /etc/litellm/config.yaml
-            {{ if .Values.numWorkers }}
+            {{- if .Values.numWorkers }}
             - --num_workers
             - {{ .Values.numWorkers | quote }}
             {{- end }}
