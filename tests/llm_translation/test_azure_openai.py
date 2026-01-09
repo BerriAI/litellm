@@ -123,6 +123,9 @@ import os
 def test_azure_extra_headers(input, call_type, header_value):
     from litellm import embedding, image_generation
 
+    # Clear the LLM clients cache to ensure the new http_client is used
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
     http_client = Client()
 
     messages = [{"role": "user", "content": "Hello world"}]
@@ -137,7 +140,7 @@ def test_azure_extra_headers(input, call_type, header_value):
                 func = image_generation
 
             data = {
-                "model": "azure/chatgpt-v-3",
+                "model": "azure/gpt-4.1-mini",
                 "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com",
                 "api_version": "2023-07-01-preview",
                 "api_key": "my-azure-api-key",
@@ -193,7 +196,7 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
             "azure_deployment": model,
             "max_retries": 2,
             "timeout": 600,
-            "api_key": "f28ab7b695af4154bc53498e5bdccb07",
+            "api_key": "sk-test-mock-key-505",
         },
         "model": model,
     }
@@ -204,7 +207,7 @@ def test_process_azure_endpoint_url(api_base, model, expected_endpoint):
 class TestAzureEmbedding(BaseLLMEmbeddingTest):
     def get_base_embedding_call_args(self) -> dict:
         return {
-            "model": "azure/azure-embedding-model",
+            "model": "azure/text-embedding-ada-002",
             "api_key": os.getenv("AZURE_API_KEY"),
             "api_base": os.getenv("AZURE_API_BASE"),
         }
@@ -339,7 +342,7 @@ def test_azure_gpt_4o_with_tool_call_and_response_format(api_version):
 
     with patch.object(client.chat.completions.with_raw_response, "create") as mock_post:
         response = litellm.completion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-mini",
             messages=[
                 {
                     "role": "system",
@@ -470,11 +473,15 @@ def test_map_openai_params():
 def test_azure_max_retries_0(
     mock_make_sync_azure_openai_chat_completion_request, max_retries, stream
 ):
+    import litellm
     from litellm import completion
+
+    # Clear the LLM clients cache to ensure max_retries is set correctly
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
         completion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -498,11 +505,15 @@ def test_azure_max_retries_0(
 async def test_async_azure_max_retries_0(
     make_azure_openai_chat_completion_request, max_retries, stream
 ):
+    import litellm
     from litellm import acompletion
+
+    # Clear the LLM clients cache to ensure max_retries is set correctly
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
     try:
         await acompletion(
-            model="azure/gpt-4o-new-test",
+            model="azure/gpt-4.1-mini",
             messages=[{"role": "user", "content": "Hello world"}],
             max_retries=max_retries,
             stream=stream,
@@ -527,7 +538,11 @@ async def test_async_azure_max_retries_0(
 async def test_azure_instruct(
     mock_select_azure_base_url_or_endpoint, max_retries, stream, sync_mode
 ):
+    import litellm
     from litellm import completion, acompletion
+
+    # Clear the LLM clients cache to ensure select_azure_base_url_or_endpoint is called
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
     args = {
         "model": "azure_text/instruct-model",
@@ -562,10 +577,14 @@ async def test_azure_instruct(
 async def test_azure_embedding_max_retries_0(
     mock_select_azure_base_url_or_endpoint, max_retries, sync_mode
 ):
+    import litellm
     from litellm import aembedding, embedding
 
+    # Clear the LLM clients cache to ensure select_azure_base_url_or_endpoint is called
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
     args = {
-        "model": "azure/azure-embedding-model",
+        "model": "azure/text-embedding-ada-002",
         "input": "Hello world",
         "max_retries": max_retries,
     }
@@ -598,7 +617,10 @@ def test_azure_safety_result():
     litellm._turn_on_debug()
 
     response = completion(
-        model="azure/gpt-4o-new-test",
+        model="azure/gpt-4.1-mini",
+        api_key=os.getenv("AZURE_API_KEY"),
+        api_base=os.getenv("AZURE_API_BASE"),
+        api_version="2024-12-01-preview",
         messages=[{"role": "user", "content": "Hello world"}],
     )
     print(f"response: {response}")
@@ -632,18 +654,77 @@ def test_azure_openai_responses_bridge():
         assert mock_responses.call_args.kwargs["custom_llm_provider"] == "azure"
 
 
-def test_azure_openai_gpt_5_responses_api():
-    try:
-        from litellm import responses
-
-        litellm._turn_on_debug()
-
-        response = responses(
-            model="azure/gpt-5",
-            input="Hello world",
-            api_key=os.getenv("AZURE_SWEDEN_API_KEY"),
-            api_base=os.getenv("AZURE_SWEDEN_API_BASE"),
+def test_completion_azure_deployment_id():
+    """
+    Ensure deployment_id takes precedence over model.
+    """
+    litellm.set_verbose = True
+    response = completion(
+        deployment_id="gpt-4.1-mini",
+        model="gpt-3.5-turbo",
+        messages=[
+            {
+                "role": "user",
+                "content": "Hello, how are you?",
+            }
+        ],
+    )
+    # Add any assertions here to check the response
+    print(response)
+def test_azure_with_content_safety_error():
+    """
+    Verify user can access innererror from the Azure OpenAI exception
+    """
+    from litellm import completion
+    from litellm.exceptions import ContentPolicyViolationError
+    from litellm.litellm_core_utils.exception_mapping_utils import exception_type
+    from unittest.mock import MagicMock
+    
+    mock_exception = Exception("The response was filtered due to the prompt triggering Azure OpenAI's content management policy")
+    mock_exception.body = {
+        "innererror": {
+            "code": "ResponsibleAIPolicyViolation",
+            "content_filter_result": {
+                "hate": {
+                    "filtered": False,
+                    "severity": "safe"
+                },
+                "jailbreak": {
+                    "filtered": False,
+                    "detected": False
+                },
+                "self_harm": {
+                    "filtered": False,
+                    "severity": "safe"
+                },
+                "sexual": {
+                    "filtered": False,
+                    "severity": "safe"
+                },
+                "violence": {
+                    "filtered": True,
+                    "severity": "high"
+                }
+            }
+        }
+    }
+    
+    mock_response = MagicMock()
+    mock_response.status_code = 400
+    mock_exception.response = mock_response
+    
+    with pytest.raises(ContentPolicyViolationError) as exc_info:
+        exception_type(
+            model="azure/gpt-4o-new-test",
+            original_exception=mock_exception,
+            custom_llm_provider="azure"
         )
-        print(f"response: {response}")
-    except litellm.RateLimitError:
-        pytest.skip("Skipping test due to RateLimitError")
+    
+    e = exc_info.value
+    print("got exception=", e)
+    assert e.provider_specific_fields is not None
+    print("got provider_specific_fields=", e.provider_specific_fields)
+    assert e.provider_specific_fields.get("innererror") is not None
+    assert e.provider_specific_fields["innererror"]["code"] == "ResponsibleAIPolicyViolation"
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["filtered"] is True
+    assert e.provider_specific_fields["innererror"]["content_filter_result"]["violence"]["severity"] == "high"

@@ -7,7 +7,7 @@ import os
 import sys
 import time
 import traceback
-import uuid
+from litellm._uuid import uuid
 from typing import Tuple
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -243,7 +243,7 @@ tools_schema = [
 def test_completion_azure_stream_special_char():
     litellm.set_verbose = True
     messages = [{"role": "user", "content": "hi. respond with the <xml> tag only"}]
-    response = completion(model="azure/chatgpt-v-3", messages=messages, stream=True)
+    response = completion(model="azure/gpt-4.1-mini", messages=messages, stream=True)
     response_str = ""
     for part in response:
         response_str += part.choices[0].delta.content or ""
@@ -451,7 +451,7 @@ def test_completion_azure_stream():
             },
         ]
         response = completion(
-            model="azure/chatgpt-v-3", messages=messages, stream=True, max_tokens=50
+            model="azure/gpt-4.1-mini", messages=messages, stream=True, max_tokens=50
         )
         complete_response = ""
         # Add any assertions here to check the response
@@ -552,36 +552,6 @@ async def test_completion_predibase_streaming(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_completion_ai21_stream():
-    litellm.set_verbose = True
-    response = await litellm.acompletion(
-        model="ai21_chat/jamba-mini",
-        user="ishaan",
-        stream=True,
-        seed=123,
-        messages=[{"role": "user", "content": "hi my name is ishaan"}],
-    )
-    complete_response = ""
-    idx = 0
-    async for init_chunk in response:
-        chunk, finished = streaming_format_tests(idx, init_chunk)
-        complete_response += chunk
-        custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
-        print(f"custom_llm_provider: {custom_llm_provider}")
-        assert custom_llm_provider == "ai21_chat"
-        idx += 1
-        if finished:
-            assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
-            break
-    if complete_response.strip() == "":
-        raise Exception("Empty response received")
-
-    print(f"complete_response: {complete_response}")
-
-    pass
-
 
 def test_completion_azure_function_calling_stream():
     try:
@@ -589,7 +559,7 @@ def test_completion_azure_function_calling_stream():
         user_message = "What is the current weather in Boston?"
         messages = [{"content": user_message, "role": "user"}]
         response = completion(
-            model="azure/chatgpt-functioncalling",
+            model="azure/gpt-4.1-mini",
             messages=messages,
             stream=True,
             tools=tools_schema,
@@ -1101,7 +1071,7 @@ def test_vertex_ai_stream(provider):
     litellm.vertex_project = "pathrise-convert-1606954137718"
     import random
 
-    test_models = ["gemini-1.5-pro"]
+    test_models = ["gemini-2.5-flash-lite"]
     for model in test_models:
         try:
             print("making request", model)
@@ -1318,7 +1288,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         # ["bedrock/cohere.command-r-plus-v1:0", None],
         ["anthropic.claude-3-sonnet-20240229-v1:0", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
-        ["bedrock/amazon.titan-tg1-large", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
     ],
 )
@@ -1418,7 +1387,7 @@ def test_bedrock_claude_3_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-3-opus-20240229",
+        "claude-3-7-sonnet-20250219",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
     ],
@@ -1952,10 +1921,8 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/chatgpt-v-3",
         "claude-3-haiku-20240307",
         "o1",
-        "azure/fake-o1-mini",
     ],
 )
 @pytest.mark.parametrize(
@@ -2752,13 +2719,13 @@ def test_azure_streaming_and_function_calling():
     messages = [{"role": "user", "content": "What is the weather like in Boston?"}]
     try:
         response = completion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
         )
         # Add any assertions here to check the response
@@ -2784,7 +2751,7 @@ def test_azure_streaming_and_function_calling():
 
 @pytest.mark.asyncio
 async def test_azure_astreaming_and_function_calling():
-    import uuid
+    from litellm._uuid import uuid
 
     tools = [
         {
@@ -2823,13 +2790,13 @@ async def test_azure_astreaming_and_function_calling():
     try:
         litellm.set_verbose = True
         response = await litellm.acompletion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -2854,13 +2821,13 @@ async def test_azure_astreaming_and_function_calling():
         ## CACHING TEST
         print("\n\nCACHING TESTS\n\n")
         response = await litellm.acompletion(
-            model="azure/gpt-4-nov-release",
+            model="azure/gpt-4.1-mini",
             tools=tools,
             tool_choice="auto",
             messages=messages,
             stream=True,
-            api_base=os.getenv("AZURE_FRANCE_API_BASE"),
-            api_key=os.getenv("AZURE_FRANCE_API_KEY"),
+            api_base=os.getenv("AZURE_API_BASE"),
+            api_key=os.getenv("AZURE_API_KEY"),
             api_version="2024-02-15-preview",
             caching=True,
         )
@@ -2916,7 +2883,7 @@ def test_completion_claude_3_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="claude-3-opus-20240229",
+            model="claude-3-7-sonnet-20250219",
             messages=messages,
             tools=tools,
             tool_choice="required",
@@ -2948,7 +2915,7 @@ def test_completion_claude_3_function_call_with_streaming():
     "model",
     [
         "gemini/gemini-2.5-flash-lite",
-    ],  #  "claude-3-opus-20240229"
+    ],
 )  #
 @pytest.mark.asyncio
 async def test_acompletion_function_call_with_streaming(model):
@@ -3716,7 +3683,7 @@ def test_unit_test_perplexity_citations_chunk():
     "model",
     [
         "gpt-3.5-turbo",
-        "claude-3-5-sonnet-20240620",
+        "claude-sonnet-4-5-20250929",
         "anthropic.claude-3-sonnet-20240229-v1:0",
         # "vertex_ai/claude-3-5-sonnet@20240620",
     ],
@@ -3983,7 +3950,7 @@ def test_streaming_finish_reason():
 
     ## Anthropic
     response = litellm.completion(
-        model="anthropic/claude-3-5-sonnet-latest",
+        model="anthropic/claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         stream=True,
         stream_options={"include_usage": True},

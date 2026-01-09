@@ -1,24 +1,27 @@
-import Link from "next/link"
-import React, { useState, useEffect } from "react"
-import type { MenuProps } from "antd"
-import { Dropdown, Tooltip } from "antd"
-import { getProxyBaseUrl, Organization } from "@/components/networking"
-import { defaultOrg } from "@/components/common_components/default_org"
-import { 
-  UserOutlined,
-  LogoutOutlined,
-  LoginOutlined,
-  BgColorsOutlined,
+import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { clearTokenCookies } from "@/utils/cookieUtils";
+import {
+  emitLocalStorageChange,
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "@/utils/localStorageUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
+import {
   CrownOutlined,
+  LogoutOutlined,
   MailOutlined,
-  SafetyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
-} from '@ant-design/icons'
-import { clearTokenCookies } from "@/utils/cookieUtils"
-import { fetchProxySettings } from "@/utils/proxyUtils"
-import { useTheme } from "@/contexts/ThemeContext"
-import { clearMCPAuthTokens } from "./mcp_tools/mcp_auth_storage"
+  SafetyOutlined,
+  UserOutlined,
+} from "@ant-design/icons";
+import type { MenuProps } from "antd";
+import { Dropdown, Switch, Tooltip } from "antd";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
 
 interface NavbarProps {
   userID: string | null;
@@ -46,9 +49,13 @@ const Navbar: React.FC<NavbarProps> = ({
   onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
+  console.log("baseUrl", baseUrl);
   const [logoutUrl, setLogoutUrl] = useState("");
+  const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
   const { logoUrl } = useTheme();
-  
+  const { data: healthData } = useHealthReadiness();
+  const version = healthData?.litellm_version;
+
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
 
@@ -67,18 +74,24 @@ const Navbar: React.FC<NavbarProps> = ({
   }, [accessToken]);
 
   useEffect(() => {
+    const storedValue = getLocalStorageItem("disableShowNewBadge");
+    setDisableShowNewBadge(storedValue === "true");
+  }, []);
+
+  useEffect(() => {
     setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
   }, [proxySettings]);
 
   const handleLogout = () => {
     clearTokenCookies();
-    clearMCPAuthTokens(); // Clear MCP auth tokens on logout
     window.location.href = logoutUrl;
   };
 
   const userItems: MenuProps["items"] = [
     {
       key: "user-info",
+      // Prevent dropdown from closing when interacting with the toggle
+      onClick: (info) => info.domEvent?.stopPropagation(),
       label: (
         <div className="px-3 py-3 border-b border-gray-100">
           <div className="flex items-center justify-between mb-3">
@@ -115,6 +128,28 @@ const Navbar: React.FC<NavbarProps> = ({
                 {userEmail || "Unknown"}
               </span>
             </div>
+            <div
+              className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-gray-500 text-xs">Hide New Feature Indicators</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={disableShowNewBadge}
+                onChange={(checked) => {
+                  setDisableShowNewBadge(checked);
+                  if (checked) {
+                    setLocalStorageItem("disableShowNewBadge", "true");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  } else {
+                    removeLocalStorageItem("disableShowNewBadge");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  }
+                }}
+                aria-label="Toggle hide new feature indicators"
+              />
+            </div>
           </div>
         </div>
       ),
@@ -127,38 +162,49 @@ const Navbar: React.FC<NavbarProps> = ({
           <span className="text-gray-800">Logout</span>
         </div>
       ),
-    }
+    },
   ];
-
 
   return (
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="w-full">
-        <div className="flex items-center h-14 px-4"> {/* Increased height from h-12 to h-14 */}
-          {/* Left side with collapse toggle and logo */}
+        <div className="flex items-center h-14 px-4">
           <div className="flex items-center flex-shrink-0">
-            {/* Collapse/Expand Toggle Button - Larger */}
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
                 className="flex items-center justify-center w-10 h-10 mr-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded transition-colors"
                 title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
               >
-                <span className="text-lg">
-                  {sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
-                </span>
+                <span className="text-lg">{sidebarCollapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}</span>
               </button>
             )}
-            
-            <Link href="/" className="flex items-center">
-              <img
-                src={imageUrl}
-                alt="LiteLLM Brand"
-                className="h-10 w-auto"
-              />
-            </Link>
-          </div>
 
+            <div className="flex items-center">
+              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
+                <div className="relative">
+                  <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+                  <span
+                    className="absolute -top-1 -right-2 text-lg animate-bounce"
+                    style={{ animationDuration: "2s" }}
+                    title="Happy Holidays!"
+                  >
+                    🎄
+                  </span>
+                </div>
+              </Link>
+              {version && (
+                <a
+                  href="https://docs.litellm.ai/release_notes"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-gray-500 border border-gray-200 rounded-lg px-2 py-0.5 bg-gray-50 font-medium -ml-2 hover:bg-gray-100 transition-colors cursor-pointer z-10"
+                >
+                  v{version}
+                </a>
+              )}
+            </div>
+          </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
             <a
@@ -171,33 +217,28 @@ const Navbar: React.FC<NavbarProps> = ({
             </a>
 
             {!isPublicPage && (
-            <Dropdown 
-              menu={{ 
-                items: userItems,
-                className: "min-w-[200px]",
-                style: {
-                  padding: '8px',
-                  marginTop: '8px',
-                  borderRadius: '12px',
-                  boxShadow: '0 4px 24px rgba(0, 0, 0, 0.08)'
-                }
-              }}
-              overlayStyle={{
-                minWidth: '200px'
-              }}
-            >
-              <button className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors">
-                User
-                <svg
-                  className="ml-1 w-5 h-5 text-gray-500"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            </Dropdown>
+              <Dropdown
+                menu={{
+                  items: userItems,
+                  className: "min-w-[200px]",
+                  style: {
+                    padding: "8px",
+                    marginTop: "8px",
+                    borderRadius: "12px",
+                    boxShadow: "0 4px 24px rgba(0, 0, 0, 0.08)",
+                  },
+                }}
+                overlayStyle={{
+                  minWidth: "200px",
+                }}
+              >
+                <button className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors">
+                  User
+                  <svg className="ml-1 w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+              </Dropdown>
             )}
           </div>
         </div>

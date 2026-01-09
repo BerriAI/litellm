@@ -36,6 +36,7 @@ from .common_utils import (
     process_azure_headers,
     select_azure_base_url_or_endpoint,
 )
+from .image_generation import get_azure_image_generation_config
 
 
 class AzureOpenAIAssistantsAPIConfig:
@@ -182,12 +183,12 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         model: str,
         messages: list,
         model_response: ModelResponse,
-        api_key: str,
+        api_key: Optional[str],
         api_base: str,
         api_version: str,
         api_type: str,
-        azure_ad_token: str,
-        azure_ad_token_provider: Callable,
+        azure_ad_token: Optional[str],
+        azure_ad_token_provider: Optional[Callable],
         dynamic_params: bool,
         print_verbose: Callable,
         timeout: Union[float, httpx.Timeout],
@@ -372,7 +373,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
     async def acompletion(
         self,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         model: str,
         api_base: str,
@@ -477,7 +478,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         self,
         logging_obj,
         api_base: str,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         dynamic_params: bool,
         data: dict,
@@ -555,7 +556,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         self,
         logging_obj: LiteLLMLoggingObj,
         api_base: str,
-        api_key: str,
+        api_key: Optional[str],
         api_version: str,
         dynamic_params: bool,
         data: dict,
@@ -989,6 +990,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def create_azure_base_url(
         self, azure_client_params: dict, model: Optional[str]
     ) -> str:
+        from litellm.llms.azure_ai.image_generation import (
+            AzureFoundryFluxImageGenerationConfig,
+        )
+
         api_base: str = azure_client_params.get(
             "azure_endpoint", ""
         )  # "https://example-endpoint.openai.azure.com"
@@ -997,6 +1002,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
+
+        # Handle FLUX 2 models on Azure AI which use a different URL pattern
+        # e.g., /providers/blackforestlabs/v1/flux-2-pro instead of /openai/deployments/{model}/images/generations
+        if AzureFoundryFluxImageGenerationConfig.is_flux2_model(model):
+            return AzureFoundryFluxImageGenerationConfig.get_flux2_image_generation_url(
+                api_base=api_base,
+                model=model,
+                api_version=api_version,
+            )
 
         if "/openai/deployments/" in api_base:
             base_url_with_deployment = api_base
@@ -1011,7 +1025,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     async def aimage_generation(
         self,
         data: dict,
-        model_response: ModelResponse,
+        model_response: Optional[ImageResponse],
         azure_client_params: dict,
         api_key: str,
         input: list,
@@ -1019,7 +1033,8 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         headers: dict,
         client=None,
         timeout=None,
-    ) -> litellm.ImageResponse:
+    ) -> ImageResponse:
+
         response: Optional[dict] = None
         try:
             # response = await azure_client.images.generate(**data, timeout=timeout)
@@ -1052,21 +1067,38 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 data=data,
                 headers=headers,
             )
-            response = httpx_response.json()
 
-            stringified_response = response
-            ## LOGGING
-            logging_obj.post_call(
-                input=input,
-                api_key=api_key,
-                additional_args={"complete_input_dict": data},
-                original_response=stringified_response,
+            provider_config = get_azure_image_generation_config(
+                data.get("model", "dall-e-2")
             )
-            return convert_to_model_response_object(  # type: ignore
-                response_object=stringified_response,
-                model_response_object=model_response,
-                response_type="image_generation",
-            )
+            if provider_config is not None:
+                return provider_config.transform_image_generation_response(
+                    model=data.get("model", "dall-e-2"),
+                    raw_response=httpx_response,
+                    model_response=model_response or ImageResponse(),
+                    logging_obj=logging_obj,
+                    request_data=data,
+                    optional_params=data,
+                    litellm_params=data,
+                    encoding=litellm.encoding,
+                )
+
+            else:
+                response = httpx_response.json()
+
+                stringified_response = response
+                ## LOGGING
+                logging_obj.post_call(
+                    input=input,
+                    api_key=api_key,
+                    additional_args={"complete_input_dict": data},
+                    original_response=stringified_response,
+                )
+                return convert_to_model_response_object(  # type: ignore
+                    response_object=stringified_response,
+                    model_response_object=model_response,
+                    response_type="image_generation",
+                )
         except Exception as e:
             ## LOGGING
             logging_obj.post_call(
@@ -1110,12 +1142,22 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     "base_model"
                 )
 
-            data = {"model": model, "prompt": prompt, **optional_params}
+            # Azure image generation API doesn't support extra_body parameter
+            extra_body = optional_params.pop("extra_body", {})
+            flattened_params = {**optional_params, **extra_body}
+            
+            data = {"model": model, "prompt": prompt, **flattened_params}
             max_retries = data.pop("max_retries", 2)
             if not isinstance(max_retries, int):
                 raise AzureOpenAIError(
                     status_code=422, message="max retries must be an int"
                 )
+
+            if api_key is None and azure_ad_token_provider is not None:
+                azure_ad_token = azure_ad_token_provider()
+                if azure_ad_token:
+                    headers.pop("api-key", None)
+                    headers["Authorization"] = f"Bearer {azure_ad_token}"
 
             # init AzureOpenAI Client
             azure_client_params: Dict[str, Any] = self.initialize_azure_sdk_client(

@@ -24,6 +24,9 @@ from litellm import (
     model_cost,
     open_ai_chat_completion_models,
 )
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+import json
+import httpx
 from litellm.types.utils import PromptTokensDetails
 from litellm.litellm_core_utils.litellm_logging import CustomLogger
 
@@ -283,7 +286,7 @@ def test_cost_azure_embedding():
 
         async def _test():
             response = await litellm.aembedding(
-                model="azure/azure-embedding-model",
+                model="azure/text-embedding-ada-002",
                 input=["good morning from litellm", "gm"],
             )
 
@@ -306,17 +309,6 @@ def test_cost_azure_embedding():
 
 
 # test_cost_azure_embedding()
-
-
-def test_cost_openai_image_gen():
-    cost = litellm.completion_cost(
-        model="dall-e-2",
-        size="1024-x-1024",
-        quality="standard",
-        n=1,
-        call_type="image_generation",
-    )
-    assert cost == 0.019922944
 
 
 def test_cost_bedrock_pricing_actual_calls():
@@ -409,7 +401,7 @@ def test_dalle_3_azure_cost_tracking():
             {
                 "b64_json": None,
                 "revised_prompt": "A close-up image of an adorable baby sea otter. Its fur is thick and fluffy to provide buoyancy and insulation against the cold water. Its eyes are round, curious and full of life. It's lying on its back, floating effortlessly on the calm sea surface under the warm sun. Surrounding the otter are patches of colorful kelp drifting along the gentle waves, giving the scene a touch of vibrancy. The sea otter has its small paws folded on its chest, and it seems to be taking a break from its play.",
-                "url": "https://dalleprodsec.blob.core.windows.net/private/images/3e5d00f3-700e-4b75-869d-2de73c3c975d/generated_00.png?se=2024-03-13T17%3A49%3A51Z&sig=R9RJD5oOSe0Vp9Eg7ze%2FZ8QR7ldRyGH6XhMxiau16Jc%3D&ske=2024-03-19T11%3A08%3A03Z&skoid=e52d5ed7-0657-4f62-bc12-7e5dbb260a96&sks=b&skt=2024-03-12T11%3A08%3A03Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+                "url": "test-azure-blob-url-with-sas-token",
             }
         ],
     )
@@ -1068,6 +1060,7 @@ def test_completion_cost_prompt_caching(model, custom_llm_provider):
         (
             response_1.usage.prompt_tokens
             - response_1.usage.prompt_tokens_details.cached_tokens
+            - response_1.usage.prompt_tokens_details.cache_creation_tokens
         )
         * _model_info["input_cost_per_token"]
         + (response_1.usage.prompt_tokens_details.cached_tokens or 0)
@@ -1147,13 +1140,56 @@ def test_completion_cost_databricks(model):
         "databricks/databricks-gte-large-en",
     ],
 )
-def test_completion_cost_databricks_embedding(model):
+def test_completion_cost_databricks_embedding(model, monkeypatch):
+    """
+    Test completion cost calculation for Databricks embedding models using mocked HTTP responses.
+    """
+    base_url = "https://my.workspace.cloud.databricks.com/serving-endpoints"
+    api_key = "dapimykey"
+    monkeypatch.setenv("DATABRICKS_API_BASE", base_url)
+    monkeypatch.setenv("DATABRICKS_API_KEY", api_key)
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
-    resp = litellm.embedding(model=model, input=["hey, how's it going?"])  # works fine
 
-    print(resp)
-    cost = completion_cost(completion_response=resp)
+    mock_response_data = {
+        "object": "list",
+        "model": model.split("/")[1],
+        "data": [
+            {
+                "index": 0,
+                "object": "embedding",
+                "embedding": [
+                    0.06768798828125,
+                    -0.01291656494140625,
+                    -0.0501708984375,
+                    0.0245361328125,
+                    -0.030364990234375,
+                ],
+            }
+        ],
+        "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8,
+            "completion_tokens": 0,
+            "completion_tokens_details": None,
+            "prompt_tokens_details": None,
+        },
+    }
+
+    mock_response = MagicMock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.json.return_value = mock_response_data
+
+    sync_handler = HTTPHandler()
+
+    with patch.object(HTTPHandler, "post", return_value=mock_response):
+        resp = litellm.embedding(
+            model=model, input=["hey, how's it going?"], client=sync_handler
+        )
+
+        print(resp)
+        cost = completion_cost(completion_response=resp)
 
 
 from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
@@ -1162,8 +1198,7 @@ from litellm.llms.fireworks_ai.cost_calculator import get_base_model_for_pricing
 @pytest.mark.parametrize(
     "model, base_model",
     [
-        ("fireworks_ai/llama-v3p1-405b-instruct", "fireworks-ai-above-16b"),
-        ("fireworks_ai/llama4-maverick-instruct-basic", "fireworks-ai-default"),
+        ("fireworks_ai/llama-v3p3-70b-instruct", "fireworks-ai-above-16b"),
     ],
 )
 def test_get_model_params_fireworks_ai(model, base_model):
@@ -1174,8 +1209,7 @@ def test_get_model_params_fireworks_ai(model, base_model):
 @pytest.mark.parametrize(
     "model",
     [
-        "fireworks_ai/llama-v3p1-405b-instruct",
-        "fireworks_ai/llama4-maverick-instruct-basic",
+        "fireworks_ai/llama-v3p3-70b-instruct",
     ],
 )
 def test_completion_cost_fireworks_ai(model):

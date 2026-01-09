@@ -261,13 +261,20 @@ async def test_new_user_license_over_limit(mocker):
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
 
-    # Mock check_duplicate_user_email to pass
+    # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None  # No duplicate found
+
+    async def mock_check_duplicate_user_id(*args, **kwargs):
         return None  # No duplicate found
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
         mock_check_duplicate_user_email,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check_duplicate_user_id,
     )
 
     # Mock the license check to return True (over limit)
@@ -315,7 +322,32 @@ async def test_user_info_url_encoding_plus_character(mocker):
 
     # Mock the prisma client
     mock_prisma_client = mocker.MagicMock()
-    mock_prisma_client.get_data = mocker.AsyncMock()
+    
+    # Create a real LiteLLM_UserTable instance (BaseModel) so isinstance check passes
+    mock_user = LiteLLM_UserTable(
+        user_id="machine-user+alp-air-admin-b58-b@tempus.com",
+        user_email="machine-user+alp-air-admin-b58-b@tempus.com",
+        teams=[],
+    )
+    
+    # Mock get_data to return user when called with user_id, empty list for keys
+    async def mock_get_data(*args, **kwargs):
+        if kwargs.get("table_name") == "key":
+            return []
+        elif kwargs.get("table_name") == "team":
+            return []
+        elif kwargs.get("user_id") is not None:
+            return mock_user
+        return None
+    
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+
+    # Mock list_team to return None (patch it from where it's imported)
+    mock_list_team = mocker.AsyncMock(return_value=None)
+    mocker.patch(
+        "litellm.proxy.management_endpoints.team_endpoints.list_team",
+        mock_list_team,
+    )
 
     # Patch the prisma client import in the endpoint
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -335,20 +367,73 @@ async def test_user_info_url_encoding_plus_character(mocker):
         "machine-user alp-air-admin-b58-b@tempus.com"  # What FastAPI gives us
     )
     expected_user_id = "machine-user+alp-air-admin-b58-b@tempus.com"
-    try:
-        response = await user_info(
-            user_id=decoded_user_id,
+    
+    response = await user_info(
+        user_id=decoded_user_id,
+        user_api_key_dict=mock_user_api_key_dict,
+        request=mock_request,
+    )
+
+    # Verify that the response contains the correct user data
+    # Check that get_data was called with the correct user_id (first call should be for user)
+    user_call = None
+    for call in mock_prisma_client.get_data.call_args_list:
+        if call.kwargs.get("user_id") and not call.kwargs.get("table_name"):
+            user_call = call
+            break
+    
+    assert user_call is not None, "get_data should be called with user_id"
+    assert user_call.kwargs["user_id"] == expected_user_id
+
+
+@pytest.mark.asyncio
+async def test_user_info_nonexistent_user(mocker):
+    """
+    Test that /user/info endpoint returns 404 when a non-existent user_id is provided.
+    """
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.internal_user_endpoints import user_info
+
+    # Mock the prisma client
+    mock_prisma_client = mocker.MagicMock()
+    
+    # Mock get_data to return None (user doesn't exist)
+    async def mock_get_data(*args, **kwargs):
+        if kwargs.get("table_name") == "key":
+            return []
+        elif kwargs.get("user_id") is not None:
+            return None  # User not found
+        return None
+    
+    mock_prisma_client.get_data = mocker.AsyncMock(side_effect=mock_get_data)
+
+    # Patch the prisma client import in the endpoint
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Create a mock request
+    mock_request = mocker.MagicMock(spec=Request)
+
+    # Mock user_api_key_dict
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test_admin", user_role="proxy_admin"
+    )
+
+    # Call user_info function with a non-existent user_id
+    nonexistent_user_id = "nonexistent-user@example.com"
+    
+    # Should raise ProxyException with 404 status code (HTTPException is converted by decorator)
+    with pytest.raises(ProxyException) as exc_info:
+        await user_info(
+            user_id=nonexistent_user_id,
             user_api_key_dict=mock_user_api_key_dict,
             request=mock_request,
         )
-    except Exception as e:
-        print(f"Error in user_info: {e}")
 
-    # Verify that the response contains the correct user data
-    print(
-        f"mock_prisma_client.get_data.call_args: {mock_prisma_client.get_data.call_args.kwargs}"
-    )
-    assert mock_prisma_client.get_data.call_args.kwargs["user_id"] == expected_user_id
+    # Verify the exception details
+    assert exc_info.value.code == "404"  # ProxyException.code is a string
+    assert f"User {nonexistent_user_id} not found" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio
@@ -371,13 +456,20 @@ async def test_new_user_default_teams_flow(mocker):
 
     mock_prisma_client.db.litellm_usertable.count = mock_count
 
-    # Mock check_duplicate_user_email to pass
+    # Mock duplicate checks to pass
     async def mock_check_duplicate_user_email(*args, **kwargs):
+        return None  # No duplicate found
+
+    async def mock_check_duplicate_user_id(*args, **kwargs):
         return None  # No duplicate found
 
     mocker.patch(
         "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_email",
         mock_check_duplicate_user_email,
+    )
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._check_duplicate_user_id",
+        mock_check_duplicate_user_id,
     )
 
     # Mock the license check to return False (under limit)
@@ -659,7 +751,7 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
     with pytest.raises(HTTPException) as exc_info:
         await _check_duplicate_user_email("user@example.com", mock_prisma_client)
 
-    assert exc_info.value.status_code == 400
+    assert exc_info.value.status_code == 409
     assert "User with email User@Example.com already exists" in str(
         exc_info.value.detail
     )
@@ -690,3 +782,234 @@ async def test_check_duplicate_user_email_case_insensitive(mocker):
     await _check_duplicate_user_email(
         None, mock_prisma_client
     )  # Should not raise exception
+
+
+@pytest.mark.asyncio
+async def test_check_duplicate_user_id(mocker):
+    """
+    Test that _check_duplicate_user_id detects duplicates and does not use case insensitive matching.
+    """
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _check_duplicate_user_id,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+
+    # Duplicate user_id should raise
+    mock_existing_user = mocker.MagicMock()
+    mock_existing_user.user_id = "existing-user-id"
+
+    async def mock_find_first_duplicate(*args, **kwargs):
+        where_clause = kwargs.get("where", {})
+        user_id_clause = where_clause.get("user_id", {})
+        assert user_id_clause.get("equals") == "existing-user-id"
+        assert "mode" not in user_id_clause
+        return mock_existing_user
+
+    mock_prisma_client.db.litellm_usertable.find_first = mock_find_first_duplicate
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _check_duplicate_user_id("existing-user-id", mock_prisma_client)
+
+    assert exc_info.value.status_code == 409
+    assert "User with id existing-user-id already exists" in str(
+        exc_info.value.detail
+    )
+
+    # No duplicate should pass
+    async def mock_find_first_no_duplicate(*args, **kwargs):
+        where_clause = kwargs.get("where", {})
+        user_id_clause = where_clause.get("user_id", {})
+        assert user_id_clause.get("equals") == "new-user-id"
+        assert "mode" not in user_id_clause
+        return None
+
+    mock_prisma_client.db.litellm_usertable.find_first = mock_find_first_no_duplicate
+
+    await _check_duplicate_user_id("new-user-id", mock_prisma_client)
+
+    # None user_id should no-op
+    await _check_duplicate_user_id(None, mock_prisma_client)
+
+
+def test_process_keys_for_user_info_filters_dashboard_keys(monkeypatch):
+    """
+    Test that _process_keys_for_user_info filters out keys with team_id='litellm-dashboard'
+    
+    UI session tokens (team_id='litellm-dashboard') should be excluded from user info responses
+    to prevent confusion, as these are automatically created during dashboard login.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _process_keys_for_user_info,
+    )
+
+    # Create mock keys with different team_ids
+    mock_key_dashboard = MagicMock()
+    mock_key_dashboard.model_dump.return_value = {
+        "token": "sk-dashboard-token",
+        "team_id": UI_SESSION_TOKEN_TEAM_ID,
+        "user_id": "test-user",
+        "key_alias": "dashboard-session-key",
+    }
+    
+    mock_key_regular = MagicMock()
+    mock_key_regular.model_dump.return_value = {
+        "token": "sk-regular-token",
+        "team_id": "regular-team",
+        "user_id": "test-user",
+        "key_alias": "regular-key",
+    }
+    
+    mock_key_no_team = MagicMock()
+    mock_key_no_team.model_dump.return_value = {
+        "token": "sk-no-team-token",
+        "team_id": None,
+        "user_id": "test-user",
+        "key_alias": "no-team-key",
+    }
+
+    keys = [mock_key_dashboard, mock_key_regular, mock_key_no_team]
+
+    # Mock general_settings and litellm_master_key_hash (they're imported from proxy_server)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_master_key_hash",
+        "different-hash",
+    )
+
+    # Call the function
+    result = _process_keys_for_user_info(keys=keys, all_teams=None)
+
+    # Verify that dashboard key is filtered out
+    assert len(result) == 2, "Should return 2 keys (dashboard key filtered out)"
+    
+    # Verify dashboard key is not in results
+    result_team_ids = [key.get("team_id") for key in result]
+    assert UI_SESSION_TOKEN_TEAM_ID not in result_team_ids, "Dashboard key should be filtered out"
+    
+    # Verify regular keys are included
+    assert "regular-team" in result_team_ids, "Regular team key should be included"
+    assert None in result_team_ids, "No-team key should be included"
+    
+    # Verify the correct keys are returned
+    result_tokens = [key.get("token") for key in result]
+    assert "sk-regular-token" in result_tokens, "Regular key should be included"
+    assert "sk-no-team-token" in result_tokens, "No-team key should be included"
+    assert "sk-dashboard-token" not in result_tokens, "Dashboard key should not be included"
+
+
+def test_process_keys_for_user_info_handles_none_keys(monkeypatch):
+    """
+    Test that _process_keys_for_user_info handles None keys gracefully
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _process_keys_for_user_info,
+    )
+
+    # Mock general_settings and litellm_master_key_hash (they're imported from proxy_server)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_master_key_hash",
+        "different-hash",
+    )
+
+    # Call with None keys
+    result = _process_keys_for_user_info(keys=None, all_teams=None)
+
+    # Should return empty list
+    assert result == [], "Should return empty list when keys is None"
+
+
+def test_process_keys_for_user_info_handles_empty_keys(monkeypatch):
+    """
+    Test that _process_keys_for_user_info handles empty keys list
+    """
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        _process_keys_for_user_info,
+    )
+
+    # Mock general_settings and litellm_master_key_hash (they're imported from proxy_server)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {},
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.litellm_master_key_hash",
+        "different-hash",
+    )
+
+    # Call with empty list
+    result = _process_keys_for_user_info(keys=[], all_teams=None)
+
+    # Should return empty list
+    assert result == [], "Should return empty list when keys is empty"
+
+
+@pytest.mark.asyncio
+async def test_get_users_user_id_partial_match(mocker):
+    """
+    Test that /user/list endpoint uses partial matching for single user_id
+    and exact matching for multiple user_ids.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    mock_prisma_client = mocker.MagicMock()
+
+    mock_user_data = {
+        "user_id": "test-user-partial-match",
+        "user_email": "test@example.com",
+        "user_role": "internal_user",
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    mock_user_row = mocker.MagicMock()
+    mock_user_row.model_dump.return_value = mock_user_data
+
+    captured_where_conditions = {}
+
+    async def mock_find_many(*args, **kwargs):
+        if "where" in kwargs:
+            captured_where_conditions.update(kwargs["where"])
+        return [mock_user_row]
+
+    async def mock_count(*args, **kwargs):
+        return 1
+
+    mock_prisma_client.db.litellm_usertable.find_many = mock_find_many
+    mock_prisma_client.db.litellm_usertable.count = mock_count
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    async def mock_get_user_key_counts(*args, **kwargs):
+        return {"test-user-partial-match": 0}
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_user_key_counts",
+        mock_get_user_key_counts,
+    )
+
+    captured_where_conditions.clear()
+    await get_users(user_ids="test-user", page=1, page_size=1)
+
+    assert "user_id" in captured_where_conditions
+    assert "contains" in captured_where_conditions["user_id"]
+    assert captured_where_conditions["user_id"]["contains"] == "test-user"
+    assert captured_where_conditions["user_id"]["mode"] == "insensitive"
+
+    captured_where_conditions.clear()
+    await get_users(user_ids="user1,user2,user3", page=1, page_size=1)
+
+    assert "user_id" in captured_where_conditions
+    assert "in" in captured_where_conditions["user_id"]
+    assert captured_where_conditions["user_id"]["in"] == ["user1", "user2", "user3"]

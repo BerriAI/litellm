@@ -3,9 +3,9 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
-
+import json
 import os
-from typing import TYPE_CHECKING, List, Literal, Optional, Tuple, Union, cast
+from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
 
 import httpx
 from pydantic import BaseModel
@@ -47,7 +47,7 @@ from litellm.types.llms.vertex_ai import (
     ToolConfig,
     Tools,
 )
-from litellm.types.utils import GenericImageParsingChunk
+from litellm.types.utils import GenericImageParsingChunk, LlmProviders
 
 from ..common_utils import (
     _check_text_in_content,
@@ -63,7 +63,22 @@ else:
     LiteLLMLoggingObj = Any
 
 
-def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartType:
+def _convert_detail_to_media_resolution_enum(
+    detail: Optional[str],
+) -> Optional[Dict[str, str]]:
+    if detail == "low":
+        return {"level": "MEDIA_RESOLUTION_LOW"}
+    elif detail == "high":
+        return {"level": "MEDIA_RESOLUTION_HIGH"}
+    return None
+
+
+def _process_gemini_image(
+    image_url: str, 
+    format: Optional[str] = None,
+    media_resolution_enum: Optional[Dict[str, str]] = None,
+    model: Optional[str] = None,
+) -> PartType:
     """
     Given an image URL, return the appropriate PartType for Gemini
     """
@@ -86,20 +101,43 @@ def _process_gemini_image(image_url: str, format: Optional[str] = None) -> PartT
             else:
                 mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
-
-            return PartType(file_data=file_data)
+            part: PartType = {"file_data": file_data}
+            
+            if media_resolution_enum is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    part_dict = dict(part)
+                    part_dict["media_resolution"] = media_resolution_enum
+                    return cast(PartType, part_dict)
+            return part
         elif (
             "https://" in image_url
             and (image_type := format or _get_image_mime_type_from_url(image_url))
             is not None
         ):
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
-            return PartType(file_data=file_data)
+            file_data = FileDataType(mime_type=image_type, file_uri=image_url)
+            part = {"file_data": file_data}
+            
+            if media_resolution_enum is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    part_dict = dict(part)
+                    part_dict["media_resolution"] = media_resolution_enum
+                    return cast(PartType, part_dict)
+            return part
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
-            # https links for unsupported mime types and base64 images
             image = convert_to_anthropic_image_obj(image_url, format=format)
-            _blob = BlobType(data=image["data"], mime_type=image["media_type"])
-            return PartType(inline_data=_blob)
+            _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
+            
+            part = {"inline_data": cast(BlobType, _blob)}
+            
+            if media_resolution_enum is not None and model is not None:
+                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+                if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                    part_dict = dict(part)
+                    part_dict["media_resolution"] = media_resolution_enum
+                    return cast(PartType, part_dict)
+            return part
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
@@ -165,6 +203,7 @@ def check_if_part_exists_in_parts(
 
 def _gemini_convert_messages_with_history(  # noqa: PLR0915
     messages: List[AllMessageValues],
+    model: Optional[str] = None,
 ) -> List[ContentType]:
     """
     Converts given messages from OpenAI format to Gemini format
@@ -204,13 +243,19 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             element = cast(ChatCompletionImageObject, element)
                             img_element = element
                             format: Optional[str] = None
+                            media_resolution_enum: Optional[Dict[str, str]] = None
                             if isinstance(img_element["image_url"], dict):
                                 image_url = img_element["image_url"]["url"]
                                 format = img_element["image_url"].get("format")
+                                detail = img_element["image_url"].get("detail")
+                                media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
                             else:
                                 image_url = img_element["image_url"]
                             _part = _process_gemini_image(
-                                image_url=image_url, format=format
+                                image_url=image_url, 
+                                format=format,
+                                media_resolution_enum=media_resolution_enum,
+                                model=model,
                             )
                             _parts.append(_part)
                         elif element["type"] == "input_audio":
@@ -235,6 +280,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _part = _process_gemini_image(
                                     image_url=openai_image_str,
                                     format=audio_format_modified,
+                                    model=model,
                                 )
                                 _parts.append(_part)
                         elif element["type"] == "file":
@@ -249,7 +295,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 )
                             try:
                                 _part = _process_gemini_image(
-                                    image_url=passed_file, format=format
+                                    image_url=passed_file, 
+                                    format=format,
+                                    model=model,
                                 )
                                 _parts.append(_part)
                             except Exception:
@@ -262,7 +310,6 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and len(_message_content) > 0
                 ):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
@@ -301,26 +348,27 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     )
                 if thinking_blocks is not None:
                     for block in thinking_blocks:
-                        block_thinking_str = block.get("thinking")
-                        block_signature = block.get("signature")
-                        if (
-                            block_thinking_str is not None
-                            and block_signature is not None
-                        ):
-                            try:
-                                assistant_content.append(
-                                    PartType(
-                                        thoughtSignature=block_signature,
-                                        **json.loads(block_thinking_str),
+                        if block["type"] == "thinking":
+                            block_thinking_str = block.get("thinking")
+                            block_signature = block.get("signature")
+                            if (
+                                block_thinking_str is not None
+                                and block_signature is not None
+                            ):
+                                try:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            **json.loads(block_thinking_str),
+                                        )
                                     )
-                                )
-                            except Exception:
-                                assistant_content.append(
-                                    PartType(
-                                        thoughtSignature=block_signature,
-                                        text=block_thinking_str,
+                                except Exception:
+                                    assistant_content.append(
+                                        PartType(
+                                            thoughtSignature=block_signature,
+                                            text=block_thinking_str,
+                                        )
                                     )
-                                )
                 if _message_content is not None and isinstance(_message_content, list):
                     _parts = []
                     for element in _message_content:
@@ -333,10 +381,20 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 elif (
                     _message_content is not None
                     and isinstance(_message_content, str)
-                    and _message_content
                 ):
-                    assistant_text = _message_content  # either string or none
-                    assistant_content.append(PartType(text=assistant_text))  # type: ignore
+                    assistant_text = _message_content
+                    # Check if message has thought_signatures in provider_specific_fields
+                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                    thought_signatures = None
+                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
+                        thought_signatures = provider_specific_fields.get("thought_signatures")
+                    
+                    # If we have thought signatures, add them to the part
+                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                        # Use the first signature for the text part (Gemini expects one signature per part)
+                        assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
+                    else:
+                        assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
@@ -344,7 +402,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     or assistant_msg.get("function_call") is not None
                 ):  # support assistant tool invoke conversion
                     gemini_tool_call_parts = convert_to_gemini_tool_call_invoke(
-                        assistant_msg
+                        assistant_msg, model=model
                     )
                     ## check if gemini_tool_call already exists in assistant_content
                     for gemini_tool_call_part in gemini_tool_call_parts:
@@ -371,7 +429,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     messages[msg_i], last_message_with_tool_calls  # type: ignore
                 )
                 msg_i += 1
-                tool_call_responses.append(_part)
+                # Handle both single part and list of parts (for Computer Use with images)
+                if isinstance(_part, list):
+                    tool_call_responses.extend(_part)
+                else:
+                    tool_call_responses.append(_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):
@@ -448,11 +510,11 @@ def _transform_request_body(
     try:
         if custom_llm_provider == "gemini":
             content = litellm.GoogleAIStudioGeminiConfig()._transform_messages(
-                messages=messages
+                messages=messages, model=model
             )
         else:
             content = litellm.VertexGeminiConfig()._transform_messages(
-                messages=messages
+                messages=messages, model=model
             )
         tools: Optional[Tools] = optional_params.pop("tools", None)
         tool_choice: Optional[ToolConfig] = optional_params.pop("tool_choice", None)
@@ -473,7 +535,7 @@ def _transform_request_body(
                 labels = {k: v for k, v in rm.items() if isinstance(v, str)}
 
         filtered_params = {
-            k: v for k, v in optional_params.items() if k in config_fields
+            k: v for k, v in optional_params.items() if _get_equivalent_key(k, set(config_fields))
         }
 
         generation_config: Optional[GenerationConfig] = GenerationConfig(
@@ -492,7 +554,8 @@ def _transform_request_body(
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content
-        if labels is not None:
+        # Only add labels for Vertex AI endpoints (not Google GenAI/AI Studio) and only if non-empty
+        if labels and custom_llm_provider != LlmProviders.GEMINI:
             data["labels"] = labels
     except Exception as e:
         raise e
@@ -512,30 +575,35 @@ def sync_transform_request_body(
     logging_obj: LiteLLMLoggingObj,
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_auth_header: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
 
-    if gemini_api_key is not None:
-        (
-            messages,
-            optional_params,
-            cached_content,
-        ) = context_caching_endpoints.check_and_create_cache(
-            messages=messages,
-            optional_params=optional_params,
-            api_key=gemini_api_key,
-            api_base=api_base,
-            model=model,
-            client=client,
-            timeout=timeout,
-            extra_headers=extra_headers,
-            cached_content=optional_params.pop("cached_content", None),
-            logging_obj=logging_obj,
-        )
-    else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+    (
+    messages,
+    optional_params,
+    cached_content,
+    ) = context_caching_endpoints.check_and_create_cache(
+        messages=messages,
+        optional_params=optional_params,
+        api_key=gemini_api_key or "dummy",
+        api_base=api_base,
+        model=model,
+        client=client,
+        timeout=timeout,
+        extra_headers=extra_headers,
+        cached_content=optional_params.pop("cached_content", None),
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        vertex_auth_header=vertex_auth_header,
+    )
+
 
     return _transform_request_body(
         messages=messages,
@@ -559,30 +627,34 @@ async def async_transform_request_body(
     logging_obj: litellm.litellm_core_utils.litellm_logging.Logging,  # type: ignore
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
+    vertex_project: Optional[str],
+    vertex_location: Optional[str],
+    vertex_auth_header: Optional[str],
 ) -> RequestBody:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
 
-    if gemini_api_key is not None:
-        (
-            messages,
-            optional_params,
-            cached_content,
-        ) = await context_caching_endpoints.async_check_and_create_cache(
-            messages=messages,
-            optional_params=optional_params,
-            api_key=gemini_api_key,
-            api_base=api_base,
-            model=model,
-            client=client,
-            timeout=timeout,
-            extra_headers=extra_headers,
-            cached_content=optional_params.pop("cached_content", None),
-            logging_obj=logging_obj,
-        )
-    else:  # [TODO] implement context caching for gemini as well
-        cached_content = optional_params.pop("cached_content", None)
+    (
+    messages,
+    optional_params,
+    cached_content,
+    ) = await context_caching_endpoints.async_check_and_create_cache(
+        messages=messages,
+        optional_params=optional_params,
+        api_key=gemini_api_key or "dummy",
+        api_base=api_base,
+        model=model,
+        client=client,
+        timeout=timeout,
+        extra_headers=extra_headers,
+        cached_content=optional_params.pop("cached_content", None),
+        logging_obj=logging_obj,
+        custom_llm_provider=custom_llm_provider,
+        vertex_project=vertex_project,
+        vertex_location=vertex_location,
+        vertex_auth_header=vertex_auth_header,
+    )
 
     return _transform_request_body(
         messages=messages,

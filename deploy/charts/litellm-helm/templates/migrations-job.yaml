@@ -22,11 +22,18 @@ spec:
     metadata:
       labels:
         {{- include "litellm.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         {{- with .Values.migrationJob.annotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ include "litellm.serviceAccountName" . }}
       containers:
         - name: prisma-migrations

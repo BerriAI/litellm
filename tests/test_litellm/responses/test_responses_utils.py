@@ -168,6 +168,7 @@ class TestResponseAPILoggingUtils:
             "input_tokens": 10,
             "output_tokens": 20,
             "total_tokens": 30,
+            "input_tokens_details": {"cached_tokens": 2},
             "output_tokens_details": {"reasoning_tokens": 5},
         }
 
@@ -181,6 +182,7 @@ class TestResponseAPILoggingUtils:
         assert result.prompt_tokens == 10
         assert result.completion_tokens == 20
         assert result.total_tokens == 30
+        assert result.prompt_tokens_details and result.prompt_tokens_details.cached_tokens == 2
 
     def test_transform_response_api_usage_with_none_values(self):
         """Test transformation handles None values properly"""

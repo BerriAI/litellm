@@ -39,6 +39,8 @@ guardrails:
 - `pre_call` Run **before** LLM call, on **input**
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input**. Same as `pre_call` but runs in parallel with the LLM call. Response not returned until guardrail check completes
+- `pre_mcp_call`: Scan MCP tool call inputs before execution
+- `during_mcp_call`: Monitor MCP tool calls in real-time
 
 ### 2. Start LiteLLM Gateway
 
@@ -135,6 +137,7 @@ guardrails:
       # application_id: "my-app"
       # monitor_mode: false
       # block_failures: true
+      # anonymize_input: false
 ```
 
 ### Required Parameters
@@ -147,6 +150,7 @@ guardrails:
 - **`application_id`**: Your application identifier (defaults to `"litellm"`)
 - **`monitor_mode`**: If `true`, logs violations without blocking (defaults to `false`)
 - **`block_failures`**: If `true`, blocks requests when guardrail API failures occur (defaults to `true`)
+- **`anonymize_input`**: If `true`, replaces sensitive content with anonymized version (defaults to `false`)
 
 ## Environment Variables
 
@@ -158,6 +162,7 @@ export NOMA_API_BASE="https://api.noma.security/"   # Optional
 export NOMA_APPLICATION_ID="my-app"                 # Optional
 export NOMA_MONITOR_MODE="false"                    # Optional
 export NOMA_BLOCK_FAILURES="true"                   # Optional
+export NOMA_ANONYMIZE_INPUT="false"                 # Optional
 ```
 
 ## Advanced Configuration
@@ -188,6 +193,20 @@ guardrails:
       mode: "pre_call"
       api_key: os.environ/NOMA_API_KEY
       block_failures: false  # Allow requests to proceed if guardrail API fails
+```
+
+### Content Anonymization
+
+Enable anonymization to replace sensitive content instead of blocking:
+
+```yaml
+guardrails:
+  - guardrail_name: "noma-anonymize"
+    litellm_params:
+      guardrail: noma
+      mode: "pre_call"
+      api_key: os.environ/NOMA_API_KEY
+      anonymize_input: true  # Replace sensitive data with anonymized version
 ```
 
 ### Multiple Guardrails

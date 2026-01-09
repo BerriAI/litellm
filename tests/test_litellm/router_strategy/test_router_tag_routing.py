@@ -386,3 +386,49 @@ async def test_router_free_paid_tier_with_responses_api():
         print("response_extra_info: ", response_extra_info)
 
         assert response_extra_info["model_id"] == "very-expensive-model"
+
+def test_get_tags_from_request_kwargs_none():
+    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+
+    # None request kwargs should safely return empty list
+    assert _get_tags_from_request_kwargs(None) == []
+
+
+def test_get_tags_from_request_kwargs_various_inputs():
+    from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+
+    # Direct "metadata" path
+    assert _get_tags_from_request_kwargs({"metadata": {"tags": ["free"]}}) == ["free"]
+    assert _get_tags_from_request_kwargs({"metadata": {"tags": []}}) == []
+    assert _get_tags_from_request_kwargs({"metadata": {"tags": None}}) == []
+    assert _get_tags_from_request_kwargs({"metadata": {}}) == []
+    assert _get_tags_from_request_kwargs({"metadata": None}) == []
+
+    # Indirect via "litellm_params" - metadata inside
+    assert (
+        _get_tags_from_request_kwargs(
+            {"litellm_params": {"metadata": {"tags": ["paid"]}}}
+        )
+        == ["paid"]
+    )
+    assert _get_tags_from_request_kwargs({"litellm_params": {"metadata": None}}) == []
+    assert _get_tags_from_request_kwargs({"litellm_params": {}}) == []
+
+    # Alternate metadata variable name: "litellm_metadata"
+    assert (
+        _get_tags_from_request_kwargs(
+            {"litellm_metadata": {"tags": ["alt"]}},
+            metadata_variable_name="litellm_metadata",
+        )
+        == ["alt"]
+    )
+    assert (
+        _get_tags_from_request_kwargs(
+            {"litellm_params": {"litellm_metadata": {"tags": ["nested-alt"]}}},
+            metadata_variable_name="litellm_metadata",
+        )
+        == ["nested-alt"]
+    )
+
+    # No relevant keys present
+    assert _get_tags_from_request_kwargs({"foo": "bar"}) == []

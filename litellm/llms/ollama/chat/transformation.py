@@ -1,6 +1,6 @@
 import json
 import time
-import uuid
+from litellm._uuid import uuid
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -16,9 +16,18 @@ from httpx._models import Headers, Response
 from pydantic import BaseModel
 
 import litellm
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    _extract_reasoning_content,
+    convert_content_list_to_str,
+    extract_images_from_message,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
-from litellm.types.llms.ollama import OllamaToolCall, OllamaToolCallFunction
+from litellm.types.llms.ollama import (
+    OllamaChatCompletionMessage,
+    OllamaToolCall,
+    OllamaToolCallFunction,
+)
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionAssistantToolCall,
@@ -175,9 +184,12 @@ class OllamaChatConfig(BaseConfig):
             ):
                 if value.get("json_schema") and value["json_schema"].get("schema"):
                     optional_params["format"] = value["json_schema"]["schema"]
-            ### FUNCTION CALLING LOGIC ###
             if param == "reasoning_effort" and value is not None:
-                optional_params["think"] = True
+                if model.startswith("gpt-oss"):
+                    optional_params["think"] = value
+                else:
+                    optional_params["think"] = value in {"low", "medium", "high"}
+            ### FUNCTION CALLING LOGIC ###
             if param == "tools":
                 ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
                 try:
@@ -272,6 +284,7 @@ class OllamaChatConfig(BaseConfig):
         stream = optional_params.pop("stream", False)
         format = optional_params.pop("format", None)
         keep_alive = optional_params.pop("keep_alive", None)
+        think = optional_params.pop("think", None)
         function_name = optional_params.pop("function_name", None)
         litellm_params["function_name"] = function_name
         tools = optional_params.pop("tools", None)
@@ -299,7 +312,23 @@ class OllamaChatConfig(BaseConfig):
                         )
                         new_tools.append(ollama_tool_call)
                 cast(dict, m)["tool_calls"] = new_tools
-            new_messages.append(m)
+            reasoning_content, parsed_content = _extract_reasoning_content(
+                cast(dict, m)
+            )
+            content_str = convert_content_list_to_str(cast(AllMessageValues, m))
+            images = extract_images_from_message(cast(AllMessageValues, m))
+
+            ollama_message = OllamaChatCompletionMessage(
+                role=cast(str, m.get("role")),
+            )
+            if reasoning_content is not None:
+                ollama_message["thinking"] = reasoning_content
+            if content_str is not None:
+                ollama_message["content"] = content_str
+            if images is not None:
+                ollama_message["images"] = images
+
+            new_messages.append(ollama_message)
 
         # Load Config
         config = self.get_config()
@@ -319,6 +348,8 @@ class OllamaChatConfig(BaseConfig):
             data["tools"] = tools
         if keep_alive is not None:
             data["keep_alive"] = keep_alive
+        if think is not None:
+            data["think"] = think
 
         return data
 
@@ -361,7 +392,7 @@ class OllamaChatConfig(BaseConfig):
                 del response_json_message["thinking"]
             elif response_json_message.get("content") is not None:
                 # parse reasoning content from content
-                from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     _parse_content_for_reasoning,
                 )
 

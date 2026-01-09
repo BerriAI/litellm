@@ -36,7 +36,7 @@ class VertexEmbedding(VertexBase):
         timeout: Optional[Union[float, httpx.Timeout]],
         api_key: Optional[str] = None,
         encoding=None,
-        aembedding=False,
+        aembedding: Optional[bool] = False,
         api_base: Optional[str] = None,
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
         vertex_project: Optional[str] = None,
@@ -72,6 +72,9 @@ class VertexEmbedding(VertexBase):
             project_id=vertex_project,
             custom_llm_provider=custom_llm_provider,
         )
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+        
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -84,10 +87,13 @@ class VertexEmbedding(VertexBase):
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-            input=input, optional_params=optional_params, model=model
+        vertex_request: VertexEmbeddingRequest = (
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+                input=input, optional_params=optional_params, model=model
+            )
         )
 
         _client_params = {}
@@ -135,7 +141,7 @@ class VertexEmbedding(VertexBase):
         self,
         model: str,
         input: Union[list, str],
-        model_response: litellm.EmbeddingResponse,
+        model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObject,
         optional_params: dict,
         custom_llm_provider: Literal[
@@ -150,7 +156,7 @@ class VertexEmbedding(VertexBase):
         gemini_api_key: Optional[str] = None,
         extra_headers: Optional[dict] = None,
         encoding=None,
-    ) -> litellm.EmbeddingResponse:
+    ) -> EmbeddingResponse:
         """
         Async embedding implementation
         """
@@ -162,6 +168,9 @@ class VertexEmbedding(VertexBase):
             project_id=vertex_project,
             custom_llm_provider=custom_llm_provider,
         )
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+        
         auth_header, api_base = self._get_token_and_url(
             model=model,
             gemini_api_key=gemini_api_key,
@@ -174,10 +183,13 @@ class VertexEmbedding(VertexBase):
             api_base=api_base,
             should_use_v1beta1_features=should_use_v1beta1_features,
             mode="embedding",
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
         headers = self.set_headers(auth_header=auth_header, extra_headers=extra_headers)
-        vertex_request: VertexEmbeddingRequest = litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
-            input=input, optional_params=optional_params, model=model
+        vertex_request: VertexEmbeddingRequest = (
+            litellm.vertexAITextEmbeddingConfig.transform_openai_request_to_vertex_embedding_request(
+                input=input, optional_params=optional_params, model=model
+            )
         )
 
         _async_client_params = {}

@@ -1,9 +1,12 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# /responses [Beta]
+# /responses
 
-LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+
+LiteLLM provides an endpoint in the spec of [OpenAI's `/responses` API](https://platform.openai.com/docs/api-reference/responses)
+
+Requests to /chat/completions may be bridged here automatically when the provider lacks support for that endpoint. The model’s default `mode` determines how bridging works.(see `model_prices_and_context_window`) 
 
 | Feature | Supported | Notes |
 |---------|-----------|--------|
@@ -11,8 +14,10 @@ LiteLLM provides a BETA endpoint in the spec of [OpenAI's `/responses` API](http
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
 | Streaming | ✅ | |
+| Image Generation Streaming | ✅ | Progressive image generation with partial images (1-3) |
 | Fallbacks | ✅ | Works between supported models |
 | Loadbalancing | ✅ | Works between supported models |
+| Guardrails | ✅ | Applies to input and output text (non-streaming only) |
 | Supported operations | Create a response, Get a response, Delete a response | |
 | Supported LiteLLM Versions | 1.63.8+ | |
 | Supported LLM providers | **All LiteLLM supported providers** | `openai`, `anthropic`, `bedrock`, `vertex_ai`, `gemini`, `azure`, `azure_ai` etc. |
@@ -38,6 +43,38 @@ response = litellm.responses(
 print(response)
 ```
 
+#### Response Format (OpenAI Responses API Format)
+
+```json
+{
+    "id": "resp_abc123",
+    "object": "response",
+    "created_at": 1734366691,
+    "status": "completed",
+    "model": "o1-pro-2025-01-30",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_abc123",
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Once upon a time, a little unicorn named Stardust lived in a magical meadow where flowers sang lullabies. One night, she discovered that her horn could paint dreams across the sky, and she spent the evening creating the most beautiful aurora for all the forest creatures to enjoy. As the animals drifted off to sleep beneath her shimmering lights, Stardust curled up on a cloud of moonbeams, happy to have shared her magic with her friends.",
+                    "annotations": []
+                }
+            ]
+        }
+    ],
+    "usage": {
+        "input_tokens": 18,
+        "output_tokens": 98,
+        "total_tokens": 116
+    }
+}
+```
+
 #### Streaming
 ```python showLineNumbers title="OpenAI Streaming Response"
 import litellm
@@ -52,6 +89,108 @@ response = litellm.responses(
 for event in response:
     print(event)
 ```
+
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Streaming Image Generation"
+import litellm
+import base64
+
+# Streaming image generation with partial images
+stream = litellm.responses(
+    model="gpt-4.1",  # Use an actual image generation model
+    input="Generate a gorgeous image of a river made of white owl feathers",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+
+)
+
+for event in stream:
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
+#### Image Generation (Non-streaming)
+
+Image generation is supported for models that generate images. Generated images are returned in the `output` array with `type: "image_generation_call"`.
+
+**Gemini (Google AI Studio):**
+```python showLineNumbers title="Gemini Image Generation"
+import litellm
+import base64
+
+# Gemini image generation models don't require tools parameter
+response = litellm.responses(
+    model="gemini/gemini-2.5-flash-image",
+    input="Generate a cute cat playing with yarn"
+)
+
+# Access generated images from output
+for item in response.output:
+    if item.type == "image_generation_call":
+        # item.result contains pure base64 (no data: prefix)
+        image_bytes = base64.b64decode(item.result)
+
+        # Save the image
+        with open(f"generated_{item.id}.png", "wb") as f:
+            f.write(image_bytes)
+
+print(f"Image saved: generated_{response.output[0].id}.png")
+```
+
+**OpenAI:**
+```python showLineNumbers title="OpenAI Image Generation"
+import litellm
+import base64
+
+# OpenAI models require tools parameter for image generation
+response = litellm.responses(
+    model="openai/gpt-4o",
+    input="Generate a futuristic city at sunset",
+    tools=[{"type": "image_generation"}]
+)
+
+# Access generated images from output
+for item in response.output:
+    if item.type == "image_generation_call":
+        image_bytes = base64.b64decode(item.result)
+        with open(f"generated_{item.id}.png", "wb") as f:
+            f.write(image_bytes)
+```
+
+**Response Format:**
+
+When image generation is successful, the response contains:
+
+```json
+{
+  "id": "resp_abc123",
+  "status": "completed",
+  "output": [
+    {
+      "type": "image_generation_call",
+      "id": "resp_abc123_img_0",
+      "status": "completed",
+      "result": "iVBORw0KGgo..."  // Pure base64 string (no data: prefix)
+    }
+  ]
+}
+```
+
+**Supported Models:**
+
+| Provider | Models | Requires `tools` Parameter |
+|----------|--------|---------------------------|
+| Google AI Studio | `gemini/gemini-2.5-flash-image` | ❌ No |
+| Vertex AI | `vertex_ai/gemini-2.5-flash-image-preview` | ❌ No |
+| OpenAI | `gpt-4o`, `gpt-4o-mini`, `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`, `o3` | ✅ Yes |
+| AWS Bedrock | Stability AI, Amazon Nova Canvas models | Model-specific |
+| Fal AI | Various image generation models | Check model docs |
+
+**Note:** The `result` field contains pure base64-encoded image data without the `data:image/png;base64,` prefix. You must decode it with `base64.b64decode()` before saving.
 
 #### GET a Response
 ```python showLineNumbers title="Get Response by ID"
@@ -77,6 +216,43 @@ print(retrieved_response)
 # For async usage
 # retrieved_response = await litellm.aget_responses(response_id=response_id)
 ```
+
+#### CANCEL a Response
+You can cancel an in-progress response (if supported by the provider):
+
+```python showLineNumbers title="Cancel Response by ID"
+import litellm
+
+# First, create a response
+response = litellm.responses(
+    model="openai/o1-pro",
+    input="Tell me a three sentence bedtime story about a unicorn.",
+    max_output_tokens=100
+)
+
+# Get the response ID
+response_id = response.id
+
+# Cancel the response by ID
+cancel_response = litellm.cancel_responses(
+    response_id=response_id
+)
+
+print(cancel_response)
+
+# For async usage
+# cancel_response = await litellm.acancel_responses(response_id=response_id)
+```
+
+
+**REST API:**
+```bash
+curl -X POST http://localhost:4000/v1/responses/response_id/cancel \
+    -H "Authorization: Bearer sk-1234"
+```
+
+This will attempt to cancel the in-progress response with the given ID.
+**Note:** Not all providers support response cancellation. If unsupported, an error will be raised.
 
 #### DELETE a Response
 ```python showLineNumbers title="Delete Response by ID"
@@ -338,6 +514,32 @@ response = client.responses.create(
 
 for event in response:
     print(event)
+```
+
+#### Image Generation with Streaming
+```python showLineNumbers title="OpenAI Proxy Streaming Image Generation"
+from openai import OpenAI
+import base64
+
+client = OpenAI(api_key="sk-1234", base_url="http://localhost:4000")
+
+stream = client.responses.create(
+    model="gpt-4.1",
+    input="Draw a gorgeous image of a river made of white owl feathers, snaking its way through a serene winter landscape",
+    stream=True,
+    tools=[{"type": "image_generation", "partial_images": 2}],
+)
+
+
+for event in stream:
+    print(f"event: {event}")
+    if event.type == "response.image_generation_call.partial_image":
+        idx = event.partial_image_index
+        image_base64 = event.partial_image_b64
+        image_bytes = base64.b64decode(image_base64)
+        with open(f"river{idx}.png", "wb") as f:
+            f.write(image_bytes)
+
 ```
 
 #### GET a Response
@@ -608,6 +810,32 @@ for event in response:
 </TabItem>
 </Tabs>
 
+## Response ID Security
+
+By default, LiteLLM Proxy prevents users from accessing other users' response IDs.
+
+This is done by encrypting the response ID with the user ID, enabling users to only access their own response IDs.
+
+Trying to access someone else's response ID returns 403:
+
+```json
+{
+  "error": {
+    "message": "Forbidden. The response id is not associated with the user, who this key belongs to.",
+    "code": 403
+  }
+}
+```
+
+To disable this, set `disable_responses_id_security: true`:
+
+```yaml
+general_settings:
+  disable_responses_id_security: true
+```
+
+This allows any user to access any response ID.
+
 ## Supported Responses API Parameters
 
 | Provider | Supported Parameters |
@@ -795,9 +1023,9 @@ curl http://localhost:4000/v1/responses \
 
 
 
-## Session Management - Non-OpenAI Models
+## Session Management
 
-LiteLLM Proxy supports session management for non-OpenAI models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
+LiteLLM Proxy supports session management for all supported models. This allows you to store and fetch conversation history (state) in LiteLLM Proxy. 
 
 #### Usage
 
