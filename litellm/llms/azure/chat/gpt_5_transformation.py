@@ -27,8 +27,8 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
     def get_supported_openai_params(self, model: str) -> List[str]:
         """Get supported parameters for Azure OpenAI GPT-5 models.
 
-        Azure OpenAI GPT-5 models support logprobs, unlike OpenAI's GPT-5.
-        This overrides the parent class to add logprobs support back.
+        Azure OpenAI GPT-5.2 models support logprobs, unlike OpenAI's GPT-5.
+        This overrides the parent class to add logprobs support back for gpt-5.2.
 
         Reference:
         - Tested with Azure OpenAI GPT-5.2 (api-version: 2025-01-01-preview)
@@ -37,9 +37,10 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         """
         params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
 
-        # Azure GPT-5 models support logprobs, add them back
-        azure_supported_params = ["logprobs", "top_logprobs"]
-        params.extend(azure_supported_params)
+        # Only gpt-5.2 has been verified to support logprobs on Azure
+        if self.is_model_gpt_5_2_model(model):
+            azure_supported_params = ["logprobs", "top_logprobs"]
+            params.extend(azure_supported_params)
 
         return params
 
