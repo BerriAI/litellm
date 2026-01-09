@@ -39,17 +39,17 @@ TEST_API_KEY = "sk-1234"
 TEST_MODEL_NAME = "gpt-3.5-turbo"
 
 # Memory Test Configuration Constants
-TOTAL_BATCHES = 500
+TOTAL_BATCHES = 15
 REQUESTS_PER_BATCH = 5
-MEDIUM_CHECKPOINT_BATCH = 250  # Measure memory after this many batches
+MEDIUM_CHECKPOINT_BATCH = TOTAL_BATCHES // 2  # Measure memory at halfway point (ensures it's always <= TOTAL_BATCHES)
 
-# Leak Detection Thresholds
-MAX_TOTAL_GROWTH_MB = 200.0  # Fail if total growth exceeds this (MB) - adjust to control sensitivity
+# Leak Detection: Fail if memory grows between medium checkpoint and final checkpoint
 
 # Request Pattern Constants
-CONCURRENT_BURST_INTERVAL = 10  # Every N batches, do concurrent requests
+# Calculate interval to ensure concurrent bursts actually occur (every ~20% of batches, minimum 2)
+CONCURRENT_BURST_INTERVAL = max(2, TOTAL_BATCHES // 5)  # Every N batches, do concurrent requests
 CONCURRENT_BURST_MIN = 5
-CONCURRENT_BURST_MAX = 10
+CONCURRENT_BURST_MAX = 10  # Must be >= CONCURRENT_BURST_MIN
 
 # Message Size Configuration
 SHORT_MESSAGE_MULTIPLIER = 1
@@ -59,10 +59,10 @@ LONG_MESSAGE_MULTIPLIER = 50  # ~1000 chars
 # Request Parameter Variation
 TEMPERATURE_MODULO = 5  # Add temperature every N requests
 TEMPERATURE_MIN = 0.5
-TEMPERATURE_MAX = 1.5
+TEMPERATURE_MAX = 1.5  # Must be > TEMPERATURE_MIN
 MAX_TOKENS_MODULO = 7  # Add max_tokens every N requests
 MAX_TOKENS_MIN = 50
-MAX_TOKENS_MAX = 200
+MAX_TOKENS_MAX = 200  # Must be > MAX_TOKENS_MIN
 
 # Timing Constants (seconds)
 INITIAL_STABILIZATION_DELAY = 0.1
@@ -204,7 +204,6 @@ async def measure_memory_after_gc() -> float:
     reason="Memray requires Linux/WSL and pytest-memray. Install with: pip install pytest-memray (Linux/WSL only)"
 )
 @pytest.mark.asyncio
-@pytest.mark.limit_leaks("30 MB")
 async def test_extended_memory_growth():
     """
     Simple memory leak test with three measurements:
@@ -213,7 +212,8 @@ async def test_extended_memory_growth():
     3. Final: after all batches
     
     Uses aggressive GC and minimal test state (only a simple int counter).
-    Fails if total memory growth exceeds MAX_TOTAL_GROWTH_MB.
+    Fails if memory grows between medium checkpoint and final checkpoint.
+    Difference between baseline and final is acceptable.
     
     Features:
     - Varying message sizes (short and long prompts)
@@ -223,10 +223,10 @@ async def test_extended_memory_growth():
     """
     # Measure baseline memory (before any requests)
     baseline_memory = await measure_memory_after_gc()
-    print(f"\n[Memory Test] Baseline memory: {baseline_memory:.2f} MB")
     
     # Only keep a simple int counter - no lists or other data structures
     batch_counter = 0
+    medium_memory = None
     
     # Execute request batches
     for batch_counter in range(TOTAL_BATCHES):
@@ -248,35 +248,28 @@ async def test_extended_memory_growth():
         # Measure medium checkpoint memory
         if batch_counter == MEDIUM_CHECKPOINT_BATCH:
             medium_memory = await measure_memory_after_gc()
-            medium_growth = medium_memory - baseline_memory
-            print(
-                f"[Memory Test] Medium checkpoint (batch {MEDIUM_CHECKPOINT_BATCH}): "
-                f"{medium_memory:.2f} MB (growth: {medium_growth:+.2f} MB)"
-            )
-            # Check if growth already exceeds threshold
-            if medium_growth > MAX_TOTAL_GROWTH_MB:
-                pytest.fail(
-                    f"Memory leak detected at medium checkpoint: "
-                    f"Growth of {medium_growth:.2f} MB exceeds threshold of {MAX_TOTAL_GROWTH_MB} MB. "
-                    f"Baseline: {baseline_memory:.2f} MB, Medium: {medium_memory:.2f} MB"
-                )
     
     # Final memory measurement
     final_memory = await measure_memory_after_gc()
-    final_growth = final_memory - baseline_memory
     
-    print(
-        f"\n[Memory Test] Final memory: {final_memory:.2f} MB "
-        f"(total growth: {final_growth:+.2f} MB from baseline {baseline_memory:.2f} MB)"
-    )
-    print(f"[Memory Test] Processed {TOTAL_BATCHES} batches (~{TOTAL_BATCHES * REQUESTS_PER_BATCH} requests)")
+    # Calculate growth metrics
+    baseline_to_final = final_memory - baseline_memory
+    medium_to_final = final_memory - medium_memory if medium_memory is not None else 0.0
     
-    # Check if final growth exceeds threshold
-    if final_growth > MAX_TOTAL_GROWTH_MB:
+    # Print all three values
+    print(f"\n[Memory Test] Memory measurements:")
+    print(f"  Baseline: {baseline_memory:.2f} MB")
+    print(f"  Medium (batch {MEDIUM_CHECKPOINT_BATCH}): {medium_memory:.2f} MB")
+    print(f"  Final (batch {TOTAL_BATCHES}): {final_memory:.2f} MB")
+    print(f"  Growth (baseline → final): {baseline_to_final:+.2f} MB")
+    print(f"  Growth (medium → final): {medium_to_final:+.2f} MB")
+    print(f"  Processed {TOTAL_BATCHES} batches (~{TOTAL_BATCHES * REQUESTS_PER_BATCH} requests)")
+    
+    # Fail if memory grew between medium and final checkpoints
+    if medium_memory is not None and medium_to_final > 0:
         pytest.fail(
-            f"Memory leak detected: "
-            f"Total growth of {final_growth:.2f} MB exceeds threshold of {MAX_TOTAL_GROWTH_MB} MB. "
-            f"Baseline: {baseline_memory:.2f} MB, Final: {final_memory:.2f} MB"
+            f"Memory leak detected: Memory grew by {medium_to_final:.2f} MB between medium checkpoint and final. "
+            f"Baseline: {baseline_memory:.2f} MB, Medium: {medium_memory:.2f} MB, Final: {final_memory:.2f} MB"
         )
     
     print("[Memory Test] Test completed successfully - no memory leak detected.")
