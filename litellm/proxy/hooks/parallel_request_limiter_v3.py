@@ -161,7 +161,7 @@ REDIS_NODE_HASHTAG_NAME = "all_keys"
 
 # TPM Token Reservation Constants
 # When max_tokens is not specified in the request, use this default for estimation
-DEFAULT_MAX_TOKENS_ESTIMATE = 256
+DEFAULT_MAX_TOKENS_ESTIMATE = 4096
 # Fallback: approximate characters per token for rough estimation
 DEFAULT_CHARS_PER_TOKEN = 4
 # Metadata key for storing reserved tokens in request data
@@ -286,12 +286,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if messages:
             # Chat completions
             try:
-                from litellm import token_counter
-
-                estimated_input_tokens = token_counter(
-                    model=model or "",
-                    messages=messages,
+                total_chars = sum(
+                    len(str(m.get("content", "")))
+                    for m in messages
+                    if isinstance(m, dict)
                 )
+                estimated_input_tokens = total_chars // DEFAULT_CHARS_PER_TOKEN
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Token counting failed, using fallback estimation: {str(e)}"
@@ -2010,9 +2010,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[
-                Span, None
-            ] = _get_parent_otel_span_from_kwargs(kwargs)
+            litellm_parent_otel_span: Union[Span, None] = (
+                _get_parent_otel_span_from_kwargs(kwargs)
+            )
             # Get metadata from standard_logging_object - this correctly handles both
             # 'metadata' and 'litellm_metadata' fields from litellm_params
             standard_logging_object = kwargs.get("standard_logging_object") or {}
