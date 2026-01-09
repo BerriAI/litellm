@@ -359,10 +359,6 @@ def get_bedrock_tool_name(response_tool_name: str) -> str:
     return response_tool_name
 
 
-# ============================================================================
-# Standalone model name utility functions
-# ============================================================================
-
 # Cache the global regions list at module level
 _BEDROCK_GLOBAL_REGIONS: Optional[List[str]] = None
 
