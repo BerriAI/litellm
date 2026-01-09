@@ -409,7 +409,7 @@ jobs:
         timeout-minutes: 10
         env:
           ANTHROPIC_VERTEX_PROJECT_ID: carto-ci-resources
-          CLOUD_ML_REGION: us-central1
+          CLOUD_ML_REGION: global
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cleanup GCP credentials
