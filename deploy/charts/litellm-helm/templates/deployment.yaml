@@ -152,26 +152,26 @@ spec:
               containerPort: {{ .Values.separateHealthPort | default 8081 }}
               protocol: TCP
             {{- end }}
+          livenessProbe:
           {{- if .Values.livenessProbe }}
           {{- toYaml .Values.livenessProbe | nindent 12 }}
           {{- else }} 
-          livenessProbe:
             httpGet:
               path: /health/liveliness
               port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
           {{- end }}  
+          readinessProbe:
           {{- if .Values.readinessProbe }}
           {{- toYaml .Values.readinessProbe | nindent 12 }}
           {{- else }}
-          readinessProbe:
             httpGet:
               path: /health/readiness
               port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
           {{- end }}
+          startupProbe:
           {{- if .Values.startupProbe }}
           {{- toYaml .Values.startupProbe | nindent 12 }}
           {{- else }}
-          startupProbe:
             httpGet:
               path: /health/startup
               port: {{ if .Values.separateHealthApp }}"health"{{ else }}"http"{{ end }}
