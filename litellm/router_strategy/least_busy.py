@@ -176,16 +176,27 @@ class LeastBusyLoggingHandler(CustomLogger):
         """
         Sync helper to get request counts for all healthy deployments.
         Returns a dict of {deployment_id: request_count}.
+
+        Uses redis_only=True to bypass in-memory cache and always read from Redis.
+        This is critical for distributed deployments where multiple pods need to see
+        the global request count, not their local stale view.
         """
         result = {}
+        none_count = 0
         for d in healthy_deployments:
             deployment_id = d["model_info"]["id"]
             if isinstance(deployment_id, int):
                 deployment_id = str(deployment_id)
             cache_key = self._get_request_count_cache_key(model_group, deployment_id)
-            count = self.router_cache.get_cache(key=cache_key)
+            # Use redis_only=True to get global count across all pods
+            count = self.router_cache.get_cache(key=cache_key, redis_only=True)
+            if count is None:
+                none_count += 1
             # Default to 0 if not in cache, ensure non-negative
             result[deployment_id] = max(0, int(count)) if count is not None else 0
+
+        if none_count == len(healthy_deployments) and none_count > 0:
+            print("[Least-Busy WARNING] Redis returned None for all deployments - Redis may be unavailable. Falling back to random routing.")
         return result
 
     async def _async_get_request_counts_for_deployments(
@@ -196,16 +207,27 @@ class LeastBusyLoggingHandler(CustomLogger):
         """
         Async helper to get request counts for all healthy deployments.
         Returns a dict of {deployment_id: request_count}.
+
+        Uses redis_only=True to bypass in-memory cache and always read from Redis.
+        This is critical for distributed deployments where multiple pods need to see
+        the global request count, not their local stale view.
         """
         result = {}
+        none_count = 0
         for d in healthy_deployments:
             deployment_id = d["model_info"]["id"]
             if isinstance(deployment_id, int):
                 deployment_id = str(deployment_id)
             cache_key = self._get_request_count_cache_key(model_group, deployment_id)
-            count = await self.router_cache.async_get_cache(key=cache_key)
+            # Use redis_only=True to get global count across all pods
+            count = await self.router_cache.async_get_cache(key=cache_key, redis_only=True)
+            if count is None:
+                none_count += 1
             # Default to 0 if not in cache, ensure non-negative
             result[deployment_id] = max(0, int(count)) if count is not None else 0
+
+        if none_count == len(healthy_deployments) and none_count > 0:
+            print("[Least-Busy WARNING] Redis returned None for all deployments - Redis may be unavailable. Falling back to random routing.")
         return result
 
     def _get_available_deployments(
@@ -214,7 +236,10 @@ class LeastBusyLoggingHandler(CustomLogger):
         all_deployments: dict,
     ):
         """
-        Helper to get deployments using least busy strategy
+        Helper to get deployments using least busy strategy.
+
+        When multiple deployments have the same minimum traffic count,
+        randomly select among them to ensure fair distribution.
         """
         # Extract healthy deployment IDs for logging
         healthy_ids = [d["model_info"]["id"] for d in healthy_deployments]
@@ -222,30 +247,36 @@ class LeastBusyLoggingHandler(CustomLogger):
         print(f"[Least-Busy DEBUG] Cached all_deployments: {all_deployments}")
         print(f"[Least-Busy DEBUG] Healthy deployment IDs: {healthy_ids}")
 
-        # Pick least busy deployment by iterating only through healthy deployments
-        # This ensures we don't consider stale/removed deployments from cache
+        # First pass: find the minimum traffic count
         min_traffic = float("inf")
-        min_deployment = None
-
         for d in healthy_deployments:
             deployment_id = d["model_info"]["id"]
             if isinstance(deployment_id, int):
                 deployment_id = str(deployment_id)
-            # Get traffic count from cache, default to 0 if not yet tracked
             traffic = all_deployments.get(deployment_id, 0)
-
             if traffic < min_traffic:
                 min_traffic = traffic
-                min_deployment = d
 
-        # If no deployment found (empty healthy_deployments), return random choice
-        if min_deployment is None:
-            print("[Least-Busy DEBUG] WARNING: No deployment found, falling back to RANDOM choice")
-            min_deployment = random.choice(healthy_deployments)
+        # Second pass: collect all deployments with minimum traffic
+        # This fixes the tie-breaking bias where the first deployment always won
+        min_deployments = []
+        for d in healthy_deployments:
+            deployment_id = d["model_info"]["id"]
+            if isinstance(deployment_id, int):
+                deployment_id = str(deployment_id)
+            traffic = all_deployments.get(deployment_id, 0)
+            if traffic == min_traffic:
+                min_deployments.append(d)
+
+        # Randomly select among deployments with equal minimum traffic
+        if min_deployments:
+            selected = random.choice(min_deployments)
+            print(f"[Least-Busy DEBUG] Selected deployment ID: {selected['model_info']['id']} with traffic={min_traffic} (from {len(min_deployments)} candidates)")
+            return selected
         else:
-            print(f"[Least-Busy DEBUG] Selected deployment ID: {min_deployment['model_info']['id']} with traffic={min_traffic}")
-
-        return min_deployment
+            # Fallback: should not happen if healthy_deployments is non-empty
+            print("[Least-Busy DEBUG] WARNING: No deployment found, falling back to RANDOM choice")
+            return random.choice(healthy_deployments)
 
     def get_available_deployments(
         self,

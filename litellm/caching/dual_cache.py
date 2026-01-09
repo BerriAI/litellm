@@ -134,12 +134,22 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
+        redis_only: bool = False,
         **kwargs,
     ):
-        # Try to fetch from in-memory cache first
+        """
+        Fetch value from cache.
+
+        Args:
+            redis_only: If True and Redis is configured, skip in-memory cache and read directly from Redis.
+                        If Redis is unavailable, returns None (does NOT fall back to in-memory).
+                        If True but Redis is not configured, falls back to in-memory cache.
+        """
         try:
             result = None
-            if self.in_memory_cache is not None:
+            skip_in_memory = redis_only and self.redis_cache is not None
+
+            if self.in_memory_cache is not None and not skip_in_memory:
                 in_memory_result = self.in_memory_cache.get_cache(key, **kwargs)
 
                 if in_memory_result is not None:
@@ -151,7 +161,7 @@ class DualCache(BaseCache):
                     key, parent_otel_span=parent_otel_span
                 )
 
-                if redis_result is not None:
+                if redis_result is not None and not redis_only:
                     # Update in-memory cache with the value from Redis
                     self.in_memory_cache.set_cache(key, redis_result, **kwargs)
 
@@ -202,15 +212,25 @@ class DualCache(BaseCache):
         key,
         parent_otel_span: Optional[Span] = None,
         local_only: bool = False,
+        redis_only: bool = False,
         **kwargs,
     ):
-        # Try to fetch from in-memory cache first
+        """
+        Async fetch value from cache.
+
+        Args:
+            redis_only: If True and Redis is configured, skip in-memory cache and read directly from Redis.
+                        If Redis is unavailable, returns None (does NOT fall back to in-memory).
+                        If True but Redis is not configured, falls back to in-memory cache.
+        """
         try:
             print_verbose(
-                f"async get cache: cache key: {key}; local_only: {local_only}"
+                f"async get cache: cache key: {key}; local_only: {local_only}; redis_only: {redis_only}"
             )
             result = None
-            if self.in_memory_cache is not None:
+            skip_in_memory = redis_only and self.redis_cache is not None
+
+            if self.in_memory_cache is not None and not skip_in_memory:
                 in_memory_result = await self.in_memory_cache.async_get_cache(
                     key, **kwargs
                 )
@@ -225,7 +245,7 @@ class DualCache(BaseCache):
                     key, parent_otel_span=parent_otel_span
                 )
 
-                if redis_result is not None:
+                if redis_result is not None and not redis_only:
                     # Update in-memory cache with the value from Redis
                     await self.in_memory_cache.async_set_cache(
                         key, redis_result, **kwargs
