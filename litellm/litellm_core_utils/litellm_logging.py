@@ -1627,11 +1627,7 @@ class Logging(LiteLLMLoggingBaseClass):
             setattr(
                 result,
                 "usage",
-                (
-                    transformed_usage.model_dump()
-                    if hasattr(transformed_usage, "model_dump")
-                    else dict(transformed_usage)
-                ),
+                transformed_usage,  # Keep as Usage object for unified handling in callbacks
             )
             if (
                 standard_logging_payload := self.model_call_details.get(
@@ -4815,7 +4811,9 @@ class StandardLoggingPayloadSetup:
         """
         Extract additional header tags for spend tracking based on config.
         """
-        extra_headers: List[str] = getattr(litellm, "extra_spend_tag_headers", None) or []
+        extra_headers: List[str] = (
+            getattr(litellm, "extra_spend_tag_headers", None) or []
+        )
         if not extra_headers:
             return None
 
