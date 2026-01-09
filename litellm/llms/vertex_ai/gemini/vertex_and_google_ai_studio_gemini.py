@@ -1516,7 +1516,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         audio_tokens: Optional[int] = None
         image_tokens: Optional[int] = None
         text_tokens: Optional[int] = None
-        image_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
