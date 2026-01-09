@@ -48,6 +48,7 @@ from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
+
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 from litellm._lazy_imports import (
@@ -88,6 +89,7 @@ def _get_cached_custom_logger():
     global _CustomLogger
     if _CustomLogger is None:
         from litellm.integrations.custom_logger import CustomLogger
+
         _CustomLogger = CustomLogger
     return _CustomLogger
 
@@ -101,6 +103,7 @@ def _get_cached_custom_guardrail():
     global _CustomGuardrail
     if _CustomGuardrail is None:
         from litellm.integrations.custom_guardrail import CustomGuardrail
+
         _CustomGuardrail = CustomGuardrail
     return _CustomGuardrail
 
@@ -114,6 +117,7 @@ def _get_cached_caching_handler_response():
     global _CachingHandlerResponse
     if _CachingHandlerResponse is None:
         from litellm.caching.caching_handler import CachingHandlerResponse
+
         _CachingHandlerResponse = CachingHandlerResponse
     return _CachingHandlerResponse
 
@@ -127,6 +131,7 @@ def _get_cached_llm_caching_handler():
     global _LLMCachingHandler
     if _LLMCachingHandler is None:
         from litellm.caching.caching_handler import LLMCachingHandler
+
         _LLMCachingHandler = LLMCachingHandler
     return _LLMCachingHandler
 
@@ -145,6 +150,7 @@ def _get_cached_audio_utils():
     global _audio_utils_module
     if _audio_utils_module is None:
         import litellm.litellm_core_utils.audio_utils.utils
+
         _audio_utils_module = litellm.litellm_core_utils.audio_utils.utils
     return _audio_utils_module
 
@@ -204,10 +210,6 @@ from litellm.types.utils import (
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
 
-
-
-
-
 try:
     # Python 3.9+
     with resources.files("litellm.litellm_core_utils.tokenizers").joinpath(
@@ -251,7 +253,10 @@ from litellm.llms.base_llm.base_utils import (
 if TYPE_CHECKING:
     # Heavy types that are only needed for type checking; avoid importing
     # their modules at runtime during `litellm` import.
-    from litellm.caching.caching_handler import CachingHandlerResponse, LLMCachingHandler
+    from litellm.caching.caching_handler import (
+        CachingHandlerResponse,
+        LLMCachingHandler,
+    )
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.llms.base_llm.files.transformation import BaseFilesConfig
     from litellm.proxy._types import AllowedModelRegion
@@ -647,7 +652,7 @@ def _is_gemini_model(model: Optional[str], custom_llm_provider: Optional[str]) -
         if custom_llm_provider in ["vertex_ai", "vertex_ai_beta"]:
             return model is not None and "gemini" in model.lower()
         return True
-    
+
     # Check if model name contains gemini
     return model is not None and "gemini" in model.lower()
 
@@ -669,7 +674,7 @@ def _process_assistant_message_tool_calls(
     """
     role = msg_copy.get("role")
     tool_calls = msg_copy.get("tool_calls")
-    
+
     if role == "assistant" and isinstance(tool_calls, list):
         new_tool_calls = []
         for tc in tool_calls:
@@ -682,17 +687,17 @@ def _process_assistant_message_tool_calls(
             else:
                 new_tool_calls.append(tc)
                 continue
-            
+
             # Remove thought signature from ID if present
             if isinstance(tc_dict.get("id"), str):
                 if thought_signature_separator in tc_dict["id"]:
                     tc_dict["id"] = _remove_thought_signature_from_id(
                         tc_dict["id"], thought_signature_separator
                     )
-            
+
             new_tool_calls.append(tc_dict)
         msg_copy["tool_calls"] = new_tool_calls
-    
+
     return msg_copy
 
 
@@ -700,14 +705,12 @@ def _process_tool_message_id(msg_copy: dict, thought_signature_separator: str) -
     """
     Process tool message to remove thought signature from tool_call_id.
     """
-    if msg_copy.get("role") == "tool" and isinstance(
-        msg_copy.get("tool_call_id"), str
-    ):
+    if msg_copy.get("role") == "tool" and isinstance(msg_copy.get("tool_call_id"), str):
         if thought_signature_separator in msg_copy["tool_call_id"]:
             msg_copy["tool_call_id"] = _remove_thought_signature_from_id(
                 msg_copy["tool_call_id"], thought_signature_separator
             )
-    
+
     return msg_copy
 
 
@@ -718,7 +721,7 @@ def _remove_thought_signatures_from_messages(
     Remove thought signatures from tool call IDs in all messages.
     """
     processed_messages = []
-    
+
     for msg in messages:
         # Handle Pydantic models (convert to dict)
         if hasattr(msg, "model_dump"):
@@ -729,17 +732,17 @@ def _remove_thought_signatures_from_messages(
             # Unknown type, keep as is
             processed_messages.append(msg)
             continue
-        
+
         # Process assistant messages with tool_calls
         msg_dict = _process_assistant_message_tool_calls(
             msg_dict, thought_signature_separator
         )
-        
+
         # Process tool messages with tool_call_id
         msg_dict = _process_tool_message_id(msg_dict, thought_signature_separator)
-        
+
         processed_messages.append(msg_dict)
-    
+
     return processed_messages
 
 
@@ -767,9 +770,9 @@ def function_setup(  # noqa: PLR0915
         get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
-            kwargs.pop("callbacks", None)
-        )
+        dynamic_callbacks: Optional[
+            List[Union[str, Callable, "CustomLogger"]]
+        ] = kwargs.pop("callbacks", None)
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -948,7 +951,6 @@ def function_setup(  # noqa: PLR0915
                 and isinstance(messages[0], dict)
                 and "content" in messages[0]
             ):
-
                 buffer = StringIO()
                 for m in messages:
                     content = m.get("content", "")
@@ -959,7 +961,7 @@ def function_setup(  # noqa: PLR0915
                     input=buffer.getvalue(),
                     model=model,
                 )
-            
+
             ### REMOVE THOUGHT SIGNATURES FROM TOOL CALL IDS FOR NON-GEMINI MODELS ###
             # Gemini models embed thought signatures in tool call IDs. When sending
             # messages with tool calls to non-Gemini providers, we need to remove these
@@ -975,7 +977,7 @@ def function_setup(  # noqa: PLR0915
 
                     # Get custom_llm_provider to determine target provider
                     custom_llm_provider = kwargs.get("custom_llm_provider")
-                    
+
                     # If custom_llm_provider not in kwargs, try to determine it from the model
                     if not custom_llm_provider and model:
                         try:
@@ -986,18 +988,18 @@ def function_setup(  # noqa: PLR0915
                         except Exception:
                             # If we can't determine the provider, skip this processing
                             pass
-                    
+
                     # Only process if target is NOT a Gemini model
                     if not _is_gemini_model(model, custom_llm_provider):
                         verbose_logger.debug(
                             "Removing thought signatures from tool call IDs for non-Gemini model"
                         )
-                        
+
                         # Process messages to remove thought signatures
                         processed_messages = _remove_thought_signatures_from_messages(
                             messages, THOUGHT_SIGNATURE_SEPARATOR
                         )
-                        
+
                         # Update messages in kwargs or args
                         if "messages" in kwargs:
                             kwargs["messages"] = processed_messages
@@ -1042,9 +1044,7 @@ def function_setup(  # noqa: PLR0915
             _file_obj: FileTypes = args[1] if len(args) > 1 else kwargs["file"]
             # Lazy import audio_utils.utils only when needed for transcription calls
             audio_utils = _get_cached_audio_utils()
-            file_checksum = audio_utils.get_audio_file_content_hash(
-                file_obj=_file_obj
-            )
+            file_checksum = audio_utils.get_audio_file_content_hash(file_obj=_file_obj)
             if "metadata" in kwargs:
                 kwargs["metadata"]["file_checksum"] = file_checksum
             else:
@@ -1607,9 +1607,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs["retry_policy"] = (
-                        reset_retry_policy()
-                    )  # prevent infinite loops
+                    kwargs[
+                        "retry_policy"
+                    ] = reset_retry_policy()  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1623,11 +1623,17 @@ def client(original_function):  # noqa: PLR0915
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-                    if (
-                        isinstance(e, openai.APIError)
-                        or isinstance(e, openai.Timeout)
-                        or isinstance(e, openai.APIConnectionError)
-                    ):
+                    # Check if this error should be retried based on status code
+                    # AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default
+                    # Only retry: 408, 409, 429, 500+ errors
+                    # However, if explicit retry_policy is provided, respect the policy decision
+                    _should_retry_error, _status_code = _is_retryable_exception(
+                        e, _retry_policy_provided
+                    )
+                    if _should_retry_error:
+                        verbose_logger.debug(
+                            f"Retrying request after {type(e).__name__} (status_code={_status_code})"
+                        )
                         kwargs["num_retries"] = num_retries
                         return litellm.completion_with_retries(*args, **kwargs)
                 elif (
@@ -1868,6 +1874,7 @@ def client(original_function):  # noqa: PLR0915
                     raise e
 
             call_type = original_function.__name__
+            _retry_policy_provided = kwargs.get("retry_policy", None) is not None
             num_retries, kwargs = _get_wrapper_num_retries(kwargs=kwargs, exception=e)
             if call_type == CallTypes.acompletion.value:
                 context_window_fallback_dict = kwargs.get(
@@ -1881,21 +1888,34 @@ def client(original_function):  # noqa: PLR0915
                 if (
                     num_retries and not _is_litellm_router_call
                 ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
-                    try:
-                        litellm.num_retries = (
-                            None  # set retries to None to prevent infinite loops
-                        )
-                        kwargs["num_retries"] = num_retries
-                        kwargs["original_function"] = original_function
-                        if isinstance(
-                            e, openai.RateLimitError
-                        ):  # rate limiting specific error
-                            kwargs["retry_strategy"] = "exponential_backoff_retry"
-                        elif isinstance(e, openai.APIError):  # generic api error
-                            kwargs["retry_strategy"] = "constant_retry"
-                        return await litellm.acompletion_with_retries(*args, **kwargs)
-                    except Exception:
-                        pass
+                    # Check if this error should be retried based on status code
+                    # AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default
+                    # Only retry: 408, 409, 429, 500+ errors
+                    # However, if explicit retry_policy is provided, respect the policy decision
+                    _should_retry_error, _status_code = _is_retryable_exception(
+                        e, _retry_policy_provided
+                    )
+                    if _should_retry_error:
+                        try:
+                            verbose_logger.debug(
+                                f"Retrying async request after {type(e).__name__} (status_code={_status_code})"
+                            )
+                            litellm.num_retries = (
+                                None  # set retries to None to prevent infinite loops
+                            )
+                            kwargs["num_retries"] = num_retries
+                            kwargs["original_function"] = original_function
+                            if isinstance(
+                                e, openai.RateLimitError
+                            ):  # rate limiting specific error
+                                kwargs["retry_strategy"] = "exponential_backoff_retry"
+                            else:
+                                kwargs["retry_strategy"] = "constant_retry"
+                            return await litellm.acompletion_with_retries(
+                                *args, **kwargs
+                            )
+                        except Exception:
+                            pass
                 elif (
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
@@ -3249,8 +3269,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
         )
 
     elif custom_llm_provider == "ollama":
-        if 'dimensions' in non_default_params:
-            optional_params['dimensions']=non_default_params.pop('dimensions')
+        if "dimensions" in non_default_params:
+            optional_params["dimensions"] = non_default_params.pop("dimensions")
         if len(non_default_params.keys()) > 0:
             if (
                 litellm.drop_params is True or drop_params is True
@@ -3516,10 +3536,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params["response_format"] = (
-                provider_config.get_json_schema_from_pydantic_object(
-                    response_format=non_default_params["response_format"]
-                )
+            non_default_params[
+                "response_format"
+            ] = provider_config.get_json_schema_from_pydantic_object(
+                response_format=non_default_params["response_format"]
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3648,16 +3668,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("tools")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("tools")
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.pop("functions")
-                    )
+                    optional_params[
+                        "functions_unsupported_model"
+                    ] = non_default_params.pop("functions")
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4803,9 +4823,9 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
-        response_obj.choices
-    )
+    _choices: Union[
+        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
+    ] = response_obj.choices
 
     # Use list accumulation to avoid O(n^2) string concatenation across choices
     response_parts: List[str] = []
@@ -6224,6 +6244,48 @@ def _should_retry(status_code: int):
     return False
 
 
+def _is_retryable_exception(
+    exception: Exception,
+    retry_policy_provided: bool,
+) -> tuple[bool, int]:
+    """
+    Determine if an exception should trigger a retry.
+
+    Args:
+        exception: The exception that was raised
+        retry_policy_provided: Whether an explicit retry_policy was provided by the user
+
+    Returns:
+        Tuple of (should_retry: bool, status_code: int) - whether to retry and the exception's status code.
+
+    Notes:
+        - Timeout and APIConnectionError inherit from APIError but don't have status_code.
+          When these occur, getattr(e, "status_code", 0) returns 0, and _should_retry(0)
+          returns False. The separate OR checks ensure these transient errors are always retried.
+        - AuthenticationError (401), BadRequestError (400), etc. should NOT be retried by default.
+        - Only retry: 408, 409, 429, 500+ errors.
+        - If explicit retry_policy is provided, respect the policy decision.
+    """
+    status_code = getattr(exception, "status_code", 0)
+
+    if retry_policy_provided:
+        # Retry policy explicitly provided - trust it (it already determined num_retries)
+        should_retry = (
+            isinstance(exception, openai.APIError)
+            or isinstance(exception, openai.Timeout)
+            or isinstance(exception, openai.APIConnectionError)
+        )
+    else:
+        # No retry policy - use _should_retry to exclude non-retryable errors like AuthenticationError
+        should_retry = (
+            (isinstance(exception, openai.APIError) and _should_retry(status_code))
+            or isinstance(exception, openai.Timeout)
+            or isinstance(exception, openai.APIConnectionError)
+        )
+
+    return should_retry, status_code
+
+
 def _get_retry_after_from_exception_header(
     response_headers: Optional[httpx.Headers] = None,
 ):
@@ -7464,7 +7526,6 @@ class ProviderConfigManager:
             if route == "v2":
                 return litellm.CohereV2ChatConfig()
             else:
-
                 return litellm.CohereChatConfig()
         elif litellm.LlmProviders.SNOWFLAKE == provider:
             return litellm.SnowflakeConfig()
@@ -7512,7 +7573,7 @@ class ProviderConfigManager:
             return litellm.IBMWatsonXAIConfig()
         elif litellm.LlmProviders.EMPOWER == provider:
             return litellm.EmpowerChatConfig()
-        elif litellm.LlmProviders.MINIMAX == provider:            
+        elif litellm.LlmProviders.MINIMAX == provider:
             return litellm.MinimaxChatConfig()
         elif litellm.LlmProviders.GITHUB == provider:
             return litellm.GithubChatConfig()
