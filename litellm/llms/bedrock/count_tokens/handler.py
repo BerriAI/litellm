@@ -70,6 +70,8 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
             verbose_logger.debug(f"Making request to: {endpoint_url}")
 
             # Use existing _sign_request method from BaseAWSLLM
+            # Extract api_key for bearer token auth if provided
+            api_key = litellm_params.get("api_key", None)
             headers = {"Content-Type": "application/json"}
             signed_headers, signed_body = self._sign_request(
                 service_name="bedrock",
@@ -78,6 +80,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 request_data=bedrock_request,
                 api_base=endpoint_url,
                 model=resolved_model,
+                api_key=api_key,
             )
 
             async_client = get_async_httpx_client(llm_provider=litellm.LlmProviders.BEDROCK)
