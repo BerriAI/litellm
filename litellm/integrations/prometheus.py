@@ -2639,6 +2639,8 @@ class PrometheusLogger(CustomLogger):
                 user_id=user_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
+                user_id_upsert=False,
+                check_db_only=True,
             )
         except Exception as e:
             verbose_logger.debug(
