@@ -3972,7 +3972,7 @@ class ProxyConfig:
         )
 
         try:
-            await global_mcp_server_manager._add_mcp_servers_from_db_to_in_memory_registry()
+            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
@@ -4119,7 +4119,7 @@ async def _reload_mcp_servers_job():
             global_mcp_server_manager,
         )
 
-        await global_mcp_server_manager._add_mcp_servers_from_db_to_in_memory_registry()  # noqa: SLF001
+        await global_mcp_server_manager.reload_servers_from_database()
     except Exception as e:
         verbose_proxy_logger.exception(
             "Failed to reload MCP servers from database: %s", str(e)
