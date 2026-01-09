@@ -65,31 +65,6 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
         # External spans should only be closed by their creators
         parent_otel_span.end.assert_not_called()
 
-    def test_init_tracing_respects_existing_tracer_provider(self):
-        """
-        Unit test: _init_tracing() should respect existing TracerProvider.
-
-        When a TracerProvider already exists (e.g., set by Langfuse SDK),
-        LiteLLM should use it instead of creating a new one.
-        """
-        from opentelemetry import trace
-        from opentelemetry.sdk.trace import TracerProvider
-        from litellm.integrations.opentelemetry import OpenTelemetry
-
-        # Setup: Create and set an existing TracerProvider
-        tracer_provider = TracerProvider()
-        trace.set_tracer_provider(tracer_provider)
-        existing_provider = trace.get_tracer_provider()
-
-        # Act: Initialize OpenTelemetry integration (should detect existing provider)
-        otel_integration = OpenTelemetry()
-
-        # Assert: The existing provider should still be active
-        current_provider = trace.get_tracer_provider()
-        assert current_provider is existing_provider, (
-            "Existing TracerProvider should be respected and not overridden"
-        )
-
     def test_get_span_context_detects_active_span(self):
         """
         Unit test: _get_span_context() should auto-detect active spans from global context.

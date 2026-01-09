@@ -55,6 +55,7 @@ const sidebars = {
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
         ...[
+          "proxy/guardrails/qualifire",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/onyx_security",
           "proxy/guardrails/aporia_api",
@@ -420,14 +421,8 @@ const sidebars = {
           ],
         },
         "assistants",
-        {
-          type: "category",
-          label: "/audio",
-          items: [
-            "audio_transcription",
-            "text_to_speech",
-          ]
-        },
+        "audio_transcription",
+        "text_to_speech",
         {
           type: "category",
           label: "/batches",
@@ -477,17 +472,13 @@ const sidebars = {
         "apply_guardrail",
         "bedrock_invoke",
         "interactions",
-        {
-          type: "category",
-          label: "/images",
-          items: [
-            "image_edits",
-            "image_generation",
-            "image_variations",
-          ]
-        },
+        "image_edits",
+        "image_generation",
+        "image_variations",
         "videos",
         "vector_store_files",
+        "vector_stores/create",
+        "vector_stores/search",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
@@ -531,17 +522,12 @@ const sidebars = {
             "proxy/pass_through_guardrails"
           ]
         },
-        {
-          type: "category",
-          label: "/rag",
-          items: [
-            "rag_ingest",
-            "rag_query",
-          ]
-        },
+        "rag_ingest",
+        "rag_query",
         "realtime",
         "rerank",
         "response_api",
+        "response_api_compact",
         {
           type: "category",
           label: "/search",
@@ -559,14 +545,7 @@ const sidebars = {
           ]
         },
         "skills",
-        {
-          type: "category",
-          label: "/vector_stores",
-          items: [
-            "vector_stores/create",
-            "vector_stores/search",
-          ]
-        },
+
       ],
     },
     {
@@ -675,12 +654,13 @@ const sidebars = {
             "providers/bedrock_writer",
             "providers/bedrock_batches",
             "providers/aws_polly",
-            "providers/bedrock_vector_store",
-          ]
-        },
-        "providers/litellm_proxy",
-        "providers/ai21",
-        "providers/aiml",
+        "providers/bedrock_vector_store",
+      ]
+    },
+    "providers/litellm_proxy",
+    "providers/abliteration",
+    "providers/ai21",
+    "providers/aiml",
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
@@ -730,7 +710,9 @@ const sidebars = {
         "providers/langgraph",
         "providers/lemonade",
         "providers/llamafile",
+        "providers/llamagate",
         "providers/lm_studio",
+        "providers/manus",
         "providers/meta_llama",
         "providers/milvus_vector_stores",
         "providers/mistral",

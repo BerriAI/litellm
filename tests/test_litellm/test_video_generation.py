@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -18,6 +18,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
 from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
 from litellm.types.videos.main import VideoObject, VideoResponse
+from litellm.videos import main as videos_main
 from litellm.videos.main import (
     avideo_generation,
     avideo_status,
@@ -31,32 +32,29 @@ class TestVideoGeneration:
 
     def test_video_generation_basic(self):
         """Test basic video generation functionality."""
-        # Mock the video generation response
-        mock_response = VideoObject(
-            id="video_123",
-            object="video",
-            status="queued",
-            created_at=1712697600,
+        # Use mock_response parameter for reliable testing
+        response = video_generation(
+            prompt="Show them running around the room",
             model="sora-2",
+            seconds="8",
             size="720x1280",
-            seconds="8"
+            mock_response={
+                "id": "video_123",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+                "model": "sora-2",
+                "size": "720x1280",
+                "seconds": "8"
+            }
         )
         
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_generation_handler.return_value = mock_response
-            
-            response = video_generation(
-                prompt="Show them running around the room",
-                model="sora-2",
-                seconds="8",
-                size="720x1280"
-            )
-            
-            assert isinstance(response, VideoObject)
-            assert response.id == "video_123"
-            assert response.model == "sora-2"
-            assert response.size == "720x1280"
-            assert response.seconds == "8"
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_123"
+        assert response.status == "queued"
+        assert response.model == "sora-2"
+        assert response.size == "720x1280"
+        assert response.seconds == "8"
 
     def test_video_generation_with_mock_response(self):
         """Test video generation with mock response."""
@@ -97,26 +95,27 @@ class TestVideoGeneration:
             progress=50
         )
         
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_generation_handler.return_value = mock_response
-            
-            import asyncio
-            
-            async def test_async():
-                response = await avideo_generation(
-                    prompt="A cat playing with a ball",
-                    model="sora-2",
-                    seconds="5",
-                    size="720x1280"
-                )
-                return response
-            
-            response = asyncio.run(test_async())
-            
-            assert isinstance(response, VideoObject)
-            assert response.id == "video_async_123"
-            assert response.status == "processing"
-            assert response.progress == 50
+        # Mock the async_video_generation_handler to return the mock_response
+        async_mock = AsyncMock(return_value=mock_response)
+        with patch.object(videos_main.base_llm_http_handler, 'async_video_generation_handler', async_mock):
+            with patch.object(videos_main.base_llm_http_handler, 'video_generation_handler', side_effect=lambda **kwargs: async_mock(**kwargs)):
+                import asyncio
+                
+                async def test_async():
+                    response = await avideo_generation(
+                        prompt="A cat playing with a ball",
+                        model="sora-2",
+                        seconds="5",
+                        size="720x1280"
+                    )
+                    return response
+                
+                response = asyncio.run(test_async())
+                
+                assert isinstance(response, VideoObject)
+                assert response.id == "video_async_123"
+                assert response.status == "processing"
+                assert response.progress == 50
 
     def test_video_generation_parameter_validation(self):
         """Test video generation parameter validation."""
@@ -132,9 +131,7 @@ class TestVideoGeneration:
 
     def test_video_generation_error_handling(self):
         """Test video generation error handling."""
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_generation_handler.side_effect = Exception("API Error")
-            
+        with patch.object(videos_main.base_llm_http_handler, 'video_generation_handler', side_effect=Exception("API Error")):
             with pytest.raises(Exception):
                 video_generation(
                     prompt="Test video",
@@ -443,32 +440,28 @@ class TestVideoGeneration:
 
     def test_video_status_basic(self):
         """Test basic video status functionality."""
-        # Mock the video status response
-        mock_response = VideoObject(
-            id="video_123",
-            object="video",
-            status="completed",
-            created_at=1712697600,
-            completed_at=1712697660,
+        # Use mock_response parameter for reliable testing
+        response = video_status(
+            video_id="video_123",
             model="sora-2",
-            progress=100,
-            size="720x1280",
-            seconds="8"
+            mock_response={
+                "id": "video_123",
+                "object": "video",
+                "status": "completed",
+                "created_at": 1712697600,
+                "completed_at": 1712697660,
+                "model": "sora-2",
+                "progress": 100,
+                "size": "720x1280",
+                "seconds": "8"
+            }
         )
         
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_status_handler.return_value = mock_response
-            
-            response = video_status(
-                video_id="video_123",
-                model="sora-2"
-            )
-            
-            assert isinstance(response, VideoObject)
-            assert response.id == "video_123"
-            assert response.status == "completed"
-            assert response.progress == 100
-            assert response.model == "sora-2"
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_123"
+        assert response.status == "completed"
+        assert response.progress == 100
+        assert response.model == "sora-2"
 
     def test_video_status_with_mock_response(self):
         """Test video status with mock response."""
@@ -506,24 +499,25 @@ class TestVideoGeneration:
             progress=0
         )
         
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_status_handler.return_value = mock_response
-            
-            import asyncio
-            
-            async def test_async():
-                response = await avideo_status(
-                    video_id="video_async_123",
-                    model="sora-2"
-                )
-                return response
-            
-            response = asyncio.run(test_async())
-            
-            assert isinstance(response, VideoObject)
-            assert response.id == "video_async_123"
-            assert response.status == "queued"
-            assert response.progress == 0
+        # Mock the async_video_status_handler to return the mock_response
+        async_mock = AsyncMock(return_value=mock_response)
+        with patch.object(videos_main.base_llm_http_handler, 'async_video_status_handler', async_mock):
+            with patch.object(videos_main.base_llm_http_handler, 'video_status_handler', side_effect=lambda **kwargs: async_mock(**kwargs)):
+                import asyncio
+                
+                async def test_async():
+                    response = await avideo_status(
+                        video_id="video_async_123",
+                        model="sora-2"
+                    )
+                    return response
+                
+                response = asyncio.run(test_async())
+                
+                assert isinstance(response, VideoObject)
+                assert response.id == "video_async_123"
+                assert response.status == "queued"
+                assert response.progress == 0
 
     def test_video_status_parameter_validation(self):
         """Test video status parameter validation."""
@@ -539,9 +533,7 @@ class TestVideoGeneration:
 
     def test_video_status_error_handling(self):
         """Test video status error handling."""
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_status_handler.side_effect = Exception("API Error")
-            
+        with patch.object(videos_main.base_llm_http_handler, 'video_status_handler', side_effect=Exception("API Error")):
             with pytest.raises(Exception):
                 video_status(
                     video_id="test_video_id",
@@ -672,33 +664,30 @@ class TestVideoGeneration:
 
     def test_video_status_async_inside_async_function(self):
         """Test that sync video_status works inside async functions (no asyncio.run issues)."""
-        mock_response = VideoObject(
-            id="video_sync_in_async",
-            object="video",
-            status="completed",
-            created_at=1712697600,
-            model="sora-2",
-            progress=100
-        )
+        import asyncio
         
-        with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
-            mock_handler.video_status_handler.return_value = mock_response
-            
-            import asyncio
-            
-            async def test_sync_in_async():
-                # This should work without asyncio.run() issues
-                response = video_status(
-                    video_id="video_sync_in_async",
-                    model="sora-2"
-                )
-                return response
-            
-            response = asyncio.run(test_sync_in_async())
-            
-            assert isinstance(response, VideoObject)
-            assert response.id == "video_sync_in_async"
-            assert response.status == "completed"
+        async def test_sync_in_async():
+            # This should work without asyncio.run() issues
+            # Use mock_response parameter for reliable testing
+            response = video_status(
+                video_id="video_sync_in_async",
+                model="sora-2",
+                mock_response={
+                    "id": "video_sync_in_async",
+                    "object": "video",
+                    "status": "completed",
+                    "created_at": 1712697600,
+                    "model": "sora-2",
+                    "progress": 100
+                }
+            )
+            return response
+        
+        response = asyncio.run(test_sync_in_async())
+        
+        assert isinstance(response, VideoObject)
+        assert response.id == "video_sync_in_async"
+        assert response.status == "completed"
 
     def test_video_status_url_construction(self):
         """Test video status URL construction."""

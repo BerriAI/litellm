@@ -863,6 +863,7 @@ class KeyRequestBase(GenerateRequestBase):
     tpm_limit_type: Optional[
         Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"]
     ] = None  # raise an error if 'guaranteed_throughput' is set and we're overallocating tpm
+    router_settings: Optional[UpdateRouterConfig] = None
 
 
 class LiteLLMKeyType(str, enum.Enum):
@@ -918,6 +919,7 @@ class GenerateKeyResponse(KeyRequestBase):
             "config",
             "permissions",
             "model_max_budget",
+            "router_settings",
         ]
         for field in dict_fields:
             value = values.get(field)
@@ -1460,6 +1462,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 
     models: list = []
     blocked: bool = False
+    router_settings: Optional[dict] = None
 
 
 class NewTeamRequest(TeamBase):
@@ -1532,6 +1535,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     guardrails: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
+    team_member_budget_duration: Optional[str] = None
     team_member_rpm_limit: Optional[int] = None
     team_member_tpm_limit: Optional[int] = None
     team_member_key_duration: Optional[str] = None
@@ -1541,6 +1545,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[Dict[str, int]] = None
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
+    router_settings: Optional[dict] = None
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):
@@ -1683,6 +1688,7 @@ class LiteLLM_TeamTable(TeamBase):
             "permissions",
             "model_max_budget",
             "model_aliases",
+            "router_settings",
         ]
 
         if isinstance(values, BaseModel):
@@ -1908,6 +1914,9 @@ class UserHeaderMapping(LiteLLMPydanticObjectBase):
     }
 
 
+UserMCPManagementMode = Literal["restricted", "view_all"]
+
+
 class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     """
     Documents all the fields supported by `general_settings` in config.yaml
@@ -1933,7 +1942,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="connect to a postgres db - needed for generating temporary keys + tracking spend / key",
     )
     database_connection_pool_limit: Optional[int] = Field(
-        100,
+        10,
         description="default connection pool for prisma client connecting to postgres db",
     )
     database_connection_timeout: Optional[float] = Field(
@@ -2025,6 +2034,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Fine-grained control over which object types to load from the database when store_model_in_db is True. Available types: 'models', 'mcp', 'guardrails', 'vector_stores', 'pass_through_endpoints', 'prompts', 'model_cost_map'. If not set, all objects are loaded (default behavior).",
     )
+    user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
+        None,
+        description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):
@@ -2091,6 +2104,7 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
+    router_settings: Optional[Dict] = None  # Router settings for this key (Key > Team > Global precedence)
 
     model_config = ConfigDict(protected_namespaces=())
 
@@ -3727,6 +3741,7 @@ class BaseDailySpendTransaction(TypedDict):
     model_group: Optional[str]
     mcp_namespaced_tool_name: Optional[str]
     custom_llm_provider: Optional[str]
+    endpoint: Optional[str]
 
     # token count metrics
     prompt_tokens: int

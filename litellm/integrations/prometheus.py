@@ -361,6 +361,25 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_requests_metric"),
             )
 
+            # Cache metrics
+            self.litellm_cache_hits_metric = self._counter_factory(
+                name="litellm_cache_hits_metric",
+                documentation="Total number of LiteLLM cache hits",
+                labelnames=self.get_labels_for_metric("litellm_cache_hits_metric"),
+            )
+
+            self.litellm_cache_misses_metric = self._counter_factory(
+                name="litellm_cache_misses_metric",
+                documentation="Total number of LiteLLM cache misses",
+                labelnames=self.get_labels_for_metric("litellm_cache_misses_metric"),
+            )
+
+            self.litellm_cached_tokens_metric = self._counter_factory(
+                name="litellm_cached_tokens_metric",
+                documentation="Total tokens served from LiteLLM cache",
+                labelnames=self.get_labels_for_metric("litellm_cached_tokens_metric"),
+            )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -823,6 +842,11 @@ class PrometheusLogger(CustomLogger):
                 f"standard_logging_object is required, got={standard_logging_payload}"
             )
 
+        if self._should_skip_metrics_for_invalid_key(
+            kwargs=kwargs, standard_logging_payload=standard_logging_payload
+        ):
+            return
+
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
         _metadata = litellm_params.get("metadata", {})
@@ -847,7 +871,7 @@ class PrometheusLogger(CustomLogger):
         user_api_key_auth_metadata: Optional[dict] = standard_logging_payload[
             "metadata"
         ].get("user_api_key_auth_metadata")
-        
+
         # Include top-level metadata fields (excluding nested dictionaries)
         # This allows accessing fields like requester_ip_address from top-level metadata
         top_level_metadata = standard_logging_payload.get("metadata", {})
@@ -858,7 +882,7 @@ class PrometheusLogger(CustomLogger):
                 for k, v in top_level_metadata.items()
                 if not isinstance(v, dict)  # Exclude nested dicts to avoid conflicts
             }
-        
+
         combined_metadata: Dict[str, Any] = {
             **top_level_fields,  # Include top-level fields first
             **(_requester_metadata if _requester_metadata else {}),
@@ -977,6 +1001,12 @@ class PrometheusLogger(CustomLogger):
             kwargs, start_time, end_time, enum_values, output_tokens
         )
 
+        # cache metrics
+        self._increment_cache_metrics(
+            standard_logging_payload=standard_logging_payload,  # type: ignore
+            enum_values=enum_values,
+        )
+
         if (
             standard_logging_payload["stream"] is True
         ):  # log successful streaming requests from logging event hook.
@@ -1045,6 +1075,54 @@ class PrometheusLogger(CustomLogger):
         self.litellm_output_tokens_metric.labels(**_labels).inc(
             standard_logging_payload["completion_tokens"]
         )
+
+    def _increment_cache_metrics(
+        self,
+        standard_logging_payload: StandardLoggingPayload,
+        enum_values: UserAPIKeyLabelValues,
+    ):
+        """
+        Increment cache-related Prometheus metrics based on cache hit/miss status.
+
+        Args:
+            standard_logging_payload: Contains cache_hit field (True/False/None)
+            enum_values: Label values for Prometheus metrics
+        """
+        cache_hit = standard_logging_payload.get("cache_hit")
+
+        # Only track if cache_hit has a definite value (True or False)
+        if cache_hit is None:
+            return
+
+        if cache_hit is True:
+            # Increment cache hits counter
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_cache_hits_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_cache_hits_metric.labels(**_labels).inc()
+
+            # Increment cached tokens counter
+            total_tokens = standard_logging_payload.get("total_tokens", 0)
+            if total_tokens > 0:
+                _labels = prometheus_label_factory(
+                    supported_enum_labels=self.get_labels_for_metric(
+                        metric_name="litellm_cached_tokens_metric"
+                    ),
+                    enum_values=enum_values,
+                )
+                self.litellm_cached_tokens_metric.labels(**_labels).inc(total_tokens)
+        else:
+            # cache_hit is False - increment cache misses counter
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_cache_misses_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_cache_misses_metric.labels(**_labels).inc()
 
     async def _increment_remaining_budget_metrics(
         self,
@@ -1237,11 +1315,17 @@ class PrometheusLogger(CustomLogger):
             f"prometheus Logging - Enters failure logging function for kwargs {kwargs}"
         )
 
-        # unpack kwargs
-        model = kwargs.get("model", "")
         standard_logging_payload: StandardLoggingPayload = kwargs.get(
             "standard_logging_object", {}
         )
+        
+        if self._should_skip_metrics_for_invalid_key(
+            kwargs=kwargs, standard_logging_payload=standard_logging_payload
+        ):
+            return
+        
+        model = kwargs.get("model", "")
+        
         litellm_params = kwargs.get("litellm_params", {}) or {}
         get_end_user_id_for_cost_tracking = _get_cached_end_user_id_for_cost_tracking()
 
@@ -1255,7 +1339,6 @@ class PrometheusLogger(CustomLogger):
         user_api_team_alias = standard_logging_payload["metadata"][
             "user_api_key_team_alias"
         ]
-        kwargs.get("exception", None)
 
         try:
             self.litellm_llm_api_failed_requests_metric.labels(
@@ -1274,6 +1357,139 @@ class PrometheusLogger(CustomLogger):
             )
             pass
         pass
+
+    def _extract_status_code(
+        self,
+        kwargs: Optional[dict] = None,
+        enum_values: Optional[Any] = None,
+        exception: Optional[Exception] = None,
+    ) -> Optional[int]:
+        """
+        Extract HTTP status code from various input formats for validation.
+        
+        This is a centralized helper to extract status code from different
+        callback function signatures. Handles both ProxyException (uses 'code')
+        and standard exceptions (uses 'status_code').
+        
+        Args:
+            kwargs: Dictionary potentially containing 'exception' key
+            enum_values: Object with 'status_code' attribute
+            exception: Exception object to extract status code from directly
+            
+        Returns:
+            Status code as integer if found, None otherwise
+        """
+        status_code = None
+        
+        # Try from enum_values first (most common in our callbacks)
+        if enum_values and hasattr(enum_values, "status_code") and enum_values.status_code:
+            try:
+                status_code = int(enum_values.status_code)
+            except (ValueError, TypeError):
+                pass
+        
+        if not status_code and exception:
+            # ProxyException uses 'code' attribute, other exceptions may use 'status_code'
+            status_code = getattr(exception, "status_code", None) or getattr(exception, "code", None)
+            if status_code is not None:
+                try:
+                    status_code = int(status_code)
+                except (ValueError, TypeError):
+                    status_code = None
+        
+        if not status_code and kwargs:
+            exception_in_kwargs = kwargs.get("exception")
+            if exception_in_kwargs:
+                status_code = getattr(exception_in_kwargs, "status_code", None) or getattr(exception_in_kwargs, "code", None)
+                if status_code is not None:
+                    try:
+                        status_code = int(status_code)
+                    except (ValueError, TypeError):
+                        status_code = None
+        
+        return status_code
+    
+    def _is_invalid_api_key_request(
+        self,
+        status_code: Optional[int],
+        exception: Optional[Exception] = None,
+    ) -> bool:
+        """
+        Determine if a request has an invalid API key based on status code and exception.
+        
+        This method prevents invalid authentication attempts from being recorded in
+        Prometheus metrics. A 401 status code is the definitive indicator of authentication
+        failure. Additionally, we check exception messages for authentication error patterns
+        to catch cases where the exception hasn't been converted to a ProxyException yet.
+        
+        Args:
+            status_code: HTTP status code (401 indicates authentication error)
+            exception: Exception object to check for auth-related error messages
+            
+        Returns:
+            True if the request has an invalid API key and metrics should be skipped,
+            False otherwise
+        """
+        if status_code == 401:
+            return True
+        
+        # Handle cases where AssertionError is raised before conversion to ProxyException
+        if exception is not None:
+            exception_str = str(exception).lower()
+            auth_error_patterns = [
+                "virtual key expected",
+                "expected to start with 'sk-'",
+                "authentication error",
+                "invalid api key",
+                "api key not valid",
+            ]
+            if any(pattern in exception_str for pattern in auth_error_patterns):
+                return True
+        
+        return False
+    
+    def _should_skip_metrics_for_invalid_key(
+        self,
+        kwargs: Optional[dict] = None,
+        user_api_key_dict: Optional[Any] = None,
+        enum_values: Optional[Any] = None,
+        standard_logging_payload: Optional[Union[dict, StandardLoggingPayload]] = None,
+        exception: Optional[Exception] = None,
+    ) -> bool:
+        """
+        Determine if Prometheus metrics should be skipped for invalid API key requests.
+        
+        This is a centralized validation method that extracts status code and exception
+        information from various callback function signatures and determines if the request
+        represents an invalid API key attempt that should be filtered from metrics.
+        
+        Args:
+            kwargs: Dictionary potentially containing exception and other data
+            user_api_key_dict: User API key authentication object (currently unused)
+            enum_values: Object with status_code attribute
+            standard_logging_payload: Standard logging payload dictionary
+            exception: Exception object to check directly
+            
+        Returns:
+            True if metrics should be skipped (invalid key detected), False otherwise
+        """
+        status_code = self._extract_status_code(
+            kwargs=kwargs,
+            enum_values=enum_values,
+            exception=exception,
+        )
+        
+        if exception is None and kwargs:
+            exception = kwargs.get("exception")
+        
+        if self._is_invalid_api_key_request(status_code, exception=exception):
+            verbose_logger.debug(
+                "Skipping Prometheus metrics for invalid API key request: "
+                f"status_code={status_code}, exception={type(exception).__name__ if exception else None}"
+            )
+            return True
+        
+        return False
 
     async def async_post_call_failure_hook(
         self,
@@ -1300,6 +1516,14 @@ class PrometheusLogger(CustomLogger):
             StandardLoggingPayloadSetup,
         )
 
+        if self._should_skip_metrics_for_invalid_key(
+            user_api_key_dict=user_api_key_dict,
+            exception=original_exception,
+        ):
+            return
+
+        status_code = self._extract_status_code(exception=original_exception)
+
         try:
             _tags = StandardLoggingPayloadSetup._get_request_tags(
                 litellm_params=request_data,
@@ -1314,8 +1538,8 @@ class PrometheusLogger(CustomLogger):
                 team=user_api_key_dict.team_id,
                 team_alias=user_api_key_dict.team_alias,
                 requested_model=request_data.get("model", ""),
-                status_code=str(getattr(original_exception, "status_code", None)),
-                exception_status=str(getattr(original_exception, "status_code", None)),
+                status_code=str(status_code),
+                exception_status=str(status_code),
                 exception_class=self._get_exception_class_name(original_exception),
                 tags=_tags,
                 route=user_api_key_dict.request_route,
@@ -1352,6 +1576,11 @@ class PrometheusLogger(CustomLogger):
             from litellm.litellm_core_utils.litellm_logging import (
                 StandardLoggingPayloadSetup,
             )
+
+            if self._should_skip_metrics_for_invalid_key(
+                user_api_key_dict=user_api_key_dict
+            ):
+                return
 
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
@@ -1408,6 +1637,15 @@ class PrometheusLogger(CustomLogger):
             exception = request_kwargs.get("exception", None)
 
             llm_provider = _litellm_params.get("custom_llm_provider", None)
+            
+            if self._should_skip_metrics_for_invalid_key(
+                kwargs=request_kwargs,
+                standard_logging_payload=standard_logging_payload,
+            ):
+                return
+            hashed_api_key = standard_logging_payload.get("metadata", {}).get(
+                "user_api_key_hash"
+            )
 
             # Create enum_values for the label factory (always create for use in different metrics)
             enum_values = UserAPIKeyLabelValues(
@@ -1422,9 +1660,7 @@ class PrometheusLogger(CustomLogger):
                     self._get_exception_class_name(exception) if exception else None
                 ),
                 requested_model=model_group,
-                hashed_api_key=standard_logging_payload["metadata"][
-                    "user_api_key_hash"
-                ],
+                hashed_api_key=hashed_api_key,
                 api_key_alias=standard_logging_payload["metadata"][
                     "user_api_key_alias"
                 ],
@@ -1485,6 +1721,14 @@ class PrometheusLogger(CustomLogger):
             ] = request_kwargs.get("standard_logging_object")
 
             if standard_logging_payload is None:
+                return
+
+            # Skip recording metrics for invalid API key requests
+            if self._should_skip_metrics_for_invalid_key(
+                kwargs=request_kwargs,
+                enum_values=enum_values,
+                standard_logging_payload=standard_logging_payload,
+            ):
                 return
 
             api_base = standard_logging_payload["api_base"]
