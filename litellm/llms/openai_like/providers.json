@@ -61,6 +61,10 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "abliteration": {
+    "base_url": "https://api.abliteration.ai/v1",
+    "api_key_env": "ABLITERATION_API_KEY"
+  },
   "llamagate": {
     "base_url": "https://api.llamagate.dev/v1",
     "api_key_env": "LLAMAGATE_API_KEY",
