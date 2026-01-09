@@ -204,3 +204,42 @@ def test_azure_gpt5_reasoning_effort_none_dropped(config: AzureOpenAIGPT5Config)
     )
     assert "reasoning_effort" not in params or params.get("reasoning_effort") != "none"
 
+
+# Logprobs support tests for Azure GPT-5
+def test_azure_gpt5_supports_logprobs(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5 models support logprobs parameters.
+
+    Azure OpenAI GPT-5 models support logprobs, unlike OpenAI's GPT-5.
+    Tested with gpt-5.2 on api-version 2025-01-01-preview.
+    """
+    supported_params = config.get_supported_openai_params(model="gpt-5.2")
+    assert "logprobs" in supported_params
+    assert "top_logprobs" in supported_params
+
+
+def test_azure_gpt5_2_supports_logprobs(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5.2 specifically supports logprobs parameters."""
+    supported_params = config.get_supported_openai_params(model="azure/gpt-5.2")
+    assert "logprobs" in supported_params
+    assert "top_logprobs" in supported_params
+
+
+def test_azure_gpt5_series_supports_logprobs(config: AzureOpenAIGPT5Config):
+    """Test that Azure GPT-5 with gpt5_series prefix supports logprobs."""
+    supported_params = config.get_supported_openai_params(model="gpt5_series/gpt-5.2")
+    assert "logprobs" in supported_params
+    assert "top_logprobs" in supported_params
+
+
+def test_azure_gpt5_logprobs_params_passed_through(config: AzureOpenAIGPT5Config):
+    """Test that logprobs parameters are correctly passed through to the API."""
+    params = config.map_openai_params(
+        non_default_params={"logprobs": True, "top_logprobs": 5},
+        optional_params={},
+        model="azure/gpt-5.2",
+        drop_params=False,
+        api_version="2025-01-01-preview",
+    )
+    assert params["logprobs"] is True
+    assert params["top_logprobs"] == 5
+
