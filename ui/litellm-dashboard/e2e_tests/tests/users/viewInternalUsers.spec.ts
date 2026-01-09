@@ -1,10 +1,11 @@
 import { test, expect, Page } from "@playwright/test";
+import { ADMIN_STORAGE_PATH } from "../../constants";
 
 test.describe("Internal Users Page", () => {
-  test.use({ storageState: "admin.storageState.json" });
+  test.use({ storageState: ADMIN_STORAGE_PATH });
 
   async function goToInternalUsers(page: Page) {
-    await page.goto("http://localhost:4000/ui");
+    await page.goto("/ui");
 
     const internalUserTab = page.getByRole("menuitem", { name: "Internal User" });
     await expect(internalUserTab).toBeVisible();
@@ -43,6 +44,7 @@ test.describe("Internal Users Page", () => {
       await expect(prevButton).toBeDisabled();
     }
 
+    await page.waitForTimeout(1000);
     // Check if there are more pages
     const hasMorePages = infoText.includes("of") && !infoText.endsWith("25 of 25");
     if (hasMorePages) {

@@ -941,9 +941,16 @@ class VertexAITokenCounter(BaseTokenCounter):
             vertex_project = count_tokens_params_request.get(
                 "vertex_project"
             ) or count_tokens_params_request.get("vertex_ai_project")
+            
             vertex_location = count_tokens_params_request.get(
                 "vertex_location"
             ) or count_tokens_params_request.get("vertex_ai_location")
+
+            # Count tokens not available on global location: https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+            vertex_location = count_tokens_params_request.get(
+                "vertex_count_tokens_location"
+            ) or vertex_location
+
             vertex_credentials = count_tokens_params_request.get(
                 "vertex_credentials"
             ) or count_tokens_params_request.get("vertex_ai_credentials")

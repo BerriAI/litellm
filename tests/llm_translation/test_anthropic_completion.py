@@ -385,7 +385,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
     "computer_tool_used, prompt_caching_set, expected_beta_header",
     [
         (True, False, True),
-        (False, True, True),
+        (False, True, False),
         (True, True, True),
         (False, False, False),
     ],

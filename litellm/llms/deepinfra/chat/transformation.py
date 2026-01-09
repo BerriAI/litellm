@@ -1,9 +1,11 @@
-from typing import Optional, Tuple, Union
+import json
+from typing import Any, Coroutine, List, Literal, Optional, Tuple, Union, cast, overload
 
 import litellm
 from litellm.constants import MIN_NON_ZERO_TEMPERATURE
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues
 
 
 class DeepInfraConfig(OpenAIGPTConfig):
@@ -116,6 +118,79 @@ class DeepInfraConfig(OpenAIGPTConfig):
                 if value is not None:
                     optional_params[param] = value
         return optional_params
+
+    def _transform_tool_message_content(self, messages: List[AllMessageValues]) -> List[AllMessageValues]:
+        """
+        Transform tool message content from array to string format for DeepInfra compatibility.
+        
+        DeepInfra requires tool message content to be a string, not an array.
+        This method converts tool message content from array format to string format.
+        
+        Example transformation:
+        - Input:  {"role": "tool", "content": [{"type": "text", "text": "20"}]}
+        - Output: {"role": "tool", "content": "20"}
+        
+        Or if content is complex:
+        - Input:  {"role": "tool", "content": [{"type": "text", "text": "result"}]}
+        - Output: {"role": "tool", "content": "[{\"type\": \"text\", \"text\": \"result\"}]"}
+        """
+        for message in messages:
+            if message.get("role") == "tool":
+                content = message.get("content")
+                
+                # If content is a list/array, convert it to string
+                if isinstance(content, list):
+                    # Check if it's a simple single text item
+                    if (
+                        len(content) == 1 
+                        and isinstance(content[0], dict) 
+                        and content[0].get("type") == "text"
+                        and "text" in content[0]
+                    ):
+                        # Extract just the text value for simple cases
+                        message["content"] = content[0]["text"]
+                    else:
+                        # For complex content, serialize the entire array as JSON string
+                        message["content"] = json.dumps(content)
+        
+        return messages
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[True]
+    ) -> Coroutine[Any, Any, List[AllMessageValues]]:
+        ...
+
+    @overload
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: Literal[False] = False
+    ) -> List[AllMessageValues]:
+        ...
+
+    def _transform_messages(
+        self, messages: List[AllMessageValues], model: str, is_async: bool = False
+    ) -> Union[List[AllMessageValues], Coroutine[Any, Any, List[AllMessageValues]]]:
+        """
+        Transform messages for DeepInfra compatibility.
+        Handles both sync and async transformations.
+        """
+        if is_async:
+            # For async case, create an async function that awaits parent and applies our transformation
+            async def _async_transform():
+                # Call parent with is_async=True (literal) for async case
+                parent_result = super(DeepInfraConfig, self)._transform_messages(
+                    messages=messages, model=model, is_async=cast(Literal[True], True)
+                )
+                transformed_messages = await parent_result
+                return self._transform_tool_message_content(transformed_messages)
+            return _async_transform()
+        else:
+            # Call parent with is_async=False (literal) for sync case
+            parent_result = super()._transform_messages(
+                messages=messages, model=model, is_async=cast(Literal[False], False)
+            )
+            # For sync case, parent_result is already the transformed messages
+            return self._transform_tool_message_content(parent_result)
 
     def _get_openai_compatible_provider_info(
         self, api_base: Optional[str], api_key: Optional[str]

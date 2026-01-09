@@ -629,6 +629,8 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonCohereConfig()
     elif bedrock_invoke_provider == "mistral":
         return litellm.AmazonMistralConfig()
+    elif bedrock_invoke_provider == "moonshot":
+        return litellm.AmazonMoonshotConfig()
     elif bedrock_invoke_provider == "deepseek_r1":
         return litellm.AmazonDeepSeekR1Config()
     elif bedrock_invoke_provider == "nova":

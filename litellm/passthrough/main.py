@@ -216,6 +216,11 @@ def llm_passthrough_route(
     )
 
     litellm_params_dict = get_litellm_params(**kwargs)
+    
+    # Add model_id to litellm_params if present in kwargs (for Bedrock Application Inference Profiles)
+    if "model_id" in kwargs:
+        litellm_params_dict["model_id"] = kwargs["model_id"]
+    
     litellm_logging_obj.update_environment_variables(
         model=model,
         litellm_params=litellm_params_dict,

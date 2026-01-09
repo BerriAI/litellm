@@ -990,6 +990,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def create_azure_base_url(
         self, azure_client_params: dict, model: Optional[str]
     ) -> str:
+        from litellm.llms.azure_ai.image_generation import (
+            AzureFoundryFluxImageGenerationConfig,
+        )
+
         api_base: str = azure_client_params.get(
             "azure_endpoint", ""
         )  # "https://example-endpoint.openai.azure.com"
@@ -998,6 +1002,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
+
+        # Handle FLUX 2 models on Azure AI which use a different URL pattern
+        # e.g., /providers/blackforestlabs/v1/flux-2-pro instead of /openai/deployments/{model}/images/generations
+        if AzureFoundryFluxImageGenerationConfig.is_flux2_model(model):
+            return AzureFoundryFluxImageGenerationConfig.get_flux2_image_generation_url(
+                api_base=api_base,
+                model=model,
+                api_version=api_version,
+            )
 
         if "/openai/deployments/" in api_base:
             base_url_with_deployment = api_base

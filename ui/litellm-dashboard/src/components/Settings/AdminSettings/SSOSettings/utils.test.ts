@@ -55,6 +55,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "proxy_admin",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
         other_field: "value",
       };
 
@@ -83,6 +84,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "internal_user",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -100,6 +102,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "internal_user_viewer",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -121,6 +124,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "proxy_admin_viewer",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -142,6 +146,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "internal_user",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -160,6 +165,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "internal_user",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -174,6 +180,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "internal_user_viewer",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -186,6 +193,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "internal_user",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -198,6 +206,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "proxy_admin_viewer",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -210,6 +219,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "proxy_admin",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -222,6 +232,7 @@ describe("processSSOSettingsPayload", () => {
         default_role: "unknown_role",
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);
@@ -233,6 +244,7 @@ describe("processSSOSettingsPayload", () => {
       const formValues = {
         group_claim: "groups",
         use_role_mappings: true,
+        sso_provider: "generic",
       };
 
       const result = processSSOSettingsPayload(formValues);

@@ -369,6 +369,10 @@ class BaseAWSLLM:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="stability"
             )
+        elif provider == "moonshot" and "moonshot/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="moonshot"
+            )
         return model_id
 
     @staticmethod

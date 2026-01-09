@@ -232,6 +232,40 @@ class TestListMCPServers:
                     assert server.transport == "http"
 
     @pytest.mark.asyncio
+    async def test_list_mcp_servers_view_all_mode(self):
+        """Users should see all MCP servers when view_all mode is enabled."""
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        mock_servers = [
+            generate_mock_mcp_server_db_record(server_id="server-1", alias="One"),
+            generate_mock_mcp_server_db_record(server_id="server-2", alias="Two"),
+        ]
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(
+            return_value=mock_servers
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+            return_value="view_all",
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
+
+            assert len(result) == 2
+            assert {server.server_id for server in result} == {"server-1", "server-2"}
+
+    @pytest.mark.asyncio
     async def test_list_mcp_servers_combined_config_and_db(self):
         """
         Test 2: If both config.yaml and DB then combines both and returns the result
@@ -1095,6 +1129,51 @@ class TestHealthCheckServers:
             assert len(result) == 1
             assert result[0]["server_id"] == "server-1"
             assert result[0]["status"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_health_check_view_all_mode(self):
+        """view_all mode should return health info for all MCP servers."""
+
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            health_check_servers,
+        )
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        health_result_one = generate_mock_mcp_server_db_record(
+            server_id="server-1", alias="One"
+        )
+        health_result_one.status = "healthy"
+
+        health_result_two = generate_mock_mcp_server_db_record(
+            server_id="server-2", alias="Two"
+        )
+        health_result_two.status = "unhealthy"
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_unfiltered = AsyncMock(
+            return_value=[health_result_one, health_result_two]
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+            return_value="view_all",
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            result = await health_check_servers(
+                server_ids=None,
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert len(result) == 2
+            assert result[0]["server_id"] == "server-1"
+            assert result[0]["status"] == "healthy"
+            assert result[1]["server_id"] == "server-2"
+            assert result[1]["status"] == "unhealthy"
 
     @pytest.mark.asyncio
     async def test_health_check_unauthorized_servers(self):
