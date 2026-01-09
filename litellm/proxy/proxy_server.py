@@ -3983,7 +3983,7 @@ class ProxyConfig:
         )
 
         try:
-            await global_mcp_server_manager._add_mcp_servers_from_db_to_in_memory_registry()
+            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
@@ -4118,6 +4118,23 @@ class ProxyConfig:
                 )
             )
             return []
+
+
+async def _reload_mcp_servers_job():
+    """Background job entrypoint for MCP registry refreshes."""
+    if proxy_config._should_load_db_object(object_type="mcp") is False:
+        return
+
+    try:
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+            global_mcp_server_manager,
+        )
+
+        await global_mcp_server_manager.reload_servers_from_database()
+    except Exception as e:
+        verbose_proxy_logger.exception(
+            "Failed to reload MCP servers from database: %s", str(e)
+        )
 
 
 proxy_config = ProxyConfig()
@@ -4657,6 +4674,18 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+
+            from litellm.proxy._experimental.mcp_server.utils import is_mcp_available
+
+            if is_mcp_available():
+                scheduler.add_job(
+                    _reload_mcp_servers_job,
+                    "interval",
+                    seconds=30,
+                    id="reload_mcp_servers_job",
+                    replace_existing=True,
+                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                )
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
             general_settings=general_settings,
