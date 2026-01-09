@@ -370,7 +370,7 @@ jobs:
             echo "version=${BASE_VERSION}-${RELEASE_TYPE}" | tee -a $GITHUB_OUTPUT
           fi
 
-          # App version (must match Docker tags that actually exist)
+          # App version (must match Docker tags)
           # stable/rc releases: Docker creates main-{tag}, so use the tag
           # latest/dev releases: Docker only creates main-{release_type}, so use release_type
           if [ "$RELEASE_TYPE" = "stable" ] || [ "$RELEASE_TYPE" = "rc" ]; then
