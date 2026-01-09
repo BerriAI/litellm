@@ -38,6 +38,14 @@ class TestIsNestedPath:
 class TestDeleteNestedValue:
     """Test the core deletion logic."""
 
+    def test_top_level_field_deletion(self):
+        """Test that top-level fields can be deleted (regression test for issue #18672)."""
+        data = {"name": "should_be_removed", "keep": "should_stay", "temperature": 0.7}
+        result = delete_nested_value(data, "name")
+        assert "name" not in result
+        assert result["keep"] == "should_stay"
+        assert result["temperature"] == 0.7
+
     def test_array_wildcard_removes_field_from_all_elements(self):
         """Test removing a field from all array elements."""
         data = {
@@ -165,16 +173,13 @@ class TestComplexNestedPatterns:
 
         # Verify deeply nested field removed from all array elements
         assert (
-            "remove_this_field"
-            not in result["tools"][0]["some_arr"][0]["some_struct"]
+            "remove_this_field" not in result["tools"][0]["some_arr"][0]["some_struct"]
         )
         assert (
-            "remove_this_field"
-            not in result["tools"][0]["some_arr"][1]["some_struct"]
+            "remove_this_field" not in result["tools"][0]["some_arr"][1]["some_struct"]
         )
         assert (
-            "remove_this_field"
-            not in result["tools"][1]["some_arr"][0]["some_struct"]
+            "remove_this_field" not in result["tools"][1]["some_arr"][0]["some_struct"]
         )
 
         # Verify other fields preserved
