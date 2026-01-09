@@ -242,14 +242,19 @@ jobs:
             echo "::endgroup::"
           fi
 
+      - name: Setup GCP credentials for Vertex AI
+        run: |
+          echo '${{ secrets.CI_RESOURCES_SERVICE_ACCOUNT }}' > /tmp/gcp-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa.json" >> $GITHUB_ENV
+
       - name: Generate changelog with Claude
         id: changelog
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          use_vertex: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: false
-          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 25 --allowed-tools Read,Write,Bash,Grep,Glob"
+          claude_args: "--model claude-sonnet-4-5@20250929 --max-turns 25 --allowedTools Read,Write,Bash,Grep,Glob"
           prompt: |
             # ROLE: Senior Staff AI Augmentation Engineer
 
@@ -403,7 +408,13 @@ jobs:
             NOW: Read the data files, investigate if needed, and write both `slack_message.txt` and `slack_thread.txt`.
         timeout-minutes: 10
         env:
+          ANTHROPIC_VERTEX_PROJECT_ID: carto-ci-resources
+          ANTHROPIC_VERTEX_REGION: us-central1
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup GCP credentials
+        if: always()
+        run: rm -f /tmp/gcp-sa.json
 
       - name: Verify messages were created
         id: verify

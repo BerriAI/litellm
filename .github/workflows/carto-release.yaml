@@ -263,15 +263,21 @@ jobs:
           cat release_notes.md
           echo "::endgroup::"
 
+      - name: Setup GCP credentials for Vertex AI
+        if: steps.manual-notes.outputs.notes_generated != 'true'
+        run: |
+          echo '${{ secrets.CI_RESOURCES_SERVICE_ACCOUNT }}' > /tmp/gcp-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa.json" >> $GITHUB_ENV
+
       - name: Generate intelligent release notes with Claude
         id: release-notes
         if: steps.manual-notes.outputs.notes_generated != 'true'
         uses: anthropics/claude-code-action@v1
         with:
+          use_vertex: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: false
-          claude_args: "--model claude-sonnet-4-5-20250929 --max-turns 50 --allowed-tools Read,Bash,Grep,Glob"
+          claude_args: "--model claude-sonnet-4-5@20250929 --max-turns 50 --allowedTools Read,Bash,Grep,Glob"
           prompt: |
             # Intelligent Release Notes Generation with Upstream Sync Detection
 
@@ -482,8 +488,14 @@ jobs:
 
             **Start now!**
         env:
+          ANTHROPIC_VERTEX_PROJECT_ID: carto-ci-resources
+          ANTHROPIC_VERTEX_REGION: us-central1
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         timeout-minutes: 20
+
+      - name: Cleanup GCP credentials
+        if: always()
+        run: rm -f /tmp/gcp-sa.json
 
       - name: Create Git tag
         run: |

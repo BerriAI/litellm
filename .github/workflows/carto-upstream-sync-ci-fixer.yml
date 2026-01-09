@@ -216,14 +216,19 @@ jobs:
           EOF
           )"
 
+      - name: Setup GCP credentials for Vertex AI
+        run: |
+          echo '${{ secrets.CI_RESOURCES_SERVICE_ACCOUNT }}' > /tmp/gcp-sa.json
+          echo "GOOGLE_APPLICATION_CREDENTIALS=/tmp/gcp-sa.json" >> $GITHUB_ENV
+
       - name: Run Claude Code to fix failures
         id: claude-fix
         uses: anthropics/claude-code-action@v1
         with:
+          use_vertex: "true"
           github_token: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           show_full_output: true
-          claude_args: "--model claude-opus-4-5-20251101 --max-turns 150 --allowed-tools Read,Write,Edit,Bash,Grep,Glob"
+          claude_args: "--model claude-opus-4-5@20251101 --max-turns 150 --allowedTools Read,Write,Edit,Bash,Grep,Glob"
           prompt: |
             # Fix CI Failures in Upstream Sync Resolution PR
 
@@ -466,8 +471,14 @@ jobs:
             - [ ] `make test-unit` passes locally
             - [ ] Changes committed and pushed
         env:
+          ANTHROPIC_VERTEX_PROJECT_ID: carto-ci-resources
+          ANTHROPIC_VERTEX_REGION: us-central1
           GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           GITHUB_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
+
+      - name: Cleanup GCP credentials
+        if: always()
+        run: rm -f /tmp/gcp-sa.json
 
       - name: Comment on PR - Result
         if: always()
