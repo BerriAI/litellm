@@ -591,3 +591,68 @@ Expected Response
 
 </TabItem>
 </Tabs>
+
+## OpenAI Responses API - Auto-Summary Control
+
+When using OpenAI Responses API models (like `gpt-5`) via `/chat/completions` with `reasoning_effort`, you can control whether `summary="detailed"` is automatically added to the reasoning parameter.
+
+### Enabling Auto-Summary
+
+You can enable automatic `summary="detailed"` in two ways:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+import litellm
+
+# Enable auto-summary globally
+litellm.reasoning_auto_summary = True
+
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort="low",  # Will automatically add summary="detailed"
+)
+```
+
+</TabItem>
+
+<TabItem value="env" label="Environment Variable">
+
+```bash
+# Set environment variable
+export LITELLM_REASONING_AUTO_SUMMARY=true
+
+# Or in your .env file
+LITELLM_REASONING_AUTO_SUMMARY=true
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy Config">
+
+```yaml
+litellm_settings:
+  reasoning_auto_summary: true  # Enable auto-summary for all requests
+
+model_list:
+  - model_name: gpt-5-mini
+    litellm_params:
+      model: openai/responses/gpt-5-mini
+```
+
+</TabItem>
+</Tabs>
+
+### Manual Control (Recommended)
+
+For fine-grained control, pass `reasoning_effort` as a dictionary:
+
+```python
+response = litellm.completion(
+    model="openai/responses/gpt-5-mini",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    reasoning_effort={"effort": "low", "summary": "detailed"},  # Explicit control
+)
+```

@@ -189,6 +189,10 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_guardrail_latency_seconds",
     "litellm_guardrail_errors_total",
     "litellm_guardrail_requests_total",
+    # Cache metrics
+    "litellm_cache_hits_metric",
+    "litellm_cache_misses_metric",
+    "litellm_cached_tokens_metric",
 ]
 
 
@@ -456,6 +460,21 @@ class PrometheusMetricLabels:
     litellm_in_memory_spend_update_queue_size: List[str] = []
 
     litellm_redis_spend_update_queue_size: List[str] = []
+
+    # Cache metrics - track cache hits, misses, and tokens served from cache
+    _cache_metric_labels = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_cache_hits_metric = _cache_metric_labels
+    litellm_cache_misses_metric = _cache_metric_labels
+    litellm_cached_tokens_metric = _cache_metric_labels
 
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:

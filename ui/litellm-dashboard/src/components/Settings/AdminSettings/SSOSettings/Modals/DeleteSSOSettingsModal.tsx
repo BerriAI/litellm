@@ -1,79 +1,66 @@
-import { Modal } from "antd";
+import { useEditSSOSettings } from "@/app/(dashboard)/hooks/sso/useEditSSOSettings";
+import { useSSOSettings } from "@/app/(dashboard)/hooks/sso/useSSOSettings";
 import React from "react";
+import DeleteResourceModal from "../../../../common_components/DeleteResourceModal";
 import NotificationsManager from "../../../../molecules/notifications_manager";
-import { updateSSOSettings } from "../../../../networking";
 import { parseErrorMessage } from "../../../../shared/errorUtils";
+import { detectSSOProvider } from "../utils";
 
 interface DeleteSSOSettingsModalProps {
   isVisible: boolean;
   onCancel: () => void;
   onSuccess: () => void;
-  accessToken: string | null;
 }
 
-const DeleteSSOSettingsModal: React.FC<DeleteSSOSettingsModalProps> = ({
-  isVisible,
-  onCancel,
-  onSuccess,
-  accessToken,
-}) => {
+const DeleteSSOSettingsModal: React.FC<DeleteSSOSettingsModalProps> = ({ isVisible, onCancel, onSuccess }) => {
+  const { data: ssoSettings } = useSSOSettings();
+  const { mutateAsync: editSSOSettings, isPending: isEditingSSOSettings } = useEditSSOSettings();
+
   // Handle clearing SSO settings
   const handleClearSSO = async () => {
-    if (!accessToken) {
-      NotificationsManager.fromBackend("No access token available");
-      return;
-    }
+    const clearSettings = {
+      google_client_id: null,
+      google_client_secret: null,
+      microsoft_client_id: null,
+      microsoft_client_secret: null,
+      microsoft_tenant: null,
+      generic_client_id: null,
+      generic_client_secret: null,
+      generic_authorization_endpoint: null,
+      generic_token_endpoint: null,
+      generic_userinfo_endpoint: null,
+      proxy_base_url: null,
+      user_email: null,
+      sso_provider: null,
+      role_mappings: null,
+    };
 
-    try {
-      // Clear all SSO settings
-      const clearSettings = {
-        google_client_id: null,
-        google_client_secret: null,
-        microsoft_client_id: null,
-        microsoft_client_secret: null,
-        microsoft_tenant: null,
-        generic_client_id: null,
-        generic_client_secret: null,
-        generic_authorization_endpoint: null,
-        generic_token_endpoint: null,
-        generic_userinfo_endpoint: null,
-        proxy_base_url: null,
-        user_email: null,
-        sso_provider: null,
-      };
-
-      await updateSSOSettings(accessToken, clearSettings);
-
-      NotificationsManager.success("SSO settings cleared successfully");
-
-      // Close modal and trigger success callback
-      onCancel();
-      onSuccess();
-    } catch (error) {
-      console.error("Failed to clear SSO settings:", error);
-      NotificationsManager.fromBackend("Failed to clear SSO settings: " + parseErrorMessage(error));
-    }
+    await editSSOSettings(clearSettings, {
+      onSuccess: () => {
+        NotificationsManager.success("SSO settings cleared successfully");
+        onCancel();
+        onSuccess();
+      },
+      onError: (error) => {
+        NotificationsManager.fromBackend("Failed to clear SSO settings: " + parseErrorMessage(error));
+      },
+    });
   };
 
   return (
-    <Modal
+    <DeleteResourceModal
+      isOpen={isVisible}
       title="Confirm Clear SSO Settings"
-      visible={isVisible}
-      onOk={handleClearSSO}
+      alertMessage="This action cannot be undone."
+      message="Are you sure you want to clear all SSO settings? Users will no longer be able to login using SSO after this change."
+      resourceInformationTitle="SSO Settings"
+      resourceInformation={[
+        { label: "Provider", value: (ssoSettings?.values && detectSSOProvider(ssoSettings?.values)) || "Generic" },
+      ]}
       onCancel={onCancel}
-      okText="Yes, Clear"
-      cancelText="Cancel"
-      okButtonProps={{
-        danger: true,
-        style: {
-          backgroundColor: "#dc2626",
-          borderColor: "#dc2626",
-        },
-      }}
-    >
-      <p>Are you sure you want to clear all SSO settings? This action cannot be undone.</p>
-      <p>Users will no longer be able to login using SSO after this change.</p>
-    </Modal>
+      onOk={handleClearSSO}
+      confirmLoading={isEditingSSOSettings}
+    />
   );
 };
 

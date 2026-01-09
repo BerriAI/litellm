@@ -68,6 +68,9 @@ class BreakdownMetrics(BaseModel):
     providers: Dict[str, MetricWithMetadata] = Field(
         default_factory=dict
     )  # provider -> {metrics, metadata}
+    endpoints: Dict[str, MetricWithMetadata] = Field(
+        default_factory=dict
+    )  # endpoint -> {metrics, metadata}
     api_keys: Dict[str, KeyMetricWithMetadata] = Field(
         default_factory=dict
     )  # api_key -> {metrics, metadata}
