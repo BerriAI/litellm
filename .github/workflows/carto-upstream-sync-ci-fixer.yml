@@ -472,7 +472,7 @@ jobs:
             - [ ] Changes committed and pushed
         env:
           ANTHROPIC_VERTEX_PROJECT_ID: carto-ci-resources
-          ANTHROPIC_VERTEX_REGION: us-central1
+          CLOUD_ML_REGION: us-central1
           GH_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
           GITHUB_TOKEN: ${{ secrets.X_GITHUB_SUPERCARTOFANTE }}
 

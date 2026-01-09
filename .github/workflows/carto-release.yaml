@@ -489,7 +489,7 @@ jobs:
             **Start now!**
         env:
           ANTHROPIC_VERTEX_PROJECT_ID: carto-ci-resources
-          ANTHROPIC_VERTEX_REGION: us-central1
+          CLOUD_ML_REGION: us-central1
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         timeout-minutes: 20
 
