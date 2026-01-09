@@ -336,9 +336,9 @@ jobs:
         run: |
           CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} 2>/dev/null || true)
           if [ -z "${CHART_LIST}" ]; then
-            echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
+            echo "current-version=1.0.0" | tee -a $GITHUB_OUTPUT
           else
-            # Extract version and strip any prerelease suffix (e.g., 0.1.827-latest -> 0.1.827)
+            # Extract version and strip any prerelease suffix (e.g., 1.0.5-latest -> 1.0.5)
             VERSION=$(printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print $2}' | tr -d " " | cut -d'-' -f1)
             echo "current-version=${VERSION}" | tee -a $GITHUB_OUTPUT
           fi
@@ -350,7 +350,7 @@ jobs:
         id: bump_version
         uses: christian-draeger/increment-semantic-version@1.1.0
         with:
-          current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
+          current-version: ${{ steps.current_version.outputs.current-version || '1.0.0' }}
           version-fragment: 'bug'
 
       # Add suffix for non-stable releases (semantic versioning)
@@ -358,7 +358,7 @@ jobs:
         id: chart_version
         shell: bash
         run: |
-          BASE_VERSION="${{ steps.bump_version.outputs.next-version || '0.1.0' }}"
+          BASE_VERSION="${{ steps.bump_version.outputs.next-version || '1.0.0' }}"
           RELEASE_TYPE="${{ github.event.inputs.release_type }}"
           if [ "$RELEASE_TYPE" = "stable" ]; then
             echo "version=${BASE_VERSION}" | tee -a $GITHUB_OUTPUT
@@ -370,7 +370,7 @@ jobs:
         with:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
-          tag: ${{ github.event.inputs.chartVersion || steps.chart_version.outputs.version || '0.1.0' }}
+          tag: ${{ github.event.inputs.chartVersion || steps.chart_version.outputs.version || '1.0.0' }}
           app_version: ${{ steps.current_app_tag.outputs.latest_tag }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}
