@@ -551,6 +551,7 @@ class MCPServerManager:
             allowed_tools=getattr(mcp_server, "allowed_tools", None),
             disallowed_tools=getattr(mcp_server, "disallowed_tools", None),
             allow_all_keys=mcp_server.allow_all_keys,
+            updated_at=getattr(mcp_server, "updated_at", None),
         )
         return new_server
 
@@ -2074,15 +2075,34 @@ class MCPServerManager:
         db_mcp_servers = await get_all_mcp_servers(prisma_client)
         verbose_logger.info(f"Found {len(db_mcp_servers)} MCP servers in database")
 
-        # ensure the global_mcp_server_manager is up to date with the db
+        previous_registry = self.registry
+        new_registry: Dict[str, MCPServer] = {}
+
         for server in db_mcp_servers:
+            existing_server = previous_registry.get(server.server_id)
+
+            if (
+                existing_server is not None
+                and existing_server.updated_at is not None
+                and server.updated_at is not None
+                and existing_server.updated_at == server.updated_at
+            ):
+                # Re-use existing server instance to avoid re-running build_mcp_server_from_table()
+                # which can perform network discovery for OAuth2 servers.
+                new_registry[server.server_id] = existing_server
+                continue
+
             verbose_logger.debug(
-                f"Adding server to registry: {server.server_id} ({server.server_name})"
+                f"Building server from DB: {server.server_id} ({server.server_name})"
             )
-            await self.add_server(server)
+            new_registry[server.server_id] = await self.build_mcp_server_from_table(
+                server
+            )
+
+        self.registry = new_registry
 
         verbose_logger.debug(
-            f"Registry now contains {len(self.get_registry())} servers"
+            "MCP registry refreshed (%s servers in registry)", len(new_registry)
         )
 
     def get_mcp_servers_from_ids(self, server_ids: List[str]) -> List[MCPServer]:
