@@ -84,10 +84,7 @@ interface ChatUIProps {
   };
 }
 
-const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([
-  EndpointType.CHAT,
-  EndpointType.RESPONSES,
-]);
+const MCP_SUPPORTED_ENDPOINTS = new Set<EndpointType>([EndpointType.CHAT, EndpointType.RESPONSES]);
 
 const ChatUI: React.FC<ChatUIProps> = ({
   accessToken,
@@ -131,7 +128,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   });
   const [apiKey, setApiKey] = useState<string>(() => sessionStorage.getItem("apiKey") || "");
   const [customProxyBaseUrl, setCustomProxyBaseUrl] = useState<string>(
-    () => sessionStorage.getItem("customProxyBaseUrl") || ""
+    () => sessionStorage.getItem("customProxyBaseUrl") || "",
   );
   const [inputMessage, setInputMessage] = useState("");
   const [chatHistory, setChatHistory] = useState<MessageType[]>(() => {
@@ -215,7 +212,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
   const [temperature, setTemperature] = useState<number>(1.0);
   const [maxTokens, setMaxTokens] = useState<number>(2048);
   const [useAdvancedParams, setUseAdvancedParams] = useState<boolean>(false);
-  
+
   // Code Interpreter state (using custom hook)
   const codeInterpreter = useCodeInterpreter();
 
@@ -244,15 +241,14 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
     try {
       const response = await listMCPTools(userApiKey, serverId);
-      setServerToolsMap(prev => ({
+      setServerToolsMap((prev) => ({
         ...prev,
-        [serverId]: response.tools || []
+        [serverId]: response.tools || [],
       }));
     } catch (error) {
       console.error(`Error fetching tools for server ${serverId}:`, error);
     }
   };
-
 
   useEffect(() => {
     if (isGetCodeModalVisible) {
@@ -1007,7 +1003,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             traceId,
             selectedVectorStores.length > 0 ? selectedVectorStores : undefined,
             selectedGuardrails.length > 0 ? selectedGuardrails : undefined,
-            selectedMCPTools, // Pass the selected tools array
+            selectedMCPServers, // Pass the selected tools array
             customProxyBaseUrl || undefined,
           );
         } else if (endpointType === EndpointType.EMBEDDINGS) {
@@ -1205,9 +1201,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                   icon={ApiOutlined}
                 />
                 {customProxyBaseUrl && (
-                  <Text className="text-xs text-gray-500 mt-1">
-                    API calls will be sent to: {customProxyBaseUrl}
-                  </Text>
+                  <Text className="text-xs text-gray-500 mt-1">API calls will be sent to: {customProxyBaseUrl}</Text>
                 )}
               </div>
 
@@ -1382,7 +1376,11 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     optionLabelProp="label"
                   >
                     {agentInfo.map((agent) => (
-                      <Select.Option key={agent.agent_id} value={agent.agent_name} label={agent.agent_name || agent.agent_id}>
+                      <Select.Option
+                        key={agent.agent_id}
+                        value={agent.agent_name}
+                        label={agent.agent_name || agent.agent_id}
+                      >
                         <div className="flex flex-col py-1">
                           <span className="font-medium">{agent.agent_name || agent.agent_id}</span>
                           {agent.agent_card_params?.description && (
@@ -1416,10 +1414,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               <div>
                 <Text className="font-medium block mb-2 text-gray-700 flex items-center">
                   <ToolOutlined className="mr-2" /> MCP Servers
-                  <Tooltip
-                    className="ml-1"
-                    title="Select MCP servers to use in your conversation."
-                  >
+                  <Tooltip className="ml-1" title="Select MCP servers to use in your conversation.">
                     <InfoCircleOutlined />
                   </Tooltip>
                 </Text>
@@ -1435,15 +1430,15 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     } else {
                       setSelectedMCPServers(value);
                       // Clean up tool restrictions for removed servers
-                      setMCPServerToolRestrictions(prev => {
+                      setMCPServerToolRestrictions((prev) => {
                         const updated = { ...prev };
-                        Object.keys(updated).forEach(serverId => {
+                        Object.keys(updated).forEach((serverId) => {
                           if (!value.includes(serverId)) delete updated[serverId];
                         });
                         return updated;
                       });
                       // Load tools for newly selected servers
-                      value.forEach(serverId => {
+                      value.forEach((serverId) => {
                         if (!serverToolsMap[serverId]) {
                           loadServerTools(serverId);
                         }
@@ -1474,12 +1469,8 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       disabled={selectedMCPServers.includes("__all__")}
                     >
                       <div className="flex flex-col py-1">
-                        <span className="font-medium">
-                          {server.alias || server.server_name || server.server_id}
-                        </span>
-                        {server.description && (
-                          <span className="text-xs text-gray-500 mt-1">{server.description}</span>
-                        )}
+                        <span className="font-medium">{server.alias || server.server_name || server.server_id}</span>
+                        {server.description && <span className="text-xs text-gray-500 mt-1">{server.description}</span>}
                       </div>
                     </Select.Option>
                   ))}
@@ -1489,40 +1480,40 @@ const ChatUI: React.FC<ChatUIProps> = ({
                 {selectedMCPServers.length > 0 &&
                   !selectedMCPServers.includes("__all__") &&
                   MCP_SUPPORTED_ENDPOINTS.has(endpointType as EndpointType) && (
-                  <div className="mt-3 space-y-2">
-                    {selectedMCPServers.map(serverId => {
-                      const server = mcpServers.find(s => s.server_id === serverId);
-                      const tools = serverToolsMap[serverId] || [];
-                      if (tools.length === 0) return null;
+                    <div className="mt-3 space-y-2">
+                      {selectedMCPServers.map((serverId) => {
+                        const server = mcpServers.find((s) => s.server_id === serverId);
+                        const tools = serverToolsMap[serverId] || [];
+                        if (tools.length === 0) return null;
 
-                      return (
-                        <div key={serverId} className="border rounded p-2">
-                          <Text className="text-xs text-gray-600 mb-1">
-                            Limit tools for {server?.alias || server?.server_name || serverId}:
-                          </Text>
-                          <Select
-                            mode="multiple"
-                            size="small"
-                            style={{ width: "100%" }}
-                            placeholder="All tools (default)"
-                            value={mcpServerToolRestrictions[serverId] || []}
-                            onChange={(selectedTools) => {
-                              setMCPServerToolRestrictions(prev => ({
-                                ...prev,
-                                [serverId]: selectedTools
-                              }));
-                            }}
-                            options={tools.map(tool => ({
-                              value: tool.name,
-                              label: tool.name
-                            }))}
-                            maxTagCount={2}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                        return (
+                          <div key={serverId} className="border rounded p-2">
+                            <Text className="text-xs text-gray-600 mb-1">
+                              Limit tools for {server?.alias || server?.server_name || serverId}:
+                            </Text>
+                            <Select
+                              mode="multiple"
+                              size="small"
+                              style={{ width: "100%" }}
+                              placeholder="All tools (default)"
+                              value={mcpServerToolRestrictions[serverId] || []}
+                              onChange={(selectedTools) => {
+                                setMCPServerToolRestrictions((prev) => ({
+                                  ...prev,
+                                  [serverId]: selectedTools,
+                                }));
+                              }}
+                              options={tools.map((tool) => ({
+                                value: tool.name,
+                                label: tool.name,
+                              }))}
+                              maxTagCount={2}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
               </div>
 
               <div>
@@ -2073,7 +2064,13 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     )}
                     {/* Quick Code Interpreter toggle for Responses */}
                     {endpointType === EndpointType.RESPONSES && (
-                      <Tooltip title={codeInterpreter.enabled ? "Code Interpreter enabled (click to disable)" : "Enable Code Interpreter"}>
+                      <Tooltip
+                        title={
+                          codeInterpreter.enabled
+                            ? "Code Interpreter enabled (click to disable)"
+                            : "Enable Code Interpreter"
+                        }
+                      >
                         <button
                           className={`p-1.5 rounded-md transition-colors ${
                             codeInterpreter.enabled

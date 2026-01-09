@@ -388,6 +388,10 @@ class VertexBase:
         Internal function. Returns the token and url for the call.
 
         Handles logic if it's google ai studio vs. vertex ai.
+        
+        For Vertex AI:
+        - If gemini_api_key is provided, use API key authentication (x-goog-api-key header)
+        - Otherwise, use service account credentials (OAuth2 Bearer token)
 
         Returns
             token, url
@@ -400,7 +404,7 @@ class VertexBase:
                 stream=stream,
                 gemini_api_key=gemini_api_key,
             )
-            auth_header = None  # this field is not used for gemin
+            auth_header = None  # this field is not used for gemini
         else:
             vertex_location = self.get_vertex_region(
                 vertex_region=vertex_location,
@@ -409,14 +413,32 @@ class VertexBase:
 
             ### SET RUNTIME ENDPOINT ###
             version = "v1beta1" if should_use_v1beta1_features is True else "v1"
-            url, endpoint = _get_vertex_url(
-                mode=mode,
-                model=model,
-                stream=stream,
-                vertex_project=vertex_project,
-                vertex_location=vertex_location,
-                vertex_api_version=version,
-            )
+            
+            # Check if using API key authentication for Vertex AI
+            if gemini_api_key and not vertex_credentials:
+                # When using API key with Vertex AI, use the Google AI Studio endpoint
+                # This is because Vertex AI API keys work with generativelanguage.googleapis.com
+                verbose_logger.debug(
+                    f"Using Vertex AI API key authentication for model: {model} - routing to Google AI Studio endpoint"
+                )
+                url, endpoint = _get_gemini_url(
+                    mode=mode,
+                    model=model,
+                    stream=stream,
+                    gemini_api_key=gemini_api_key,
+                )
+                # API key is already included in the URL by _get_gemini_url
+                auth_header = None
+            else:
+                # Use OAuth2 Bearer token authentication (traditional Vertex AI)
+                url, endpoint = _get_vertex_url(
+                    mode=mode,
+                    model=model,
+                    stream=stream,
+                    vertex_project=vertex_project,
+                    vertex_location=vertex_location,
+                    vertex_api_version=version,
+                )
 
         return self._check_custom_proxy(
             api_base=api_base,

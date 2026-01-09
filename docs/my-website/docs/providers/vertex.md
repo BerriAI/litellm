@@ -35,6 +35,8 @@ import json
 # !gcloud auth application-default login - run this to add vertex credentials to your env
 ## OR ## 
 file_path = 'path/to/vertex_ai_service_account.json'
+## OR ##
+export VERTEXAI_API_KEY="your-api-key"
 
 # Load the JSON file
 with open(file_path, 'r') as file:
@@ -47,7 +49,7 @@ vertex_credentials_json = json.dumps(vertex_credentials)
 response = completion(
   model="vertex_ai/gemini-2.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
-  vertex_credentials=vertex_credentials_json
+  vertex_credentials=vertex_credentials_json # Can remove this is added VERTEXAI_API_KEY in env
 )
 ```
 
@@ -1329,15 +1331,41 @@ Here's how to use Vertex AI with the LiteLLM Proxy Server
 
 ## Authentication - vertex_project, vertex_location, etc. 
 
+LiteLLM supports two authentication methods for Vertex AI:
+
+1. **API Key Authentication** (Recommended for getting started)
+2. **Service Account Credentials** (Recommended for production)
+
 Set your vertex credentials via:
 - dynamic params
 OR
 - env vars 
 
+### **Authentication Method 1: 
 
-### **Dynamic Params**
+The simplest way to authenticate with Vertex AI. You can set:
+- `api_key` (str) - Your Vertex AI API key
 
-You can set:
+**Environment Variables:**
+```bash
+export VERTEXAI_API_KEY="your-api-key"
+```
+
+**Or pass as parameters:**
+```python
+from litellm import completion
+
+response = completion(
+  model="vertex_ai/gemini-2.0-flash-exp",
+  messages=[{"role": "user", "content": "Hello!"}],
+  api_key="your-vertex-api-key",
+
+)
+```
+
+### **Authentication Method 2: Service Account Credentials**
+
+For production environments with fine-grained access control. You can set:
 - `vertex_credentials` (str) - can be a json string or filepath to your vertex ai service account.json
 - `vertex_location` (str) - place where vertex model is deployed (us-central1, asia-southeast1, etc.). Some models support the global location, please see [Vertex AI documentation](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations#supported_models)
 - `vertex_project` Optional[str] - use if vertex project different from the one in vertex_credentials
@@ -1392,7 +1420,16 @@ model_list:
 
 ### **Environment Variables**
 
-You can set:
+#### For API Key Authentication:
+
+- `VERTEXAI_API_KEY` or `VERTEX_API_KEY` - Your Vertex AI API key
+
+```bash
+export VERTEXAI_API_KEY="your-vertex-api-key"
+```
+
+#### For Service Account Authentication:
+
 - `GOOGLE_APPLICATION_CREDENTIALS` - store the filepath for your service_account.json in here (used by vertex sdk directly).
 - VERTEXAI_LOCATION - place where vertex model is deployed (us-central1, asia-southeast1, etc.)
 - VERTEXAI_PROJECT - Optional[str] - use if vertex project different from the one in vertex_credentials
