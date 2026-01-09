@@ -2894,6 +2894,7 @@ def get_optional_params_image_gen(
                     litellm.drop_params is True or drop_params is True
                 ) and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
+                    passed_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
