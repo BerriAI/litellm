@@ -4,9 +4,13 @@ from unittest.mock import MagicMock, patch
 import pytest
 import redis
 import redis.asyncio as async_redis
+import inspect
 
 from litellm._redis import (
     _get_redis_cluster_kwargs,
+    _get_redis_kwargs,
+    _get_redis_url_kwargs,
+    _get_signature_arg_names,
     get_redis_async_client,
     get_redis_client,
     get_redis_connection_pool,
@@ -133,10 +137,7 @@ def test_get_redis_url_from_environment_missing_host_port(monkeypatch):
         get_redis_url_from_environment()
 
     # Check the error message
-    assert (
-        "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified"
-        in str(excinfo.value)
-    )
+    assert "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified" in str(excinfo.value)
 
 
 def test_get_redis_url_from_environment_missing_port(monkeypatch):
@@ -151,18 +152,28 @@ def test_get_redis_url_from_environment_missing_port(monkeypatch):
         get_redis_url_from_environment()
 
     # Check the error message
-    assert (
-        "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified"
-        in str(excinfo.value)
-    )
+    assert "Either 'REDIS_URL' or both 'REDIS_HOST' and 'REDIS_PORT' must be specified" in str(excinfo.value)
+
+
+def test_get_signature_arg_names_strips_var_args_and_kwargs():
+    """The introspection helper must drop *args/**kwargs so a catch-all signature
+    like Redis.from_url(url, **kwargs) never leaks a bogus 'kwargs' entry into the
+    allow-list. Regression for redis-py v7 where from_url/RedisCluster expose **kwargs."""
+
+    def fn(url, host="localhost", *args, timeout=None, **kwargs):
+        return None
+
+    names = _get_signature_arg_names(fn)
+
+    assert names == ["url", "host", "timeout"]
+    assert "args" not in names
+    assert "kwargs" not in names
 
 
 def test_max_connections_in_cluster_kwargs():
     """Test that max_connections is included in Redis cluster kwargs"""
     kwargs = _get_redis_cluster_kwargs()
-    assert (
-        "max_connections" in kwargs
-    ), "max_connections should be in available Redis cluster kwargs"
+    assert "max_connections" in kwargs, "max_connections should be in available Redis cluster kwargs"
 
 
 def test_socket_timeouts_in_cluster_kwargs():
@@ -212,6 +223,164 @@ def test_async_cluster_reconnect_defaults_are_overridable(mock_cluster_cls):
     assert call_kwargs["socket_keepalive"] is False
 
 
+def test_signature_vs_getfullargspec_with_redis_decorator():
+    """
+    Regression test for Redis 7.1+ compatibility.
+
+    Redis-py 7.1 introduced a @deprecated_args decorator on Redis.__init__ that wraps
+    the method. Even though it uses functools.wraps, inspect.getfullargspec() cannot
+    properly introspect through the wrapper and returns an empty args list, while
+    inspect.signature() correctly unwraps and returns all parameters.
+
+    This test replicates the exact decorator pattern to document why we migrated
+    from getfullargspec() to signature().
+    """
+    from functools import wraps
+    from typing import Callable, TypeVar
+
+    C = TypeVar("C", bound=Callable)
+
+    # Replicate redis-py's @deprecated_args decorator pattern
+    def deprecated_args(args_to_warn=None, reason="", version=""):
+        def decorator(func: C) -> C:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                return func(*args, **kwargs)
+
+            return wrapper
+
+        return decorator
+
+    # Create a mock Redis class with the decorator (like redis-py 7.1+)
+    class MockRedisWithDecorator:
+        @deprecated_args(args_to_warn=["retry_on_timeout"], version="6.0.0")
+        def __init__(self, host="localhost", port=6379, db=0, password=None):
+            self.host = host
+            self.port = port
+
+    # Test getfullargspec - it fails to see through the wrapper
+    spec = inspect.getfullargspec(MockRedisWithDecorator.__init__)
+    getfullargspec_args = spec.args
+
+    # Test signature - it properly unwraps and sees the real parameters
+    sig = inspect.signature(MockRedisWithDecorator.__init__)
+    signature_params = list(sig.parameters.keys())
+
+    # Document the issue: getfullargspec sees only the wrapper's (*args, **kwargs)
+    # which results in 0 named args, while signature sees the original 5 parameters
+    assert len(getfullargspec_args) == 0, "getfullargspec incorrectly returns 0 args for decorated function"
+    assert len(signature_params) == 5, "signature correctly returns 5 parameters"
+    assert "self" in signature_params, "signature finds 'self' parameter"
+    assert "host" in signature_params, "signature finds 'host' parameter"
+    assert "port" in signature_params, "signature finds 'port' parameter"
+    assert "host" not in getfullargspec_args, "getfullargspec fails to find 'host' parameter"
+
+    # This is why we use signature() instead of getfullargspec() in:
+    # - _get_redis_kwargs()
+    # - _get_redis_url_kwargs()
+    # - _get_redis_cluster_kwargs()
+
+
+def test_get_redis_kwargs_works_with_actual_redis_class():
+    """
+    Integration test: Verify _get_redis_kwargs() works with real redis.Redis class.
+
+    This catches regressions when redis-py library updates add decorators or
+    change class structure that might break our introspection.
+    """
+    import redis
+
+    # Get kwargs from the actual Redis class
+    kwargs = _get_redis_kwargs()
+
+    # Critical: Should NOT be empty
+    assert len(kwargs) > 0, (
+        "CRITICAL: _get_redis_kwargs() returned empty list! "
+        "This likely means redis-py updated their decorators/class structure. "
+        f"Redis version: {redis.__version__}"
+    )
+
+    # Should have at least these common Redis parameters
+    expected_params = ["host", "port", "db", "password"]
+    for param in expected_params:
+        assert param in kwargs, (
+            f"Expected parameter '{param}' missing from Redis kwargs. "
+            f"Redis version: {redis.__version__}. "
+            "This may indicate redis-py structural changes."
+        )
+
+    # Excluded params should NOT be present
+    excluded_params = ["self", "connection_pool", "retry"]
+    for param in excluded_params:
+        assert param not in kwargs, f"Parameter '{param}' should be excluded but was found in kwargs"
+
+
+def test_get_redis_url_kwargs_works_with_actual_redis_class():
+    """
+    Integration test: Verify _get_redis_url_kwargs() works with real redis.Redis.from_url.
+
+    This catches regressions when redis-py library updates might break our introspection.
+    """
+    import redis
+
+    # Get kwargs from the actual Redis.from_url method
+    kwargs = _get_redis_url_kwargs()
+
+    # Critical: Should NOT be empty
+    assert len(kwargs) > 0, (
+        "CRITICAL: _get_redis_url_kwargs() returned empty list! "
+        "This likely means redis-py updated their decorators/class structure. "
+        f"Redis version: {redis.__version__}"
+    )
+
+    # Should definitely include 'url' parameter
+    assert "url" in kwargs, f"'url' parameter missing from Redis.from_url kwargs. Redis version: {redis.__version__}"
+
+    # Excluded params should NOT be present
+    excluded_params = ["self", "connection_pool", "retry", "kwargs"]
+    for param in excluded_params:
+        assert param not in kwargs, f"Parameter '{param}' should be excluded but was found in kwargs"
+
+
+def test_get_redis_cluster_kwargs_works_with_actual_redis_class():
+    """
+    Integration test: Verify _get_redis_cluster_kwargs() works with real redis.RedisCluster.
+
+    This catches regressions when redis-py library updates might break our introspection.
+    """
+    import redis
+
+    # Get kwargs from the actual RedisCluster class
+    kwargs = _get_redis_cluster_kwargs()
+
+    # Critical: Should NOT be empty
+    assert len(kwargs) > 0, (
+        "CRITICAL: _get_redis_cluster_kwargs() returned empty list! "
+        "This likely means redis-py updated their decorators/class structure. "
+        f"Redis version: {redis.__version__}"
+    )
+
+    # Should have these cluster-specific parameters we explicitly add
+    expected_custom_params = [
+        "max_connections",
+        "password",
+        "username",
+        "ssl",
+        "ssl_cert_reqs",
+        "ssl_check_hostname",
+        "ssl_ca_certs",
+    ]
+    for param in expected_custom_params:
+        assert param in kwargs, (
+            f"Expected parameter '{param}' missing from RedisCluster kwargs. Redis version: {redis.__version__}"
+        )
+
+    # Excluded params should NOT be present
+    excluded_params = ["self", "connection_pool", "retry", "host", "port", "startup_nodes", "kwargs"]
+    for param in excluded_params:
+        assert param not in kwargs, f"Parameter '{param}' should be excluded but was found in kwargs"
+
+
 def test_get_redis_async_client_with_connection_pool():
     """Test that connection_pool parameter is properly passed to Redis client"""
     # Create a mock connection pool
@@ -222,7 +391,6 @@ def test_get_redis_async_client_with_connection_pool():
         patch("litellm._redis.async_redis.Redis") as mock_redis,
         patch("litellm._redis._get_redis_client_logic") as mock_logic,
     ):
-
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
 
@@ -231,12 +399,8 @@ def test_get_redis_async_client_with_connection_pool():
 
         # Verify Redis was called with connection_pool in kwargs
         call_kwargs = mock_redis.call_args[1]
-        assert (
-            "connection_pool" in call_kwargs
-        ), "connection_pool should be passed to Redis client"
-        assert (
-            call_kwargs["connection_pool"] == mock_pool
-        ), "connection_pool should match the provided pool"
+        assert "connection_pool" in call_kwargs, "connection_pool should be passed to Redis client"
+        assert call_kwargs["connection_pool"] == mock_pool, "connection_pool should match the provided pool"
 
 
 def test_get_redis_async_client_without_connection_pool():
@@ -245,7 +409,6 @@ def test_get_redis_async_client_without_connection_pool():
         patch("litellm._redis.async_redis.Redis") as mock_redis,
         patch("litellm._redis._get_redis_client_logic") as mock_logic,
     ):
-
         # Configure mock to return basic redis kwargs
         mock_logic.return_value = {"host": "localhost", "port": 6379, "db": 0}
 
@@ -254,9 +417,7 @@ def test_get_redis_async_client_without_connection_pool():
 
         # Verify Redis was called without connection_pool in kwargs
         call_kwargs = mock_redis.call_args[1]
-        assert (
-            "connection_pool" not in call_kwargs
-        ), "connection_pool should not be in kwargs when not provided"
+        assert "connection_pool" not in call_kwargs, "connection_pool should not be in kwargs when not provided"
 
 
 def test_gcp_iam_credential_provider_get_credentials():
@@ -328,9 +489,7 @@ def test_gcp_iam_credential_provider_cache_shared_across_instances():
     share one cached token so concurrent Redis connections don't each trigger
     a blocking IAM round-trip.
     """
-    service_account = (
-        "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
-    )
+    service_account = "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
 
     with patch(
         "litellm._redis_credential_provider._generate_gcp_iam_access_token",
@@ -355,9 +514,7 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     startup_nodes = [{"host": "redis-node-1", "port": 6379}]
 
     mock_connect_func = MagicMock()
-    mock_connect_func._gcp_service_account = (
-        "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
-    )
+    mock_connect_func._gcp_service_account = "projects/-/serviceAccounts/sa@project.iam.gserviceaccount.com"
 
     redis_kwargs = {
         "startup_nodes": startup_nodes,
@@ -374,15 +531,11 @@ def test_get_redis_async_client_gcp_cluster_uses_credential_provider():
     cluster_call_kwargs = mock_cluster.call_args[1]
 
     # Must use credential_provider, not a static password
-    assert (
-        "credential_provider" in cluster_call_kwargs
-    ), "async GCP cluster must use credential_provider for per-connection token refresh"
-    assert isinstance(
-        cluster_call_kwargs["credential_provider"], GCPIAMCredentialProvider
+    assert "credential_provider" in cluster_call_kwargs, (
+        "async GCP cluster must use credential_provider for per-connection token refresh"
     )
-    assert (
-        "password" not in cluster_call_kwargs
-    ), "async GCP cluster must not use a static password (expires after 1h)"
+    assert isinstance(cluster_call_kwargs["credential_provider"], GCPIAMCredentialProvider)
+    assert "password" not in cluster_call_kwargs, "async GCP cluster must not use a static password (expires after 1h)"
 
 
 @patch("litellm._redis.init_redis_cluster")
@@ -399,9 +552,7 @@ def test_sync_client_prefers_cluster_over_url(mock_init_cluster, monkeypatch):
 
     mock_init_cluster.assert_called_once()
     call_kwargs = mock_init_cluster.call_args[0][0]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to init_redis_cluster"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to init_redis_cluster"
 
 
 @patch("litellm._redis.async_redis.RedisCluster")
@@ -417,18 +568,12 @@ def test_async_client_prefers_cluster_over_url(mock_cluster_cls, monkeypatch):
 
     mock_cluster_cls.assert_called_once()
     call_kwargs = mock_cluster_cls.call_args[1]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to async RedisCluster"
-    assert (
-        len(call_kwargs["startup_nodes"]) == 1
-    ), "should forward exactly 1 cluster node"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to async RedisCluster"
+    assert len(call_kwargs["startup_nodes"]) == 1, "should forward exactly 1 cluster node"
 
 
 @patch("litellm._redis.async_redis.RedisCluster")
-def test_async_client_prefers_cluster_over_url_via_env_var(
-    mock_cluster_cls, monkeypatch
-):
+def test_async_client_prefers_cluster_over_url_via_env_var(mock_cluster_cls, monkeypatch):
     """
     Test get_redis_async_client returns async RedisCluster when REDIS_CLUSTER_NODES is set
     even if REDIS_URL is also set.
@@ -443,15 +588,11 @@ def test_async_client_prefers_cluster_over_url_via_env_var(
 
     mock_cluster_cls.assert_called_once()
     call_kwargs = mock_cluster_cls.call_args[1]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to async RedisCluster"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to async RedisCluster"
 
 
 @patch("litellm._redis.init_redis_cluster")
-def test_sync_client_prefers_cluster_over_url_via_env_var(
-    mock_init_cluster, monkeypatch
-):
+def test_sync_client_prefers_cluster_over_url_via_env_var(mock_init_cluster, monkeypatch):
     """
     Test get_redis_client returns RedisCluster when REDIS_CLUSTER_NODES is set even if
     REDIS_URL is also set.
@@ -467,9 +608,7 @@ def test_sync_client_prefers_cluster_over_url_via_env_var(
 
     mock_init_cluster.assert_called_once()
     call_kwargs = mock_init_cluster.call_args[0][0]
-    assert (
-        "startup_nodes" in call_kwargs
-    ), "startup_nodes must be forwarded to init_redis_cluster"
+    assert "startup_nodes" in call_kwargs, "startup_nodes must be forwarded to init_redis_cluster"
     assert len(call_kwargs["startup_nodes"]) == 1
 
 
@@ -588,9 +727,7 @@ def test_async_sentinel_uses_sentinel_password_and_master_password(
 
 
 @patch("litellm._redis.init_redis_cluster")
-def test_sync_client_preserves_password_for_cluster_when_url_also_set(
-    mock_init_cluster, monkeypatch
-):
+def test_sync_client_preserves_password_for_cluster_when_url_also_set(mock_init_cluster, monkeypatch):
     """
     Test _get_redis_client_logic does not strip password from redis_kwargs when
     startup_nodes is present even if REDIS_URL is also set.
@@ -604,9 +741,7 @@ def test_sync_client_preserves_password_for_cluster_when_url_also_set(
 
     mock_init_cluster.assert_called_once()
     call_kwargs = mock_init_cluster.call_args[0][0]
-    assert (
-        "password" in call_kwargs
-    ), "password must not be stripped when routing to cluster"
+    assert "password" in call_kwargs, "password must not be stripped when routing to cluster"
     assert call_kwargs["password"] == "secret"
 
 

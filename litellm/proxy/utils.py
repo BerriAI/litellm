@@ -548,7 +548,7 @@ class ProxyLogging:
 
         for hook in PROXY_HOOKS:
             proxy_hook = get_proxy_hook(hook)
-            expected_args = inspect.getfullargspec(proxy_hook).args
+            expected_args = list(inspect.signature(proxy_hook).parameters.keys())
             passed_in_args: Dict[str, Any] = {}
             if "internal_usage_cache" in expected_args:
                 passed_in_args["internal_usage_cache"] = self.internal_usage_cache

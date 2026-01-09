@@ -744,11 +744,11 @@ class Router:
         """
         Returns a list of valid arguments for the Router.__init__ method.
         """
-        arg_spec = inspect.getfullargspec(Router.__init__)
-        valid_args = arg_spec.args + arg_spec.kwonlyargs
-        if "self" in valid_args:
-            valid_args.remove("self")
-        return valid_args
+        return [
+            name
+            for name, param in inspect.signature(Router.__init__).parameters.items()
+            if name != "self" and param.kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+        ]
 
     def apply_default_settings(self):
         """
