@@ -47,7 +47,6 @@ from tiktoken import Encoding
 from tokenizers import Tokenizer
 
 import litellm
-
 import litellm.litellm_core_utils
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
@@ -291,7 +290,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig
     from litellm.llms.base_llm.search.transformation import BaseSearchConfig
     from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.bedrock.bedrock_model_info import BedrockModelInfo
     from litellm.llms.cohere.common_utils import CohereModelInfo
     from litellm.llms.mistral.ocr.transformation import MistralOCRConfig
     # Type stubs for lazy-loaded functions and classes
@@ -4954,7 +4953,7 @@ def _get_base_bedrock_model(model_name) -> str:
     Handle model names like - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
     AND "meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
     """
-    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+    from litellm.llms.bedrock.bedrock_model_info import BedrockModelInfo
 
     return BedrockModelInfo.get_base_model(model_name)
 
@@ -7779,7 +7778,7 @@ class ProviderConfigManager:
         # The 'BEDROCK' provider corresponds to Amazon's implementation of Anthropic Claude v3.
         # This mapping ensures that the correct configuration is returned for BEDROCK.
         elif litellm.LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+            from litellm.llms.bedrock.bedrock_model_info import BedrockModelInfo
 
             return BedrockModelInfo.get_bedrock_provider_config_for_messages_api(model)
         elif litellm.LlmProviders.VERTEX_AI == provider:
@@ -7941,6 +7940,8 @@ class ProviderConfigManager:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
+        elif LlmProviders.BEDROCK == provider:
+            return litellm.llms.bedrock.common_utils.BedrockModelInfo()
         return None
 
     @staticmethod
