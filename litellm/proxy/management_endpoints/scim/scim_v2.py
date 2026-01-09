@@ -206,23 +206,52 @@ def _build_scim_metadata(
     return metadata
 
 
+async def _get_scim_upsert_user_setting() -> bool:
+    """
+    Get the scim_upsert_user setting from litellm_settings.
+    
+    Returns:
+        True if scim_upsert_user is not set or is True (default behavior),
+        False if scim_upsert_user is explicitly set to False (SCIM 2.0 strict mode)
+    """
+    try:
+        from litellm.proxy.proxy_server import proxy_config
+        
+        config = await proxy_config.get_config()
+        litellm_settings = config.get("litellm_settings", {}) or {}
+        scim_upsert_user = litellm_settings.get("scim_upsert_user", True)
+        
+        # Default to True if not set (backward compatibility)
+        return bool(scim_upsert_user)
+    except Exception as e:
+        verbose_proxy_logger.warning(
+            f"Error reading scim_upsert_user setting, defaulting to True: {e}"
+        )
+        # Default to True for backward compatibility
+        return True
+
+
 async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionResult:
     """
     Extract member IDs from SCIMGroup, validating that all users exist.
 
-    Per SCIM 2.0 protocol, groups should only reference existing users.
-    Users must be created via POST /Users before being added to groups.
+    Behavior depends on litellm_settings.scim_upsert_user:
+    - If True (default): Creates users that don't exist (backward compatible)
+    - If False: Rejects non-existent users per SCIM 2.0 protocol
 
     Returns:
-        GroupMemberExtractionResult with existing members and all member IDs
+        GroupMemberExtractionResult with existing members, created users, and all member IDs
 
     Raises:
-        HTTPException: If any member user does not exist (400 Bad Request)
+        HTTPException: If scim_upsert_user is False and any member user does not exist (400 Bad Request)
     """
     prisma_client = await _get_prisma_client_or_raise_exception()
     existing_member_ids = []
-    created_users = []  # Always empty - users must exist before group membership
+    created_users = []
     all_member_ids = []
+    
+    # Check the feature flag
+    scim_upsert_user = await _get_scim_upsert_user_setting()
 
     if group.members:
         for member in group.members:
@@ -246,16 +275,26 @@ async def _extract_group_member_ids(group: SCIMGroup) -> GroupMemberExtractionRe
                 existing_member_ids.append(user_id)
                 all_member_ids.append(user_id)
             else:
-                # User doesn't exist - reject per SCIM 2.0 protocol
-                # This prevents security issues where users not assigned to app
-                # get provisioned via group membership
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"User with ID '{user_id}' does not exist. "
-                                 "Please create the user first via POST /Users before adding to group."
-                    },
-                )
+                if scim_upsert_user:
+                    # Create the user if they don't exist (backward compatible behavior)
+                    created_user = await _create_user_if_not_exists(
+                        user_id=user_id, created_via="scim_group_membership"
+                    )
+                    if created_user:
+                        created_users.append(created_user)
+                        all_member_ids.append(user_id)
+                    # If creation failed, user is skipped (logged in helper)
+                else:
+                    # User doesn't exist - reject per SCIM 2.0 protocol
+                    # This prevents security issues where users not assigned to app
+                    # get provisioned via group membership
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"User with ID '{user_id}' does not exist. "
+                                     "Please create the user first via POST /Users before adding to group."
+                        },
+                    )
 
     return GroupMemberExtractionResult(
         existing_member_ids=existing_member_ids,
@@ -328,7 +367,7 @@ async def _create_user_if_not_exists(
 
         new_user_request = NewUserRequest(
             user_id=user_id,
-            user_email=None,  # We don't have email from group membership
+            user_email=user_id,  # We don't have email from group membership
             user_alias=None,
             teams=[],  # Teams will be added separately
             metadata={"created_via": created_via},
@@ -1220,7 +1259,9 @@ async def _process_group_patch_operations(
         elif path.startswith("members"):
             # Handle member operations
             member_values = _extract_group_values(value)
-            # Validate all users exist - per SCIM 2.0, users must exist before group membership
+            # Check the feature flag
+            scim_upsert_user = await _get_scim_upsert_user_setting()
+            # Validate all users exist or create them based on feature flag
             valid_members = []
             for member_id in member_values:
                 # Validate member_id is not empty
@@ -1238,14 +1279,23 @@ async def _process_group_patch_operations(
                 if user:
                     valid_members.append(member_id)
                 else:
-                    # User doesn't exist - reject per SCIM 2.0 protocol
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
-                            "error": f"User with ID '{member_id}' does not exist. "
-                                     "Please create the user first via POST /Users before adding to group."
-                        },
-                    )
+                    if scim_upsert_user:
+                        # Create the user if they don't exist (backward compatible behavior)
+                        created_user = await _create_user_if_not_exists(
+                            user_id=member_id, created_via="scim_group_patch"
+                        )
+                        if created_user:
+                            valid_members.append(member_id)
+                        # If creation failed, user is skipped (logged in helper)
+                    else:
+                        # User doesn't exist - reject per SCIM 2.0 protocol
+                        raise HTTPException(
+                            status_code=400,
+                            detail={
+                                "error": f"User with ID '{member_id}' does not exist. "
+                                         "Please create the user first via POST /Users before adding to group."
+                            },
+                        )
 
             if op_type == "replace":
                 final_members = set(valid_members)
