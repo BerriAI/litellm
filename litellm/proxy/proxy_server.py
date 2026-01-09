@@ -2240,6 +2240,14 @@ class ProxyConfig:
                                 }
                             )
 
+                        if get_secret("REDIS_CLUSTER_NODES", None) is not None:
+                            redis_cluster_nodes = get_secret("REDIS_CLUSTER_NODES", None)
+                            cache_params.update(
+                                {
+                                    "startup_nodes": redis_cluster_nodes,
+                                }
+                            )
+
                         # Assuming cache_type, cache_host, cache_port, and cache_password are strings
                         verbose_proxy_logger.debug(
                             "%sCache Type:%s %s",
