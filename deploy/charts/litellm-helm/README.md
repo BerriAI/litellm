@@ -50,6 +50,51 @@ If `db.useStackgresOperator` is used (not yet implemented):
 | `pdb.annotations`           | Extra metadata annotations to add to the PDB                                                                                                                                                                                                  | `{}`                      |
 | `pdb.labels`                | Extra metadata labels to add to the PDB                                                                                                                                                                                                       | `{}`                      |
 
+### Health Check Probe Settings
+
+| Name              | Description                                                                                                                                                                                                                     | Default Value                                                                                           |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| `livenessProbe`   | Kubernetes liveness probe configuration for the LiteLLM proxy container. If not specified, defaults to an HTTP GET request to `/health/liveliness` on the appropriate port. Can be customized to override the default probe.  | `httpGet: path: /health/liveliness, port: http (or health if separateHealthApp enabled)`                |
+| `readinessProbe`  | Kubernetes readiness probe configuration for the LiteLLM proxy container. If not specified, defaults to an HTTP GET request to `/health/readiness` on the appropriate port. Can be customized to override the default probe.   | `httpGet: path: /health/readiness, port: http (or health if separateHealthApp enabled)`                 |
+| `startupProbe`    | Kubernetes startup probe configuration for the LiteLLM proxy container. If not specified, defaults to an HTTP GET request to `/health/startup` on the appropriate port. Can be customized to override the default probe.       | `httpGet: path: /health/startup, port: http (or health if separateHealthApp enabled)`                   |
+
+All health check probes automatically use the appropriate port based on the `separateHealthApp` setting:
+- When `separateHealthApp` is `false` (default), probes use the main `http` port (4000 by default)
+- When `separateHealthApp` is `true`, probes use the dedicated `health` port (8081 by default)
+
+#### Example: Customizing Health Check Probes
+
+You can override the default probe configurations in your `values.yaml`:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /health/liveliness
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health/readiness
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /health/startup
+    port: http
+  initialDelaySeconds: 0
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 30
+```
+
 #### Example `proxy_config` ConfigMap from values (default):
 
 ```
