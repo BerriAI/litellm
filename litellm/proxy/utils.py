@@ -131,6 +131,7 @@ else:
 
 unified_guardrail = UnifiedLLMGuardrails()
 
+_anthropic_async_clients = {}
 
 def print_verbose(print_statement):
     """
@@ -4254,11 +4255,16 @@ async def count_tokens_with_anthropic_api(
 
         if anthropic_api_key and messages:
             # Call Anthropic API directly for more accurate token counting
-            client = anthropic.Anthropic(api_key=anthropic_api_key)
+            
+            # Use cached client if available to avoid socket exhaustion
+            if anthropic_api_key not in _anthropic_async_clients:
+                _anthropic_async_clients[anthropic_api_key] = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
+            
+            client = _anthropic_async_clients[anthropic_api_key]
 
             # Call with explicit parameters to satisfy type checking
             # Type ignore for now since messages come from generic dict input
-            response = client.beta.messages.count_tokens(
+            response = await client.beta.messages.count_tokens(
                 model=model_to_use,
                 messages=messages,  # type: ignore
                 betas=["token-counting-2024-11-01"],
