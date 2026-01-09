@@ -53,7 +53,12 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
+from litellm.utils import (
+    add_dummy_tool,
+    has_tool_call_blocks,
+    last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_reasoning,
+)
 
 from ..common_utils import (
     BedrockError,
@@ -729,7 +734,7 @@ class AmazonConverseConfig(BaseConfig):
             return optional_params
 
         """
-        Follow similar approach to anthropic - translate to a single tool call. 
+        Follow similar approach to anthropic - translate to a single tool call.
 
         When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
         - You usually want to provide a single tool
@@ -912,16 +917,16 @@ class AmazonConverseConfig(BaseConfig):
         inference_params = {
             k: v for k, v in inference_params.items() if k in total_supported_params
         }
-        
+
         # Only set the topK value in for models that support it
         additional_request_params.update(
             self._handle_top_k_value(model, inference_params)
         )
-        
+
         # Filter out internal/MCP-related parameters that shouldn't be sent to the API
         # These are LiteLLM internal parameters, not API parameters
         additional_request_params = filter_internal_params(additional_request_params)
-        
+
         # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
         # from additional_request_params to prevent JSON serialization errors
         # This filters: Exception objects, callable objects (functions), Logging objects, etc.
@@ -1021,9 +1026,24 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
+        # Drop thinking param if thinking is enabled but thinking_blocks are missing
+        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        # Related issues: https://github.com/BerriAI/litellm/issues/14194
+        if (
+            optional_params.get("thinking") is not None
+            and messages is not None
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params.pop("thinking", None)
+                litellm.verbose_logger.warning(
+                    "Dropping 'thinking' param because the last assistant message with tool_calls "
+                    "has no thinking_blocks. The model won't use extended thinking for this turn."
+                )
+
         # Prepare and separate parameters
-        inference_params, additional_request_params, request_metadata = (
-            self._prepare_request_params(optional_params, model)
+        inference_params, additional_request_params, request_metadata = self._prepare_request_params(
+            optional_params, model
         )
 
         original_tools = inference_params.pop("tools", [])
@@ -1410,11 +1430,11 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         """
-        Bedrock Response Object has optional message block 
+        Bedrock Response Object has optional message block
 
         completion_response["output"].get("message", None)
 
-        A message block looks like this (Example 1): 
+        A message block looks like this (Example 1):
         "output": {
             "message": {
                 "role": "assistant",
