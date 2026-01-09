@@ -698,9 +698,7 @@ class MCPServerManager:
         results = await asyncio.gather(*tasks)
 
         # Flatten results into single list
-        list_tools_result: List[MCPTool] = [
-            tool for tools in results for tool in tools
-        ]
+        list_tools_result: List[MCPTool] = [tool for tools in results for tool in tools]
 
         verbose_logger.info(
             f"Successfully fetched {len(list_tools_result)} tools total from all servers"
