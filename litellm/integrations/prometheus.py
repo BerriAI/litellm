@@ -884,7 +884,6 @@ class PrometheusLogger(CustomLogger):
             }
 
         combined_metadata: Dict[str, Any] = {
-            **top_level_fields,  # Include top-level fields first
             **(_requester_metadata if _requester_metadata else {}),
             **(user_api_key_auth_metadata if user_api_key_auth_metadata else {}),
         }
