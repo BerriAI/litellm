@@ -34,6 +34,7 @@ import { formatNumberWithCommas } from "../utils/dataUtils";
 import NotificationsManager from "./molecules/notifications_manager";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
+import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -51,8 +52,10 @@ interface OrganizationsTableProps {
 export const fetchOrganizations = async (
   accessToken: string,
   setOrganizations: (organizations: Organization[]) => void,
+  org_id: string | null = null,
+  org_alias: string | null = null,
 ) => {
-  const organizations = await organizationListCall(accessToken);
+  const organizations = await organizationListCall(accessToken, org_id, org_alias);
   setOrganizations(organizations);
 };
 
@@ -76,12 +79,51 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
   const [isOrgModalVisible, setIsOrgModalVisible] = useState(false);
   const [form] = Form.useForm();
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
+  const [showFilters, setShowFilters] = useState(false);
+  const [filters, setFilters] = useState<FilterState>({
+    org_id: "",
+    org_alias: "",
+    sort_by: "created_at",
+    sort_order: "desc",
+  });
 
-  useEffect(() => {
+  const handleFilterChange = (key: keyof FilterState, value: string) => {
+    const newFilters = { ...filters, [key]: value };
+    setFilters(newFilters);
+    // Call organizationListCall with the new filters
     if (accessToken) {
-      fetchOrganizations(accessToken, setOrganizations);
+      organizationListCall(accessToken, newFilters.org_id || null, newFilters.org_alias || null)
+        .then((response) => {
+          if (response) {
+            setOrganizations(response);
+          }
+        })
+        .catch((error) => {
+          console.error("Error fetching organizations:", error);
+        });
     }
-  }, [accessToken]);
+  };
+
+  const handleFilterReset = () => {
+    setFilters({
+      org_id: "",
+      org_alias: "",
+      sort_by: "created_at",
+      sort_order: "desc",
+    });
+    // Reset organizations list
+    if (accessToken) {
+      organizationListCall(accessToken, null, null)
+        .then((response) => {
+          if (response) {
+            setOrganizations(response);
+          }
+        })
+        .catch((error) => {
+          console.error("Error fetching organizations:", error);
+        });
+    }
+  };
 
   const handleDelete = (orgId: string | null) => {
     if (!orgId) return;
@@ -101,7 +143,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       setIsDeleteModalOpen(false);
       setOrgToDelete(null);
       // Refresh organizations list
-      await fetchOrganizations(accessToken, setOrganizations);
+      await fetchOrganizations(accessToken, setOrganizations, filters.org_id || null, filters.org_alias || null);
     } catch (error) {
       console.error("Error deleting organization:", error);
     } finally {
@@ -148,7 +190,7 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
       setIsOrgModalVisible(false);
       form.resetFields();
       // Refresh organizations list
-      fetchOrganizations(accessToken, setOrganizations);
+      fetchOrganizations(accessToken, setOrganizations, filters.org_id || null, filters.org_alias || null);
     } catch (error) {
       console.error("Error creating organization:", error);
     }
@@ -217,7 +259,18 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
                   <Text>Click on &ldquo;Organization ID&rdquo; to view organization details.</Text>
                   <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
                     <Col numColSpan={1}>
-                      <Card className="w-full mx-auto flex-auto overflow-y-auto max-h-[50vh]">
+                      <Card className="w-full mx-auto flex-auto overflow-hidden overflow-y-auto max-h-[50vh]">
+                        <div className="border-b px-6 py-4">
+                          <div className="flex flex-col space-y-4">
+                            <OrganizationFilters
+                              filters={filters}
+                              showFilters={showFilters}
+                              onToggleFilters={setShowFilters}
+                              onChange={handleFilterChange}
+                              onReset={handleFilterReset}
+                            />
+                          </div>
+                        </div>
                         <Table>
                           <TableHead>
                             <TableRow>
