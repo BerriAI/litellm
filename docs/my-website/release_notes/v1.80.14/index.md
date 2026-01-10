@@ -72,7 +72,7 @@ Users can now see Endpoint Activity Metrics in the UI.
 
 ## New Providers and Endpoints
 
-### New Providers (6 new providers)
+### New Providers (7 new providers)
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
@@ -82,6 +82,7 @@ Users can now see Endpoint Activity Metrics in the UI.
 | [GigaChat](../../docs/providers/gigachat) | `/chat/completions` | GigaChat provider for Russian language AI |
 | [LlamaGate](../../docs/providers/llamagate) | `/chat/completions`, `/embeddings` | LlamaGate provider with 15+ models |
 | [Abliteration AI](../../docs/providers/abliteration) | `/chat/completions` | Abliteration.ai provider support |
+| [Bedrock](../../docs/providers/bedrock) | `/v1/messages/count_tokens` | Bedrock as new provider for token counting |
 
 ### New LLM API Endpoints (3 new endpoints)
 
@@ -231,8 +232,8 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Allow using all LiteLLM providers (interactions -> responses API bridge) - [PR #18373](https://github.com/BerriAI/litellm/pull/18373)
 - **[RAG Search API](../../docs/search/index)**
     - Add RAG Search/Query endpoint - [PR #18376](https://github.com/BerriAI/litellm/pull/18376)
-- **[CountTokens API](../../docs/completion/token_usage)**
-    - Add Bedrock as a backend API for token counting - [PR #18858](https://github.com/BerriAI/litellm/pull/18858)
+- **[CountTokens API](../../docs/anthropic_count_tokens)**
+    - Add Bedrock as a new provider for `/v1/messages/count_tokens` - [PR #18858](https://github.com/BerriAI/litellm/pull/18858)
 - **[Generate Content](../../docs/providers/gemini)**
     - Add generate content in LLM route - [PR #18405](https://github.com/BerriAI/litellm/pull/18405)
 - **General**
