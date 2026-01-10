@@ -2229,27 +2229,34 @@ class ProxyConfig:
 
                     verbose_proxy_logger.debug("passed cache type=%s", cache_type)
 
-                    if (
-                        cache_type == "redis" or cache_type == "redis-semantic"
-                    ) and len(cache_params.keys()) == 0:
-                        cache_host = get_secret("REDIS_HOST", None)
-                        cache_port = get_secret("REDIS_PORT", None)
-                        cache_password = None
-                        cache_params.update(
-                            {
-                                "type": cache_type,
-                                "host": cache_host,
-                                "port": cache_port,
-                            }
-                        )
+                    if cache_type == "redis" or cache_type == "redis-semantic":
+                        # Only set cache_params from environment if not already configured
+                        if "type" not in cache_params:
+                            cache_params["type"] = cache_type
 
-                        if get_secret("REDIS_PASSWORD", None) is not None:
+                        cache_host = None
+                        if "host" not in cache_params:
+                            cache_host = get_secret("REDIS_HOST", None)
+                            if cache_host is not None:
+                                cache_params["host"] = cache_host
+
+                        cache_port = None
+                        if "port" not in cache_params:
+                            cache_port = get_secret("REDIS_PORT", None)
+                            if cache_port is not None:
+                                cache_params["port"] = cache_port
+
+                        cache_password = None
+                        if "password" not in cache_params:
                             cache_password = get_secret("REDIS_PASSWORD", None)
-                            cache_params.update(
-                                {
-                                    "password": cache_password,
-                                }
-                            )
+                            if cache_password is not None:
+                                cache_params["password"] = cache_password
+
+                        redis_cluster_nodes = None
+                        if "startup_nodes" not in cache_params:
+                            redis_cluster_nodes = get_secret("REDIS_CLUSTER_NODES", None)
+                            if redis_cluster_nodes is not None:
+                                cache_params["startup_nodes"] = redis_cluster_nodes
 
                         # Assuming cache_type, cache_host, cache_port, and cache_password are strings
                         verbose_proxy_logger.debug(
@@ -2275,6 +2282,12 @@ class ProxyConfig:
                             blue_color_code,
                             reset_color_code,
                             cache_password,
+                        )
+                        verbose_proxy_logger.debug(
+                            "%sRedis Cluster Nodes:%s %s",
+                            blue_color_code,
+                            reset_color_code,
+                            redis_cluster_nodes,
                         )
 
                     # users can pass os.environ/ variables on the proxy - we should read them from the env
