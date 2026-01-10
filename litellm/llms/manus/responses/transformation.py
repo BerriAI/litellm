@@ -94,9 +94,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
         
         # Manus uses API_KEY header, not Authorization: Bearer
+        # Content-Type is required for all requests (including GET)
         headers.update(
             {
                 "API_KEY": api_key,
+                "Content-Type": "application/json",
             }
         )
         return headers
@@ -164,8 +166,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if extra_body:
             base_request.update(extra_body)
         
-        # Avoid logging potentially sensitive agent_profile value
-        verbose_logger.debug("Manus: Using task_mode=agent")
+        verbose_logger.debug(
+            f"Manus: Using agent_profile={agent_profile}, task_mode=agent"
+        )
         
         return base_request
 
