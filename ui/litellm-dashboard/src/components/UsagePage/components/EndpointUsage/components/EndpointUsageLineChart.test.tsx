@@ -23,38 +23,12 @@ vi.mock("@tremor/react", async () => {
   return { Card, Title, LineChart };
 });
 
-vi.mock("antd", async () => {
-  const React = await import("react");
-
-  function Segmented({ options, value, onChange }: any) {
-    return React.createElement(
-      "div",
-      { "data-testid": "antd-segmented", "data-value": value },
-      options?.map((opt: any) =>
-        React.createElement(
-          "button",
-          {
-            key: opt.value,
-            onClick: () => onChange?.(opt.value),
-            "data-selected": value === opt.value,
-          },
-          opt.label,
-        ),
-      ),
-    );
-  }
-  (Segmented as any).displayName = "Segmented";
-
-  return { Segmented };
-});
-
 describe("EndpointUsageLineChart", () => {
   it("should render", () => {
     render(<EndpointUsageLineChart />);
 
     expect(screen.getByTestId("tremor-card")).toBeInTheDocument();
     expect(screen.getByText("Endpoint Usage Trends")).toBeInTheDocument();
-    expect(screen.getByTestId("antd-segmented")).toBeInTheDocument();
     expect(screen.getByTestId("tremor-line-chart")).toBeInTheDocument();
   });
 });
