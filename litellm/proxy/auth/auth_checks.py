@@ -1830,7 +1830,7 @@ async def get_org_object(
             return cached_org_obj
     # else, check db
     try:
-        query_kwargs = {"where": {"organization_id": org_id}}
+        query_kwargs: Dict[str, Any] = {"where": {"organization_id": org_id}}
         if include_budget_table:
             query_kwargs["include"] = {"litellm_budget_table": True}
         
