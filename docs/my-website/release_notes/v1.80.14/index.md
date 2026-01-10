@@ -72,15 +72,19 @@ Users can now see Endpoint Activity Metrics in the UI.
 
 ## New Providers and Endpoints
 
-### New Providers (7 new providers)
+### New Providers (11 new providers)
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
-| [Manus](../../docs/providers/manus) | `/responses`, `GET /responses`, `/files` | Manus API for agentic workflows with file management |
-| [MiniMax](../../docs/providers/minimax) | `/chat/completions`, `/audio/speech` | MiniMax chat completions and TTS support |
+| [Manus](../../docs/providers/manus) | `/responses` | Manus API for agentic workflows |
+| [Manus](../../docs/providers/manus) | `GET /responses` | Manus API for retrieving responses |
+| [Manus](../../docs/providers/manus) | `/files` | Manus API for file management |
+| [MiniMax](../../docs/providers/minimax) | `/chat/completions` | MiniMax chat completions |
+| [MiniMax](../../docs/providers/minimax) | `/audio/speech` | MiniMax text-to-speech |
 | [AWS Polly](../../docs/providers/aws_polly) | `/audio/speech` | AWS Polly text-to-speech API |
 | [GigaChat](../../docs/providers/gigachat) | `/chat/completions` | GigaChat provider for Russian language AI |
-| [LlamaGate](../../docs/providers/llamagate) | `/chat/completions`, `/embeddings` | LlamaGate provider with 15+ models |
+| [LlamaGate](../../docs/providers/llamagate) | `/chat/completions` | LlamaGate chat completions |
+| [LlamaGate](../../docs/providers/llamagate) | `/embeddings` | LlamaGate embeddings |
 | [Abliteration AI](../../docs/providers/abliteration) | `/chat/completions` | Abliteration.ai provider support |
 | [Bedrock](../../docs/providers/bedrock) | `/v1/messages/count_tokens` | Bedrock as new provider for token counting |
 
