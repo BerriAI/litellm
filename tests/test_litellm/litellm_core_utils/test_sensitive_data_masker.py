@@ -108,14 +108,16 @@ def test_lists_with_sensitive_keys_are_masked():
     """
     masker = SensitiveDataMasker()
     data = {
-        "api_key": ["sk-123", "sk-456"],
+        "api_key": ["sk-1234567890abcdef", "sk-9876543210fedcba"],
         "tags": ["prod", "test"],
     }
 
     masked = masker.mask_dict(data)
     # sensitive key list entries should be masked
-    assert masked["api_key"][0] != "sk-123"
+    assert masked["api_key"][0] != "sk-1234567890abcdef"
     assert "*" in masked["api_key"][0]
+    assert masked["api_key"][1] != "sk-9876543210fedcba"
+    assert "*" in masked["api_key"][1]
 
     # non-sensitive list should remain unchanged
     assert masked["tags"] == ["prod", "test"]
