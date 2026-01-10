@@ -426,38 +426,65 @@ def get_key_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
     """
-    Get the model rpm limit for a given api key
-    - check key metadata
-    - check key model max budget
-    - check team metadata
+    Get the model rpm limit for a given api key.
+
+    Priority order (returns first found):
+    1. Key metadata (model_rpm_limit)
+    2. Key model_max_budget (rpm_limit per model)
+    3. Team metadata (model_rpm_limit)
     """
+    # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
-        if "model_rpm_limit" in user_api_key_dict.metadata:
-            return user_api_key_dict.metadata["model_rpm_limit"]
-    elif user_api_key_dict.model_max_budget:
+        result = user_api_key_dict.metadata.get("model_rpm_limit")
+        if result:
+            return result
+
+    # 2. Check model_max_budget
+    if user_api_key_dict.model_max_budget:
         model_rpm_limit: Dict[str, Any] = {}
         for model, budget in user_api_key_dict.model_max_budget.items():
-            if "rpm_limit" in budget and budget["rpm_limit"] is not None:
+            if isinstance(budget, dict) and budget.get("rpm_limit") is not None:
                 model_rpm_limit[model] = budget["rpm_limit"]
-        return model_rpm_limit
-    elif user_api_key_dict.team_metadata:
-        if "model_rpm_limit" in user_api_key_dict.team_metadata:
-            return user_api_key_dict.team_metadata["model_rpm_limit"]
+        if model_rpm_limit:
+            return model_rpm_limit
+
+    # 3. Fallback to team metadata
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_rpm_limit")
+
     return None
 
 
 def get_key_model_tpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
+    """
+    Get the model tpm limit for a given api key.
+
+    Priority order (returns first found):
+    1. Key metadata (model_tpm_limit)
+    2. Key model_max_budget (tpm_limit per model)
+    3. Team metadata (model_tpm_limit)
+    """
+    # 1. Check key metadata first (takes priority)
     if user_api_key_dict.metadata:
-        if "model_tpm_limit" in user_api_key_dict.metadata:
-            return user_api_key_dict.metadata["model_tpm_limit"]
-    elif user_api_key_dict.model_max_budget:
-        if "tpm_limit" in user_api_key_dict.model_max_budget:
-            return user_api_key_dict.model_max_budget["tpm_limit"]
-    elif user_api_key_dict.team_metadata:
-        if "model_tpm_limit" in user_api_key_dict.team_metadata:
-            return user_api_key_dict.team_metadata["model_tpm_limit"]
+        result = user_api_key_dict.metadata.get("model_tpm_limit")
+        if result:
+            return result
+
+    # 2. Check model_max_budget (iterate per-model like RPM does)
+    if user_api_key_dict.model_max_budget:
+        model_tpm_limit: Dict[str, Any] = {}
+        for model, budget in user_api_key_dict.model_max_budget.items():
+            if isinstance(budget, dict) and budget.get("tpm_limit") is not None:
+                model_tpm_limit[model] = budget["tpm_limit"]
+        if model_tpm_limit:
+            return model_tpm_limit
+
+    # 3. Fallback to team metadata
+    if user_api_key_dict.team_metadata:
+        return user_api_key_dict.team_metadata.get("model_tpm_limit")
+
     return None
 
 
@@ -469,7 +496,8 @@ def get_model_rate_limit_from_metadata(
     if getattr(user_api_key_dict, metadata_accessor_key):
         return getattr(user_api_key_dict, metadata_accessor_key).get(rate_limit_key)
     return None
-  
+
+
 def get_team_model_rpm_limit(
     user_api_key_dict: UserAPIKeyAuth,
 ) -> Optional[Dict[str, int]]:
