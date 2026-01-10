@@ -63,6 +63,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
         value={selectedValues}
         loading={loading}
         className={className}
+        allowClear
         showSearch
         style={{ width: "100%" }}
         disabled={disabled}
