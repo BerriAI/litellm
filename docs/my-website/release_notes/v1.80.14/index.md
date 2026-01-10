@@ -346,7 +346,7 @@ Users can now see Endpoint Activity Metrics in the UI.
 | [Focus](../../docs/observability/focus) | Logging | Focus export support for observability - [PR #18802](https://github.com/BerriAI/litellm/pull/18802) |
 | [SigNoz](../../docs/observability/signoz) | Logging | SigNoz integration for observability - [PR #18726](https://github.com/BerriAI/litellm/pull/18726) |
 | [Qualifire](../../docs/proxy/guardrails/qualifire) | Guardrails | Qualifire guardrails and eval webhook - [PR #18594](https://github.com/BerriAI/litellm/pull/18594) |
-| Levo AI | Guardrails | Levo AI integration for security - [PR #18529](https://github.com/BerriAI/litellm/pull/18529) |
+| [Levo AI](../../docs/observability/levo_integration) | Guardrails | Levo AI integration for security - [PR #18529](https://github.com/BerriAI/litellm/pull/18529) |
 
 ### Logging
 
