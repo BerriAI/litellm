@@ -182,3 +182,9 @@ markers = [
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
     "no_parallel: mark test to run sequentially (not in parallel) - typically for memory measurement tests",
 ]
+filterwarnings = [
+    # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)
+    "ignore:.*PydanticSerializationUnexpectedValue.*:UserWarning:pydantic.main",
+    # Suppress pytest-asyncio event loop deprecation warning (handled automatically by pytest-asyncio)
+    "ignore:.*unclosed event loop.*:DeprecationWarning:pytest_asyncio.plugin",
+]
