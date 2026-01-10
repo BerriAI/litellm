@@ -3534,6 +3534,39 @@ jobs:
           paths:
             - litellm-docker-database.tar.gz
 
+  neon_test_setup:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Neon CLI
+          command: |
+            npm install -g @neondatabase/cli
+      - run:
+          name: Create Neon branch
+          command: |
+            export NEON_BRANCH_NAME="preview/commit-${CIRCLE_SHA1:0:7}"
+
+            neon branches create \
+              --project-id $NEON_PROJECT_ID \
+              --name $NEON_BRANCH_NAME \
+              --api-key $NEON_API_KEY || true
+      - run:
+          name: Load DB URL
+          command: |
+            DB_URL=$(neon connection-string \
+              --project-id $NEON_PROJECT_ID \
+              --api-key $NEON_API_KEY \
+              --branch $NEON_BRANCH_NAME \
+              --database yuneng-trial-db \
+              --role neondb_owner)
+
+            echo "export E2E_UI_TEST_DATABASE_URL=$DB_URL" >> $BASH_ENV
+
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3547,8 +3580,8 @@ jobs:
       - run:
           name: Install Neon CLI
           command: |
-            curl -fsSL https://neon.tech/install.sh | bash
-            echo 'export PATH="$HOME/.neon/bin:$PATH"' >> $BASH_ENV
+            npm install -g @neondatabase/cli
+
       - run:
           name: Load Docker Database Image
           command: |
@@ -3820,6 +3853,13 @@ workflows:
                 - main
                 - /litellm_.*/
       - build_docker_database_image:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - neon_test_setup:
+          context: e2e_ui_tests
           filters:
             branches:
               only:
