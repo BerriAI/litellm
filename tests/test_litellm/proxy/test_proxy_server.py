@@ -3216,3 +3216,107 @@ async def test_get_hierarchical_router_settings():
         prisma_client=mock_prisma_client,
     )
     assert result is None
+
+
+def test_get_image_local_svg_sets_svg_media_type(monkeypatch):
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+
+    with patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, patch(
+        "litellm.proxy.proxy_server.FileResponse"
+    ) as mock_file_response:
+
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return "/tmp/logo.svg"
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+
+        get_image()
+
+        assert mock_file_response.called
+        _args, kwargs = mock_file_response.call_args
+        assert kwargs["media_type"] == "image/svg+xml"
+
+
+def test_get_image_remote_svg_caches_with_svg_extension(monkeypatch):
+    from unittest.mock import mock_open, patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+
+    class _Resp:
+        status_code = 200
+        content = b"<svg></svg>"
+        headers = {"Content-Type": "image/svg+xml"}
+
+    with patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, patch(
+        "litellm.proxy.proxy_server.HTTPHandler"
+    ) as mock_http_handler, patch(
+        "builtins.open", mock_open()
+    ) as _mocked_open, patch(
+        "litellm.proxy.proxy_server.FileResponse"
+    ) as mock_file_response:
+
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return "https://example.com/logo.svg"
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+        mock_http_handler.return_value.get.return_value = _Resp()
+
+        get_image()
+
+        assert _mocked_open.called
+        open_path = _mocked_open.call_args[0][0]
+        assert str(open_path).endswith("cached_logo.svg")
+
+        assert mock_file_response.called
+        _args, kwargs = mock_file_response.call_args
+        assert kwargs["media_type"] == "image/svg+xml"
+
+
+def test_get_image_remote_svgz_sets_gzip_encoding_header(monkeypatch):
+    from unittest.mock import mock_open, patch
+
+    from litellm.proxy.proxy_server import get_image
+
+    monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
+
+    class _Resp:
+        status_code = 200
+        content = b"fake-gzipped-svg"
+        headers = {"Content-Type": "image/svg+xml", "Content-Encoding": "gzip"}
+
+    with patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, patch(
+        "litellm.proxy.proxy_server.HTTPHandler"
+    ) as mock_http_handler, patch(
+        "builtins.open", mock_open()
+    ) as _mocked_open, patch(
+        "litellm.proxy.proxy_server.FileResponse"
+    ) as mock_file_response:
+
+        def getenv_side_effect(key, default=""):
+            if key == "UI_LOGO_PATH":
+                return "https://example.com/logo.svgz"
+            return default
+
+        mock_getenv.side_effect = getenv_side_effect
+        mock_http_handler.return_value.get.return_value = _Resp()
+
+        get_image()
+
+        assert _mocked_open.called
+        open_path = _mocked_open.call_args[0][0]
+        assert str(open_path).endswith("cached_logo.svgz")
+
+        assert mock_file_response.called
+        _args, kwargs = mock_file_response.call_args
+        assert kwargs["media_type"] == "image/svg+xml"
+        assert kwargs["headers"]["Content-Encoding"] == "gzip"
