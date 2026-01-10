@@ -1794,11 +1794,20 @@ async def get_org_object(
     user_api_key_cache: DualCache,
     parent_otel_span: Optional[Span] = None,
     proxy_logging_obj: Optional[ProxyLogging] = None,
+    include_budget_table: bool = False,
 ) -> Optional[LiteLLM_OrganizationTable]:
     """
     - Check if org id in proxy Org Table
     - if valid, return LiteLLM_OrganizationTable object
     - if not, then raise an error
+    
+    Args:
+        org_id: Organization ID to look up
+        prisma_client: Database client
+        user_api_key_cache: Cache for storing results
+        parent_otel_span: Optional OpenTelemetry span
+        proxy_logging_obj: Optional proxy logging object
+        include_budget_table: If True, includes litellm_budget_table in the query
     """
     if prisma_client is None:
         raise Exception(
@@ -1807,8 +1816,13 @@ async def get_org_object(
     if not isinstance(org_id, str):
         return None
 
+    # Use different cache key if budget table is included
+    cache_key = "org_id:{}".format(org_id)
+    if include_budget_table:
+        cache_key = "org_id:{}:with_budget".format(org_id)
+    
     # check if in cache
-    cached_org_obj = user_api_key_cache.async_get_cache(key="org_id:{}".format(org_id))
+    cached_org_obj = user_api_key_cache.async_get_cache(key=cache_key)
     if cached_org_obj is not None:
         if isinstance(cached_org_obj, dict):
             return LiteLLM_OrganizationTable(**cached_org_obj)
@@ -1816,12 +1830,23 @@ async def get_org_object(
             return cached_org_obj
     # else, check db
     try:
+        query_kwargs = {"where": {"organization_id": org_id}}
+        if include_budget_table:
+            query_kwargs["include"] = {"litellm_budget_table": True}
+        
         response = await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": org_id}
+            **query_kwargs
         )
 
         if response is None:
             raise Exception
+
+        # Cache the result
+        await user_api_key_cache.async_set_cache(
+            key=cache_key,
+            value=response.model_dump() if hasattr(response, "model_dump") else response,
+            ttl=DEFAULT_IN_MEMORY_TTL,
+        )
 
         return response
     except Exception:
@@ -2344,11 +2369,14 @@ async def _organization_max_budget_check(
     if org_id is None:
         return
 
-    # Get organization object with budget table to check current spend and max budget
+    # Get organization object with budget table - use get_org_object so it can be mocked in tests
     try:
-        org_table = await prisma_client.db.litellm_organizationtable.find_unique(
-            where={"organization_id": org_id},
-            include={"litellm_budget_table": True},
+        org_table = await get_org_object(
+            org_id=org_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+            include_budget_table=True,
         )
     except Exception:
         # If organization lookup fails, skip the check
