@@ -4,7 +4,6 @@ import inspect
 import io
 import os
 import random
-import secrets
 import shutil
 import subprocess
 import sys
@@ -26,7 +25,6 @@ from typing import (
     cast,
     get_args,
     get_origin,
-    get_type_hints,
 )
 
 from litellm._uuid import uuid
@@ -34,7 +32,6 @@ from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
-    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
@@ -54,7 +51,6 @@ from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
-    TextCompletionResponse,
     TokenCountResponse,
 )
 from litellm.utils import load_credentials_from_list
@@ -1330,10 +1326,11 @@ def load_from_azure_key_vault(use_azure_key_vault: bool = False):
 
 def cost_tracking():
     global prisma_client
-    if prisma_client is not None:
-        litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger())
+    if prisma_client is None:
+        proxy_db_logger = _ProxyDBLogger()
+        litellm.logging_callback_manager.add_litellm_callback(proxy_db_logger)
         litellm.logging_callback_manager.add_litellm_async_success_callback(
-            _ProxyDBLogger()
+            proxy_db_logger
         )
 
 
