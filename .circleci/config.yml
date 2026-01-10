@@ -2060,15 +2060,15 @@ jobs:
           command: |
             echo "Running memory leak tests individually to avoid baseline drift..."
             echo "Running test_memory_baseline_1k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v --tb=short
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v -s --tb=short
             echo "Running test_memory_baseline_2k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_2k -v --tb=short
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_2k -v -s --tb=short
             echo "Running test_memory_baseline_4k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_4k -v --tb=short
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_4k -v -s --tb=short
             echo "Running test_memory_baseline_10k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_10k -v --tb=short
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_10k -v -s --tb=short
             echo "Running test_memory_baseline_30k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_30k -v --tb=short
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_30k -v -s --tb=short
           no_output_timeout: 60m
 
   db_migration_disable_update_check:
