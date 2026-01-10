@@ -3612,20 +3612,15 @@ jobs:
               --parent br-fancy-paper-ad1olsb3 \
               --api-key $NEON_API_KEY || true
       - run:
-          name: Load DB URL
+          name: Run Docker container
           command: |
-            DB_URL=$(neon connection-string \
+            E2E_UI_TEST_DATABASE_URL=$(neon connection-string \
               --project-id $NEON_PROJECT_ID \
               --api-key $NEON_API_KEY \
               --branch preview/commit-${CIRCLE_SHA1:0:7} \
               --database-name yuneng-trial-db \
               --role neondb_owner)
-
-            echo "export E2E_UI_TEST_DATABASE_URL=$DB_URL" >> $BASH_ENV
-      - run:
-          name: Run Docker container
-          command: |
-            echo "E2E_UI_TEST_DATABASE_URL: $E2E_UI_TEST_DATABASE_URL"
+            echo $E2E_UI_TEST_DATABASE_URL
             docker run -d \
               -p 4000:4000 \
               -e DATABASE_URL=$E2E_UI_TEST_DATABASE_URL \
