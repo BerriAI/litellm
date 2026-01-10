@@ -3549,11 +3549,9 @@ jobs:
       - run:
           name: Create Neon branch
           command: |
-            export NEON_BRANCH_NAME="preview/commit-${CIRCLE_SHA1:0:7}"
-
             neon branches create \
               --project-id $NEON_PROJECT_ID \
-              --name $NEON_BRANCH_NAME \
+              --name preview/commit-${CIRCLE_SHA1:0:7} \
               --parent br-fancy-paper-ad1olsb3 \
               --api-key $NEON_API_KEY || true
       - run:
@@ -3562,7 +3560,7 @@ jobs:
             DB_URL=$(neon connection-string \
               --project-id $NEON_PROJECT_ID \
               --api-key $NEON_API_KEY \
-              --branch $NEON_BRANCH_NAME \
+              --branch preview/commit-${CIRCLE_SHA1:0:7} \
               --database-name yuneng-trial-db \
               --role neondb_owner)
 
