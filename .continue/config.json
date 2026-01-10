@@ -1,0 +1,20 @@
+{
+  "models": [
+    {
+      "title": "DeepSeek Local",
+      "provider": "ollama",
+      "model": "deepseek-coder:6.7b",
+      "apiBase": "http://localhost:11434"
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "DeepSeek Autocomplete", 
+    "provider": "ollama",
+    "model": "deepseek-coder:6.7b"
+  },
+  "disableAuthentication": true,
+  "customCommands": [],
+  "experimental": {
+    "modelRoles": false
+  }
+}
