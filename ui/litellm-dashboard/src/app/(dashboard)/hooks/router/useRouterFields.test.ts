@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useRouterFields, RouterFieldsResponse, RouterSettingsField } from "./useRouterFields";
+import { RouterFieldsResponse, useRouterFields } from "./useRouterFields";
 
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
