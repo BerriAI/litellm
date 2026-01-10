@@ -46,7 +46,8 @@ class XAIModelInfo(BaseLLMModelInfo):
 
     @staticmethod
     def get_api_key(api_key: Optional[str] = None) -> Optional[str]:
-        return api_key or get_secret_str("XAI_API_KEY")
+        import litellm
+        return api_key or litellm.xai_key or litellm.api_key or get_secret_str("XAI_API_KEY")
 
     @staticmethod
     def get_base_model(model: str) -> Optional[str]:
