@@ -3565,6 +3565,15 @@ jobs:
               --role neondb_owner)
 
             echo "export E2E_UI_TEST_DATABASE_URL=$DB_URL" >> $BASH_ENV
+      - run:
+          name: Delete Neon branch
+          command: |
+            neon branches delete \
+              --project-id $NEON_PROJECT_ID \
+              --name preview/commit-${CIRCLE_SHA1:0:7} \
+              --api-key $NEON_API_KEY \
+              --yes || true
+          when: always
 
   e2e_ui_testing:
     machine:
