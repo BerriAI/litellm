@@ -1185,3 +1185,120 @@ def test_is_chunk_non_empty_with_valid_tool_calls(
         )
         is True
     )
+
+
+def _make_chunk(content: Optional[str]) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="test",
+        created=1741037890,
+        model="test-model",
+        choices=[StreamingChoices(index=0, delta=Delta(content=content))],
+    )
+
+
+def _build_chunks(pattern: list[str], N: int) -> list[ModelResponseStream]:
+    """
+    Build a list of chunks based on a pattern specification.
+    """
+    chunks = []
+    for i, p in enumerate(pattern):
+        if p == "same":
+            chunks.append(_make_chunk("same_chunk"))
+        elif p == "diff":
+            chunks.append(_make_chunk(f"chunk_{i}"))
+        else:
+            chunks.append(_make_chunk(p))
+    return chunks
+
+_REPETITION_TEST_CASES = [
+    # Basic cases
+    pytest.param(
+        ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        True,
+        id="all_identical_raises",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1),
+        False,
+        id="below_threshold_no_raise",
+    ),
+    pytest.param(
+        [None] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="none_content_no_raise",
+    ),
+    pytest.param(
+        [""] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="empty_content_no_raise",
+    ),
+    # Short content (len <= 2) should not raise
+    pytest.param(
+        ["##"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_2chars_no_raise",
+    ),
+    pytest.param(
+        ["{"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_1char_no_raise",
+    ),
+    pytest.param(
+        ["ab"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="short_content_2chars_ab_no_raise",
+    ),
+    # All different chunks
+    pytest.param(
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT,
+        False,
+        id="all_different_no_raise",
+    ),
+    # One chunk different at various positions
+    pytest.param(
+        ["different_first"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1),
+        False,
+        id="first_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 1) + ["different_last"],
+        False,
+        id="last_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1) + ["different_mid"] + ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - litellm.REPEATED_STREAMING_CHUNK_LIMIT // 2 + 1),
+        False,
+        id="middle_chunk_different_no_raise",
+    ),
+    pytest.param(
+        ["same"] * (litellm.REPEATED_STREAMING_CHUNK_LIMIT - 2) + ["diff", "diff"],
+        False,
+        id="last_two_different_no_raise",
+    ),
+    pytest.param(
+        ["diff"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["same"] * litellm.REPEATED_STREAMING_CHUNK_LIMIT + ["diff"],
+        True,
+        id="in_between_same_and_diff_raise",
+    ),
+]
+
+
+@pytest.mark.parametrize("chunks_pattern,should_raise", _REPETITION_TEST_CASES)
+def test_raise_on_model_repetition(
+    initialized_custom_stream_wrapper: CustomStreamWrapper,
+    chunks_pattern: list,
+    should_raise: bool,
+):
+    wrapper = initialized_custom_stream_wrapper
+    chunks = _build_chunks(chunks_pattern, len(chunks_pattern))
+
+    if should_raise:
+        with pytest.raises(litellm.InternalServerError) as exc_info:
+            for chunk in chunks:
+                wrapper.chunks.append(chunk)
+                wrapper.raise_on_model_repetition()
+        assert "repeating the same chunk" in str(exc_info.value)
+    else:
+        for chunk in chunks:
+            wrapper.chunks.append(chunk)
+            wrapper.raise_on_model_repetition()
