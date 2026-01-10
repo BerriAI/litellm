@@ -88,6 +88,7 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
+    filter_deployments_by_access_groups,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -619,11 +620,12 @@ class Router:
                 self.retry_policy = RetryPolicy(**retry_policy)
             elif isinstance(retry_policy, RetryPolicy):
                 self.retry_policy = retry_policy
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
-                    self.retry_policy.model_dump(exclude_none=True)
+            if self.retry_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Retry Policy Set:\n{}\033[0m".format(
+                        self.retry_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.model_group_retry_policy: Optional[
             Dict[str, RetryPolicy]
@@ -636,11 +638,12 @@ class Router:
             elif isinstance(allowed_fails_policy, AllowedFailsPolicy):
                 self.allowed_fails_policy = allowed_fails_policy
 
-            verbose_router_logger.info(
-                "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
-                    self.allowed_fails_policy.model_dump(exclude_none=True)
+            if self.allowed_fails_policy is not None:
+                verbose_router_logger.info(
+                    "\033[32mRouter Custom Allowed Fails Policy Set:\n{}\033[0m".format(
+                        self.allowed_fails_policy.model_dump(exclude_none=True)
+                    )
                 )
-            )
 
         self.alerting_config: Optional[AlertingConfig] = alerting_config
 
@@ -4769,9 +4772,23 @@ class Router:
 
         if hasattr(original_exception, "message"):
             # add the available fallbacks to the exception
-            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
-                model_group,
-                fallback_model_group,
+            deployment_info = ""
+            if kwargs is not None:
+                metadata = kwargs.get("metadata", {})
+                if metadata and "deployment" in metadata:
+                    deployment_info = f"\nUsed Deployment: {metadata['deployment']}"
+                    if "model_info" in metadata:
+                        model_info = metadata["model_info"]
+                        if isinstance(model_info, dict):
+                            deployment_info += (
+                                f"\nDeployment ID: {model_info.get('id', 'unknown')}"
+                            )
+
+            original_exception.message += (  # type: ignore
+                f". Received Model Group={model_group}"
+                f"\nAvailable Model Group Fallbacks={fallback_model_group}"
+                f"{deployment_info}"
+                f"\n\n💡 Tip: If using wildcard patterns (e.g., 'openai/*'), ensure all matching deployments have credentials with access to this model."
             )
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += (  # type: ignore
@@ -8089,6 +8106,17 @@ class Router:
 
         verbose_router_logger.debug(
             f"healthy_deployments after web search filter: {healthy_deployments}"
+        )
+
+        # Filter by allowed access groups (GitHub issue #18333)
+        # This prevents cross-team load balancing when teams have models with same name in different access groups
+        healthy_deployments = filter_deployments_by_access_groups(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
+        )
+
+        verbose_router_logger.debug(
+            f"healthy_deployments after access group filter: {healthy_deployments}"
         )
 
         if isinstance(healthy_deployments, dict):

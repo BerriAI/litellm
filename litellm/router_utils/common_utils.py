@@ -32,9 +32,9 @@ def add_model_file_id_mappings(
     model_file_id_mapping = {}
     if isinstance(healthy_deployments, list):
         for deployment, response in zip(healthy_deployments, responses):
-            model_file_id_mapping[deployment.get("model_info", {}).get("id")] = (
-                response.id
-            )
+            model_file_id_mapping[
+                deployment.get("model_info", {}).get("id")
+            ] = response.id
     elif isinstance(healthy_deployments, dict):
         for model_id, file_id in healthy_deployments.items():
             model_file_id_mapping[model_id] = file_id
@@ -75,6 +75,7 @@ def filter_team_based_models(
         if deployment.get("model_info", {}).get("id") not in ids_to_remove
     ]
 
+
 def _deployment_supports_web_search(deployment: Dict) -> bool:
     """
     Check if a deployment supports web search.
@@ -112,7 +113,7 @@ def filter_web_search_deployments(
     is_web_search_request = False
     tools = request_kwargs.get("tools") or []
     for tool in tools:
-        # These are the two websearch tools for OpenAI / Azure. 
+        # These are the two websearch tools for OpenAI / Azure.
         if tool.get("type") == "web_search" or tool.get("type") == "web_search_preview":
             is_web_search_request = True
             break
@@ -121,8 +122,62 @@ def filter_web_search_deployments(
         return healthy_deployments
 
     # Filter out deployments that don't support web search
-    final_deployments = [d for d in healthy_deployments if _deployment_supports_web_search(d)]
+    final_deployments = [
+        d for d in healthy_deployments if _deployment_supports_web_search(d)
+    ]
     if len(healthy_deployments) > 0 and len(final_deployments) == 0:
         verbose_logger.warning("No deployments support web search for request")
     return final_deployments
 
+
+def filter_deployments_by_access_groups(
+    healthy_deployments: Union[List[Dict], Dict],
+    request_kwargs: Optional[Dict] = None,
+) -> Union[List[Dict], Dict]:
+    """
+    Filter deployments to only include those matching the team's allowed access groups.
+
+    If the request includes `user_api_key_allowed_access_groups` in metadata,
+    only return deployments where at least one of the deployment's access_groups
+    matches the allowed list.
+
+    This prevents cross-team load balancing when multiple teams have models with
+    the same name but in different access groups (GitHub issue #18333).
+    """
+    if request_kwargs is None:
+        return healthy_deployments
+
+    if isinstance(healthy_deployments, dict):
+        return healthy_deployments
+
+    metadata = request_kwargs.get("metadata") or {}
+    litellm_metadata = request_kwargs.get("litellm_metadata") or {}
+    allowed_access_groups = metadata.get(
+        "user_api_key_allowed_access_groups"
+    ) or litellm_metadata.get("user_api_key_allowed_access_groups")
+
+    # If no access groups specified, return all deployments (backwards compatible)
+    if not allowed_access_groups:
+        return healthy_deployments
+
+    allowed_set = set(allowed_access_groups)
+    filtered = []
+    for deployment in healthy_deployments:
+        model_info = deployment.get("model_info") or {}
+        deployment_access_groups = model_info.get("access_groups") or []
+
+        # If deployment has no access groups, include it (not restricted)
+        if not deployment_access_groups:
+            filtered.append(deployment)
+            continue
+
+        # Include if any of deployment's groups overlap with allowed groups
+        if set(deployment_access_groups) & allowed_set:
+            filtered.append(deployment)
+
+    if len(healthy_deployments) > 0 and len(filtered) == 0:
+        verbose_logger.warning(
+            f"No deployments match allowed access groups {allowed_access_groups}"
+        )
+
+    return filtered
