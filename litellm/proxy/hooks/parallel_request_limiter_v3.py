@@ -1244,11 +1244,15 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         For 'input' and 'total' rate limit types, cached tokens are excluded
         because providers like AWS Bedrock don't count cached tokens toward
         rate limits. This aligns LiteLLM's TPM calculation with provider behavior.
+
+        Note: After upstream transformation in litellm_logging.py, usage should
+        always be a unified Usage object with prompt_tokens/completion_tokens.
         """
         total_tokens = 0
         cached_tokens = 0
 
         if usage:
+            # Primary case: Usage object (unified format after transformation)
             if isinstance(usage, Usage):
                 if rate_limit_type == "output":
                     total_tokens = usage.completion_tokens or 0
@@ -1268,8 +1272,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                             or 0
                         )
 
+            # Defensive fallback: dict (in case transformation didn't occur)
             elif isinstance(usage, dict):
-                # Responses API usage comes as a dict
                 if rate_limit_type == "output":
                     total_tokens = usage.get("completion_tokens", 0) or 0
                 elif rate_limit_type == "input":
@@ -1555,9 +1559,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         from litellm.types.caching import RedisPipelineIncrementOperation
 
         try:
-            litellm_parent_otel_span: Union[Span, None] = (
-                _get_parent_otel_span_from_kwargs(kwargs)
-            )
+            litellm_parent_otel_span: Union[
+                Span, None
+            ] = _get_parent_otel_span_from_kwargs(kwargs)
             # Get metadata from standard_logging_object - this correctly handles both
             # 'metadata' and 'litellm_metadata' fields from litellm_params
             standard_logging_object = kwargs.get("standard_logging_object") or {}
