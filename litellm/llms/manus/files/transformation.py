@@ -86,10 +86,11 @@ class ManusFilesConfig(BaseFilesConfig):
             )
 
         # Manus uses API_KEY header, not Authorization: Bearer
-        # Don't set Content-Type for file uploads - httpx will set multipart/form-data
+        # Manus requires Content-Type: application/json for all requests (even GET)
         headers.update(
             {
                 "API_KEY": api_key,
+                "Content-Type": "application/json",
             }
         )
         return headers
@@ -257,6 +258,8 @@ class ManusFilesConfig(BaseFilesConfig):
             if initial_response_data:
                 response_json = initial_response_data
             else:
+                # Log raw response for debugging
+                verbose_logger.debug(f"Manus raw response text: {raw_response.text}")
                 response_json = raw_response.json()
 
             verbose_logger.debug(f"Manus file response: {response_json}")
