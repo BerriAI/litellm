@@ -49,8 +49,20 @@ class Scheduler:
         # We use the priority directly, as lower values indicate higher priority
         # get the queue
         queue = await self.get_queue(model_name=request.model_name)
+        
+        # Ensure priority is an integer to prevent type comparison errors in heapq
+        priority = request.priority
+        if not isinstance(priority, int):
+            try:
+                priority = int(priority)
+                print_verbose(f"Normalized priority from {type(request.priority)} to int: {priority}")
+            except (ValueError, TypeError):
+                # If conversion fails, use default priority of 0
+                priority = 0
+                print_verbose(f"Failed to convert priority {request.priority}, using default: {priority}")
+        
         # update the queue
-        heapq.heappush(queue, (request.priority, request.request_id))
+        heapq.heappush(queue, (priority, request.request_id))
 
         # save the queue
         await self.save_queue(queue=queue, model_name=request.model_name)
@@ -123,7 +135,24 @@ class Scheduler:
             if response is None or not isinstance(response, list):
                 return []
             elif isinstance(response, list):
-                return response
+                # Validate queue items have correct types (int priority, str request_id)
+                validated_queue = []
+                for item in response:
+                    if isinstance(item, (tuple, list)) and len(item) == 2:
+                        try:
+                            # Ensure priority is int and request_id is str
+                            priority = int(item[0]) if not isinstance(item[0], int) else item[0]
+                            request_id = str(item[1]) if not isinstance(item[1], str) else item[1]
+                            validated_queue.append((priority, request_id))
+                        except (ValueError, TypeError):
+                            # Skip invalid items
+                            print_verbose(f"Skipping invalid queue item: {item}")
+                            continue
+                    else:
+                        # Invalid format, skip
+                        print_verbose(f"Skipping malformed queue item: {item}")
+                        continue
+                return validated_queue
         return self.queue
 
     async def save_queue(self, queue: list, model_name: str) -> None:
