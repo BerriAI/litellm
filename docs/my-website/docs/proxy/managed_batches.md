@@ -1,4 +1,4 @@
-# [BETA] LiteLLM Managed Files with Batches
+# LiteLLM Managed Files with Batches
 
 :::info
 
