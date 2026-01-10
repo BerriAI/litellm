@@ -846,7 +846,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     # Add headers to metadata for guardrails to access (fixes #17477)
     # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
-    if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):
+    if _metadata_variable_name in data and isinstance(
+        data[_metadata_variable_name], dict
+    ):
         data[_metadata_variable_name]["headers"] = _headers
 
     # check for forwardable headers
@@ -999,6 +1001,24 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_model_max_budget"
     ] = user_api_key_dict.model_max_budget
+
+    # Extract allowed access groups for router filtering (GitHub issue #18333)
+    # This allows the router to filter deployments based on team's access groups
+    if llm_router is not None:
+        from litellm.proxy.auth.model_checks import get_access_groups_from_models
+
+        model_access_groups = llm_router.get_model_access_groups()
+        # Combine key models and team models to get all allowed access groups
+        all_models = list(user_api_key_dict.models) + list(
+            user_api_key_dict.team_models or []
+        )
+        allowed_access_groups = get_access_groups_from_models(
+            model_access_groups=model_access_groups, models=all_models
+        )
+        if allowed_access_groups:
+            data[_metadata_variable_name][
+                "user_api_key_allowed_access_groups"
+            ] = allowed_access_groups
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)

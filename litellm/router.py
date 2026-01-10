@@ -86,6 +86,7 @@ from litellm.router_utils.clientside_credential_handler import (
     is_clientside_credential,
 )
 from litellm.router_utils.common_utils import (
+    filter_deployments_by_access_groups,
     filter_team_based_models,
     filter_web_search_deployments,
 )
@@ -4488,14 +4489,16 @@ class Router:
             # add the available fallbacks to the exception
             deployment_info = ""
             if kwargs is not None:
-                metadata = kwargs.get('metadata', {})
-                if metadata and 'deployment' in metadata:
+                metadata = kwargs.get("metadata", {})
+                if metadata and "deployment" in metadata:
                     deployment_info = f"\nUsed Deployment: {metadata['deployment']}"
-                    if 'model_info' in metadata:
-                        model_info = metadata['model_info']
+                    if "model_info" in metadata:
+                        model_info = metadata["model_info"]
                         if isinstance(model_info, dict):
-                            deployment_info += f"\nDeployment ID: {model_info.get('id', 'unknown')}"
-            
+                            deployment_info += (
+                                f"\nDeployment ID: {model_info.get('id', 'unknown')}"
+                            )
+
             original_exception.message += (  # type: ignore
                 f". Received Model Group={model_group}"
                 f"\nAvailable Model Group Fallbacks={fallback_model_group}"
@@ -7797,9 +7800,16 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(
-            f"healthy_deployments after web search filter: {healthy_deployments}"
+        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
+
+        # Filter by allowed access groups (GitHub issue #18333)
+        # This prevents cross-team load balancing when teams have models with same name in different access groups
+        healthy_deployments = filter_deployments_by_access_groups(
+            healthy_deployments=healthy_deployments,
+            request_kwargs=request_kwargs,
         )
+
+        verbose_router_logger.debug(f"healthy_deployments after access group filter: {healthy_deployments}")
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
