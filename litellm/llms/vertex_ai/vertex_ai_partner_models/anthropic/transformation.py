@@ -5,6 +5,7 @@ from typing import Any, List, Optional
 import httpx
 
 import litellm
+from litellm.llms.anthropic.common_utils import get_anthropic_beta_from_headers
 from litellm.llms.base_llm.chat.transformation import LiteLLMLoggingObj
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
@@ -71,16 +72,21 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         
         tools = optional_params.get("tools")
         tool_search_used = self.is_tool_search_used(tools)
+        
+        # Start with user's anthropic-beta header
+        beta_set = set(get_anthropic_beta_from_headers(headers))
+        
+        # Add auto-detected betas, with prompt_caching disabled for Vertex
         auto_betas = self.get_anthropic_beta_list(
             model=model,
             optional_params=optional_params,
             computer_tool_used=self.is_computer_tool_used(tools),
-            prompt_caching_set=self.is_cache_control_set(messages),
+            prompt_caching_set=False,  # Disable prompt caching for Vertex
             file_id_used=self.is_file_id_used(messages),
             mcp_server_used=self.is_mcp_server_used(optional_params.get("mcp_servers")),
         )
-
-        beta_set = set(auto_betas)
+        beta_set.update(auto_betas)
+        
         if tool_search_used:
             beta_set.add("tool-search-tool-2025-10-19")  # Vertex requires this header for tool search
 
