@@ -2879,41 +2879,7 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        if isinstance(transformed_request, dict) and "method" in transformed_request:
-            # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
-            upload_response = getattr(
-                sync_httpx_client, transformed_request["method"].lower()
-            )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
-                timeout=timeout,
-            )
-        elif isinstance(transformed_request, str) or isinstance(
-            transformed_request, bytes
-        ):
-            # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
-            # Use the HTTP method specified by the provider config
-            http_method = provider_config.file_upload_http_method.upper()
-            if http_method == "PUT":
-                upload_response = sync_httpx_client.put(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
-            else:  # Default to POST
-                upload_response = sync_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
-        else:
+        if isinstance(transformed_request, dict) and "initial_request" in transformed_request:
             # Handle two-step uploads (TwoStepFileUploadConfig)
             # Used by providers like Manus, Google Cloud Storage
             try:
@@ -2955,6 +2921,43 @@ class BaseLLMHTTPHandler:
                     e=e,
                     provider_config=provider_config,
                 )
+        elif isinstance(transformed_request, dict) and "method" in transformed_request and "initial_request" not in transformed_request:
+            # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
+            # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
+            upload_response = getattr(
+                sync_httpx_client, transformed_request["method"].lower()
+            )(
+                url=transformed_request["url"],
+                headers=transformed_request["headers"],
+                data=transformed_request["data"],
+                timeout=timeout,
+            )
+        elif isinstance(transformed_request, str) or isinstance(
+            transformed_request, bytes
+        ):
+            # Handle traditional file uploads
+            # Ensure transformed_request is a string for httpx compatibility
+            if isinstance(transformed_request, bytes):
+                transformed_request = transformed_request.decode("utf-8")
+
+            # Use the HTTP method specified by the provider config
+            http_method = provider_config.file_upload_http_method.upper()
+            if http_method == "PUT":
+                upload_response = sync_httpx_client.put(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
+            else:  # Default to POST
+                upload_response = sync_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
+        else:
+            raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
@@ -3001,41 +3004,7 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        if isinstance(transformed_request, dict) and "method" in transformed_request:
-            # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
-            upload_response = await getattr(
-                async_httpx_client, transformed_request["method"].lower()
-            )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
-                timeout=timeout,
-            )
-        elif isinstance(transformed_request, str) or isinstance(
-            transformed_request, bytes
-        ):
-            # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
-            # Use the HTTP method specified by the provider config
-            http_method = provider_config.file_upload_http_method.upper()
-            if http_method == "PUT":
-                upload_response = await async_httpx_client.put(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
-            else:  # Default to POST
-                upload_response = await async_httpx_client.post(
-                    url=api_base,
-                    headers=headers,
-                    data=transformed_request,
-                    timeout=timeout,
-                )
-        else:
+        if isinstance(transformed_request, dict) and "initial_request" in transformed_request:
             # Handle two-step uploads (TwoStepFileUploadConfig)
             # Used by providers like Manus, Google Cloud Storage
             try:
@@ -3078,6 +3047,43 @@ class BaseLLMHTTPHandler:
                     e=e,
                     provider_config=provider_config,
                 )
+        elif isinstance(transformed_request, dict) and "method" in transformed_request and "initial_request" not in transformed_request:
+            # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
+            # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
+            upload_response = await getattr(
+                async_httpx_client, transformed_request["method"].lower()
+            )(
+                url=transformed_request["url"],
+                headers=transformed_request["headers"],
+                data=transformed_request["data"],
+                timeout=timeout,
+            )
+        elif isinstance(transformed_request, str) or isinstance(
+            transformed_request, bytes
+        ):
+            # Handle traditional file uploads
+            # Ensure transformed_request is a string for httpx compatibility
+            if isinstance(transformed_request, bytes):
+                transformed_request = transformed_request.decode("utf-8")
+
+            # Use the HTTP method specified by the provider config
+            http_method = provider_config.file_upload_http_method.upper()
+            if http_method == "PUT":
+                upload_response = await async_httpx_client.put(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
+            else:  # Default to POST
+                upload_response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=transformed_request,
+                    timeout=timeout,
+                )
+        else:
+            raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
         return provider_config.transform_create_file_response(
             model=None,
