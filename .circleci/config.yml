@@ -3534,45 +3534,6 @@ jobs:
           paths:
             - litellm-docker-database.tar.gz
 
-  neon_test_setup:
-    machine:
-      image: ubuntu-2204:2023.10.1
-    resource_class: xlarge
-    working_directory: ~/project
-    steps:
-      - checkout
-      - setup_google_dns
-      - run:
-          name: Install Neon CLI
-          command: |
-            npm i -g neonctl
-      - run:
-          name: Create Neon branch
-          command: |
-            export EXPIRES_AT=$(date -u -d "+3 hours" +"%Y-%m-%dT%H:%M:%SZ")
-            echo "Expires at: $EXPIRES_AT"
-            neon branches create \
-              --project-id $NEON_PROJECT_ID \
-              --name preview/commit-${CIRCLE_SHA1:0:7} \
-              --expires-at $EXPIRES_AT \
-              --parent br-fancy-paper-ad1olsb3 \
-              --api-key $NEON_API_KEY || true
-      - run:
-          name: Load DB URL
-          command: |
-            DB_URL=$(neon connection-string \
-              --project-id $NEON_PROJECT_ID \
-              --api-key $NEON_API_KEY \
-              --branch preview/commit-${CIRCLE_SHA1:0:7} \
-              --database-name yuneng-trial-db \
-              --role neondb_owner)
-            echo $DB_URL
-            echo "export E2E_UI_TEST_DATABASE_URL=$DB_URL" >> $BASH_ENV
-      - run:
-          name: Echo DB URL
-          command: |
-            echo $E2E_UI_TEST_DATABASE_URL
-
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3847,13 +3808,6 @@ workflows:
                 - main
                 - /litellm_.*/
       - build_docker_database_image:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - neon_test_setup:
-          context: e2e_ui_tests
           filters:
             branches:
               only:
