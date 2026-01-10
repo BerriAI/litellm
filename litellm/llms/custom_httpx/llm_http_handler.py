@@ -2924,12 +2924,13 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "method" in transformed_request and "initial_request" not in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
+            presigned_request = cast(Dict[str, Any], transformed_request)
             upload_response = getattr(
-                sync_httpx_client, transformed_request["method"].lower()
+                sync_httpx_client, presigned_request["method"].lower()
             )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
+                url=presigned_request["url"],
+                headers=presigned_request["headers"],
+                data=presigned_request["data"],
                 timeout=timeout,
             )
         elif isinstance(transformed_request, str) or isinstance(
@@ -3050,12 +3051,13 @@ class BaseLLMHTTPHandler:
         elif isinstance(transformed_request, dict) and "method" in transformed_request and "initial_request" not in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
             # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
+            presigned_request = cast(Dict[str, Any], transformed_request)
             upload_response = await getattr(
-                async_httpx_client, transformed_request["method"].lower()
+                async_httpx_client, presigned_request["method"].lower()
             )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
+                url=presigned_request["url"],
+                headers=presigned_request["headers"],
+                data=presigned_request["data"],
                 timeout=timeout,
             )
         elif isinstance(transformed_request, str) or isinstance(
