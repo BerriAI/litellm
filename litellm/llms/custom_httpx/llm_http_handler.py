@@ -71,6 +71,7 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
+from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -2782,6 +2783,38 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    def _extract_upload_url_from_response(
+        self,
+        response: httpx.Response,
+        upload_url_location: str,
+        upload_url_key: str = "upload_url",
+    ) -> tuple[Optional[str], Optional[dict]]:
+        """
+        Extract upload URL from initial file creation response.
+        
+        Args:
+            response: HTTP response from initial file creation request
+            upload_url_location: Where to find URL ('headers' or 'body')
+            upload_url_key: Key name for URL in response body (default: 'upload_url')
+            
+        Returns:
+            Tuple of (upload_url, response_data)
+            - upload_url: The extracted upload URL, or None if not found
+            - response_data: Parsed response body (for 'body' location), or None
+        """
+        if upload_url_location == "headers":
+            # Google Cloud Storage style - URL in X-Goog-Upload-URL header
+            upload_url = response.headers.get("X-Goog-Upload-URL")
+            return upload_url, None
+        else:
+            # Response body style (e.g., Manus, S3 presigned URLs)
+            try:
+                response_data = response.json()
+                upload_url = response_data.get(upload_url_key)
+                return upload_url, response_data if upload_url else None
+            except Exception:
+                return None, None
+
     def create_file(
         self,
         create_file_data: CreateFileRequest,
@@ -2879,6 +2912,8 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         else:
+            # Handle two-step uploads (TwoStepFileUploadConfig)
+            # Used by providers like Manus, Google Cloud Storage
             try:
                 # Step 1: Initial request to get upload URL
                 initial_response = sync_httpx_client.post(
@@ -2891,19 +2926,28 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
 
-                # Extract upload URL from response headers
-                upload_url = initial_response.headers.get("X-Goog-Upload-URL")
+                # Extract upload URL from response
+                upload_url, initial_response_data = self._extract_upload_url_from_response(
+                    response=initial_response,
+                    upload_url_location=transformed_request.get("upload_url_location", "headers"),
+                    upload_url_key=transformed_request.get("upload_url_key", "upload_url"),
+                )
 
                 if not upload_url:
                     raise ValueError("Failed to get upload URL from initial request")
 
                 # Step 2: Upload the actual file
-                upload_response = sync_httpx_client.post(
+                upload_method = transformed_request["upload_request"].get("method", "POST").lower()
+                upload_response = getattr(sync_httpx_client, upload_method)(
                     url=upload_url,
                     headers=transformed_request["upload_request"]["headers"],
                     data=transformed_request["upload_request"]["data"],
                     timeout=timeout,
                 )
+                
+                # Store initial response for transformation
+                if initial_response_data:
+                    litellm_params["initial_file_response"] = initial_response_data
             except Exception as e:
                 raise self._handle_error(
                     e=e,
@@ -2923,7 +2967,7 @@ class BaseLLMHTTPHandler:
 
     async def async_create_file(
         self,
-        transformed_request: Union[bytes, str, dict],
+        transformed_request: Union[bytes, str, dict, "TwoStepFileUploadConfig"],
         litellm_params: dict,
         provider_config: BaseFilesConfig,
         headers: dict,
@@ -2990,6 +3034,8 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         else:
+            # Handle two-step uploads (TwoStepFileUploadConfig)
+            # Used by providers like Manus, Google Cloud Storage
             try:
                 # Step 1: Initial request to get upload URL
                 initial_response = await async_httpx_client.post(
@@ -3002,19 +3048,28 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
 
-                # Extract upload URL from response headers
-                upload_url = initial_response.headers.get("X-Goog-Upload-URL")
+                # Extract upload URL from response
+                upload_url, initial_response_data = self._extract_upload_url_from_response(
+                    response=initial_response,
+                    upload_url_location=transformed_request.get("upload_url_location", "headers"),
+                    upload_url_key=transformed_request.get("upload_url_key", "upload_url"),
+                )
 
                 if not upload_url:
                     raise ValueError("Failed to get upload URL from initial request")
 
                 # Step 2: Upload the actual file
-                upload_response = await async_httpx_client.post(
+                upload_method = transformed_request["upload_request"].get("method", "POST").lower()
+                upload_response = await getattr(async_httpx_client, upload_method)(
                     url=upload_url,
                     headers=transformed_request["upload_request"]["headers"],
                     data=transformed_request["upload_request"]["data"],
                     timeout=timeout,
                 )
+                
+                # Store initial response for transformation
+                if initial_response_data:
+                    litellm_params["initial_file_response"] = initial_response_data
             except Exception as e:
                 verbose_logger.exception(f"Error creating file: {e}")
                 raise self._handle_error(
