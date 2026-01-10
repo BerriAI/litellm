@@ -7,6 +7,8 @@ import TabItem from '@theme/TabItem';
 
 AI Observability and Evaluation Platform
 
+[Top LLM Evaluation Platforms](https://arize.com/llm-evaluation-platforms-top-frameworks)
+
 <Image img={require('../../img/arize.png')} />
 
 
