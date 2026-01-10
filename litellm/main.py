@@ -189,7 +189,7 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
-from .llms.gemini.common_utils import get_api_key_from_env, get_vertex_api_key_from_env
+from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
@@ -3230,12 +3230,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
 
-            vertex_api_key = (
-                api_key
-                or get_vertex_api_key_from_env()
-                or litellm.api_key
-            )
-
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = safe_deep_copy(optional_params or {})
@@ -3277,7 +3271,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
                     vertex_credentials=vertex_credentials,
-                    gemini_api_key=vertex_api_key,  # Support for Vertex AI API Key
+                    gemini_api_key=None,
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,
