@@ -38,7 +38,11 @@ async def test_manus_responses_api_with_agent_profile():
     print("Manus response=", json.dumps(response, indent=4, default=str))
 
     ## Get the status of the response
-    got_response = await litellm.aget_responses(response_id=response.id)
+    got_response = await litellm.aget_responses(
+        response_id=response.id,
+        custom_llm_provider="manus",
+        api_key=os.getenv("MANUS_API_KEY"),
+    )
     print("GET API MANUS RESPONSE=", json.dumps(got_response, indent=4, default=str))
     if got_response.status == "completed":
         assert got_response.output is not None
