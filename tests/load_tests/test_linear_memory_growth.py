@@ -28,9 +28,12 @@ from tests.load_tests.memory_leak_utils import (
     test_router,  # noqa: F401  # pytest fixture used via dependency injection
 )
 
+# Memory limit for all linear memory growth tests
+MEMORY_LIMIT = "40 MB"
+
 
 @pytest.mark.asyncio
-@pytest.mark.limit_leaks("40 MB")
+@pytest.mark.limit_leaks(MEMORY_LIMIT)
 @pytest.mark.no_parallel  # Must run sequentially - measures process memory
 async def test_memory_baseline_1k(test_router, limit_memory):
     """
@@ -47,7 +50,7 @@ async def test_memory_baseline_1k(test_router, limit_memory):
 
 
 @pytest.mark.asyncio
-@pytest.mark.limit_leaks("40 MB")
+@pytest.mark.limit_leaks(MEMORY_LIMIT)
 @pytest.mark.no_parallel  # Must run sequentially - measures process memory
 async def test_memory_baseline_2k(test_router, limit_memory):
     """
@@ -64,7 +67,7 @@ async def test_memory_baseline_2k(test_router, limit_memory):
 
 
 @pytest.mark.asyncio
-@pytest.mark.limit_leaks("40 MB")
+@pytest.mark.limit_leaks(MEMORY_LIMIT)
 @pytest.mark.no_parallel  # Must run sequentially - measures process memory
 async def test_memory_baseline_4k(test_router, limit_memory):
     """
@@ -83,7 +86,7 @@ async def test_memory_baseline_4k(test_router, limit_memory):
 
 
 @pytest.mark.asyncio
-@pytest.mark.limit_leaks("40 MB")
+@pytest.mark.limit_leaks(MEMORY_LIMIT)
 @pytest.mark.no_parallel  # Must run sequentially - measures process memory
 async def test_memory_baseline_10k(test_router, limit_memory):
     """
@@ -101,7 +104,7 @@ async def test_memory_baseline_10k(test_router, limit_memory):
 
 
 @pytest.mark.asyncio
-@pytest.mark.limit_leaks("40 MB")
+@pytest.mark.limit_leaks(MEMORY_LIMIT)
 @pytest.mark.no_parallel  # Must run sequentially - measures process memory
 async def test_memory_baseline_30k(test_router, limit_memory):
     """
