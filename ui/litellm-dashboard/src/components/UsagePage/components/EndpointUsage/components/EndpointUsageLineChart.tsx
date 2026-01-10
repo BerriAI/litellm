@@ -1,6 +1,5 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo } from "react";
 import { Card, LineChart, Title } from "@tremor/react";
-import { Segmented } from "antd";
 import { DailyData } from "../../../types";
 
 interface EndpointUsageLineChartProps {
@@ -8,11 +7,8 @@ interface EndpointUsageLineChartProps {
   endpointData?: Record<string, any>;
 }
 
-type TimePeriod = "7" | "30" | "90";
-
-
 // Transform daily data into chart format
-function transformDailyDataToChart(dailyData: DailyData[], days: number): Array<Record<string, string | number>> {
+function transformDailyDataToChart(dailyData: DailyData[]): Array<Record<string, string | number>> {
   const chartData: Array<Record<string, string | number>> = [];
 
   // Get all unique endpoint names
@@ -23,10 +19,7 @@ function transformDailyDataToChart(dailyData: DailyData[], days: number): Array<
     }
   });
 
-  // Filter to the last N days based on time period
-  const filteredData = dailyData.slice(-days);
-
-  filteredData.forEach((day) => {
+  dailyData.forEach((day) => {
     const date = new Date(day.date);
     const dateStr = date.toLocaleDateString("en-US", {
       month: "short",
@@ -45,20 +38,18 @@ function transformDailyDataToChart(dailyData: DailyData[], days: number): Array<
     chartData.push(dataPoint);
   });
 
-  return chartData;
+  // Reverse the array so most recent dates appear on the right
+  return chartData.reverse();
 }
 
 export function EndpointUsageLineChart({ dailyData, endpointData }: EndpointUsageLineChartProps) {
-  const [timePeriod, setTimePeriod] = useState<TimePeriod>("7");
-  const days = parseInt(timePeriod);
-
   const chartData = useMemo(() => {
     if (!dailyData?.results || dailyData.results.length === 0) {
       return [];
     }
 
-    return transformDailyDataToChart(dailyData.results, days);
-  }, [dailyData, days]);
+    return transformDailyDataToChart(dailyData.results);
+  }, [dailyData]);
 
   // Get endpoint names from chart data
   const categories = useMemo(() => {
@@ -74,27 +65,6 @@ export function EndpointUsageLineChart({ dailyData, endpointData }: EndpointUsag
     <Card className="mb-6">
       <div className="flex items-center justify-between mb-4">
         <Title>Endpoint Usage Trends</Title>
-        <Segmented
-          options={[
-            {
-              label: "7 Days",
-              value: "7",
-            },
-            {
-              label: "30 Days",
-              value: "30",
-            },
-            {
-              label: "90 Days",
-              value: "90",
-            },
-          ]}
-          value={timePeriod}
-          onChange={(value) => setTimePeriod(value as TimePeriod)}
-          style={{
-            backgroundColor: "#f3f4f6",
-          }}
-        />
       </div>
       <LineChart
         className="h-80"
