@@ -181,24 +181,26 @@ async def route_request(
         else:
             return getattr(litellm, f"{route_type}")(**data)
 
-    elif "user_config" in data:
-        router_config = data.pop("user_config")
-        user_router = litellm.Router(**router_config)
-        ret_val = getattr(user_router, f"{route_type}")(**data)
-        user_router.discard()
-        return ret_val
-
     elif (
         route_type == "acompletion"
         and data.get("model", "") is not None
         and "," in data.get("model", "")
         and llm_router is not None
     ):
+        # Handle batch completions with comma-separated models BEFORE user_config check
+        # This ensures batch completion logic is applied even when user_config is set
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
         else:
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
+
+    elif "user_config" in data:
+        router_config = data.pop("user_config")
+        user_router = litellm.Router(**router_config)
+        ret_val = getattr(user_router, f"{route_type}")(**data)
+        user_router.discard()
+        return ret_val
     elif llm_router is not None:
         # Skip model-based routing for container operations
         if route_type in [
