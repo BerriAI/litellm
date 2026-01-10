@@ -8,7 +8,7 @@ and following LiteLLM testing patterns and best practices.
 # Standard library imports
 import os
 import sys
-from typing import Dict
+from typing import Any, Dict
 from unittest.mock import Mock, patch
 
 # Add parent directory to path for imports
@@ -29,7 +29,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import get_logging_caching_headers
 from litellm.proxy.guardrails.guardrail_hooks.pillar import (
     PillarGuardrail,
-    PillarGuardrailAPIError,
     PillarGuardrailMissingSecrets,
 )
 from litellm.proxy.guardrails.guardrail_hooks.pillar.pillar import (
@@ -413,10 +412,20 @@ async def test_pre_call_hook_flagged_content_monitor(
     assert "metadata" in malicious_request_data
     metadata = malicious_request_data["metadata"]
     assert metadata.get("pillar_flagged") is True
-    assert metadata.get("pillar_session_id") == pillar_flagged_response.json()["session_id"]
-    assert metadata.get("pillar_session_id_response") == pillar_flagged_response.json()["session_id"]
-    assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get("scanners", {})
-    assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get("evidence", [])
+    assert (
+        metadata.get("pillar_session_id")
+        == pillar_flagged_response.json()["session_id"]
+    )
+    assert (
+        metadata.get("pillar_session_id_response")
+        == pillar_flagged_response.json()["session_id"]
+    )
+    assert metadata.get("pillar_scanners") == pillar_flagged_response.json().get(
+        "scanners", {}
+    )
+    assert metadata.get("pillar_evidence") == pillar_flagged_response.json().get(
+        "evidence", []
+    )
 
 
 @pytest.mark.asyncio
@@ -445,14 +454,23 @@ async def test_pre_call_hook_clean_content_returns_scanners_and_evidence(
     # Even when not flagged, we should get scanners and evidence
     assert metadata.get("pillar_flagged") is False
     # pillar_session_id preserves existing value, pillar_session_id_response is always from response
-    assert metadata.get("pillar_session_id_response") == pillar_clean_response.json()["session_id"]
-    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get("scanners", {})
-    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get("evidence", [])
+    assert (
+        metadata.get("pillar_session_id_response")
+        == pillar_clean_response.json()["session_id"]
+    )
+    assert metadata.get("pillar_scanners") == pillar_clean_response.json().get(
+        "scanners", {}
+    )
+    assert metadata.get("pillar_evidence") == pillar_clean_response.json().get(
+        "evidence", []
+    )
 
     # Verify headers are also built
     headers = get_logging_caching_headers(sample_request_data)
     assert headers["x-pillar-flagged"] == "false"
-    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_clean_response.json().get("scanners", {})
+    assert json.loads(
+        unquote(headers["x-pillar-scanners"])
+    ) == pillar_clean_response.json().get("scanners", {})
 
 
 def test_get_logging_caching_headers_pillar_metadata():
@@ -475,7 +493,10 @@ def test_get_logging_caching_headers_pillar_metadata():
     assert json.loads(unquote(headers["x-pillar-scanners"])) == scanners
     assert json.loads(unquote(headers["x-pillar-evidence"])) == evidence
     assert unquote(headers["x-pillar-session-id"]) == "test-session-123"
-    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-flagged"] == "true"
+    assert (
+        request_data["metadata"]["pillar_response_headers"]["x-pillar-flagged"]
+        == "true"
+    )
 
 
 def test_get_logging_caching_headers_truncates_large_evidence():
@@ -497,7 +518,10 @@ def test_get_logging_caching_headers_truncates_large_evidence():
     assert decoded_evidence[0]["evidence"].endswith("...[truncated]")
     assert decoded_evidence[0].get("evidence_truncated") is True
     assert request_data["metadata"]["pillar_evidence_truncated"] is True
-    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-evidence"] == evidence_header
+    assert (
+        request_data["metadata"]["pillar_response_headers"]["x-pillar-evidence"]
+        == evidence_header
+    )
 
 
 @pytest.mark.asyncio
@@ -533,10 +557,17 @@ async def test_post_call_hook_flagged_content_monitor_updates_metadata_and_heade
 
     headers = get_logging_caching_headers(request_data)
     assert headers["x-pillar-flagged"] == "true"
-    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_json.get("scanners", {})
-    assert json.loads(unquote(headers["x-pillar-evidence"])) == pillar_json.get("evidence", [])
+    assert json.loads(unquote(headers["x-pillar-scanners"])) == pillar_json.get(
+        "scanners", {}
+    )
+    assert json.loads(unquote(headers["x-pillar-evidence"])) == pillar_json.get(
+        "evidence", []
+    )
     assert unquote(headers["x-pillar-session-id"]) == pillar_json["session_id"]
-    assert request_data["metadata"]["pillar_response_headers"]["x-pillar-session-id"] == headers["x-pillar-session-id"]
+    assert (
+        request_data["metadata"]["pillar_response_headers"]["x-pillar-session-id"]
+        == headers["x-pillar-session-id"]
+    )
 
 
 @pytest.mark.asyncio
@@ -704,7 +735,7 @@ async def test_litellm_context_headers_automatically_added(
     assert captured_headers["X-LiteLLM-Team-Name"] == "engineering-team"
     assert "X-LiteLLM-Org-Id" in captured_headers
     assert captured_headers["X-LiteLLM-Org-Id"] == "org-789"
-    
+
     # Metadata is NOT sent (may contain sensitive information)
     assert "X-LiteLLM-Metadata" not in captured_headers
 
@@ -1212,7 +1243,9 @@ async def test_pre_call_hook_masking_mode(
         )
 
     # Messages should be replaced with masked messages
-    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert (
+        result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    )
     assert result["messages"] != original_messages
 
 
@@ -1437,8 +1470,281 @@ async def test_mcp_call_masking(
         )
 
     # Messages should be replaced with masked messages
-    assert result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    assert (
+        result["messages"] == pillar_masked_response.json()["masked_session_messages"]
+    )
     assert result["messages"] != original_messages
+
+
+# ============================================================================
+# STREAMING SUPPORT TESTS
+# ============================================================================
+
+
+@pytest.fixture
+def mock_streaming_chunks():
+    """Fixture providing mock streaming response chunks."""
+    from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+    chunk1 = ModelResponseStream(
+        id="chatcmpl-123",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content="Hello", role="assistant"),
+                finish_reason=None,
+            )
+        ],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    chunk2 = ModelResponseStream(
+        id="chatcmpl-123",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=" there!"),
+                finish_reason=None,
+            )
+        ],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    chunk3 = ModelResponseStream(
+        id="chatcmpl-123",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(content=None),
+                finish_reason="stop",
+            )
+        ],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion.chunk",
+    )
+
+    return [chunk1, chunk2, chunk3]
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_clean_content(
+    pillar_guardrail_instance,
+    sample_request_data,
+    user_api_key_dict,
+    pillar_clean_response,
+    mock_streaming_chunks,
+):
+    """Test streaming post-call hook with clean content."""
+
+    async def mock_stream():
+        for chunk in mock_streaming_chunks:
+            yield chunk
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_clean_response,
+    ):
+        collected_chunks = []
+        async for chunk in pillar_guardrail_instance.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=sample_request_data,
+        ):
+            collected_chunks.append(chunk)
+
+    # Should have yielded chunks
+    assert len(collected_chunks) > 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_flagged_content_block(
+    pillar_guardrail_instance,
+    malicious_request_data,
+    user_api_key_dict,
+    pillar_flagged_response,
+    mock_streaming_chunks,
+):
+    """Test streaming post-call hook blocks flagged content when action is 'block'."""
+
+    async def mock_stream():
+        for chunk in mock_streaming_chunks:
+            yield chunk
+
+    with pytest.raises(HTTPException) as excinfo:
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            return_value=pillar_flagged_response,
+        ):
+            collected_chunks = []
+            async for chunk in pillar_guardrail_instance.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=malicious_request_data,
+            ):
+                collected_chunks.append(chunk)
+
+    assert "Blocked by Pillar Security Guardrail" in str(excinfo.value.detail)
+    assert excinfo.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_monitor_mode(
+    pillar_monitor_guardrail,
+    malicious_request_data,
+    user_api_key_dict,
+    pillar_flagged_response,
+    mock_streaming_chunks,
+):
+    """Test streaming post-call hook allows flagged content when action is 'monitor'."""
+
+    async def mock_stream():
+        for chunk in mock_streaming_chunks:
+            yield chunk
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        return_value=pillar_flagged_response,
+    ):
+        collected_chunks = []
+        async for chunk in pillar_monitor_guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=malicious_request_data,
+        ):
+            collected_chunks.append(chunk)
+
+    # Should have yielded chunks even though content was flagged
+    assert len(collected_chunks) > 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_api_error_fallback_allow(
+    sample_request_data,
+    user_api_key_dict,
+    mock_streaming_chunks,
+    env_setup,
+):
+    """Test streaming hook allows on API error when fallback_on_error='allow'."""
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-stream-fallback-allow",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        fallback_on_error="allow",
+    )
+
+    async def mock_stream():
+        for chunk in mock_streaming_chunks:
+            yield chunk
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        side_effect=Exception("Connection error"),
+    ):
+        collected_chunks = []
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=user_api_key_dict,
+            response=mock_stream(),
+            request_data=sample_request_data,
+        ):
+            collected_chunks.append(chunk)
+
+    # Should have yielded chunks on error with fallback allow
+    # Note: the streaming hook collects and re-streams, so chunk count may differ
+    assert len(collected_chunks) > 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_api_error_fallback_block(
+    sample_request_data,
+    user_api_key_dict,
+    mock_streaming_chunks,
+    env_setup,
+):
+    """Test streaming hook blocks on API error when fallback_on_error='block'."""
+    guardrail = PillarGuardrail(
+        guardrail_name="pillar-stream-fallback-block",
+        api_key="test-pillar-key",
+        api_base="https://api.pillar.security",
+        fallback_on_error="block",
+    )
+
+    async def mock_stream():
+        for chunk in mock_streaming_chunks:
+            yield chunk
+
+    with pytest.raises(Exception):
+        with patch(
+            "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+            side_effect=Exception("Connection error"),
+        ):
+            collected_chunks = []
+            async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=user_api_key_dict,
+                response=mock_stream(),
+                request_data=sample_request_data,
+            ):
+                collected_chunks.append(chunk)
+
+
+@pytest.mark.asyncio
+async def test_streaming_hook_empty_stream(
+    pillar_guardrail_instance,
+    sample_request_data,
+    user_api_key_dict,
+):
+    """Test streaming hook with empty stream."""
+
+    async def mock_stream():
+        return
+        yield  # Make it a generator
+
+    collected_chunks = []
+    async for chunk in pillar_guardrail_instance.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict,
+        response=mock_stream(),
+        request_data=sample_request_data,
+    ):
+        collected_chunks.append(chunk)
+
+    # Should handle empty stream gracefully
+    assert len(collected_chunks) == 0
+
+
+# ============================================================================
+# GUARDRAIL STATUS AND LOGGING TESTS
+# ============================================================================
+
+
+def test_determine_guardrail_status_success(pillar_guardrail_instance):
+    """Test _determine_guardrail_status returns 'success' for unflagged response."""
+    response = {"flagged": False, "session_id": "test-123"}
+    status = pillar_guardrail_instance._determine_guardrail_status(response)
+    assert status == "success"
+
+
+def test_determine_guardrail_status_intervened(pillar_guardrail_instance):
+    """Test _determine_guardrail_status returns 'guardrail_intervened' for flagged response."""
+    response = {"flagged": True, "session_id": "test-123"}
+    status = pillar_guardrail_instance._determine_guardrail_status(response)
+    assert status == "guardrail_intervened"
+
+
+def test_determine_guardrail_status_invalid_response(pillar_guardrail_instance):
+    """Test _determine_guardrail_status returns 'guardrail_failed_to_respond' for invalid response."""
+    status = pillar_guardrail_instance._determine_guardrail_status("not a dict")
+    assert status == "guardrail_failed_to_respond"
+
+
+def test_determine_guardrail_status_missing_flagged(pillar_guardrail_instance):
+    """Test _determine_guardrail_status returns 'success' when flagged field is missing (defaults to False)."""
+    response = {"session_id": "test-123"}
+    status = pillar_guardrail_instance._determine_guardrail_status(response)
+    assert status == "success"
 
 
 if __name__ == "__main__":

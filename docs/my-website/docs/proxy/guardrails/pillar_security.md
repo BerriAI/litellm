@@ -282,6 +282,65 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
+## Streaming Support
+
+Pillar Security fully supports streaming responses. When using `stream=true` with your LLM requests, the guardrail automatically handles streaming by:
+
+1. **Collecting chunks**: All streaming chunks are collected as they arrive
+2. **Assembling response**: Chunks are assembled into a complete response
+3. **Scanning**: The complete response is scanned by Pillar Security
+4. **Re-streaming**: The response is re-streamed back to the client
+
+This approach ensures complete response analysis while maintaining the streaming experience.
+
+### Streaming Example
+
+```bash
+curl -X POST "http://localhost:4000/v1/chat/completions" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_LITELLM_PROXY_MASTER_KEY" \
+  -d '{
+    "model": "gpt-4.1-mini",
+    "messages": [{"role": "user", "content": "Tell me a story"}],
+    "stream": true
+  }'
+```
+
+### How It Works
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant LiteLLM
+    participant LLM
+    participant Pillar
+
+    Client->>LiteLLM: Request (stream=true)
+    LiteLLM->>LLM: Forward request
+    LLM-->>LiteLLM: Stream chunks
+    Note over LiteLLM: Collect all chunks
+    Note over LiteLLM: Assemble complete response
+    LiteLLM->>Pillar: Scan complete response
+    Pillar-->>LiteLLM: Scan result
+    alt Content flagged (block mode)
+        LiteLLM-->>Client: Error response
+    else Content safe or monitor mode
+        LiteLLM-->>Client: Re-stream response
+    end
+```
+
+### Streaming Behavior by Mode
+
+| Mode | Streaming Behavior |
+|------|-------------------|
+| **`block`** | If flagged, raises exception after collecting all chunks |
+| **`monitor`** | Logs threat, streams response with detection headers |
+| **`mask`** | Applies masking to assembled response, re-streams masked content |
+
+:::note
+Streaming responses are scanned after the complete response is assembled. This means blocking decisions are made after the LLM has generated the full response, but before any content is streamed to the client.
+:::
+
 ## Configuration Reference
 
 ### Environment Variables
@@ -589,6 +648,95 @@ guardrails:
 ```
 
 Keep in mind that LiteLLM forwards these values as the documented `plr_*` headers, so any direct HTTP integrations outside the proxy can reuse the same guidance.
+
+## Observability & Logging
+
+Pillar Security integrates with LiteLLM's observability stack, automatically logging guardrail information to platforms like **Langfuse**, **DataDog**, **OpenTelemetry**, and others.
+
+### What Gets Logged
+
+Every guardrail scan generates a `StandardLoggingGuardrailInformation` object containing:
+
+| Field | Description |
+|-------|-------------|
+| `guardrail_name` | Name of the guardrail instance (e.g., `"pillar-production"`) |
+| `guardrail_provider` | Always `"pillar"` |
+| `guardrail_mode` | The event hook that triggered the scan (`pre_call`, `during_call`, `post_call`) |
+| `guardrail_response` | Full Pillar API response including `flagged`, `scanners`, `evidence` |
+| `guardrail_status` | Outcome of the scan (see below) |
+| `start_time` | Unix timestamp when scan started |
+| `end_time` | Unix timestamp when scan completed |
+| `duration` | Scan duration in seconds |
+
+### Guardrail Status Values
+
+| Status | Meaning |
+|--------|---------|
+| `success` | Content passed - no security threats detected |
+| `guardrail_intervened` | Content flagged - security threats detected |
+| `guardrail_failed_to_respond` | API error or timeout occurred |
+
+### Example Log Entry
+
+```json
+{
+  "guardrail_name": "pillar-production",
+  "guardrail_provider": "pillar",
+  "guardrail_mode": "pre_call",
+  "guardrail_response": {
+    "session_id": "abc-123-def-456",
+    "flagged": true,
+    "scanners": {
+      "jailbreak": true,
+      "prompt_injection": false,
+      "pii": false
+    },
+    "evidence": [
+      {
+        "category": "jailbreak",
+        "type": "jailbreak",
+        "evidence": "Ignore previous instructions..."
+      }
+    ]
+  },
+  "guardrail_status": "guardrail_intervened",
+  "start_time": 1704067200.123,
+  "end_time": 1704067200.456,
+  "duration": 0.333
+}
+```
+
+### Integration with Observability Platforms
+
+Guardrail logs are automatically included in traces sent to configured observability platforms:
+
+**Langfuse:**
+- Guardrail information appears in the trace metadata
+- Filter traces by `guardrail_status` to find flagged requests
+- Analyze guardrail performance using `duration` metrics
+
+**DataDog:**
+- Guardrail spans are nested under the main LLM call span
+- Use `guardrail_status` tags for alerting and dashboards
+- Track guardrail latency impact on overall request time
+
+**OpenTelemetry:**
+- Guardrail attributes are added to the span
+- Compatible with any OTLP-compatible backend (Jaeger, Zipkin, etc.)
+
+### Configuration
+
+Logging is enabled automatically when you configure observability in LiteLLM:
+
+```yaml
+litellm_settings:
+  callbacks: ["langfuse"]  # or datadog, otel, etc.
+  
+general_settings:
+  master_key: "your-master-key"
+```
+
+No additional configuration is needed for Pillar guardrail logging - it integrates seamlessly with your existing observability setup.
 
 ## Examples
 
