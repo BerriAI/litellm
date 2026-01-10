@@ -184,7 +184,9 @@ markers = [
 ]
 filterwarnings = [
     # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)
-    "ignore:.*PydanticSerializationUnexpectedValue.*:UserWarning:pydantic.main",
+    # These occur because the mock server returns a simplified response format
+    "ignore:Pydantic serializer warnings:UserWarning",
+    "ignore::UserWarning:pydantic.main",
     # Suppress pytest-asyncio event loop deprecation warning (handled automatically by pytest-asyncio)
-    "ignore:.*unclosed event loop.*:DeprecationWarning:pytest_asyncio.plugin",
+    "ignore::DeprecationWarning:pytest_asyncio.plugin",
 ]
