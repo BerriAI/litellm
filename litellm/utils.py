@@ -48,6 +48,7 @@ from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
+
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 from litellm._lazy_imports import (
@@ -70,8 +71,6 @@ from litellm.constants import (
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-
-
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -7959,6 +7958,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
             return BedrockFilesConfig()
+        elif LlmProviders.MANUS == provider:
+            from litellm.llms.manus.files.transformation import ManusFilesConfig
+
+            return ManusFilesConfig()
         return None
 
     @staticmethod

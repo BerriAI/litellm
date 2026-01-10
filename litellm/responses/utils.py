@@ -198,11 +198,14 @@ class ResponsesAPIRequestUtils:
         model_id = model_info.get("id")
 
         # access the response id based on the object type
-        response_id = (
-            responses_api_response["id"]
-            if isinstance(responses_api_response, dict)
-            else responses_api_response.id
-        )
+        if isinstance(responses_api_response, dict):
+            response_id = responses_api_response.get("id")
+        else:
+            response_id = getattr(responses_api_response, "id", None)
+        
+        # If no response_id, return the response as-is (likely an error response)
+        if response_id is None:
+            return responses_api_response
 
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
