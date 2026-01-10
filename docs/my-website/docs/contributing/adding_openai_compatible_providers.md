@@ -4,9 +4,28 @@ For simple OpenAI-compatible providers (like Hyperbolic, Nscale, etc.), you can 
 
 ## Quick Start
 
+### Option 1: Edit Local JSON File
 1. Edit `litellm/llms/openai_like/providers.json`
 2. Add your provider configuration
 3. Test with: `litellm.completion(model="your_provider/model-name", ...)`
+
+### Option 2: Load from Environment Variable (JSON String)
+1. Set the `LITELLM_CUSTOM_PROVIDERS` environment variable with your JSON configuration
+2. Start LiteLLM - it will automatically load and merge your custom providers
+
+```bash
+export LITELLM_CUSTOM_PROVIDERS='{"my_provider": {"base_url": "https://api.myprovider.com/v1", "api_key_env": "MY_PROVIDER_KEY"}}'
+```
+
+This is useful for containerized deployments, CI/CD, or when you want inline configuration.
+
+### Option 3: Load from Custom URL
+1. Create a custom JSON file with your provider configurations
+2. Host it at a URL (can be a local file server, cloud storage, or any HTTP endpoint)
+3. Set the environment variable: `LITELLM_CUSTOM_PROVIDERS_URL=https://example.com/my-providers.json`
+4. Start LiteLLM - it will automatically load and merge your custom providers
+
+This is useful when you want to define custom providers without modifying LiteLLM's source code or waiting for PR approval.
 
 ## Basic Configuration
 
@@ -82,6 +101,55 @@ That's it! The provider is now available.
 
 ## Usage
 
+### Using Custom Providers from JSON String
+
+```python
+import litellm
+import os
+import json
+
+# Define providers inline
+custom_providers = {
+    "my_provider": {
+        "base_url": "https://api.myprovider.com/v1",
+        "api_key_env": "MY_PROVIDER_API_KEY"
+    }
+}
+
+# Set as environment variable
+os.environ["LITELLM_CUSTOM_PROVIDERS"] = json.dumps(custom_providers)
+
+# Set your API key
+os.environ["MY_PROVIDER_API_KEY"] = "your-key-here"
+
+# Use the provider
+response = litellm.completion(
+    model="my_provider/model-name",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+### Using Custom Providers from URL
+
+```python
+import litellm
+import os
+
+# Set the URL to your custom providers JSON
+os.environ["LITELLM_CUSTOM_PROVIDERS_URL"] = "https://example.com/my-providers.json"
+
+# Set your API key
+os.environ["YOUR_PROVIDER_API_KEY"] = "your-key-here"
+
+# Use the provider
+response = litellm.completion(
+    model="your_provider/model-name",
+    messages=[{"role": "user", "content": "Hello"}],
+)
+```
+
+### Using Built-in Providers
+
 ```python
 import litellm
 import os
@@ -95,6 +163,20 @@ response = litellm.completion(
     messages=[{"role": "user", "content": "Hello"}],
 )
 ```
+
+## Custom Provider Loading Behavior
+
+**Loading order:**
+1. Local providers from `providers.json` are loaded first
+2. If `LITELLM_CUSTOM_PROVIDERS` is set, providers from the JSON string are merged
+3. If `LITELLM_CUSTOM_PROVIDERS_URL` is set, providers from the URL are merged
+
+**Key behaviors:**
+- Custom providers can overwrite local providers with the same name
+- Both environment variables can be used together
+- If JSON string is invalid, LiteLLM logs a warning and continues
+- If URL is unreachable or returns invalid JSON, LiteLLM logs a warning and continues with local providers only
+- The fetch/parse happens once at startup (providers are cached)
 
 ## When to Use Python Instead
 
