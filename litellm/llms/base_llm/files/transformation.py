@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 import httpx
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
@@ -75,7 +76,15 @@ class BaseFilesConfig(BaseConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, str, bytes]:
+    ) -> Union[dict, str, bytes, "TwoStepFileUploadConfig"]:
+        """
+        Transform OpenAI-style file creation request into provider-specific format.
+        
+        Returns:
+            - dict: For pre-signed single-step uploads (e.g., Bedrock S3)
+            - str/bytes: For traditional file uploads
+            - TwoStepFileUploadConfig: For two-step upload process (e.g., Manus, GCS)
+        """
         pass
 
     @abstractmethod
