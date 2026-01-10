@@ -3566,8 +3566,12 @@ jobs:
               --branch preview/commit-${CIRCLE_SHA1:0:7} \
               --database-name yuneng-trial-db \
               --role neondb_owner)
-
+            echo $DB_URL
             echo "export E2E_UI_TEST_DATABASE_URL=$DB_URL" >> $BASH_ENV
+      - run:
+          name: Echo DB URL
+          command: |
+            echo $E2E_UI_TEST_DATABASE_URL
 
   e2e_ui_testing:
     machine:
