@@ -2973,6 +2973,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     custom_llm_provider="",
     drop_params: Optional[bool] = None,
     additional_drop_params: Optional[List[str]] = None,
+    official_base_url: bool = False,
     **kwargs,
 ):
     # Lazy load get_supported_openai_params
@@ -3045,6 +3046,7 @@ def get_optional_params_embeddings(  # noqa: PLR0915
 
         if (
             model is not None
+            and official_base_url
             and "text-embedding-3" not in model
             and "dimensions" in non_default_params.keys()
         ):
@@ -3299,6 +3301,30 @@ def get_optional_params_embeddings(  # noqa: PLR0915
 
     return final_params
 
+def is_official_llm_provider_api_base(
+    custom_llm_provider: str,
+    api_base: str
+) -> bool:
+    """
+    Check if the api base is the official url for the provider
+
+    Relevant Issues: https://github.com/BerriAI/litellm/issues/11940
+    """
+    default_url = get_official_api_base(custom_llm_provider=custom_llm_provider)
+    return default_url == api_base
+
+def get_official_api_base(
+    custom_llm_provider: str,
+) -> Optional[str]:
+    """
+    Get the official api base for the llm provider
+
+    Relevant Issues: https://github.com/BerriAI/litellm/issues/11940
+    """
+    if custom_llm_provider == "openai":
+        return "https://api.openai.com/v1"
+    else:
+        return None
 
 def _remove_additional_properties(schema):
     """
