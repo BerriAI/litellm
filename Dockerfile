@@ -12,7 +12,7 @@ WORKDIR /app
 USER root
 
 # Install build dependencies
-RUN apk add --no-cache bash gcc py3-pip python3 python3-dev openssl openssl-dev
+RUN apk add --no-cache bash gcc python3-dev openssl openssl-dev
 
 RUN python -m pip install build
 
@@ -46,7 +46,7 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 USER root
 
 # Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip
+RUN apk add --no-cache bash openssl tzdata nodejs npm
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
