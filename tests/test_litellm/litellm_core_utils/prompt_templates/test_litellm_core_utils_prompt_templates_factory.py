@@ -832,8 +832,14 @@ def test_bedrock_image_processor_content_type_document_formats():
     test_cases = [
         ("https://example.com/doc.pdf", "application/pdf"),
         ("https://example.com/sheet.csv", "text/csv"),
-        ("https://example.com/doc.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
-        ("https://example.com/sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        (
+            "https://example.com/doc.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ),
+        (
+            "https://example.com/sheet.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
         ("https://example.com/page.html", "text/html"),
         ("https://example.com/readme.txt", "text/plain"),
     ]
@@ -842,7 +848,9 @@ def test_bedrock_image_processor_content_type_document_formats():
         _, content_type = BedrockImageProcessor._post_call_image_processing(
             mock_response, url
         )
-        assert content_type == expected_mime, f"Expected {expected_mime} for {url}, got {content_type}"
+        assert (
+            content_type == expected_mime
+        ), f"Expected {expected_mime} for {url}, got {content_type}"
 
 
 def test_bedrock_image_processor_content_type_s3_pdf_with_query():
@@ -908,6 +916,45 @@ def test_bedrock_tools_pt_empty_description():
     assert tool_spec is not None
     assert tool_spec.get("name") == "get_weather"
     assert tool_spec.get("description") == "get_weather"
+
+
+def test_bedrock_tools_pt_none_parameters():
+    """
+    Test that _bedrock_tools_pt handles none value of the key "parameters" correctly.
+
+    Some agent frameworks may produce a tool having a None value of its "parameters" key.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather1",
+                "description": "Get current weather",
+                "parameters": None,
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather2",
+                "description": "Get current weather",
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools=tools)
+
+    # Verify that the result is a list with two tools
+    assert len(result) == 2
+
+    # Verify that the description falls back to the function name
+    for r in result:
+        tool_spec = r.get("toolSpec")
+        assert tool_spec is not None
+        assert tool_spec.get("description") == "Get current weather"
+
 
 def test_bedrock_create_bedrock_block_deterministic_document_hash():
     """
@@ -1108,7 +1155,9 @@ def test_bedrock_create_bedrock_block_document_name_format():
 
     # Check format: DocumentPDFmessages_{16_hex_chars}_{format}
     pattern = r"^DocumentPDFmessages_[0-9a-f]{16}_pdf$"
-    assert re.match(pattern, document_name), f"Document name format mismatch: {document_name}"
+    assert re.match(
+        pattern, document_name
+    ), f"Document name format mismatch: {document_name}"
 
 
 def test_bedrock_create_bedrock_block_different_document_formats():
