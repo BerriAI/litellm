@@ -4486,21 +4486,9 @@ class Router:
 
         if hasattr(original_exception, "message"):
             # add the available fallbacks to the exception
-            deployment_info = ""
-            if kwargs is not None:
-                metadata = kwargs.get('metadata', {})
-                if metadata and 'deployment' in metadata:
-                    deployment_info = f"\nUsed Deployment: {metadata['deployment']}"
-                    if 'model_info' in metadata:
-                        model_info = metadata['model_info']
-                        if isinstance(model_info, dict):
-                            deployment_info += f"\nDeployment ID: {model_info.get('id', 'unknown')}"
-            
-            original_exception.message += (  # type: ignore
-                f". Received Model Group={model_group}"
-                f"\nAvailable Model Group Fallbacks={fallback_model_group}"
-                f"{deployment_info}"
-                f"\n\n💡 Tip: If using wildcard patterns (e.g., 'openai/*'), ensure all matching deployments have credentials with access to this model."
+            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
+                model_group,
+                fallback_model_group,
             )
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += (  # type: ignore
@@ -7679,10 +7667,6 @@ class Router:
             )
 
             if pattern_deployments:
-                verbose_router_logger.debug(
-                    f"Pattern match for model='{model}': Found {len(pattern_deployments)} deployments. "
-                    f"Deployment IDs: {[d.get('model_info', {}).get('id', 'unknown') for d in pattern_deployments]}"
-                )
                 return model, pattern_deployments
 
             if (
