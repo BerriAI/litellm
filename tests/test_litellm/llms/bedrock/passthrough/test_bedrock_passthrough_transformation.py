@@ -175,3 +175,132 @@ def test_format_url_handles_trailing_slash_normalization():
     assert str(result_with_slash) == "http://proxy.com/bedrockproxy/model/test/invoke"
 
 
+def test_bedrock_passthrough_with_application_inference_profile():
+    """
+    Test get_complete_url with Application Inference Profile ARN as model_id.
+    
+    This test verifies the fix for GitHub issue #18761 where Bedrock passthrough
+    was not working with Application Inference Profiles. The model_id (ARN) should
+    replace the translated model name in the endpoint URL.
+    """
+    config = BedrockPassthroughConfig()
+    
+    model = "anthropic.claude-sonnet-4-20250514-v1:0"
+    model_id = "arn:aws:bedrock:eu-west-1:123456789:application-inference-profile/abcdefgh1234"
+    endpoint = f"model/{model}/invoke"
+    
+    with patch.object(config, '_get_aws_region_name', return_value="eu-west-1"), \
+         patch.object(config, 'get_runtime_endpoint', return_value=(
+             "https://bedrock-runtime.eu-west-1.amazonaws.com",
+             "https://bedrock-runtime.eu-west-1.amazonaws.com"
+         )):
+        
+        url, api_base = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=model,
+            endpoint=endpoint,
+            request_query_params=None,
+            litellm_params={"model_id": model_id, "aws_region_name": "eu-west-1"}
+        )
+        
+        # Verify that the URL contains the model_id (ARN) instead of the model name
+        url_str = str(url)
+        assert model_id in url_str, f"Expected model_id ARN in URL, but got: {url_str}"
+        assert model not in url_str, f"Model name should be replaced by model_id, but got: {url_str}"
+        assert "/invoke" in url_str, "Expected /invoke action in URL"
+        
+        # Verify the complete URL structure
+        expected_url = f"https://bedrock-runtime.eu-west-1.amazonaws.com/model/{model_id}/invoke"
+        assert url_str == expected_url, f"Expected {expected_url}, but got: {url_str}"
+
+
+def test_bedrock_passthrough_with_inference_profile_converse_endpoint():
+    """Test Application Inference Profile with converse endpoint"""
+    config = BedrockPassthroughConfig()
+    
+    model = "anthropic.claude-sonnet-4-20250514-v1:0"
+    model_id = "arn:aws:bedrock:us-east-1:123456789:application-inference-profile/xyz123"
+    endpoint = f"model/{model}/converse"
+    
+    with patch.object(config, '_get_aws_region_name', return_value="us-east-1"), \
+         patch.object(config, 'get_runtime_endpoint', return_value=(
+             "https://bedrock-runtime.us-east-1.amazonaws.com",
+             "https://bedrock-runtime.us-east-1.amazonaws.com"
+         )):
+        
+        url, api_base = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=model,
+            endpoint=endpoint,
+            request_query_params=None,
+            litellm_params={"model_id": model_id}
+        )
+        
+        url_str = str(url)
+        assert model_id in url_str
+        assert "/converse" in url_str
+        assert model not in url_str
+
+
+def test_bedrock_passthrough_without_model_id_backward_compatibility():
+    """
+    Test that passthrough still works without model_id (backward compatibility).
+    
+    When model_id is not provided, the system should use the model name as before.
+    """
+    config = BedrockPassthroughConfig()
+    
+    model = "anthropic.claude-3-sonnet"
+    endpoint = f"model/{model}/invoke"
+    
+    with patch.object(config, '_get_aws_region_name', return_value="us-east-1"), \
+         patch.object(config, 'get_runtime_endpoint', return_value=(
+             "https://bedrock-runtime.us-east-1.amazonaws.com",
+             "https://bedrock-runtime.us-east-1.amazonaws.com"
+         )):
+        
+        url, api_base = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=model,
+            endpoint=endpoint,
+            request_query_params=None,
+            litellm_params={}  # No model_id provided
+        )
+        
+        # Verify that the URL contains the model name (not replaced)
+        url_str = str(url)
+        assert model in url_str, f"Expected model name in URL when model_id not provided, but got: {url_str}"
+        expected_url = f"https://bedrock-runtime.us-east-1.amazonaws.com/model/{model}/invoke"
+        assert url_str == expected_url
+
+
+def test_bedrock_passthrough_region_extraction_from_inference_profile_arn():
+    """Test that AWS region is correctly extracted from Application Inference Profile ARN"""
+    config = BedrockPassthroughConfig()
+    
+    model = "anthropic.claude-sonnet-4-20250514-v1:0"
+    # ARN contains us-west-2 region
+    model_id = "arn:aws:bedrock:us-west-2:123456789:application-inference-profile/test123"
+    endpoint = f"model/{model}/invoke"
+    
+    # Don't provide aws_region_name in litellm_params to test ARN extraction
+    with patch.object(config, 'get_runtime_endpoint', return_value=(
+             "https://bedrock-runtime.us-west-2.amazonaws.com",
+             "https://bedrock-runtime.us-west-2.amazonaws.com"
+         )):
+        
+        url, api_base = config.get_complete_url(
+            api_base=None,
+            api_key=None,
+            model=model,
+            endpoint=endpoint,
+            request_query_params=None,
+            litellm_params={"model_id": model_id}  # Region should be extracted from ARN
+        )
+        
+        # Verify that the region from ARN is used in the base URL
+        assert "us-west-2" in api_base, f"Expected region 'us-west-2' from ARN in base URL, but got: {api_base}"
+

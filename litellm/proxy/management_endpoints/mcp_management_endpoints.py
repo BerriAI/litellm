@@ -36,12 +36,19 @@ from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
+    get_server_prefix,
     validate_and_normalize_mcp_server_payload,
 )
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
+
 MCP_AVAILABLE: bool = True
+
 TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
+DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
+LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
+LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
+
 try:
     importlib.import_module("mcp")
 except ImportError as e:
@@ -57,6 +64,7 @@ if MCP_AVAILABLE:
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        get_request_base_url,
         authorize_with_server,
         exchange_token_with_server,
         register_client_with_server,
@@ -88,6 +96,66 @@ if MCP_AVAILABLE:
     class _TemporaryMCPServerEntry:
         server: MCPServer
         expires_at: datetime
+
+    def _is_public_registry_enabled() -> bool:
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
+
+        return bool(proxy_general_settings.get("enable_mcp_registry"))
+
+    def _build_registry_remote_url(base_url: str, path: str) -> str:
+        normalized_base = base_url.rstrip("/")
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        return f"{normalized_base}{normalized_path}"
+
+    def _build_mcp_registry_server_name(server: MCPServer) -> str:
+        if server.alias:
+            return server.alias
+        if server.server_name:
+            return server.server_name
+        return server.server_id
+
+    def _build_mcp_registry_entry_for_server(
+        server: MCPServer, base_url: str
+    ) -> Dict[str, Any]:
+        server_name = _build_mcp_registry_server_name(server)
+        title = server_name
+        description = server_name
+        version = DEFAULT_MCP_REGISTRY_VERSION
+
+        server_prefix = get_server_prefix(server)
+        if not server_prefix:
+            raise ValueError("MCP server prefix is missing")
+        remote_url = _build_registry_remote_url(base_url, f"/{server_prefix}/mcp")
+
+        return {
+            "name": server_name,
+            "title": title,
+            "description": description,
+            "version": version,
+            "remotes": [
+                {
+                    "type": "streamable-http",
+                    "url": remote_url,
+                }
+            ],
+        }
+
+    def _build_builtin_registry_entry(base_url: str) -> Dict[str, Any]:
+        remote_url = _build_registry_remote_url(base_url, "/mcp")
+        return {
+            "name": LITELLM_MCP_SERVER_NAME,
+            "title": LITELLM_MCP_SERVER_NAME,
+            "description": LITELLM_MCP_SERVER_DESCRIPTION,
+            "version": DEFAULT_MCP_REGISTRY_VERSION,
+            "remotes": [
+                {
+                    "type": "streamable-http",
+                    "url": remote_url,
+                }
+            ],
+        }
 
     _temporary_mcp_servers: Dict[str, _TemporaryMCPServerEntry] = {}
 
@@ -302,15 +370,42 @@ if MCP_AVAILABLE:
         access_groups_list = sorted(list(access_groups))
         return {"access_groups": access_groups_list}
 
+    @router.get(
+        "/registry.json",
+        tags=["mcp"],
+        description="MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry",
+    )
+    async def get_mcp_registry(request: Request):
+        if not _is_public_registry_enabled():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="MCP registry is not enabled",
+            )
+
+        base_url = get_request_base_url(request)
+        registry_servers: List[Dict[str, Any]] = []
+        registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
+
+        registered_servers = list(global_mcp_server_manager.get_registry().values())
+        registered_servers.sort(key=_build_mcp_registry_server_name)
+
+        for server in registered_servers:
+            try:
+                entry = _build_mcp_registry_entry_for_server(server, base_url)
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Skipping MCP server {getattr(server, 'server_id', 'unknown')} in registry: {e}"
+                )
+                continue
+            registry_servers.append({"server": entry})
+
+        return {"servers": registry_servers}
+
     ## FastAPI Routes
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
-        proxy_general_settings: dict = {}
-        try:
-            from litellm.proxy.proxy_server import (
-                general_settings as proxy_general_settings,
-            )
-        except Exception:
-            pass
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
 
         mode = proxy_general_settings.get("user_mcp_management_mode")
         if mode == "view_all":

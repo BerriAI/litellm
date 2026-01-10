@@ -4,6 +4,7 @@ ROUTER SETTINGS MANAGEMENT
 Endpoints for accessing router configuration and metadata
 
 GET /router/settings - Get router configuration including available routing strategies
+GET /router/fields - Get router settings field definitions without values (for UI rendering)
 """
 
 import inspect
@@ -31,6 +32,15 @@ class RouterSettingsResponse(BaseModel):
     )
     current_values: Dict[str, Any] = Field(
         description="Current values of router settings"
+    )
+    routing_strategy_descriptions: Dict[str, str] = Field(
+        description="Descriptions for each routing strategy option"
+    )
+
+
+class RouterFieldsResponse(BaseModel):
+    fields: List[RouterSettingsField] = Field(
+        description="List of all configurable router settings with metadata (without field values)"
     )
     routing_strategy_descriptions: Dict[str, str] = Field(
         description="Descriptions for each routing strategy option"
@@ -117,6 +127,56 @@ async def get_router_settings(
     except Exception as e:
         verbose_proxy_logger.error(
             f"Error fetching router settings: {str(e)}"
+        )
+        raise
+
+
+@router.get(
+    "/router/fields",
+    tags=["Router Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=RouterFieldsResponse,
+)
+async def get_router_fields(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get router settings field definitions without values.
+    
+    Returns only the field metadata (type, description, default, options) without
+    populating field_value. This is useful for UI components that need to know
+    what fields to render, but will get the actual values from a different endpoint.
+    
+    Returns:
+    - fields: List of all configurable router settings with their metadata (type, description, default, options)
+              The routing_strategy field includes available options extracted from the Router class
+              Note: field_value will be None for all fields
+    - routing_strategy_descriptions: Descriptions for each routing strategy option
+    """
+    try:
+        # Get available routing strategies dynamically from Router class
+        available_routing_strategies = _get_routing_strategies_from_router_class()
+        
+        # Get router settings fields from types file
+        router_fields = [field.model_copy(deep=True) for field in ROUTER_SETTINGS_FIELDS]
+        
+        # Populate routing_strategy field with available options
+        for field in router_fields:
+            if field.field_name == "routing_strategy":
+                field.options = available_routing_strategies
+                break
+        
+        # Ensure field_value is None for all fields (don't populate values)
+        for field in router_fields:
+            field.field_value = None
+        
+        return RouterFieldsResponse(
+            fields=router_fields,
+            routing_strategy_descriptions=ROUTING_STRATEGY_DESCRIPTIONS,
+        )
+    except Exception as e:
+        verbose_proxy_logger.error(
+            f"Error fetching router fields: {str(e)}"
         )
         raise
 

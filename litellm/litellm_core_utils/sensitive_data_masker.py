@@ -1,4 +1,5 @@
-from typing import Any, Dict, Optional, Set
+from collections.abc import Mapping
+from typing import Any, Dict, List, Optional, Set
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
 
@@ -17,6 +18,7 @@ class SensitiveDataMasker:
             "key",
             "token",
             "auth",
+            "authorization",
             "credential",
             "access",
             "private",
@@ -42,21 +44,51 @@ class SensitiveDataMasker:
         else:
             return f"{value_str[:self.visible_prefix]}{self.mask_char * masked_length}{value_str[-self.visible_suffix:]}"
 
-    def is_sensitive_key(self, key: str, excluded_keys: Optional[Set[str]] = None) -> bool:
+    def is_sensitive_key(
+        self, key: str, excluded_keys: Optional[Set[str]] = None
+    ) -> bool:
         # Check if key is in excluded_keys first (exact match)
         if excluded_keys and key in excluded_keys:
             return False
-        
+
         key_lower = str(key).lower()
-        # Split on underscores and check if any segment matches the pattern
+        # Split on underscores/hyphens and check if any segment matches the pattern
         # This avoids false positives like "max_tokens" matching "token"
         # but still catches "api_key", "access_token", etc.
-        key_segments = key_lower.replace('-', '_').split('_')
-        result = any(
-            pattern in key_segments
-            for pattern in self.sensitive_patterns
-        )
+        key_segments = key_lower.replace("-", "_").split("_")
+        result = any(pattern in key_segments for pattern in self.sensitive_patterns)
         return result
+
+    def _mask_sequence(
+        self,
+        values: List[Any],
+        depth: int,
+        max_depth: int,
+        excluded_keys: Optional[Set[str]],
+        key_is_sensitive: bool,
+    ) -> List[Any]:
+        masked_items: List[Any] = []
+        if depth >= max_depth:
+            return values
+
+        for item in values:
+            if isinstance(item, Mapping):
+                masked_items.append(
+                    self.mask_dict(dict(item), depth + 1, max_depth, excluded_keys)
+                )
+            elif isinstance(item, list):
+                masked_items.append(
+                    self._mask_sequence(
+                        item, depth + 1, max_depth, excluded_keys, key_is_sensitive
+                    )
+                )
+            elif key_is_sensitive and isinstance(item, str):
+                masked_items.append(self._mask_value(item))
+            else:
+                masked_items.append(
+                    item if isinstance(item, (int, float, bool, str, list)) else str(item)
+                )
+        return masked_items
 
     def mask_dict(
         self,
@@ -71,11 +103,20 @@ class SensitiveDataMasker:
         masked_data: Dict[str, Any] = {}
         for k, v in data.items():
             try:
-                if isinstance(v, dict):
-                    masked_data[k] = self.mask_dict(v, depth + 1, max_depth, excluded_keys)
+                key_is_sensitive = self.is_sensitive_key(k, excluded_keys)
+                if isinstance(v, Mapping):
+                    masked_data[k] = self.mask_dict(
+                        dict(v), depth + 1, max_depth, excluded_keys
+                    )
+                elif isinstance(v, list):
+                    masked_data[k] = self._mask_sequence(
+                        v, depth + 1, max_depth, excluded_keys, key_is_sensitive
+                    )
                 elif hasattr(v, "__dict__") and not isinstance(v, type):
-                    masked_data[k] = self.mask_dict(vars(v), depth + 1, max_depth, excluded_keys)
-                elif self.is_sensitive_key(k, excluded_keys):
+                    masked_data[k] = self.mask_dict(
+                        vars(v), depth + 1, max_depth, excluded_keys
+                    )
+                elif key_is_sensitive:
                     str_value = str(v) if v is not None else ""
                     masked_data[k] = self._mask_value(str_value)
                 else:

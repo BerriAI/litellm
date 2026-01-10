@@ -146,6 +146,7 @@ router_settings:
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
   disable_cooldowns: True                  # bool - Disable cooldowns for all models 
   enable_tag_filtering: True                # bool - Use tag based routing for requests
+  tag_filtering_match_any: True             # bool - Tag matching behavior (only when enable_tag_filtering=true). `true`: match if deployment has ANY requested tag; `false`: match only if deployment has ALL requested tags
   retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
     "TimeoutErrorRetries": 3,
@@ -293,6 +294,7 @@ router_settings:
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
   disable_cooldowns: True                  # bool - Disable cooldowns for all models
   enable_tag_filtering: True                # bool - Use tag based routing for requests
+  tag_filtering_match_any: True             # bool - Tag matching behavior (only when enable_tag_filtering=true). `true`: match if deployment has ANY requested tag; `false`: match only if deployment has ALL requested tags
   retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
     "TimeoutErrorRetries": 3,
@@ -322,6 +324,7 @@ router_settings:
 | content_policy_fallbacks | array of objects | Specifies fallback models for content policy violations. [More information here](reliability) |
 | fallbacks | array of objects | Specifies fallback models for all types of errors. [More information here](reliability) |
 | enable_tag_filtering | boolean | If true, uses tag based routing for requests [Tag Based Routing](tag_routing) |
+| tag_filtering_match_any | boolean | Tag matching behavior (only when enable_tag_filtering=true). `true`: match if deployment has ANY requested tag; `false`: match only if deployment has ALL requested tags |
 | cooldown_time | integer | The duration (in seconds) to cooldown a model if it exceeds the allowed failures. |
 | disable_cooldowns | boolean | If true, disables cooldowns for all models. [More information here](reliability) |
 | retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
@@ -578,6 +581,18 @@ router_settings:
 | FIREWORKS_AI_56_B_MOE | Size parameter for Fireworks AI 56B MOE model. Default is 56
 | FIREWORKS_AI_80_B | Size parameter for Fireworks AI 80B model. Default is 80
 | FIREWORKS_AI_176_B_MOE | Size parameter for Fireworks AI 176B MOE model. Default is 176
+| FOCUS_PROVIDER | Destination provider for Focus exports (e.g., `s3`). Defaults to `s3`.
+| FOCUS_FORMAT | Output format for Focus exports. Defaults to `parquet`.
+| FOCUS_FREQUENCY | Frequency for scheduled Focus exports (`hourly`, `daily`, or `interval`). Defaults to `hourly`.
+| FOCUS_CRON_OFFSET | Minute offset used when scheduling hourly/daily Focus exports. Defaults to `5` minutes.
+| FOCUS_INTERVAL_SECONDS | Interval (in seconds) for Focus exports when `frequency` is `interval`.
+| FOCUS_PREFIX | Object key prefix (or folder) used when uploading Focus export files. Defaults to `focus_exports`.
+| FOCUS_S3_BUCKET_NAME | S3 bucket to upload Focus export files when using the S3 destination.
+| FOCUS_S3_REGION_NAME | AWS region for the Focus export S3 bucket.
+| FOCUS_S3_ENDPOINT_URL | Custom endpoint for the Focus export S3 client (optional; useful for S3-compatible storage).
+| FOCUS_S3_ACCESS_KEY | AWS access key ID used by the Focus export S3 client.
+| FOCUS_S3_SECRET_KEY | AWS secret access key used by the Focus export S3 client.
+| FOCUS_S3_SESSION_TOKEN | AWS session token used by the Focus export S3 client (optional).
 | FUNCTION_DEFINITION_TOKEN_COUNT | Token count for function definitions. Default is 9
 | GALILEO_BASE_URL | Base URL for Galileo platform
 | GALILEO_PASSWORD | Password for Galileo authentication
