@@ -46,7 +46,10 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    add_deployment_guardrails_to_metadata,
+    add_litellm_data_to_request,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 
@@ -519,6 +522,14 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        # Add deployment-level guardrails to metadata BEFORE pre_call_hook
+        # This fixes GitHub issue #18363 - guardrails in litellm_params weren't being applied
+        add_deployment_guardrails_to_metadata(
+            data=self.data,
+            llm_router=llm_router,
+            model_name=self.data.get("model"),
+        )
 
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
