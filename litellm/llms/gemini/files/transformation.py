@@ -7,6 +7,7 @@ import time
 from typing import List, Optional
 
 import httpx
+from openai.types.file_deleted import FileDeleted
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
@@ -17,6 +18,7 @@ from litellm.llms.base_llm.files.transformation import (
 from litellm.types.llms.gemini import GeminiCreateFilesResponseObject
 from litellm.types.llms.openai import (
     CreateFileRequest,
+    HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
 )
@@ -171,3 +173,67 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         except Exception as e:
             verbose_logger.exception(f"Error parsing file upload response: {str(e)}")
             raise ValueError(f"Error parsing file upload response: {str(e)}")
+
+    def transform_retrieve_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file retrieval")
+
+    def transform_retrieve_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> OpenAIFileObject:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file retrieval")
+
+    def transform_delete_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file deletion")
+
+    def transform_delete_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> FileDeleted:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file deletion")
+
+    def transform_list_files_request(
+        self,
+        purpose: Optional[str],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
+
+    def transform_list_files_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> List[OpenAIFileObject]:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file listing")
+
+    def transform_file_content_request(
+        self,
+        file_content_request,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
+
+    def transform_file_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> HttpxBinaryResponseContent:
+        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file content retrieval")
