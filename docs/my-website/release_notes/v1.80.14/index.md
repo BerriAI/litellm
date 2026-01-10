@@ -1,6 +1,6 @@
 ---
-title: "[Preview] v1.80.13 - Google Interactions API"
-slug: "v1-80-13"
+title: "[Preview] v1.80.14 - Manus API Support"
+slug: "v1-80-14"
 date: 2026-01-10T10:00:00
 authors:
   - name: Krrish Dholakia
