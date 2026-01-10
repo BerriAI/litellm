@@ -139,4 +139,12 @@ def get_litellm_params(
         "aws_external_id": kwargs.get("aws_external_id"),
         "aws_bedrock_runtime_endpoint": kwargs.get("aws_bedrock_runtime_endpoint"),
     }
+
+    # Preserve any extra/custom params passed via kwargs
+    # This ensures custom params defined in config.yaml (e.g., context_id, use_case)
+    # are passed through to custom handlers. Fixes issue #18216.
+    for key, value in kwargs.items():
+        if key not in litellm_params and value is not None:
+            litellm_params[key] = value
+
     return litellm_params
