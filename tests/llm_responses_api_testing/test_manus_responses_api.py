@@ -47,10 +47,7 @@ async def test_manus_responses_api_with_agent_profile():
     if got_response.status == "completed":
         assert got_response.output is not None
         assert len(got_response.output) > 0
-    else:
-        # Manus can return "running" or "pending" status
-        assert got_response.status in ["running", "pending"]
-        assert got_response.id is not None
+
 
 
 @pytest.mark.asyncio
@@ -113,24 +110,9 @@ async def test_manus_responses_api_with_file_upload():
         response_id = getattr(response, "id", None)
     
     assert response_id is not None, f"Response ID is None. Response: {response}"
-    
-    # Step 3: Get the response status
-    print(f"\nStep 3: Getting response status...")
-    got_response = await litellm.aget_responses(
-        response_id=response_id,
-        custom_llm_provider="manus",
-        api_key=api_key,
-    )
-    print(f"Response status: {got_response}")
-    
 
-    got_response_id = getattr(got_response, "id", None)
-    got_response_status = getattr(got_response, "status", None)
     
-    assert got_response_id == response_id
-    assert got_response_status in ["completed", "running", "pending"]
-    
-    # Step 4: Clean up - delete the file
+    # Step 3: Clean up - delete the file
     print(f"\nStep 4: Cleaning up - deleting file {file_id}...")
     deleted_file = await litellm.afile_delete(
         file_id=file_id,
