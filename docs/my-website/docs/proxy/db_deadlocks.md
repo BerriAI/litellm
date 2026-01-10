@@ -4,6 +4,12 @@ import TabItem from '@theme/TabItem';
 
 # High Availability Setup (Resolve DB Deadlocks)
 
+:::tip Essential for Production
+
+This configuration is **required** for production deployments handling 1000+ requests per second. Without Redis configured, you may experience PostgreSQL connection exhaustion (`FATAL: sorry, too many clients already`).
+
+:::
+
 Resolve any Database Deadlocks you see in high traffic by using this setup
 
 ## What causes the problem?
