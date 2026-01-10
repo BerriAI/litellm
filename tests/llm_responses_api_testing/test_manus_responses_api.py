@@ -47,6 +47,95 @@ async def test_manus_responses_api_with_agent_profile():
         # Manus can return "running" or "pending" status
         assert got_response.status in ["running", "pending"]
         assert got_response.id is not None
+
+
+@pytest.mark.asyncio
+async def test_manus_responses_api_with_file_upload():
+    """
+    Test that uploads a file via Files API and then passes it to Responses API.
+    """
+    litellm._turn_on_debug()
     
+    api_key = os.getenv("MANUS_API_KEY")
+    if api_key is None:
+        pytest.skip("MANUS_API_KEY not set")
+    
+    # Step 1: Upload a file
+    test_content = b"Warren Buffett's 2023 Letter to Shareholders\n\nKey Points:\n1. Long-term value creation\n2. Capital allocation strategy\n3. Market volatility perspective"
+    test_filename = "buffett_letter_summary.txt"
+    
+    print("Step 1: Uploading file...")
+    uploaded_file = await litellm.acreate_file(
+        file=(test_filename, test_content),
+        purpose="assistants",
+        custom_llm_provider="manus",
+        api_key=api_key,
+    )
+    print(f"Uploaded file: {uploaded_file}")
+    assert uploaded_file.id is not None
+    file_id = uploaded_file.id
+    
+    # Step 2: Create a response with the uploaded file
+    print(f"\nStep 2: Creating response with file {file_id}...")
+    response = await litellm.aresponses(
+        model="manus/manus-1.6-lite",
+        input=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": "Summarize the key points from this letter.",
+                    },
+                    {
+                        "type": "input_file",
+                        "file_id": file_id,
+                    },
+                ],
+            },
+        ],
+        api_key=api_key,
+        max_output_tokens=100,
+    )
+    
+    print(f"Response created: {response}")
+    print(f"Response type: {type(response)}")
+    print(f"Response has id: {hasattr(response, 'id')}")
+    
+    # Handle both dict and ResponsesAPIResponse object
+    if isinstance(response, dict):
+        response_id = response.get("id")
+    else:
+        response_id = getattr(response, "id", None)
+    
+    assert response_id is not None, f"Response ID is None. Response: {response}"
+    
+    # Step 3: Get the response status
+    print(f"\nStep 3: Getting response status...")
+    got_response = await litellm.aget_responses(
+        response_id=response_id,
+        custom_llm_provider="manus",
+        api_key=api_key,
+    )
+    print(f"Response status: {got_response}")
+    
+
+    got_response_id = getattr(got_response, "id", None)
+    got_response_status = getattr(got_response, "status", None)
+    
+    assert got_response_id == response_id
+    assert got_response_status in ["completed", "running", "pending"]
+    
+    # Step 4: Clean up - delete the file
+    print(f"\nStep 4: Cleaning up - deleting file {file_id}...")
+    deleted_file = await litellm.afile_delete(
+        file_id=file_id,
+        custom_llm_provider="manus",
+        api_key=api_key,
+    )
+    print(f"Deleted file: {deleted_file}")
+    assert deleted_file.deleted is True
+    
+    print("\n✅ File upload and responses API integration test passed!")
 
 
