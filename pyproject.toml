@@ -152,6 +152,7 @@ opentelemetry-sdk = "1.25.0"
 opentelemetry-exporter-otlp = "1.25.0"
 langfuse = "^2.45.0"
 fastapi-offline = "^1.7.3"
+openapi-core = "^0.19.0"
 
 [tool.poetry.group.proxy-dev.dependencies]
 prisma = "0.11.0"

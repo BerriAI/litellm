@@ -12,6 +12,15 @@ import pytest
 from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 
 
+# Helper to check if litellm_enterprise is available
+def _is_enterprise_available():
+    try:
+        import litellm_enterprise
+        return True
+    except ImportError:
+        return False
+
+
 class TestResponsesBackgroundCostTracking:
     """Integration tests for responses API background cost tracking"""
 
@@ -258,6 +267,10 @@ class TestResponsesBackgroundCostTracking:
         assert mock_managed_files_obj.store_unified_object_id.called
 
 
+@pytest.mark.skipif(
+    not _is_enterprise_available(),
+    reason="litellm_enterprise module not available (requires enterprise)"
+)
 class TestCheckResponsesCost:
     """Tests for the CheckResponsesCost polling class"""
 
