@@ -442,6 +442,24 @@ async def get_key_info(session: aiohttp.ClientSession, key: str) -> Dict[str, An
         return await response.json()
 
 
+async def get_user_info(session: aiohttp.ClientSession, user_id: str) -> Dict[str, Any]:
+    """Fetch user info and return the response"""
+    from urllib.parse import quote
+
+    # URL encode user_id to handle special characters
+    encoded_user_id = quote(user_id, safe="")
+    url = f"http://0.0.0.0:4000/user/info?user_id={encoded_user_id}"
+    headers = {
+        "Authorization": "Bearer sk-1234",
+    }
+
+    async with session.get(url, headers=headers) as response:
+        assert (
+            response.status == 200
+        ), f"Failed to get user info. Status: {response.status}"
+        return await response.json()
+
+
 def extract_key_budget_metrics(metrics_text: str, key_id: str) -> Dict[str, float]:
     """Extract budget-related metrics for a specific key"""
     import re
@@ -466,6 +484,33 @@ def extract_key_budget_metrics(metrics_text: str, key_id: str) -> Dict[str, floa
     return metrics
 
 
+def extract_user_budget_metrics(metrics_text: str, user_id: str) -> Dict[str, float]:
+    """Extract budget-related metrics for a specific user"""
+    import re
+
+    metrics = {}
+
+    # Escape user_id for regex pattern matching
+    escaped_user_id = re.escape(user_id)
+
+    # Get remaining budget
+    remaining_pattern = f'litellm_remaining_user_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    remaining_match = re.search(remaining_pattern, metrics_text)
+    metrics["remaining"] = float(remaining_match.group(1)) if remaining_match else None
+
+    # Get total budget
+    total_pattern = f'litellm_user_max_budget_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    total_match = re.search(total_pattern, metrics_text)
+    metrics["total"] = float(total_match.group(1)) if total_match else None
+
+    # Get remaining hours
+    hours_pattern = f'litellm_user_budget_remaining_hours_metric{{user="{escaped_user_id}"}} ([0-9.]+)'
+    hours_match = re.search(hours_pattern, metrics_text)
+    metrics["remaining_hours"] = float(hours_match.group(1)) if hours_match else None
+
+    return metrics
+
+
 @pytest.mark.asyncio
 async def test_key_budget_metrics():
     """
@@ -476,6 +521,8 @@ async def test_key_budget_metrics():
     4. Verify request costs are being tracked correctly
     5. Verify prometheus metrics match /key/info spend data
     """
+    from datetime import datetime, timedelta, timezone
+
     async with aiohttp.ClientSession() as session:
         # Setup test key with unique alias
         unique_alias = f"budget_test_key_{uuid.uuid4()}"
@@ -483,6 +530,7 @@ async def test_key_budget_metrics():
             "key_alias": unique_alias,
             "max_budget": 10,
             "budget_duration": "7d",
+            "budget_reset_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
         }
         key = await create_test_key_with_budget(session, key_data)
 
@@ -541,6 +589,94 @@ async def test_key_budget_metrics():
         assert (
             abs(key_info_remaining_budget - first_budget["remaining"]) <= 0.001
         ), f"Spend mismatch: Prometheus={key_info_remaining_budget}, Key Info={first_budget['remaining']}"
+
+
+@pytest.mark.asyncio
+async def test_user_budget_metrics():
+    """
+    Test user budget tracking metrics:
+    1. Create a user with max_budget
+    2. Make chat completion requests using OpenAI SDK with the user's key
+    3. Verify budget decreases over time
+    4. Verify request costs are being tracked correctly
+    5. Verify prometheus metrics match /user/info spend data
+    """
+    from datetime import datetime, timedelta, timezone
+
+    async with aiohttp.ClientSession() as session:
+        # Setup test user with unique user_id
+        unique_user_id = f"budget_test_user_{uuid.uuid4()}"
+        user_data = {
+            "user_id": unique_user_id,
+            "max_budget": 10,
+            "budget_duration": "7d",
+            "budget_reset_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+        }
+        user_info = await create_test_user(session, user_data)
+        print("user_info", user_info)
+        user_id = user_info["user_id"]
+        print("user_id", user_id)
+        # Get the key that was created with the user
+        key = user_info["key"]
+
+        # Initialize OpenAI client with the user's key
+        client = AsyncOpenAI(base_url="http://0.0.0.0:4000", api_key=key)
+
+        # Make initial request and check budget
+        await client.chat.completions.create(
+            model="fake-openai-endpoint",
+            messages=[{"role": "user", "content": f"Hello {uuid.uuid4()}"}],
+        )
+
+        await asyncio.sleep(11)  # Wait for metrics to update
+
+        # Get metrics after request
+        metrics_after_first = await get_prometheus_metrics(session)
+        print("metrics_after_first request", metrics_after_first)
+        first_budget = extract_user_budget_metrics(metrics_after_first, user_id)
+
+        print(f"Budget after 1 request: {first_budget}")
+        assert (
+            first_budget["remaining"] is not None
+        ), "remaining budget metric should be present"
+        assert (
+            first_budget["total"] is not None
+        ), "total budget metric should be present"
+        assert (
+            first_budget["remaining"] < 10.0
+        ), "remaining budget should be less than 10.0 after first request"
+        assert first_budget["total"] == 10.0, "Total budget metric is incorrect"
+        print("first_budget['remaining_hours']", first_budget["remaining_hours"])
+        # The budget reset time is now standardized - for "7d" it resets on Monday at midnight
+        # So we'll check if it's within a reasonable range (0-7 days depending on current day of week)
+        assert (
+            first_budget["remaining_hours"] is not None
+        ), "remaining hours metric should be present"
+        assert (
+            0 <= first_budget["remaining_hours"] <= 168
+        ), "Budget remaining hours should be within a reasonable range (0-7 days depending on day of week)"
+
+        # Get user info and verify spend matches prometheus metrics
+        user_info_response = await get_user_info(session, user_id)
+        print("user_info_response", user_info_response)
+        _user_info_data = user_info_response["user_info"]
+
+        # Calculate spend from prometheus (total - remaining)
+        user_info_spend = float(_user_info_data["spend"])
+        user_info_max_budget = float(_user_info_data["max_budget"])
+        user_info_remaining_budget = user_info_max_budget - user_info_spend
+        print("\n\n\n###### Final budget metrics ######\n\n\n")
+        print("user_info_remaining_budget", user_info_remaining_budget)
+        print("prometheus_remaining_budget", first_budget["remaining"])
+        print(
+            "diff between user_info_remaining_budget and prometheus_remaining_budget",
+            user_info_remaining_budget - first_budget["remaining"],
+        )
+
+        # Verify spends match within a small delta (floating point comparison)
+        assert (
+            abs(user_info_remaining_budget - first_budget["remaining"]) <= 0.001
+        ), f"Spend mismatch: Prometheus={user_info_remaining_budget}, User Info={first_budget['remaining']}"
 
 
 @pytest.mark.asyncio
