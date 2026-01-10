@@ -3545,7 +3545,7 @@ jobs:
       - run:
           name: Install Neon CLI
           command: |
-            npm install -g @neondatabase/cli
+            npm i -g neonctl
       - run:
           name: Create Neon branch
           command: |
