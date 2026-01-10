@@ -1,5 +1,5 @@
-import React, { useMemo } from "react";
 import { Card, LineChart, Title } from "@tremor/react";
+import { useMemo } from "react";
 import { DailyData } from "../../../types";
 
 interface EndpointUsageLineChartProps {
