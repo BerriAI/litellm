@@ -15,7 +15,6 @@ USER root
 RUN apk add --no-cache \
     bash \
     gcc \
-    python3-dev \
     openssl \
     openssl-dev
 
