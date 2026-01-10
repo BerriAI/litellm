@@ -3554,7 +3554,7 @@ jobs:
             neon branches create \
               --project-id $NEON_PROJECT_ID \
               --name $NEON_BRANCH_NAME \
-              --parent $E2E_NEON_BRANCH_PARENT_ID \
+              --parent br-fancy-paper-ad1olsb3 \
               --api-key $NEON_API_KEY || true
       - run:
           name: Load DB URL
