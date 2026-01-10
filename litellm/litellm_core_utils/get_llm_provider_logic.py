@@ -913,6 +913,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "http://localhost:2024"
         )
         dynamic_api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
+    elif custom_llm_provider == "manus":
+        # Manus is OpenAI compatible for responses API
+        api_base = (
+            api_base
+            or get_secret_str("MANUS_API_BASE")
+            or "https://api.manus.im"
+        )
+        dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

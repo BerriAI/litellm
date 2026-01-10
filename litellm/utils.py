@@ -47,8 +47,8 @@ from tiktoken import Encoding
 from tokenizers import Tokenizer
 
 import litellm
-
 import litellm.litellm_core_utils
+
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 from litellm._lazy_imports import (
@@ -71,8 +71,6 @@ from litellm.constants import (
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-
-
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -615,15 +613,6 @@ def get_applied_guardrails(kwargs: Dict[str, Any]) -> List[str]:
     return applied_guardrails
 
 
-def _get_utils_globals() -> dict:
-    """
-    Get the globals dictionary of the utils module.
-    
-    This is where we cache imported attributes so we don't import them twice.
-    """
-    return sys.modules[__name__].__dict__
-
-
 def load_credentials_from_list(kwargs: dict):
     """
     Updates kwargs with the credentials if credential_name in kwarg
@@ -772,6 +761,9 @@ def function_setup(  # noqa: PLR0915
 
         ## LOGGING SETUP
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
+
+        ## LAZY LOAD COROUTINE CHECKER ##
+        get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
@@ -1193,6 +1185,7 @@ def _get_wrapper_timeout(
 
 
 def check_coroutine(value) -> bool:
+    get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
     return get_coroutine_checker().is_async_callable(value)
 
 
@@ -2900,6 +2893,7 @@ def get_optional_params_image_gen(
                     litellm.drop_params is True or drop_params is True
                 ) and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
+                    passed_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
@@ -2990,6 +2984,8 @@ def get_optional_params_embeddings(  # noqa: PLR0915
 
     drop_params = passed_params.pop("drop_params", None)
     additional_drop_params = passed_params.pop("additional_drop_params", None)
+    # Remove function objects from passed_params to avoid JSON serialization errors
+    passed_params.pop("get_supported_openai_params", None)
 
     def _check_valid_arg(supported_params: Optional[list]):
         if supported_params is None:
@@ -6913,6 +6909,8 @@ def get_valid_models(
         ################################
         # init litellm_params
         #################################
+        from litellm.types.router import LiteLLM_Params
+        
         if litellm_params is None:
             litellm_params = LiteLLM_Params(model="")
         if api_key is not None:
@@ -7411,15 +7409,184 @@ def validate_chat_completion_tool_choice(
 
 
 class ProviderConfigManager:
+    # Dictionary mapping for O(1) provider lookup
+    # Stores tuples of (factory_function, needs_model_parameter)
+    # This is initialized lazily on first access to avoid circular imports
+    _PROVIDER_CONFIG_MAP: Optional[dict[LlmProviders, tuple[Callable, bool]]] = None
+
+    @staticmethod
+    def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable, bool]]:
+        """Build the provider-to-config mapping dictionary.
+        
+        Returns a dict mapping provider to (factory_function, needs_model_parameter).
+        This avoids expensive inspect.signature() calls at runtime.
+        """
+        return {
+            # Most common providers first for readability
+            # Format: (factory_function, needs_model_parameter: bool)
+            LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
+            LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
+            LlmProviders.AZURE: (lambda model: ProviderConfigManager._get_azure_config(model), True),
+            LlmProviders.AZURE_AI: (lambda model: ProviderConfigManager._get_azure_ai_config(model), True),
+            LlmProviders.VERTEX_AI: (lambda model: ProviderConfigManager._get_vertex_ai_config(model), True),
+            LlmProviders.BEDROCK: (lambda model: ProviderConfigManager._get_bedrock_config(model), True),
+            LlmProviders.COHERE: (lambda model: ProviderConfigManager._get_cohere_config(model), True),
+            LlmProviders.COHERE_CHAT: (lambda model: ProviderConfigManager._get_cohere_config(model), True),
+            # Simple provider mappings (no model parameter needed)
+            LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
+            LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
+            LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
+            LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
+            LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
+            LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
+            LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
+            LlmProviders.TEXT_COMPLETION_OPENAI: (lambda: litellm.OpenAITextCompletionConfig(), False),
+            LlmProviders.SNOWFLAKE: (lambda: litellm.SnowflakeConfig(), False),
+            LlmProviders.CLARIFAI: (lambda: litellm.ClarifaiConfig(), False),
+            LlmProviders.ANTHROPIC_TEXT: (lambda: litellm.AnthropicTextConfig(), False),
+            LlmProviders.VERTEX_AI_BETA: (lambda: litellm.VertexGeminiConfig(), False),
+            LlmProviders.CLOUDFLARE: (lambda: litellm.CloudflareChatConfig(), False),
+            LlmProviders.SAGEMAKER_CHAT: (lambda: litellm.SagemakerChatConfig(), False),
+            LlmProviders.SAGEMAKER: (lambda: litellm.SagemakerConfig(), False),
+            LlmProviders.FIREWORKS_AI: (lambda: litellm.FireworksAIConfig(), False),
+            LlmProviders.FRIENDLIAI: (lambda: litellm.FriendliaiChatConfig(), False),
+            LlmProviders.WATSONX: (lambda: litellm.IBMWatsonXChatConfig(), False),
+            LlmProviders.WATSONX_TEXT: (lambda: litellm.IBMWatsonXAIConfig(), False),
+            LlmProviders.EMPOWER: (lambda: litellm.EmpowerChatConfig(), False),
+            LlmProviders.MINIMAX: (lambda: litellm.MinimaxChatConfig(), False),
+            LlmProviders.GITHUB: (lambda: litellm.GithubChatConfig(), False),
+            LlmProviders.COMPACTIFAI: (lambda: litellm.CompactifAIChatConfig(), False),
+            LlmProviders.GITHUB_COPILOT: (lambda: litellm.GithubCopilotConfig(), False),
+            LlmProviders.GIGACHAT: (lambda: litellm.GigaChatConfig(), False),
+            LlmProviders.RAGFLOW: (lambda: litellm.RAGFlowConfig(), False),
+            LlmProviders.CUSTOM: (lambda: litellm.OpenAILikeChatConfig(), False),
+            LlmProviders.CUSTOM_OPENAI: (lambda: litellm.OpenAILikeChatConfig(), False),
+            LlmProviders.OPENAI_LIKE: (lambda: litellm.OpenAILikeChatConfig(), False),
+            LlmProviders.AIOHTTP_OPENAI: (lambda: litellm.AiohttpOpenAIChatConfig(), False),
+            LlmProviders.HOSTED_VLLM: (lambda: litellm.HostedVLLMChatConfig(), False),
+            LlmProviders.LLAMAFILE: (lambda: litellm.LlamafileChatConfig(), False),
+            LlmProviders.LM_STUDIO: (lambda: litellm.LMStudioChatConfig(), False),
+            LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
+            LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
+            LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
+            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
+            LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
+            LlmProviders.VERCEL_AI_GATEWAY: (lambda: litellm.VercelAIGatewayConfig(), False),
+            LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
+            LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
+            LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
+            LlmProviders.AI21: (lambda: litellm.AI21ChatConfig(), False),
+            LlmProviders.AI21_CHAT: (lambda: litellm.AI21ChatConfig(), False),
+            LlmProviders.AZURE_TEXT: (lambda: litellm.AzureOpenAITextConfig(), False),
+            LlmProviders.NLP_CLOUD: (lambda: litellm.NLPCloudConfig(), False),
+            LlmProviders.OOBABOOGA: (lambda: litellm.OobaboogaConfig(), False),
+            LlmProviders.OLLAMA_CHAT: (lambda: litellm.OllamaChatConfig(), False),
+            LlmProviders.DEEPINFRA: (lambda: litellm.DeepInfraConfig(), False),
+            LlmProviders.PERPLEXITY: (lambda: litellm.PerplexityChatConfig(), False),
+            LlmProviders.MISTRAL: (lambda: litellm.MistralConfig(), False),
+            LlmProviders.CODESTRAL: (lambda: litellm.MistralConfig(), False),
+            LlmProviders.NVIDIA_NIM: (lambda: litellm.NvidiaNimConfig(), False),
+            LlmProviders.CEREBRAS: (lambda: litellm.CerebrasConfig(), False),
+            LlmProviders.BASETEN: (lambda: litellm.BasetenConfig(), False),
+            LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
+            LlmProviders.TEXT_COMPLETION_CODESTRAL: (lambda: litellm.CodestralTextCompletionConfig(), False),
+            LlmProviders.SAMBANOVA: (lambda: litellm.SambanovaConfig(), False),
+            LlmProviders.MARITALK: (lambda: litellm.MaritalkConfig(), False),
+            LlmProviders.VLLM: (lambda: litellm.VLLMConfig(), False),
+            LlmProviders.OLLAMA: (lambda: litellm.OllamaConfig(), False),
+            LlmProviders.PREDIBASE: (lambda: litellm.PredibaseConfig(), False),
+            LlmProviders.TRITON: (lambda: litellm.TritonConfig(), False),
+            LlmProviders.PETALS: (lambda: litellm.PetalsConfig(), False),
+            LlmProviders.SAP_GENERATIVE_AI_HUB: (lambda: litellm.GenAIHubOrchestrationConfig(), False),
+            LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
+            LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
+            LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
+            LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
+            LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
+            LlmProviders.DOCKER_MODEL_RUNNER: (lambda: litellm.DockerModelRunnerChatConfig(), False),
+            LlmProviders.V0: (lambda: litellm.V0ChatConfig(), False),
+            LlmProviders.MORPH: (lambda: litellm.MorphChatConfig(), False),
+            LlmProviders.LITELLM_PROXY: (lambda: litellm.LiteLLMProxyChatConfig(), False),
+            LlmProviders.GRADIENT_AI: (lambda: litellm.GradientAIConfig(), False),
+            LlmProviders.NSCALE: (lambda: litellm.NscaleConfig(), False),
+            LlmProviders.HEROKU: (lambda: litellm.HerokuChatConfig(), False),
+            LlmProviders.OCI: (lambda: litellm.OCIChatConfig(), False),
+            LlmProviders.HYPERBOLIC: (lambda: litellm.HyperbolicChatConfig(), False),
+            LlmProviders.OVHCLOUD: (lambda: litellm.OVHCloudChatConfig(), False),
+            LlmProviders.AMAZON_NOVA: (lambda: litellm.AmazonNovaChatConfig(), False),
+            LlmProviders.LANGGRAPH: (lambda: ProviderConfigManager._get_langgraph_config(), False),
+        }
+
+    @staticmethod
+    def _get_azure_config(model: str) -> BaseConfig:
+        """Get Azure config based on model type."""
+        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+            return litellm.AzureOpenAIO1Config()
+        if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            return litellm.AzureOpenAIGPT5Config()
+        return litellm.AzureOpenAIConfig()
+
+    @staticmethod
+    def _get_azure_ai_config(model: str) -> BaseConfig:
+        """Get Azure AI config based on model type."""
+        if "claude" in model.lower():
+            return litellm.AzureAnthropicConfig()
+        return litellm.AzureAIStudioConfig()
+
+    @staticmethod
+    def _get_vertex_ai_config(model: str) -> BaseConfig:
+        """Get Vertex AI config based on model type."""
+        if "gemini" in model:
+            return litellm.VertexGeminiConfig()
+        elif "claude" in model:
+            return litellm.VertexAIAnthropicConfig()
+        elif "gpt-oss" in model:
+            from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
+                VertexAIGPTOSSTransformation,
+            )
+            return VertexAIGPTOSSTransformation()
+        elif model in litellm.vertex_mistral_models:
+            if "codestral" in model:
+                return litellm.CodestralTextCompletionConfig()
+            return litellm.MistralConfig()
+        elif model in litellm.vertex_ai_ai21_models:
+            return litellm.VertexAIAi21Config()
+        else:
+            return litellm.VertexAILlama3Config()
+
+    @staticmethod
+    def _get_bedrock_config(model: str) -> BaseConfig:
+        """Get Bedrock config based on model."""
+        from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
+        return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_cohere_config(model: str) -> BaseConfig:
+        """Get Cohere config based on route."""
+        CohereModelInfo = getattr(sys.modules[__name__], 'CohereModelInfo')
+        route = CohereModelInfo.get_cohere_route(model)
+        if route == "v2":
+            return litellm.CohereV2ChatConfig()
+        return litellm.CohereChatConfig()
+
+    @staticmethod
+    def _get_langgraph_config() -> BaseConfig:
+        """Get LangGraph config."""
+        from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+        return LangGraphConfig()
+
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: LlmProviders
     ) -> Optional[BaseConfig]:
         """
         Returns the provider config for a given provider.
+        
+        Uses O(1) dictionary lookup for fast provider resolution.
         """
-
-        # Check JSON providers FIRST
+        # Check JSON providers FIRST (these override standard mappings)
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -7429,242 +7596,29 @@ class ProviderConfigManager:
                 raise ValueError(f"Provider {provider.value} not found")
             return create_config_class(provider_config)()
 
-        if (
-            provider == LlmProviders.OPENAI
-            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
-        ):
-            return litellm.openaiOSeriesConfig
-        elif (
-            provider == LlmProviders.OPENAI
-            and litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
-        ):
-            return litellm.OpenAIGPT5Config()
-        elif litellm.LlmProviders.DEEPSEEK == provider:
-            return litellm.DeepSeekChatConfig()
-        elif litellm.LlmProviders.GROQ == provider:
-            return litellm.GroqChatConfig()
-        elif litellm.LlmProviders.BYTEZ == provider:
-            return litellm.BytezChatConfig()
-        elif litellm.LlmProviders.DATABRICKS == provider:
-            return litellm.DatabricksConfig()
-        elif litellm.LlmProviders.XAI == provider:
-            return litellm.XAIChatConfig()
-        elif litellm.LlmProviders.ZAI == provider:
-            return litellm.ZAIChatConfig()
-        elif litellm.LlmProviders.LAMBDA_AI == provider:
-            return litellm.LambdaAIChatConfig()
-        elif litellm.LlmProviders.LLAMA == provider:
-            return litellm.LlamaAPIConfig()
-        elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
-            return litellm.OpenAITextCompletionConfig()
-        elif (
-            litellm.LlmProviders.COHERE_CHAT == provider
-            or litellm.LlmProviders.COHERE == provider
-        ):
-            CohereModelInfo = getattr(sys.modules[__name__], 'CohereModelInfo')
-            route = CohereModelInfo.get_cohere_route(model)
-            if route == "v2":
-                return litellm.CohereV2ChatConfig()
-            else:
+        # Handle OpenAI special cases (O-series and GPT-5 models)
+        if provider == LlmProviders.OPENAI:
+            if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
+                return litellm.openaiOSeriesConfig
+            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+                return litellm.OpenAIGPT5Config()
 
-                return litellm.CohereChatConfig()
-        elif litellm.LlmProviders.SNOWFLAKE == provider:
-            return litellm.SnowflakeConfig()
-        elif litellm.LlmProviders.CLARIFAI == provider:
-            return litellm.ClarifaiConfig()
-        elif litellm.LlmProviders.ANTHROPIC == provider:
-            return litellm.AnthropicConfig()
-        elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
-            return litellm.AnthropicTextConfig()
-        elif litellm.LlmProviders.VERTEX_AI_BETA == provider:
-            return litellm.VertexGeminiConfig()
-        elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "gemini" in model:
-                return litellm.VertexGeminiConfig()
-            elif "claude" in model:
-                return litellm.VertexAIAnthropicConfig()
-            elif "gpt-oss" in model:
-                from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
-                    VertexAIGPTOSSTransformation,
-                )
+        # Initialize provider config map lazily (avoids circular imports)
+        if ProviderConfigManager._PROVIDER_CONFIG_MAP is None:
+            ProviderConfigManager._PROVIDER_CONFIG_MAP = ProviderConfigManager._build_provider_config_map()
 
-                return VertexAIGPTOSSTransformation()
-            elif model in litellm.vertex_mistral_models:
-                if "codestral" in model:
-                    return litellm.CodestralTextCompletionConfig()
-                else:
-                    return litellm.MistralConfig()
-            elif model in litellm.vertex_ai_ai21_models:
-                return litellm.VertexAIAi21Config()
-            else:  # use generic openai-like param mapping
-                return litellm.VertexAILlama3Config()
-        elif litellm.LlmProviders.CLOUDFLARE == provider:
-            return litellm.CloudflareChatConfig()
-        elif litellm.LlmProviders.SAGEMAKER_CHAT == provider:
-            return litellm.SagemakerChatConfig()
-        elif litellm.LlmProviders.SAGEMAKER == provider:
-            return litellm.SagemakerConfig()
-        elif litellm.LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIConfig()
-        elif litellm.LlmProviders.FRIENDLIAI == provider:
-            return litellm.FriendliaiChatConfig()
-        elif litellm.LlmProviders.WATSONX == provider:
-            return litellm.IBMWatsonXChatConfig()
-        elif litellm.LlmProviders.WATSONX_TEXT == provider:
-            return litellm.IBMWatsonXAIConfig()
-        elif litellm.LlmProviders.EMPOWER == provider:
-            return litellm.EmpowerChatConfig()
-        elif litellm.LlmProviders.MINIMAX == provider:            
-            return litellm.MinimaxChatConfig()
-        elif litellm.LlmProviders.GITHUB == provider:
-            return litellm.GithubChatConfig()
-        elif litellm.LlmProviders.COMPACTIFAI == provider:
-            return litellm.CompactifAIChatConfig()
-        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
-            return litellm.GithubCopilotConfig()
-        elif litellm.LlmProviders.RAGFLOW == provider:
-            return litellm.RAGFlowConfig()
-        elif (
-            litellm.LlmProviders.CUSTOM == provider
-            or litellm.LlmProviders.CUSTOM_OPENAI == provider
-            or litellm.LlmProviders.OPENAI_LIKE == provider
-        ):
-            return litellm.OpenAILikeChatConfig()
-        elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
-            return litellm.AiohttpOpenAIChatConfig()
-        elif litellm.LlmProviders.HOSTED_VLLM == provider:
-            return litellm.HostedVLLMChatConfig()
-        elif litellm.LlmProviders.LLAMAFILE == provider:
-            return litellm.LlamafileChatConfig()
-        elif litellm.LlmProviders.LM_STUDIO == provider:
-            return litellm.LMStudioChatConfig()
-        elif litellm.LlmProviders.GALADRIEL == provider:
-            return litellm.GaladrielChatConfig()
-        elif litellm.LlmProviders.REPLICATE == provider:
-            return litellm.ReplicateConfig()
-        elif litellm.LlmProviders.HUGGINGFACE == provider:
-            return litellm.HuggingFaceChatConfig()
-        elif litellm.LlmProviders.TOGETHER_AI == provider:
-            return litellm.TogetherAIConfig()
-        elif litellm.LlmProviders.OPENROUTER == provider:
-            return litellm.OpenrouterConfig()
-        elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
-            return litellm.VercelAIGatewayConfig()
-        elif litellm.LlmProviders.COMETAPI == provider:
-            return litellm.CometAPIConfig()
-        elif litellm.LlmProviders.DATAROBOT == provider:
-            return litellm.DataRobotConfig()
-        elif litellm.LlmProviders.GEMINI == provider:
-            return litellm.GoogleAIStudioGeminiConfig()
-        elif (
-            litellm.LlmProviders.AI21 == provider
-            or litellm.LlmProviders.AI21_CHAT == provider
-        ):
-            return litellm.AI21ChatConfig()
-        elif litellm.LlmProviders.AZURE == provider:
-            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
-                return litellm.AzureOpenAIO1Config()
-            if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
-                return litellm.AzureOpenAIGPT5Config()
-            return litellm.AzureOpenAIConfig()
-        elif litellm.LlmProviders.AZURE_AI == provider:
-            if "claude" in model.lower():
-                return litellm.AzureAnthropicConfig()
-            return litellm.AzureAIStudioConfig()
-        elif litellm.LlmProviders.AZURE_TEXT == provider:
-            return litellm.AzureOpenAITextConfig()
-        elif litellm.LlmProviders.HOSTED_VLLM == provider:
-            return litellm.HostedVLLMChatConfig()
-        elif litellm.LlmProviders.NLP_CLOUD == provider:
-            return litellm.NLPCloudConfig()
-        elif litellm.LlmProviders.OOBABOOGA == provider:
-            return litellm.OobaboogaConfig()
-        elif litellm.LlmProviders.OLLAMA_CHAT == provider:
-            return litellm.OllamaChatConfig()
-        elif litellm.LlmProviders.DEEPINFRA == provider:
-            return litellm.DeepInfraConfig()
-        elif litellm.LlmProviders.PERPLEXITY == provider:
-            return litellm.PerplexityChatConfig()
-        elif (
-            litellm.LlmProviders.MISTRAL == provider
-            or litellm.LlmProviders.CODESTRAL == provider
-        ):
-            return litellm.MistralConfig()
-        elif litellm.LlmProviders.NVIDIA_NIM == provider:
-            return litellm.NvidiaNimConfig()
-        elif litellm.LlmProviders.CEREBRAS == provider:
-            return litellm.CerebrasConfig()
-        elif litellm.LlmProviders.BASETEN == provider:
-            return litellm.BasetenConfig()
-        elif litellm.LlmProviders.VOLCENGINE == provider:
-            return litellm.VolcEngineConfig()
-        elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
-            return litellm.CodestralTextCompletionConfig()
-        elif litellm.LlmProviders.SAMBANOVA == provider:
-            return litellm.SambanovaConfig()
-        elif litellm.LlmProviders.MARITALK == provider:
-            return litellm.MaritalkConfig()
-        elif litellm.LlmProviders.CLOUDFLARE == provider:
-            return litellm.CloudflareChatConfig()
-        elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
-            return litellm.AnthropicTextConfig()
-        elif litellm.LlmProviders.VLLM == provider:
-            return litellm.VLLMConfig()
-        elif litellm.LlmProviders.OLLAMA == provider:
-            return litellm.OllamaConfig()
-        elif litellm.LlmProviders.PREDIBASE == provider:
-            return litellm.PredibaseConfig()
-        elif litellm.LlmProviders.TRITON == provider:
-            return litellm.TritonConfig()
-        elif litellm.LlmProviders.PETALS == provider:
-            return litellm.PetalsConfig()
-        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
-            return litellm.GenAIHubOrchestrationConfig()
-        elif litellm.LlmProviders.FEATHERLESS_AI == provider:
-            return litellm.FeatherlessAIConfig()
-        elif litellm.LlmProviders.NOVITA == provider:
-            return litellm.NovitaConfig()
-        elif litellm.LlmProviders.NEBIUS == provider:
-            return litellm.NebiusConfig()
-        elif litellm.LlmProviders.WANDB == provider:
-            return litellm.WandbConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            return litellm.DashScopeChatConfig()
-        elif litellm.LlmProviders.MOONSHOT == provider:
-            return litellm.MoonshotChatConfig()
-        elif litellm.LlmProviders.DOCKER_MODEL_RUNNER == provider:
-            return litellm.DockerModelRunnerChatConfig()
-        elif litellm.LlmProviders.V0 == provider:
-            return litellm.V0ChatConfig()
-        elif litellm.LlmProviders.MORPH == provider:
-            return litellm.MorphChatConfig()
-        elif litellm.LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
+        # O(1) dictionary lookup
+        config_entry = ProviderConfigManager._PROVIDER_CONFIG_MAP.get(provider)
+        if config_entry is None:
+            return None
 
-            return get_bedrock_chat_config(model=model)
-        elif litellm.LlmProviders.LITELLM_PROXY == provider:
-            return litellm.LiteLLMProxyChatConfig()
-        elif litellm.LlmProviders.OPENAI == provider:
-            return litellm.OpenAIGPTConfig()
-        elif litellm.LlmProviders.GRADIENT_AI == provider:
-            return litellm.GradientAIConfig()
-        elif litellm.LlmProviders.NSCALE == provider:
-            return litellm.NscaleConfig()
-        elif litellm.LlmProviders.HEROKU == provider:
-            return litellm.HerokuChatConfig()
-        elif litellm.LlmProviders.OCI == provider:
-            return litellm.OCIChatConfig()
-        elif litellm.LlmProviders.HYPERBOLIC == provider:
-            return litellm.HyperbolicChatConfig()
-        elif litellm.LlmProviders.OVHCLOUD == provider:
-            return litellm.OVHCloudChatConfig()
-        elif litellm.LlmProviders.AMAZON_NOVA == provider:
-            return litellm.AmazonNovaChatConfig()
-        elif litellm.LlmProviders.LANGGRAPH == provider:
-            from litellm.llms.langgraph.chat.transformation import LangGraphConfig
-
-            return LangGraphConfig()
-        return None
+        # Unpack factory function and whether it needs model parameter
+        # This avoids expensive inspect.signature() calls at runtime
+        config_factory, needs_model = config_entry
+        if needs_model:
+            return config_factory(model)  # type: ignore
+        else:
+            return config_factory()  # type: ignore
 
     @staticmethod
     def get_provider_embedding_config(
@@ -7717,6 +7671,13 @@ class ProviderConfigManager:
             return litellm.CometAPIEmbeddingConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotEmbeddingConfig()
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.embedding.transformation import (
+                OpenrouterEmbeddingConfig,
+            )
+            return OpenrouterEmbeddingConfig()
+        elif litellm.LlmProviders.GIGACHAT == provider:
+            return litellm.GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
             from litellm.llms.sagemaker.embedding.transformation import (
                 SagemakerEmbeddingConfig,
@@ -7868,6 +7829,8 @@ class ProviderConfigManager:
             return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
+        elif litellm.LlmProviders.MANUS == provider:
+            return litellm.ManusResponsesAPIConfig()
         return None
 
     @staticmethod
@@ -7936,6 +7899,8 @@ class ProviderConfigManager:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
+        elif LlmProviders.BEDROCK == provider:
+            return litellm.llms.bedrock.common_utils.BedrockModelInfo()
         return None
 
     @staticmethod
@@ -7993,6 +7958,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
             return BedrockFilesConfig()
+        elif LlmProviders.MANUS == provider:
+            from litellm.llms.manus.files.transformation import ManusFilesConfig
+
+            return ManusFilesConfig()
         return None
 
     @staticmethod
@@ -8745,672 +8714,16 @@ def should_run_mock_completion(
     return False
 
 
-def __getattr__(name: str) -> Any:  # noqa: PLR0915
-    """Lazy import handler for utils module"""
-    _globals = _get_utils_globals()
-    
-    # Lazy load encoding from main.py to avoid heavy tiktoken import
-    if name == "encoding":
-        # Check if already cached
-        if "encoding" not in _globals:
-            from litellm.main import encoding as _encoding
-            _globals["encoding"] = _encoding
-        return _globals["encoding"]
-    
-    # Lazy load BaseVectorStore to avoid loading it at module import time
-    if name == "BaseVectorStore":
-        # Check if already cached
-        if "BaseVectorStore" not in _globals:
-            from litellm.integrations.vector_store_integrations.base_vector_store import (
-                BaseVectorStore as _BaseVectorStore,
-            )
-            _globals["BaseVectorStore"] = _BaseVectorStore
-        return _globals["BaseVectorStore"]
-    
-    # Lazy load CredentialAccessor to avoid loading it at module import time
-    if name == "CredentialAccessor":
-        # Check if already cached
-        if "CredentialAccessor" not in _globals:
-            from litellm.litellm_core_utils.credential_accessor import (
-                CredentialAccessor as _CredentialAccessor,
-            )
-            _globals["CredentialAccessor"] = _CredentialAccessor
-        return _globals["CredentialAccessor"]
-    
-    # Lazy load exception_mapping_utils functions to avoid loading at module import time
-    if name == "exception_type":
-        # Check if already cached
-        if "exception_type" not in _globals:
-            from litellm.litellm_core_utils.exception_mapping_utils import (
-                exception_type as _exception_type,
-            )
-            _globals["exception_type"] = _exception_type
-        return _globals["exception_type"]
-    
-    if name == "get_error_message":
-        # Check if already cached
-        if "get_error_message" not in _globals:
-            from litellm.litellm_core_utils.exception_mapping_utils import (
-                get_error_message as _get_error_message,
-            )
-            _globals["get_error_message"] = _get_error_message
-        return _globals["get_error_message"]
-    
-    if name == "_get_response_headers":
-        # Check if already cached
-        if "_get_response_headers" not in _globals:
-            from litellm.litellm_core_utils.exception_mapping_utils import (
-                _get_response_headers as __get_response_headers,
-            )
-            _globals["_get_response_headers"] = __get_response_headers
-        return _globals["_get_response_headers"]
-    
-    # Lazy load get_llm_provider_logic functions to avoid loading at module import time
-    if name == "get_llm_provider":
-        # Check if already cached
-        if "get_llm_provider" not in _globals:
-            from litellm.litellm_core_utils.get_llm_provider_logic import (
-                get_llm_provider as _get_llm_provider,
-            )
-            _globals["get_llm_provider"] = _get_llm_provider
-        return _globals["get_llm_provider"]
-    
-    if name == "_is_non_openai_azure_model":
-        # Check if already cached
-        if "_is_non_openai_azure_model" not in _globals:
-            from litellm.litellm_core_utils.get_llm_provider_logic import (
-                _is_non_openai_azure_model as __is_non_openai_azure_model,
-            )
-            _globals["_is_non_openai_azure_model"] = __is_non_openai_azure_model
-        return _globals["_is_non_openai_azure_model"]
-    
-    # Lazy load get_supported_openai_params to avoid loading at module import time
-    if name == "get_supported_openai_params":
-        # Check if already cached
-        if "get_supported_openai_params" not in _globals:
-            from litellm.litellm_core_utils.get_supported_openai_params import (
-                get_supported_openai_params as _get_supported_openai_params,
-            )
-            _globals["get_supported_openai_params"] = _get_supported_openai_params
-        return _globals["get_supported_openai_params"]
-    
-    # Lazy load convert_dict_to_response functions to avoid loading at module import time
-    if name == "LiteLLMResponseObjectHandler":
-        # Check if already cached
-        if "LiteLLMResponseObjectHandler" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-                LiteLLMResponseObjectHandler as _LiteLLMResponseObjectHandler,
-            )
-            _globals["LiteLLMResponseObjectHandler"] = _LiteLLMResponseObjectHandler
-        return _globals["LiteLLMResponseObjectHandler"]
-    
-    if name == "_handle_invalid_parallel_tool_calls":
-        # Check if already cached
-        if "_handle_invalid_parallel_tool_calls" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-                _handle_invalid_parallel_tool_calls as __handle_invalid_parallel_tool_calls,
-            )
-            _globals["_handle_invalid_parallel_tool_calls"] = __handle_invalid_parallel_tool_calls
-        return _globals["_handle_invalid_parallel_tool_calls"]
-    
-    if name == "convert_to_model_response_object":
-        # Check if already cached
-        if "convert_to_model_response_object" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-                convert_to_model_response_object as _convert_to_model_response_object,
-            )
-            _globals["convert_to_model_response_object"] = _convert_to_model_response_object
-        return _globals["convert_to_model_response_object"]
-    
-    if name == "convert_to_streaming_response":
-        # Check if already cached
-        if "convert_to_streaming_response" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-                convert_to_streaming_response as _convert_to_streaming_response,
-            )
-            _globals["convert_to_streaming_response"] = _convert_to_streaming_response
-        return _globals["convert_to_streaming_response"]
-    
-    if name == "convert_to_streaming_response_async":
-        # Check if already cached
-        if "convert_to_streaming_response_async" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-                convert_to_streaming_response_async as _convert_to_streaming_response_async,
-            )
-            _globals["convert_to_streaming_response_async"] = _convert_to_streaming_response_async
-        return _globals["convert_to_streaming_response_async"]
-    
-    # Lazy load get_api_base to avoid loading at module import time
-    if name == "get_api_base":
-        # Check if already cached
-        if "get_api_base" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.get_api_base import (
-                get_api_base as _get_api_base,
-            )
-            _globals["get_api_base"] = _get_api_base
-        return _globals["get_api_base"]
-    
-    # Lazy load ResponseMetadata to avoid loading at module import time
-    if name == "ResponseMetadata":
-        # Check if already cached
-        if "ResponseMetadata" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-                ResponseMetadata as _ResponseMetadata,
-            )
-            _globals["ResponseMetadata"] = _ResponseMetadata
-        return _globals["ResponseMetadata"]
-    
-    # Lazy load _parse_content_for_reasoning to avoid loading at module import time
-    if name == "_parse_content_for_reasoning":
-        # Check if already cached
-        if "_parse_content_for_reasoning" not in _globals:
-            from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                _parse_content_for_reasoning as __parse_content_for_reasoning,
-            )
-            _globals["_parse_content_for_reasoning"] = __parse_content_for_reasoning
-        return _globals["_parse_content_for_reasoning"]
-    
-    # Lazy load redact_messages to avoid loading at module import time
-    if name == "LiteLLMLoggingObject":
-        # Check if already cached
-        if "LiteLLMLoggingObject" not in _globals:
-            from litellm.litellm_core_utils.redact_messages import (
-                LiteLLMLoggingObject as _LiteLLMLoggingObject,
-            )
-            _globals["LiteLLMLoggingObject"] = _LiteLLMLoggingObject
-        return _globals["LiteLLMLoggingObject"]
-    
-    if name == "redact_message_input_output_from_logging":
-        # Check if already cached
-        if "redact_message_input_output_from_logging" not in _globals:
-            from litellm.litellm_core_utils.redact_messages import (
-                redact_message_input_output_from_logging as _redact_message_input_output_from_logging,
-            )
-            _globals["redact_message_input_output_from_logging"] = _redact_message_input_output_from_logging
-        return _globals["redact_message_input_output_from_logging"]
-    
-    # Lazy load CustomStreamWrapper to avoid loading at module import time
-    if name == "CustomStreamWrapper":
-        # Check if already cached
-        if "CustomStreamWrapper" not in _globals:
-            from litellm.litellm_core_utils.streaming_handler import (
-                CustomStreamWrapper as _CustomStreamWrapper,
-            )
-            _globals["CustomStreamWrapper"] = _CustomStreamWrapper
-        return _globals["CustomStreamWrapper"]
-    
-    # Lazy load BaseGoogleGenAIGenerateContentConfig to avoid loading at module import time
-    if name == "BaseGoogleGenAIGenerateContentConfig":
-        # Check if already cached
-        if "BaseGoogleGenAIGenerateContentConfig" not in _globals:
-            from litellm.llms.base_llm.google_genai.transformation import (
-                BaseGoogleGenAIGenerateContentConfig as _BaseGoogleGenAIGenerateContentConfig,
-            )
-            _globals["BaseGoogleGenAIGenerateContentConfig"] = _BaseGoogleGenAIGenerateContentConfig
-        return _globals["BaseGoogleGenAIGenerateContentConfig"]
-    
-    # Lazy load BaseOCRConfig to avoid loading at module import time
-    if name == "BaseOCRConfig":
-        # Check if already cached
-        if "BaseOCRConfig" not in _globals:
-            from litellm.llms.base_llm.ocr.transformation import (
-                BaseOCRConfig as _BaseOCRConfig,
-            )
-            _globals["BaseOCRConfig"] = _BaseOCRConfig
-        return _globals["BaseOCRConfig"]
-    
-    # Lazy load BaseSearchConfig to avoid loading at module import time
-    if name == "BaseSearchConfig":
-        # Check if already cached
-        if "BaseSearchConfig" not in _globals:
-            from litellm.llms.base_llm.search.transformation import (
-                BaseSearchConfig as _BaseSearchConfig,
-            )
-            _globals["BaseSearchConfig"] = _BaseSearchConfig
-        return _globals["BaseSearchConfig"]
-    
-    # Lazy load BaseTextToSpeechConfig to avoid loading at module import time
-    if name == "BaseTextToSpeechConfig":
-        # Check if already cached
-        if "BaseTextToSpeechConfig" not in _globals:
-            from litellm.llms.base_llm.text_to_speech.transformation import (
-                BaseTextToSpeechConfig as _BaseTextToSpeechConfig,
-            )
-            _globals["BaseTextToSpeechConfig"] = _BaseTextToSpeechConfig
-        return _globals["BaseTextToSpeechConfig"]
-    
-    # Lazy load BedrockModelInfo to avoid loading at module import time
-    if name == "BedrockModelInfo":
-        # Check if already cached
-        if "BedrockModelInfo" not in _globals:
-            from litellm.llms.bedrock.common_utils import (
-                BedrockModelInfo as _BedrockModelInfo,
-            )
-            _globals["BedrockModelInfo"] = _BedrockModelInfo
-        return _globals["BedrockModelInfo"]
-    
-    # Lazy load CohereModelInfo to avoid loading at module import time
-    if name == "CohereModelInfo":
-        # Check if already cached
-        if "CohereModelInfo" not in _globals:
-            from litellm.llms.cohere.common_utils import (
-                CohereModelInfo as _CohereModelInfo,
-            )
-            _globals["CohereModelInfo"] = _CohereModelInfo
-        return _globals["CohereModelInfo"]
-    
-    # Lazy load MistralOCRConfig to avoid loading at module import time
-    if name == "MistralOCRConfig":
-        # Check if already cached
-        if "MistralOCRConfig" not in _globals:
-            from litellm.llms.mistral.ocr.transformation import (
-                MistralOCRConfig as _MistralOCRConfig,
-            )
-            _globals["MistralOCRConfig"] = _MistralOCRConfig
-        return _globals["MistralOCRConfig"]
-    
-    # Lazy load Rules to avoid loading at module import time
-    if name == "Rules":
-        # Check if already cached
-        if "Rules" not in _globals:
-            from litellm.litellm_core_utils.rules import Rules as _Rules
-            _globals["Rules"] = _Rules
-        return _globals["Rules"]
-    
-    # Lazy load AsyncHTTPHandler and HTTPHandler to avoid loading at module import time
-    if name == "AsyncHTTPHandler":
-        # Check if already cached
-        if "AsyncHTTPHandler" not in _globals:
-            from litellm.llms.custom_httpx.http_handler import (
-                AsyncHTTPHandler as _AsyncHTTPHandler,
-            )
-            _globals["AsyncHTTPHandler"] = _AsyncHTTPHandler
-        return _globals["AsyncHTTPHandler"]
-    
-    if name == "HTTPHandler":
-        # Check if already cached
-        if "HTTPHandler" not in _globals:
-            from litellm.llms.custom_httpx.http_handler import (
-                HTTPHandler as _HTTPHandler,
-            )
-            _globals["HTTPHandler"] = _HTTPHandler
-        return _globals["HTTPHandler"]
-    
-    # Lazy load get_num_retries_from_retry_policy and reset_retry_policy to avoid loading at module import time
-    if name == "get_num_retries_from_retry_policy":
-        # Check if already cached
-        if "get_num_retries_from_retry_policy" not in _globals:
-            from litellm.router_utils.get_retry_from_policy import (
-                get_num_retries_from_retry_policy as _get_num_retries_from_retry_policy,
-            )
-            _globals["get_num_retries_from_retry_policy"] = _get_num_retries_from_retry_policy
-        return _globals["get_num_retries_from_retry_policy"]
-    
-    if name == "reset_retry_policy":
-        # Check if already cached
-        if "reset_retry_policy" not in _globals:
-            from litellm.router_utils.get_retry_from_policy import (
-                reset_retry_policy as _reset_retry_policy,
-            )
-            _globals["reset_retry_policy"] = _reset_retry_policy
-        return _globals["reset_retry_policy"]
-    
-    # Lazy load get_secret to avoid loading at module import time
-    if name == "get_secret":
-        # Check if already cached
-        if "get_secret" not in _globals:
-            from litellm.secret_managers.main import get_secret as _get_secret
-            _globals["get_secret"] = _get_secret
-        return _globals["get_secret"]
-    
-    # Lazy load cached_imports functions to avoid loading at module import time
-    if name == "get_coroutine_checker":
-        # Check if already cached
-        if "get_coroutine_checker" not in _globals:
-            from litellm.litellm_core_utils.cached_imports import (
-                get_coroutine_checker as _get_coroutine_checker,
-            )
-            _globals["get_coroutine_checker"] = _get_coroutine_checker
-        return _globals["get_coroutine_checker"]
-    
-    if name == "get_litellm_logging_class":
-        # Check if already cached
-        if "get_litellm_logging_class" not in _globals:
-            from litellm.litellm_core_utils.cached_imports import (
-                get_litellm_logging_class as _get_litellm_logging_class,
-            )
-            _globals["get_litellm_logging_class"] = _get_litellm_logging_class
-        return _globals["get_litellm_logging_class"]
-    
-    if name == "get_set_callbacks":
-        # Check if already cached
-        if "get_set_callbacks" not in _globals:
-            from litellm.litellm_core_utils.cached_imports import (
-                get_set_callbacks as _get_set_callbacks,
-            )
-            _globals["get_set_callbacks"] = _get_set_callbacks
-        return _globals["get_set_callbacks"]
-    
-    # Lazy load core_helpers functions to avoid loading at module import time
-    if name == "get_litellm_metadata_from_kwargs":
-        # Check if already cached
-        if "get_litellm_metadata_from_kwargs" not in _globals:
-            from litellm.litellm_core_utils.core_helpers import (
-                get_litellm_metadata_from_kwargs as _get_litellm_metadata_from_kwargs,
-            )
-            _globals["get_litellm_metadata_from_kwargs"] = _get_litellm_metadata_from_kwargs
-        return _globals["get_litellm_metadata_from_kwargs"]
-    
-    if name == "map_finish_reason":
-        # Check if already cached
-        if "map_finish_reason" not in _globals:
-            from litellm.litellm_core_utils.core_helpers import (
-                map_finish_reason as _map_finish_reason,
-            )
-            _globals["map_finish_reason"] = _map_finish_reason
-        return _globals["map_finish_reason"]
-    
-    if name == "process_response_headers":
-        # Check if already cached
-        if "process_response_headers" not in _globals:
-            from litellm.litellm_core_utils.core_helpers import (
-                process_response_headers as _process_response_headers,
-            )
-            _globals["process_response_headers"] = _process_response_headers
-        return _globals["process_response_headers"]
-    
-    # Lazy load dot_notation_indexing functions to avoid loading at module import time
-    if name == "delete_nested_value":
-        # Check if already cached
-        if "delete_nested_value" not in _globals:
-            from litellm.litellm_core_utils.dot_notation_indexing import (
-                delete_nested_value as _delete_nested_value,
-            )
-            _globals["delete_nested_value"] = _delete_nested_value
-        return _globals["delete_nested_value"]
-    
-    if name == "is_nested_path":
-        # Check if already cached
-        if "is_nested_path" not in _globals:
-            from litellm.litellm_core_utils.dot_notation_indexing import (
-                is_nested_path as _is_nested_path,
-            )
-            _globals["is_nested_path"] = _is_nested_path
-        return _globals["is_nested_path"]
-    
-    # Lazy load get_litellm_params functions to avoid loading at module import time
-    if name == "_get_base_model_from_litellm_call_metadata":
-        # Check if already cached
-        if "_get_base_model_from_litellm_call_metadata" not in _globals:
-            from litellm.litellm_core_utils.get_litellm_params import (
-                _get_base_model_from_litellm_call_metadata as __get_base_model_from_litellm_call_metadata,
-            )
-            _globals["_get_base_model_from_litellm_call_metadata"] = __get_base_model_from_litellm_call_metadata
-        return _globals["_get_base_model_from_litellm_call_metadata"]
-    
-    if name == "get_litellm_params":
-        # Check if already cached
-        if "get_litellm_params" not in _globals:
-            from litellm.litellm_core_utils.get_litellm_params import (
-                get_litellm_params as _get_litellm_params,
-            )
-            _globals["get_litellm_params"] = _get_litellm_params
-        return _globals["get_litellm_params"]
-    
-    # Lazy load _ensure_extra_body_is_safe to avoid loading at module import time
-    if name == "_ensure_extra_body_is_safe":
-        # Check if already cached
-        if "_ensure_extra_body_is_safe" not in _globals:
-            from litellm.litellm_core_utils.llm_request_utils import (
-                _ensure_extra_body_is_safe as __ensure_extra_body_is_safe,
-            )
-            _globals["_ensure_extra_body_is_safe"] = __ensure_extra_body_is_safe
-        return _globals["_ensure_extra_body_is_safe"]
-    
-    # Lazy load get_formatted_prompt to avoid loading at module import time
-    if name == "get_formatted_prompt":
-        # Check if already cached
-        if "get_formatted_prompt" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.get_formatted_prompt import (
-                get_formatted_prompt as _get_formatted_prompt,
-            )
-            _globals["get_formatted_prompt"] = _get_formatted_prompt
-        return _globals["get_formatted_prompt"]
-    
-    # Lazy load get_response_headers to avoid loading at module import time
-    if name == "get_response_headers":
-        # Check if already cached
-        if "get_response_headers" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.get_headers import (
-                get_response_headers as _get_response_headers,
-            )
-            _globals["get_response_headers"] = _get_response_headers
-        return _globals["get_response_headers"]
-    
-    # Lazy load update_response_metadata to avoid loading at module import time
-    if name == "update_response_metadata":
-        # Check if already cached
-        if "update_response_metadata" not in _globals:
-            from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
-                update_response_metadata as _update_response_metadata,
-            )
-            _globals["update_response_metadata"] = _update_response_metadata
-        return _globals["update_response_metadata"]
-    
-    # Lazy load executor to avoid loading at module import time
-    if name == "executor":
-        # Check if already cached
-        if "executor" not in _globals:
-            from litellm.litellm_core_utils.thread_pool_executor import (
-                executor as _executor,
-            )
-            _globals["executor"] = _executor
-        return _globals["executor"]
-    
-    # Lazy load BaseAnthropicMessagesConfig to avoid loading at module import time
-    if name == "BaseAnthropicMessagesConfig":
-        # Check if already cached
-        if "BaseAnthropicMessagesConfig" not in _globals:
-            from litellm.llms.base_llm.anthropic_messages.transformation import (
-                BaseAnthropicMessagesConfig as _BaseAnthropicMessagesConfig,
-            )
-            _globals["BaseAnthropicMessagesConfig"] = _BaseAnthropicMessagesConfig
-        return _globals["BaseAnthropicMessagesConfig"]
-    
-    # Lazy load BaseAudioTranscriptionConfig to avoid loading at module import time
-    if name == "BaseAudioTranscriptionConfig":
-        # Check if already cached
-        if "BaseAudioTranscriptionConfig" not in _globals:
-            from litellm.llms.base_llm.audio_transcription.transformation import (
-                BaseAudioTranscriptionConfig as _BaseAudioTranscriptionConfig,
-            )
-            _globals["BaseAudioTranscriptionConfig"] = _BaseAudioTranscriptionConfig
-        return _globals["BaseAudioTranscriptionConfig"]
-    
-    # Lazy load BaseBatchesConfig to avoid loading at module import time
-    if name == "BaseBatchesConfig":
-        # Check if already cached
-        if "BaseBatchesConfig" not in _globals:
-            from litellm.llms.base_llm.batches.transformation import (
-                BaseBatchesConfig as _BaseBatchesConfig,
-            )
-            _globals["BaseBatchesConfig"] = _BaseBatchesConfig
-        return _globals["BaseBatchesConfig"]
-    
-    # Lazy load BaseContainerConfig to avoid loading at module import time
-    if name == "BaseContainerConfig":
-        # Check if already cached
-        if "BaseContainerConfig" not in _globals:
-            from litellm.llms.base_llm.containers.transformation import (
-                BaseContainerConfig as _BaseContainerConfig,
-            )
-            _globals["BaseContainerConfig"] = _BaseContainerConfig
-        return _globals["BaseContainerConfig"]
-    
-    # Lazy load BaseEmbeddingConfig to avoid loading at module import time
-    if name == "BaseEmbeddingConfig":
-        # Check if already cached
-        if "BaseEmbeddingConfig" not in _globals:
-            from litellm.llms.base_llm.embedding.transformation import (
-                BaseEmbeddingConfig as _BaseEmbeddingConfig,
-            )
-            _globals["BaseEmbeddingConfig"] = _BaseEmbeddingConfig
-        return _globals["BaseEmbeddingConfig"]
-    
-    # Lazy load BaseImageEditConfig to avoid loading at module import time
-    if name == "BaseImageEditConfig":
-        # Check if already cached
-        if "BaseImageEditConfig" not in _globals:
-            from litellm.llms.base_llm.image_edit.transformation import (
-                BaseImageEditConfig as _BaseImageEditConfig,
-            )
-            _globals["BaseImageEditConfig"] = _BaseImageEditConfig
-        return _globals["BaseImageEditConfig"]
-    
-    # Lazy load BaseImageGenerationConfig to avoid loading at module import time
-    if name == "BaseImageGenerationConfig":
-        # Check if already cached
-        if "BaseImageGenerationConfig" not in _globals:
-            from litellm.llms.base_llm.image_generation.transformation import (
-                BaseImageGenerationConfig as _BaseImageGenerationConfig,
-            )
-            _globals["BaseImageGenerationConfig"] = _BaseImageGenerationConfig
-        return _globals["BaseImageGenerationConfig"]
-    
-    # Lazy load BaseImageVariationConfig to avoid loading at module import time
-    if name == "BaseImageVariationConfig":
-        # Check if already cached
-        if "BaseImageVariationConfig" not in _globals:
-            from litellm.llms.base_llm.image_variations.transformation import (
-                BaseImageVariationConfig as _BaseImageVariationConfig,
-            )
-            _globals["BaseImageVariationConfig"] = _BaseImageVariationConfig
-        return _globals["BaseImageVariationConfig"]
-    
-    # Lazy load BasePassthroughConfig to avoid loading at module import time
-    if name == "BasePassthroughConfig":
-        # Check if already cached
-        if "BasePassthroughConfig" not in _globals:
-            from litellm.llms.base_llm.passthrough.transformation import (
-                BasePassthroughConfig as _BasePassthroughConfig,
-            )
-            _globals["BasePassthroughConfig"] = _BasePassthroughConfig
-        return _globals["BasePassthroughConfig"]
-    
-    # Lazy load BaseRealtimeConfig to avoid loading at module import time
-    if name == "BaseRealtimeConfig":
-        # Check if already cached
-        if "BaseRealtimeConfig" not in _globals:
-            from litellm.llms.base_llm.realtime.transformation import (
-                BaseRealtimeConfig as _BaseRealtimeConfig,
-            )
-            _globals["BaseRealtimeConfig"] = _BaseRealtimeConfig
-        return _globals["BaseRealtimeConfig"]
-    
-    # Lazy load BaseRerankConfig to avoid loading at module import time
-    if name == "BaseRerankConfig":
-        # Check if already cached
-        if "BaseRerankConfig" not in _globals:
-            from litellm.llms.base_llm.rerank.transformation import (
-                BaseRerankConfig as _BaseRerankConfig,
-            )
-            _globals["BaseRerankConfig"] = _BaseRerankConfig
-        return _globals["BaseRerankConfig"]
-    
-    # Lazy load BaseVectorStoreConfig to avoid loading at module import time
-    if name == "BaseVectorStoreConfig":
-        # Check if already cached
-        if "BaseVectorStoreConfig" not in _globals:
-            from litellm.llms.base_llm.vector_store.transformation import (
-                BaseVectorStoreConfig as _BaseVectorStoreConfig,
-            )
-            _globals["BaseVectorStoreConfig"] = _BaseVectorStoreConfig
-        return _globals["BaseVectorStoreConfig"]
-    
-    # Lazy load BaseVectorStoreFilesConfig to avoid loading at module import time
-    if name == "BaseVectorStoreFilesConfig":
-        # Check if already cached
-        if "BaseVectorStoreFilesConfig" not in _globals:
-            from litellm.llms.base_llm.vector_store_files.transformation import (
-                BaseVectorStoreFilesConfig as _BaseVectorStoreFilesConfig,
-            )
-            _globals["BaseVectorStoreFilesConfig"] = _BaseVectorStoreFilesConfig
-        return _globals["BaseVectorStoreFilesConfig"]
-    
-    # Lazy load BaseVideoConfig to avoid loading at module import time
-    if name == "BaseVideoConfig":
-        # Check if already cached
-        if "BaseVideoConfig" not in _globals:
-            from litellm.llms.base_llm.videos.transformation import (
-                BaseVideoConfig as _BaseVideoConfig,
-            )
-            _globals["BaseVideoConfig"] = _BaseVideoConfig
-        return _globals["BaseVideoConfig"]
-    
-    # Lazy load ANTHROPIC_API_ONLY_HEADERS to avoid loading at module import time
-    if name == "ANTHROPIC_API_ONLY_HEADERS":
-        # Check if already cached
-        if "ANTHROPIC_API_ONLY_HEADERS" not in _globals:
-            from litellm.types.llms.anthropic import (
-                ANTHROPIC_API_ONLY_HEADERS as _ANTHROPIC_API_ONLY_HEADERS,
-            )
-            _globals["ANTHROPIC_API_ONLY_HEADERS"] = _ANTHROPIC_API_ONLY_HEADERS
-        return _globals["ANTHROPIC_API_ONLY_HEADERS"]
-    
-    # Lazy load AnthropicThinkingParam to avoid loading at module import time
-    if name == "AnthropicThinkingParam":
-        # Check if already cached
-        if "AnthropicThinkingParam" not in _globals:
-            from litellm.types.llms.anthropic import (
-                AnthropicThinkingParam as _AnthropicThinkingParam,
-            )
-            _globals["AnthropicThinkingParam"] = _AnthropicThinkingParam
-        return _globals["AnthropicThinkingParam"]
-    
-    # Lazy load RerankResponse to avoid loading at module import time
-    if name == "RerankResponse":
-        # Check if already cached
-        if "RerankResponse" not in _globals:
-            from litellm.types.rerank import RerankResponse as _RerankResponse
-            _globals["RerankResponse"] = _RerankResponse
-        return _globals["RerankResponse"]
-    
-    # Lazy load ChatCompletionDeltaToolCallChunk to avoid loading at module import time
-    if name == "ChatCompletionDeltaToolCallChunk":
-        # Check if already cached
-        if "ChatCompletionDeltaToolCallChunk" not in _globals:
-            from litellm.types.llms.openai import (
-                ChatCompletionDeltaToolCallChunk as _ChatCompletionDeltaToolCallChunk,
-            )
-            _globals["ChatCompletionDeltaToolCallChunk"] = _ChatCompletionDeltaToolCallChunk
-        return _globals["ChatCompletionDeltaToolCallChunk"]
-    
-    # Lazy load ChatCompletionToolCallChunk to avoid loading at module import time
-    if name == "ChatCompletionToolCallChunk":
-        # Check if already cached
-        if "ChatCompletionToolCallChunk" not in _globals:
-            from litellm.types.llms.openai import (
-                ChatCompletionToolCallChunk as _ChatCompletionToolCallChunk,
-            )
-            _globals["ChatCompletionToolCallChunk"] = _ChatCompletionToolCallChunk
-        return _globals["ChatCompletionToolCallChunk"]
-    
-    # Lazy load ChatCompletionToolCallFunctionChunk to avoid loading at module import time
-    if name == "ChatCompletionToolCallFunctionChunk":
-        # Check if already cached
-        if "ChatCompletionToolCallFunctionChunk" not in _globals:
-            from litellm.types.llms.openai import (
-                ChatCompletionToolCallFunctionChunk as _ChatCompletionToolCallFunctionChunk,
-            )
-            _globals["ChatCompletionToolCallFunctionChunk"] = _ChatCompletionToolCallFunctionChunk
-        return _globals["ChatCompletionToolCallFunctionChunk"]
-    
-    # Lazy load LiteLLM_Params to avoid loading at module import time
-    if name == "LiteLLM_Params":
-        # Check if already cached
-        if "LiteLLM_Params" not in _globals:
-            from litellm.types.router import LiteLLM_Params as _LiteLLM_Params
-            _globals["LiteLLM_Params"] = _LiteLLM_Params
-        return _globals["LiteLLM_Params"]
+def __getattr__(name: str) -> Any:
+    """Lazy import handler for utils module with cached registry for improved performance."""
+    # Use cached registry from _lazy_imports instead of importing tuples every time
+    from litellm._lazy_imports import _get_lazy_import_registry
+    
+    registry = _get_lazy_import_registry()
+    
+    # Check if name is in registry and call the cached handler function
+    if name in registry:
+        handler_func = registry[name]
+        return handler_func(name)
     
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

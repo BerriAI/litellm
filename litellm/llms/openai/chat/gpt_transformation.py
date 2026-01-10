@@ -771,9 +771,9 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             return ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
-                created=chunk["created"],
-                model=chunk["model"],
-                choices=chunk["choices"],
+                created=chunk.get("created"),
+                model=chunk.get("model"),
+                choices=chunk.get("choices", []),
             )
         except Exception as e:
             raise e

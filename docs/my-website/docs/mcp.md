@@ -17,7 +17,7 @@ LiteLLM Proxy provides an MCP Gateway that allows you to use a fixed endpoint fo
 ## Overview
 | Feature | Description |
 |---------|-------------|
-| MCP Operations | • List Tools<br/>• Call Tools |
+| MCP Operations | • List Tools<br/>• Call Tools <br/>• Prompts <br/>• Resources |
 | Supported MCP Transports | • Streamable HTTP<br/>• SSE<br/>• Standard Input/Output (stdio) |
 | LiteLLM Permission Management | • By Key<br/>• By Team<br/>• By Organization |
 
@@ -198,6 +198,7 @@ mcp_servers:
   - `http` - Streamable HTTP transport
   - `stdio` - Standard Input/Output transport
 - **Command**: The command to execute for stdio transport (required for stdio)
+- **allow_all_keys**: Set to `true` to make the server available to every LiteLLM API key, even if the key/team doesn't list the server in its MCP permissions.
 - **Args**: Array of arguments to pass to the command (optional for stdio)
 - **Env**: Environment variables to set for the stdio process (optional for stdio)
 - **Description**: Optional description for the server

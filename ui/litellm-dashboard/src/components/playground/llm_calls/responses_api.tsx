@@ -33,6 +33,7 @@ export async function makeOpenAIResponsesRequest(
   onMCPEvent?: (event: MCPEvent) => void,
   codeInterpreterEnabled?: boolean,
   onCodeInterpreterResult?: (result: CodeInterpreterResult) => void,
+  customBaseUrl?: string,
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
 ) {
@@ -50,7 +51,7 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {

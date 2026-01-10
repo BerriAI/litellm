@@ -749,6 +749,57 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         raise AssertionError(error_message)
 
 
+def test_max_tokens_consistency():
+    """
+    Test that max_tokens == max_output_tokens for all models.
+
+    According to the spec in model_prices_and_context_window.json:
+    - max_tokens is a LEGACY parameter
+    - It should be set to max_output_tokens if the provider specifies it
+
+    This test ensures consistency across all model definitions.
+    """
+    import json
+    from pathlib import Path
+
+    # Load the model configuration
+    config_path = Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
+    with open(config_path, 'r') as f:
+        models = json.load(f)
+
+    inconsistencies = []
+
+    for model_name, config in models.items():
+        # Skip the sample_spec
+        if model_name == "sample_spec":
+            continue
+
+        # Check if both max_tokens and max_output_tokens exist
+        if isinstance(config, dict):
+            max_tokens = config.get('max_tokens')
+            max_output_tokens = config.get('max_output_tokens')
+
+            # Only validate if both exist
+            if max_tokens is not None and max_output_tokens is not None:
+                if max_tokens != max_output_tokens:
+                    inconsistencies.append({
+                        'model': model_name,
+                        'max_tokens': max_tokens,
+                        'max_output_tokens': max_output_tokens
+                    })
+
+    if inconsistencies:
+        error_msg = f"\n\n❌ Found {len(inconsistencies)} models with max_tokens != max_output_tokens:\n\n"
+        for item in inconsistencies[:10]:  # Show first 10
+            error_msg += f"  {item['model']}: max_tokens={item['max_tokens']}, max_output_tokens={item['max_output_tokens']}\n"
+
+        if len(inconsistencies) > 10:
+            error_msg += f"\n  ... and {len(inconsistencies) - 10} more\n"
+
+        error_msg += "\nTo fix these inconsistencies, run: poetry run python fix_max_tokens_inconsistencies.py"
+        raise AssertionError(error_msg)
+
+
 def test_get_model_info_gemini():
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
