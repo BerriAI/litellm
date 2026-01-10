@@ -178,7 +178,26 @@ def init_bedrock_client(
     ) = params_to_check
 
     # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
+    # Use the same logic as BaseAWSLLM._get_ssl_verify() for consistency
+    from litellm.secret_managers.main import str_to_bool
     ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+    
+    # Convert string "False"/"True" to boolean
+    if isinstance(ssl_verify, str):
+        # Check if it's a file path
+        if os.path.exists(ssl_verify):
+            pass  # Keep the file path
+        else:
+            # Otherwise try to convert to boolean
+            ssl_verify_bool = str_to_bool(ssl_verify)
+            if ssl_verify_bool is not None:
+                ssl_verify = ssl_verify_bool
+    
+    # Check SSL_CERT_FILE environment variable for custom CA bundle
+    if ssl_verify is True or ssl_verify == "True":
+        ssl_cert_file = os.getenv("SSL_CERT_FILE")
+        if ssl_cert_file and os.path.exists(ssl_cert_file):
+            ssl_verify = ssl_cert_file
 
     ### SET REGION NAME
     if region_name:
@@ -229,7 +248,7 @@ def init_bedrock_client(
                 status_code=401,
             )
 
-        sts_client = boto3.client("sts")
+        sts_client = boto3.client("sts", verify=ssl_verify)
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
