@@ -50,15 +50,30 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
             )
 
         headers["content-type"] = "application/json"
-        
+
+        # Get exclusion list from litellm_params
+        exclude_anthropic_beta_values = litellm_params.get("exclude_anthropic_beta_values") or []
+
+        # Filter existing anthropic-beta header if present and exclusions are configured
+        if "anthropic-beta" in headers and exclude_anthropic_beta_values:
+            existing_betas = [b.strip() for b in headers["anthropic-beta"].split(",")]
+            filtered_betas = [b for b in existing_betas if b not in exclude_anthropic_beta_values]
+            if filtered_betas:
+                headers["anthropic-beta"] = ",".join(filtered_betas)
+            else:
+                del headers["anthropic-beta"]
+
         # Add web search beta header for Vertex AI only if not already set
         if "anthropic-beta" not in headers:
             tools = optional_params.get("tools", [])
             for tool in tools:
                 if isinstance(tool, dict) and tool.get("type", "").startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
-                    headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                    web_search_beta = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+                    # Only add if not in exclusion list
+                    if web_search_beta not in exclude_anthropic_beta_values:
+                        headers["anthropic-beta"] = web_search_beta
                     break
-        
+
         return headers, api_base
 
     def get_complete_url(
