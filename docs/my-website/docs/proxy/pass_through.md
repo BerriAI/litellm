@@ -12,6 +12,14 @@ Route requests from your LiteLLM proxy to any external API. Perfect for custom m
 - Proxy Admins don't need to give developers api keys to upstream llm providers like Bria, Mistral OCR, etc.
 - Maintain centralized authentication, spend tracking, budgeting
 
+:::info **Enterprise Feature**
+
+**Authentication for passthrough endpoints is an Enterprise feature.** 
+
+For open-source users, passthrough endpoints work without authentication. To enable authentication features, [contact us for Enterprise access](https://litellm.ai/#trial).
+
+:::
+
 ## Quick Start with UI (Recommended)
 
 The easiest way to create pass through endpoints is through the LiteLLM UI. In this example, we'll onboard the [Bria API](https://docs.bria.ai/image-generation/endpoints/text-to-image-base) and set a cost per request.
@@ -163,7 +171,7 @@ general_settings:
   pass_through_endpoints:
     - path: string                    # Route on LiteLLM Proxy Server
       target: string                  # Target URL for forwarding
-      auth: boolean                   # Enable LiteLLM authentication (Enterprise)
+      auth: boolean                   # Enable LiteLLM authentication (Enterprise Only)
       forward_headers: boolean        # Forward all incoming headers
       headers:                        # Custom headers to add
         Authorization: string         # Auth header for target API
