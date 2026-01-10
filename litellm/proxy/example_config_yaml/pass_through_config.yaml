@@ -28,8 +28,8 @@ model_list:
     litellm_params:
       model: openai/*
       api_key: os.environ/OPENAI_API_KEY
-general_settings: 
-  master_key: sk-1234 
+general_settings:
+  master_key: sk-1234
   custom_auth: custom_auth_basic.user_api_key_auth
   pass_through_endpoints:
     - path: "/azure-config-passthrough"
@@ -37,6 +37,13 @@ general_settings:
       include_subpath: true
       headers:
         Authorization: os.environ/AZURE_API_KEY
+    - path: "/anthropic"
+      target: "https://api.anthropic.com"
+      include_subpath: true
+      forward_metadata: true  # Enable for Anthropic prompt caching - forwards client metadata to target endpoint
+      headers:
+        x-api-key: os.environ/ANTHROPIC_API_KEY
+        anthropic-version: "2023-06-01"
 
 litellm_settings:
   include_cost_in_streaming_usage: true

@@ -1886,6 +1886,112 @@ async def test_bedrock_router_passthrough_metadata_initialization():
         assert result == mock_response
 
 
+def test_init_kwargs_forward_metadata_toggle():
+    """
+    Test that _init_kwargs_for_pass_through_endpoint respects the forward_metadata toggle.
+
+    When forward_metadata=False (default):
+        - metadata is stripped from _parsed_body (for LiteLLM-only use like cost tracking tags)
+    When forward_metadata=True:
+        - metadata is preserved in _parsed_body for forwarding to target endpoint
+        - Providers like Anthropic need this for features like prompt caching
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        HttpPassThroughEndpointHelpers,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        PassthroughStandardLoggingPayload,
+    )
+
+    # Create mock request
+    mock_request = MagicMock(spec=Request)
+    mock_request.headers = Headers({})
+
+    # Create mock user API key dict with all required fields
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.api_key = "test-api-key"
+    mock_user_api_key_dict.key_alias = "test-alias"
+    mock_user_api_key_dict.user_email = "test@example.com"
+    mock_user_api_key_dict.user_id = "test-user-id"
+    mock_user_api_key_dict.team_id = "test-team-id"
+    mock_user_api_key_dict.org_id = "test-org-id"
+    mock_user_api_key_dict.team_alias = "test-team-alias"
+    mock_user_api_key_dict.end_user_id = "test-end-user-id"
+    mock_user_api_key_dict.request_route = "/api/endpoint"
+    mock_user_api_key_dict.spend = 0.0
+    mock_user_api_key_dict.max_budget = None
+    mock_user_api_key_dict.budget_reset_at = None
+    mock_user_api_key_dict.metadata = {}
+
+    # Create passthrough logging payload
+    passthrough_logging_payload = PassthroughStandardLoggingPayload(
+        url="http://example.com/api",
+        request_body={},
+        request_method="POST",
+    )
+
+    # Create mock logging object (without spec to allow setting arbitrary attributes)
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {}
+
+    # Test Case 1: forward_metadata=False (default) - metadata should be STRIPPED
+    _parsed_body_stripped = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"user_id": "client-user-123", "tags": ["cost-tracking"]},
+        "max_tokens": 1024,
+    }
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_logging_payload,
+        logging_obj=mock_logging_obj,
+        _parsed_body=_parsed_body_stripped,
+        forward_metadata=False,  # Default behavior
+    )
+
+    # Metadata should be STRIPPED from _parsed_body when forward_metadata=False
+    assert "metadata" not in _parsed_body_stripped, "metadata should be stripped when forward_metadata=False"
+    # Other fields should still be present
+    assert "model" in _parsed_body_stripped
+    assert "messages" in _parsed_body_stripped
+    assert "max_tokens" in _parsed_body_stripped
+
+    # Test Case 2: forward_metadata=True - metadata should be PRESERVED
+    _parsed_body_preserved = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {"user_id": "client-user-123", "cache_control": {"type": "ephemeral"}},
+        "max_tokens": 1024,
+    }
+    original_metadata = _parsed_body_preserved["metadata"].copy()
+
+    # Reset mock logging object
+    mock_logging_obj.model_call_details = {}
+
+    result = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=mock_user_api_key_dict,
+        passthrough_logging_payload=passthrough_logging_payload,
+        logging_obj=mock_logging_obj,
+        _parsed_body=_parsed_body_preserved,
+        forward_metadata=True,  # Enable forwarding for providers like Anthropic
+    )
+
+    # Metadata should be PRESERVED in _parsed_body when forward_metadata=True
+    assert "metadata" in _parsed_body_preserved, "metadata should be preserved when forward_metadata=True"
+    assert _parsed_body_preserved["metadata"] == original_metadata, "metadata content should be unchanged"
+    # Other fields should still be present
+    assert "model" in _parsed_body_preserved
+    assert "messages" in _parsed_body_preserved
+    assert "max_tokens" in _parsed_body_preserved
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_adds_headers_to_metadata():
     """
