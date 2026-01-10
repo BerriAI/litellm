@@ -2,15 +2,13 @@ import React from "react";
 import { BarChart, Card, Title } from "@tremor/react";
 import { CustomLegend, CustomTooltip } from "@/components/common_components/chartUtils";
 import { MetricWithMetadata } from "../../../types";
-import { mockEndpointData } from "../mockEndpointData";
 
 interface EndpointUsageBarChartProps {
   endpointData?: Record<string, MetricWithMetadata>;
 }
 
 const EndpointUsageBarChart: React.FC<EndpointUsageBarChartProps> = ({ endpointData }) => {
-  // Use mock data if no endpointData is provided
-  const dataToUse = endpointData || mockEndpointData;
+  const dataToUse = endpointData || {};
 
   // Transform endpoint data into chart format
   const chartData = React.useMemo(() => {

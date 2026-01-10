@@ -54,6 +54,7 @@ import TopKeyView from "./EntityUsage/TopKeyView";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
+import NewBadge from "../../common_components/NewBadge";
 
 interface UsagePageProps {
   teams: Team[];
@@ -435,13 +436,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {usageView === "global" && (
             <TabGroup>
               <div className="flex justify-between items-center">
-                <TabList variant="solid" className="mt-1">
-                  <Tab>Cost</Tab>
-                  <Tab>Model Activity</Tab>
-                  <Tab>Key Activity</Tab>
-                  <Tab>MCP Server Activity</Tab>
-                  <Tab>Endpoint Activity</Tab>
-                </TabList>
+                <NewBadge>
+                  <TabList variant="solid" className="mt-1">
+                    <Tab>Cost</Tab>
+                    <Tab>Model Activity</Tab>
+                    <Tab>Key Activity</Tab>
+                    <Tab>MCP Server Activity</Tab>
+                    <Tab>Endpoint Activity</Tab>
+                  </TabList>
+                </NewBadge>
                 <Button
                   onClick={() => setIsGlobalExportModalOpen(true)}
                   icon={() => (
