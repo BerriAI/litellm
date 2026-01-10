@@ -54,7 +54,7 @@ pip install litellm==1.80.14
 - **Interactions API Bridge** - [Use all LiteLLM providers with the Interactions API](../../docs/interactions)
 - **RAG Query Endpoint** - [New RAG Search/Query endpoint for retrieval-augmented generation](../../docs/search/index)
 - **92.7% Faster Provider Config Lookup** - Major performance improvement for provider configuration
-- **UI Usage - Endpoint Activity** - Users can now see Endpoint Activity Metrics in the UI.
+- **UI Usage - Endpoint Activity** - [Users can now see Endpoint Activity Metrics in the UI](../../docs/proxy/endpoint_activity.md)
 
 
 ---
