@@ -49,7 +49,7 @@ pip install litellm==1.80.14
 - **MiniMax Provider** - [Full support for MiniMax chat completions, TTS, and Anthropic native endpoint](../../docs/providers/minimax)
 - **AWS Polly TTS** - [New TTS provider using AWS Polly API](../../docs/providers/aws_polly)
 - **SSO Role Mapping** - Configure role mappings for SSO providers directly in the UI
-- **Cost Estimator** - [New UI tool for estimating costs across multiple models and requests](../../docs/proxy/cost_estimator)
+- **Cost Estimator** - New UI tool for estimating costs across multiple models and requests
 - **MCP Global Mode** - [Configure MCP servers globally with visibility controls](../../docs/mcp)
 - **Interactions API Bridge** - [Use all LiteLLM providers with the Interactions API](../../docs/interactions)
 - **RAG Query Endpoint** - [New RAG Search/Query endpoint for retrieval-augmented generation](../../docs/search/index)
@@ -67,6 +67,29 @@ style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
 Users can now see Endpoint Activity Metrics in the UI.
+
+---
+
+## New Providers and Endpoints
+
+### New Providers (6 new providers)
+
+| Provider | Supported LiteLLM Endpoints | Description |
+| -------- | ------------------- | ----------- |
+| [Manus](../../docs/providers/manus) | `/responses`, `GET /responses`, `/files` | Manus API for agentic workflows with file management |
+| [MiniMax](../../docs/providers/minimax) | `/chat/completions`, `/audio/speech` | MiniMax chat completions and TTS support |
+| [AWS Polly](../../docs/providers/aws_polly) | `/audio/speech` | AWS Polly text-to-speech API |
+| [GigaChat](../../docs/providers/gigachat) | `/chat/completions` | GigaChat provider for Russian language AI |
+| [LlamaGate](../../docs/providers/llamagate) | `/chat/completions`, `/embeddings` | LlamaGate provider with 15+ models |
+| [Abliteration AI](../../docs/providers/abliteration) | `/chat/completions` | Abliteration.ai provider support |
+
+### New LLM API Endpoints (3 new endpoints)
+
+| Endpoint | Method | Description | Documentation |
+| -------- | ------ | ----------- | ------------- |
+| `/responses/compact` | POST | Compact responses API endpoint | [Docs](../../docs/response_api) |
+| `/rag/query` | POST | RAG Search/Query endpoint | [Docs](../../docs/search/index) |
+| `/containers/{id}/files` | POST | Upload files to containers | [Docs](../../docs/container_files) |
 
 ---
 
@@ -120,7 +143,7 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Add thought_signatures to VertexGeminiConfig - [PR #18853](https://github.com/BerriAI/litellm/pull/18853)
     - Add support for Vertex AI API keys - [PR #18806](https://github.com/BerriAI/litellm/pull/18806)
     - Add zai glm-4.7 model support - [PR #18782](https://github.com/BerriAI/litellm/pull/18782)
-- **[Azure](../../docs/providers/azure)**
+- **[Azure](../../docs/providers/azure/azure)**
     - Add Azure gpt-image-1.5 pricing to cost map - [PR #18347](https://github.com/BerriAI/litellm/pull/18347)
     - Add azure/gpt-5.2-chat model - [PR #18361](https://github.com/BerriAI/litellm/pull/18361)
     - Add support for image generation via Azure AD token - [PR #18413](https://github.com/BerriAI/litellm/pull/18413)
@@ -129,7 +152,6 @@ Users can now see Endpoint Activity Metrics in the UI.
 - **[Bedrock](../../docs/providers/bedrock)**
     - Add Bedrock Kimi K2 model support - [PR #18797](https://github.com/BerriAI/litellm/pull/18797)
     - Add support for model id in bedrock passthrough - [PR #18800](https://github.com/BerriAI/litellm/pull/18800)
-    - Add Bedrock as a backend API for token counting - [PR #18858](https://github.com/BerriAI/litellm/pull/18858)
     - Fix Nova model detection for Bedrock provider - [PR #18250](https://github.com/BerriAI/litellm/pull/18250)
     - Ensure toolUse.input is always a dict when converting from OpenAI format - [PR #18414](https://github.com/BerriAI/litellm/pull/18414)
 - **[Databricks](../../docs/providers/databricks)**
@@ -149,7 +171,7 @@ Users can now see Endpoint Activity Metrics in the UI.
 - **[Ollama](../../docs/providers/ollama)**
     - Add dimensions for ollama embedding - [PR #18536](https://github.com/BerriAI/litellm/pull/18536)
     - Extract pure base64 data from data URLs for Ollama - [PR #18465](https://github.com/BerriAI/litellm/pull/18465)
-- **[Watsonx](../../docs/providers/watsonx)**
+- **[Watsonx](../../docs/providers/watsonx/index)**
     - Add Watsonx fields support - [PR #18569](https://github.com/BerriAI/litellm/pull/18569)
     - Fix Watsonx Audio Transcription - filter model field - [PR #18810](https://github.com/BerriAI/litellm/pull/18810)
 - **[SAP](../../docs/providers/sap)**
@@ -183,12 +205,13 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Fix google_genai streaming adapter provider handling - [PR #18845](https://github.com/BerriAI/litellm/pull/18845)
 - **[Groq](../../docs/providers/groq)**
     - Remove deprecated Groq models and update model registry - [PR #18062](https://github.com/BerriAI/litellm/pull/18062)
+- **[Vertex AI](../../docs/providers/vertex)**
+    - Handle unsupported region for Vertex AI count tokens endpoint - [PR #18665](https://github.com/BerriAI/litellm/pull/18665)
 - **General**
     - Fix request body for image embedding request - [PR #18336](https://github.com/BerriAI/litellm/pull/18336)
     - Fix lost tool_calls when streaming has both text and tool_calls - [PR #18316](https://github.com/BerriAI/litellm/pull/18316)
     - Add all resolution for gpt-image-1.5 - [PR #18586](https://github.com/BerriAI/litellm/pull/18586)
     - Fix gpt-image-1 cost calculation using token-based pricing - [PR #17906](https://github.com/BerriAI/litellm/pull/17906)
-    - Handle not supported region for vertex ai count tokens - [PR #18665](https://github.com/BerriAI/litellm/pull/18665)
     - Fix response_format leaking into extra_body - [PR #18859](https://github.com/BerriAI/litellm/pull/18859)
     - Align max_tokens with max_output_tokens for consistency - [PR #18820](https://github.com/BerriAI/litellm/pull/18820)
 
@@ -208,7 +231,7 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Allow using all LiteLLM providers (interactions -> responses API bridge) - [PR #18373](https://github.com/BerriAI/litellm/pull/18373)
 - **[RAG Search API](../../docs/search/index)**
     - Add RAG Search/Query endpoint - [PR #18376](https://github.com/BerriAI/litellm/pull/18376)
-- **[CountTokens API](../../docs/token_counting)**
+- **[CountTokens API](../../docs/completion/token_usage)**
     - Add Bedrock as a backend API for token counting - [PR #18858](https://github.com/BerriAI/litellm/pull/18858)
 - **[Generate Content](../../docs/providers/gemini)**
     - Add generate content in LLM route - [PR #18405](https://github.com/BerriAI/litellm/pull/18405)
@@ -281,8 +304,8 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Add selectable MCP servers to the playground - [PR #18578](https://github.com/BerriAI/litellm/pull/18578)
     - Add custom proxy base URL support to Playground - [PR #18661](https://github.com/BerriAI/litellm/pull/18661)
 - **General UI**
-    - Minor Styling Changes - [PR #18310](https://github.com/BerriAI/litellm/pull/18310)
-    - New Badge Reusable Component - [PR #18537](https://github.com/BerriAI/litellm/pull/18537)
+    - UI styling improvements and fixes - [PR #18310](https://github.com/BerriAI/litellm/pull/18310)
+    - Add reusable "New" badge component for feature highlights - [PR #18537](https://github.com/BerriAI/litellm/pull/18537)
     - Hide New Badges - [PR #18547](https://github.com/BerriAI/litellm/pull/18547)
     - Change Budget page to Have Tabs - [PR #18576](https://github.com/BerriAI/litellm/pull/18576)
     - Clicking on Logo Directs to Correct URL - [PR #18575](https://github.com/BerriAI/litellm/pull/18575)
@@ -309,9 +332,18 @@ Users can now see Endpoint Activity Metrics in the UI.
 
 ---
 
-## Logging / Guardrail / Prompt Management Integrations
+## AI Integrations
 
-#### Features
+### New Integrations (4 new integrations)
+
+| Integration | Type | Description |
+| ----------- | ---- | ----------- |
+| [Focus](../../docs/observability/focus) | Logging | Focus export support for observability - [PR #18802](https://github.com/BerriAI/litellm/pull/18802) |
+| [SigNoz](../../docs/observability/signoz) | Logging | SigNoz integration for observability - [PR #18726](https://github.com/BerriAI/litellm/pull/18726) |
+| [Qualifire](../../docs/proxy/guardrails/qualifire) | Guardrails | Qualifire guardrails and eval webhook - [PR #18594](https://github.com/BerriAI/litellm/pull/18594) |
+| Levo AI | Guardrails | Levo AI integration for security - [PR #18529](https://github.com/BerriAI/litellm/pull/18529) |
+
+### Logging
 
 - **[DataDog](../../docs/proxy/logging#datadog)**
     - Fix span kind fallback when parent_id missing - [PR #18418](https://github.com/BerriAI/litellm/pull/18418)
@@ -334,23 +366,18 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Add support for LangSmith organization-scoped API keys with tenant ID - [PR #18623](https://github.com/BerriAI/litellm/pull/18623)
 - **[Generic API Logger](../../docs/proxy/logging#generic-api-logger)**
     - Add log_format option to GenericAPILogger - [PR #18587](https://github.com/BerriAI/litellm/pull/18587)
-- **[Focus](../../docs/proxy/logging#focus)**
-    - Add Focus export support - [PR #18802](https://github.com/BerriAI/litellm/pull/18802)
 
-#### Guardrails
+### Guardrails
 
 - **[Content Filter](../../docs/proxy/guardrails/litellm_content_filter)**
     - Add content filter logs page - [PR #18335](https://github.com/BerriAI/litellm/pull/18335)
     - Log actual event type for guardrails - [PR #18489](https://github.com/BerriAI/litellm/pull/18489)
 - **[Qualifire](../../docs/proxy/guardrails/qualifire)**
-    - Add Qualifire guardrails - [PR #18594](https://github.com/BerriAI/litellm/pull/18594)
     - Add Qualifire eval webhook - [PR #18836](https://github.com/BerriAI/litellm/pull/18836)
-- **[Lasso](../../docs/proxy/guardrails/lasso)**
+- **[Lasso Security](../../docs/proxy/guardrails/lasso_security)**
     - Add Lasso guardrail API docs - [PR #18652](https://github.com/BerriAI/litellm/pull/18652)
-- **[Levo AI](../../docs/proxy/guardrails/levo)**
-    - Add Levo AI integration - [PR #18529](https://github.com/BerriAI/litellm/pull/18529)
-- **[Noma](../../docs/proxy/guardrails/noma)**
-    - Add support MCP guardrail to Noma - [PR #18668](https://github.com/BerriAI/litellm/pull/18668)
+- **[Noma Security](../../docs/proxy/guardrails/noma_security)**
+    - Add MCP guardrail support for Noma - [PR #18668](https://github.com/BerriAI/litellm/pull/18668)
 - **[Bedrock Guardrails](../../docs/proxy/guardrails/bedrock)**
     - Remove redundant Bedrock guardrail block handling - [PR #18634](https://github.com/BerriAI/litellm/pull/18634)
 - **General**
@@ -359,10 +386,6 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Extend case normalization to ALL guardrail types - [PR #18664](https://github.com/BerriAI/litellm/pull/18664)
     - Fix MCP handling in unified guardrail - [PR #18630](https://github.com/BerriAI/litellm/pull/18630)
     - Fix embeddings calltype for guardrail precallhook - [PR #18740](https://github.com/BerriAI/litellm/pull/18740)
-
-#### New Integration
-
-- **[SigNoz](../../docs/observability/signoz)** - Add SigNoz integration to observability docs - [PR #18726](https://github.com/BerriAI/litellm/pull/18726)
 
 ---
 
@@ -389,10 +412,10 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Require auth for MCP connection test endpoint - [PR #18290](https://github.com/BerriAI/litellm/pull/18290)
     - Fix MCP gateway OAuth2 auth issues and ClosedResourceError - [PR #18281](https://github.com/BerriAI/litellm/pull/18281)
 - **Bug Fixes**
-    - Fix health status - [PR #18443](https://github.com/BerriAI/litellm/pull/18443)
-    - Fix openapi to mcp - [PR #18597](https://github.com/BerriAI/litellm/pull/18597)
-    - Remove exec() usage and handle invalid OpenAPI parameter names - [PR #18480](https://github.com/BerriAI/litellm/pull/18480)
-    - Fix MCP error in multiple servers - [PR #18855](https://github.com/BerriAI/litellm/pull/18855)
+    - Fix MCP server health status reporting - [PR #18443](https://github.com/BerriAI/litellm/pull/18443)
+    - Fix OpenAPI to MCP tool conversion - [PR #18597](https://github.com/BerriAI/litellm/pull/18597)
+    - Remove exec() usage and handle invalid OpenAPI parameter names for security - [PR #18480](https://github.com/BerriAI/litellm/pull/18480)
+    - Fix MCP error when using multiple servers simultaneously - [PR #18855](https://github.com/BerriAI/litellm/pull/18855)
 - **Migrate MCP Fetching Logic to React Query** - [PR #18352](https://github.com/BerriAI/litellm/pull/18352)
 
 ---
@@ -480,39 +503,6 @@ Users can now see Endpoint Activity Metrics in the UI.
     - Remove redundant comments about setting litellm.callbacks - [PR #18711](https://github.com/BerriAI/litellm/pull/18711)
     - Update header to be markdown bold by removing space - [PR #18846](https://github.com/BerriAI/litellm/pull/18846)
     - Manus docs - new provider - [PR #18817](https://github.com/BerriAI/litellm/pull/18817)
-
----
-
-## Infrastructure / CI/CD
-
-- **CI Fixes**
-    - Fix CI: Revert security scan changes and add GitGuardian ignore rules - [PR #18358](https://github.com/BerriAI/litellm/pull/18358)
-    - Fix check_code_and_doc_quality - [PR #18560](https://github.com/BerriAI/litellm/pull/18560)
-    - Fix litellm_mapped_tests_llms - [PR #18563](https://github.com/BerriAI/litellm/pull/18563)
-    - Fix litellm_utils_testing - [PR #18565](https://github.com/BerriAI/litellm/pull/18565)
-    - Fix litellm_security_tests - [PR #18567](https://github.com/BerriAI/litellm/pull/18567)
-    - Fix litellm_mapped_tests_proxy - [PR #18572](https://github.com/BerriAI/litellm/pull/18572)
-    - De-duplicate Docker Database Build - [PR #18561](https://github.com/BerriAI/litellm/pull/18561)
-    - Fix component label automation to prevent false positives - [PR #18765](https://github.com/BerriAI/litellm/pull/18765)
-    - Update issue labeling with working regex pattern - [PR #18821](https://github.com/BerriAI/litellm/pull/18821)
-    - Prevent Prisma migration workflow from running in forks - [PR #18863](https://github.com/BerriAI/litellm/pull/18863)
-- **UI Testing**
-    - E2E Tests Setup - [PR #18501](https://github.com/BerriAI/litellm/pull/18501)
-    - E2E Tests: Sidebar Navigation - [PR #18528](https://github.com/BerriAI/litellm/pull/18528)
-    - E2E Tests: Parity With Legacy Tests - [PR #18533](https://github.com/BerriAI/litellm/pull/18533)
-    - Unit Testing Coverage With v8 - [PR #18548](https://github.com/BerriAI/litellm/pull/18548)
-    - Test for React Query Hooks - [PR #18577](https://github.com/BerriAI/litellm/pull/18577)
-    - E2E Test: Can View Admin Setting Page - [PR #18682](https://github.com/BerriAI/litellm/pull/18682)
-    - E2E Test: New DB Branch Per Test Run - [PR #18885](https://github.com/BerriAI/litellm/pull/18885)
-    - Adding Unit Tests to Increase Coverage - [PR #18601](https://github.com/BerriAI/litellm/pull/18601), [PR #18618](https://github.com/BerriAI/litellm/pull/18618), [PR #18742](https://github.com/BerriAI/litellm/pull/18742), [PR #18848](https://github.com/BerriAI/litellm/pull/18848)
-    - E2E Test: Add Model - See Models from Selected Provider - [PR #18615](https://github.com/BerriAI/litellm/pull/18615)
-    - E2E Test: Refactor Page Settings + Test for Page Navigation - [PR #18849](https://github.com/BerriAI/litellm/pull/18849)
-- **React Query Migration**
-    - useQuery Hooks Now Depend on useAuthorized - [PR #18416](https://github.com/BerriAI/litellm/pull/18416)
-    - Key Table to Use Optional "expand" query - [PR #18503](https://github.com/BerriAI/litellm/pull/18503)
-    - Refactor Keys Table - [PR #18504](https://github.com/BerriAI/litellm/pull/18504)
-    - Virtual Keys Table to use React Query - [PR #18506](https://github.com/BerriAI/litellm/pull/18506)
-    - Deprecate useTeams - [PR #18404](https://github.com/BerriAI/litellm/pull/18404)
 
 ---
 
