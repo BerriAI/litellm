@@ -9,7 +9,7 @@ Use Manus AI agents through LiteLLM's OpenAI-compatible Responses API.
 |----------|---------|
 | Description | Manus is an AI agent platform for complex reasoning tasks, document analysis, and multi-step workflows with asynchronous task execution. |
 | Provider Route on LiteLLM | `manus/{agent_profile}` |
-| Supported Operations | `/responses` (Responses API) |
+| Supported Operations | `/responses` (Responses API), `/files` (Files API) |
 | Provider Doc | [Manus API ↗](https://open.manus.im/docs/openai-compatibility) |
 
 ## Model Format
@@ -188,7 +188,182 @@ For production applications, use [webhooks](https://open.manus.im/docs/webhooks)
 | `max_output_tokens` | ✅ | Limits response length |
 | `previous_response_id` | ✅ | For multi-turn conversations |
 
+## Files API
+
+Manus supports file uploads for document analysis and processing. Files can be uploaded and then referenced in Responses API calls.
+
+### LiteLLM Python SDK
+
+```python showLineNumbers title="Upload, Use, Retrieve, and Delete Files"
+import litellm
+import os
+
+# Set API key
+os.environ["MANUS_API_KEY"] = "your-manus-api-key"
+
+# Upload file
+file_content = b"This is a document for analysis."
+created_file = await litellm.acreate_file(
+    file=("document.txt", file_content),
+    purpose="assistants",
+    custom_llm_provider="manus",
+)
+print(f"Uploaded file: {created_file.id}")
+
+# Use file with Responses API
+response = await litellm.aresponses(
+    model="manus/manus-1.6",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize this document."},
+                {"type": "input_file", "file_id": created_file.id},
+            ],
+        },
+    ],
+    extra_body={"task_mode": "agent", "agent_profile": "manus-1.6-agent"},
+)
+print(f"Response: {response.id}")
+
+# Retrieve file
+retrieved_file = await litellm.afile_retrieve(
+    file_id=created_file.id,
+    custom_llm_provider="manus",
+)
+print(f"File details: {retrieved_file.filename}, {retrieved_file.bytes} bytes")
+
+# Delete file
+deleted_file = await litellm.afile_delete(
+    file_id=created_file.id,
+    custom_llm_provider="manus",
+)
+print(f"Deleted: {deleted_file.deleted}")
+```
+
+### LiteLLM AI Gateway
+
+<Tabs>
+<TabItem value="curl" label="cURL">
+
+```bash showLineNumbers title="Upload File"
+# Upload file
+curl -X POST http://localhost:4000/v1/files \
+  -H "Authorization: Bearer your-proxy-key" \
+  -F "file=@document.txt" \
+  -F "purpose=assistants" \
+  -F "custom_llm_provider=manus"
+
+# Response
+{
+  "id": "file_abc123",
+  "object": "file",
+  "bytes": 1024,
+  "created_at": 1234567890,
+  "filename": "document.txt",
+  "purpose": "assistants",
+  "status": "uploaded"
+}
+```
+
+```bash showLineNumbers title="Use File with Responses API"
+# Create response with file
+curl -X POST http://localhost:4000/responses \
+  -H "Authorization: Bearer your-proxy-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "manus-agent",
+    "input": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "input_text", "text": "Summarize this document."},
+          {"type": "input_file", "file_id": "file_abc123"}
+        ]
+      }
+    ]
+  }'
+```
+
+```bash showLineNumbers title="Retrieve File"
+# Get file details
+curl http://localhost:4000/v1/files/file_abc123 \
+  -H "Authorization: Bearer your-proxy-key"
+
+# Response
+{
+  "id": "file_abc123",
+  "object": "file",
+  "bytes": 1024,
+  "created_at": 1234567890,
+  "filename": "document.txt",
+  "purpose": "assistants",
+  "status": "uploaded"
+}
+```
+
+```bash showLineNumbers title="Delete File"
+# Delete file
+curl -X DELETE http://localhost:4000/v1/files/file_abc123 \
+  -H "Authorization: Bearer your-proxy-key"
+
+# Response
+{
+  "id": "file_abc123",
+  "object": "file",
+  "deleted": true
+}
+```
+
+</TabItem>
+<TabItem value="openai" label="OpenAI SDK">
+
+```python showLineNumbers title="Upload, Use, Retrieve, and Delete Files"
+import openai
+
+client = openai.OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-proxy-key"
+)
+
+# Upload file
+with open("document.txt", "rb") as f:
+    created_file = client.files.create(
+        file=f,
+        purpose="assistants",
+        extra_body={"custom_llm_provider": "manus"}
+    )
+print(f"Uploaded file: {created_file.id}")
+
+# Use file with Responses API
+response = client.responses.create(
+    model="manus-agent",
+    input=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Summarize this document."},
+                {"type": "input_file", "file_id": created_file.id}
+            ]
+        }
+    ]
+)
+print(f"Response: {response.id}")
+
+# Retrieve file
+retrieved_file = client.files.retrieve(created_file.id)
+print(f"File: {retrieved_file.filename}, {retrieved_file.bytes} bytes")
+
+# Delete file
+deleted_file = client.files.delete(created_file.id)
+print(f"Deleted: {deleted_file.deleted}")
+```
+
+</TabItem>
+</Tabs>
+
 ## Related Documentation
 
 - [LiteLLM Responses API](/docs/response_api)
+- [LiteLLM Files API](/docs/proxy/litellm_managed_files)
 - [Manus OpenAI Compatibility](https://open.manus.im/docs/openai-compatibility)
