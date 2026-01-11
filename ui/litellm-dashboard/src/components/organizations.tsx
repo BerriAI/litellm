@@ -1,40 +1,39 @@
-import React, { useState, useEffect } from "react";
+import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { ChevronDownIcon, ChevronRightIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
+  Badge,
+  Button,
+  Card,
+  Col,
+  Grid,
+  Icon,
+  Tab,
+  TabGroup,
   Table,
+  TableBody,
+  TableCell,
   TableHead,
   TableHeaderCell,
-  TableBody,
   TableRow,
-  TableCell,
-  Card,
-  Text,
-  Badge,
-  Icon,
-  Grid,
-  Col,
-  Button,
-  TabGroup,
   TabList,
-  Tab,
-  TabPanels,
   TabPanel,
+  TabPanels,
+  Text,
+  TextInput,
 } from "@tremor/react";
-import NumericalInput from "./shared/numerical_input";
-import { Input } from "antd";
-import { Modal, Form, Tooltip, Select as Select2 } from "antd";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { RefreshIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { TextInput } from "@tremor/react";
-import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
-import OrganizationInfoView from "./organization/organization_view";
-import { Organization, organizationListCall, organizationCreateCall, organizationDeleteCall } from "./networking";
-import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import React, { useState } from "react";
 import { formatNumberWithCommas } from "../utils/dataUtils";
-import NotificationsManager from "./molecules/notifications_manager";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
-import OrganizationFilters, { FilterState } from "@/app/(dashboard)/organizations/OrganizationFilters";
+import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
+import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import NotificationsManager from "./molecules/notifications_manager";
+import { Organization, organizationCreateCall, organizationDeleteCall, organizationListCall } from "./networking";
+import OrganizationInfoView from "./organization/organization_view";
+import NumericalInput from "./shared/numerical_input";
+import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
