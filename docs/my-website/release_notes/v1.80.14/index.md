@@ -53,9 +53,63 @@ pip install litellm==1.80.14
 - **MCP Global Mode** - [Configure MCP servers globally with visibility controls](../../docs/mcp)
 - **Interactions API Bridge** - [Use all LiteLLM providers with the Interactions API](../../docs/interactions)
 - **RAG Query Endpoint** - [New RAG Search/Query endpoint for retrieval-augmented generation](../../docs/search/index)
-- **92.7% Faster Provider Config Lookup** - Major performance improvement for provider configuration
 - **UI Usage - Endpoint Activity** - [Users can now see Endpoint Activity Metrics in the UI](../../docs/proxy/endpoint_activity.md)
+- **50% Overhead Reduction** - LiteLLM now sends 2.5× more requests to LLM providers
 
+
+---
+
+## Performance - 50% Overhead Reduction
+
+LiteLLM now sends 2.5× more requests to LLM providers by replacing sequential if/elif chains with O(1) dictionary lookups for provider configuration resolution (92.7% faster). This optimization has a high impact because it runs inside the client decorator, which is invoked on every HTTP request made to the proxy server.
+
+### Before
+
+> **Note:** Worse-looking provider metrics are a good sign here—they indicate requests spend less time inside LiteLLM.
+
+```
+============================================================
+Fake LLM Provider Stats (When called by LiteLLM)
+============================================================
+Total Time:            0.56s
+Requests/Second:       10746.68
+
+Latency Statistics (seconds):
+   Mean:               0.2039s
+   Median (p50):       0.2310s
+   Min:                0.0323s
+   Max:                0.3928s
+   Std Dev:            0.1166s
+   p95:                0.3574s
+   p99:                0.3748s
+
+Status Codes:
+   200: 6000
+```
+
+### After
+
+```
+============================================================
+Fake LLM Provider Stats (When called by LiteLLM)
+============================================================
+Total Time:            1.42s
+Requests/Second:       4224.49
+
+Latency Statistics (seconds):
+   Mean:               0.5300s
+   Median (p50):       0.5871s
+   Min:                0.0885s
+   Max:                1.0482s
+   Std Dev:            0.3065s
+   p95:                0.9750s
+   p99:                1.0444s
+
+Status Codes:
+   200: 6000
+```
+
+> The benchmarks run LiteLLM locally with a lightweight LLM provider to eliminate network latency, isolating internal overhead and bottlenecks so we can focus on reducing pure LiteLLM overhead on a single instance.
 
 ---
 
