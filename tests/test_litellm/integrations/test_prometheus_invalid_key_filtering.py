@@ -10,6 +10,7 @@ import sys
 from unittest.mock import Mock, patch
 
 import pytest
+from litellm.proxy.auth.auth_utils import abbreviate_api_key
 from prometheus_client import REGISTRY
 
 sys.path.insert(0, os.path.abspath("../../.."))
@@ -72,7 +73,7 @@ class TestInvalidAPIKeyDetection:
         assert prometheus_logger._is_invalid_api_key_request(status_code=status_code) == expected
 
     def test_auth_error_message_detection(self, prometheus_logger):
-        exception = AssertionError("LiteLLM Virtual Key expected. Received=invalid-key-12345, expected to start with 'sk-'.")
+        exception = AssertionError(f"LiteLLM Virtual Key expected. Received={abbreviate_api_key(api_key='invalid-key-12345')}, expected to start with 'sk-'.")
         assert prometheus_logger._is_invalid_api_key_request(status_code=None, exception=exception) is True
 
     def test_non_auth_exception_not_detected(self, prometheus_logger):
