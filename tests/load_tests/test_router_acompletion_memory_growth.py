@@ -1,5 +1,5 @@
 """
-Memory Leak Detection Tests - Linear Memory Growth
+Memory Leak Detection Tests - Linear Memory Grow
 
 Tests that check for linear/progressive memory growth by running different numbers
 of requests (1k, 2k, 4k, 10k, 30k) with the same memory limit. If lower request
@@ -11,12 +11,12 @@ IMPORTANT: These tests should be run INDIVIDUALLY, not all together. Running the
 together causes memory baseline drift between tests, making it difficult to detect
 linear growth accurately. Each test should be run in isolation:
 
-    pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v
-    pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_2k -v
+    pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_1k -v
+    pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_2k -v
     # etc.
 
 NOTE: Not recommended for accurate results:
-pytest tests/load_tests/test_linear_memory_growth.py -v
+pytest tests/load_tests/test_router_acompletion_memory_growth.py -v
 """
 
 import pytest
@@ -44,7 +44,7 @@ async def test_memory_baseline_1k(test_router, limit_memory):
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
-        pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v
+        pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_1k -v
     """
     await run_memory_baseline_test(1000, test_router, limit_memory)
 
@@ -61,7 +61,7 @@ async def test_memory_baseline_2k(test_router, limit_memory):
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
-        pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_2k -v
+        pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_2k -v
     """
     await run_memory_baseline_test(2000, test_router, limit_memory)
 
@@ -79,7 +79,7 @@ async def test_memory_baseline_4k(test_router, limit_memory):
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
-        pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_4k -v
+        pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_4k -v
     """
     await run_memory_baseline_test(4000, test_router, limit_memory)
 
@@ -98,7 +98,7 @@ async def test_memory_baseline_10k(test_router, limit_memory):
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
-        pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_10k -v
+        pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_10k -v
     """
     await run_memory_baseline_test(10000, test_router, limit_memory)
 
@@ -116,6 +116,6 @@ async def test_memory_baseline_30k(test_router, limit_memory):
     NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
     Running multiple tests together causes memory baseline drift, making it difficult
     to accurately detect linear memory growth. Run with:
-        pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_30k -v
+        pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_30k -v
     """
     await run_memory_baseline_test(30000, test_router, limit_memory)

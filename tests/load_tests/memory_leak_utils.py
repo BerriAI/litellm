@@ -97,24 +97,30 @@ def mock_server():
     """Start a mock server in a separate thread for the test session.
     
     Yields the server URL (with trailing slash) for use in router configuration.
+    
+    Dynamically finds an available port to support running multiple tests in parallel.
     """
     app = create_mock_server()
-    port = 18888
     
-    # Check if port is already in use
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(("127.0.0.1", port))
-        sock.close()
-    except OSError:
-        # Port already in use, try next port
-        port = 18889
+    # Try to find an available port dynamically
+    # Start with preferred ports, then try a range
+    port_candidates = [18888, 18889] + list(range(18890, 18920))
+    port = None
+    
+    for candidate_port in port_candidates:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.bind(("127.0.0.1", port))
+            sock.bind(("127.0.0.1", candidate_port))
             sock.close()
+            port = candidate_port
+            print(f"[Mock Server] Found available port: {port}")
+            break
         except OSError:
-            pytest.fail(f"Could not find available port for mock server (tried 18888, 18889)")
+            # Port in use, try next one
+            continue
+    
+    if port is None:
+        pytest.fail(f"Could not find available port for mock server (tried ports {port_candidates[0]}-{port_candidates[-1]})")
     
     # Start server in background thread
     thread = Thread(target=lambda: run_server(app, port), daemon=True)
