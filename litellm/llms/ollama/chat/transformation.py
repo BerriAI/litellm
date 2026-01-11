@@ -413,6 +413,27 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
+            # Transform Ollama tool_calls to OpenAI format if present
+            # Ollama returns arguments as dict, OpenAI expects JSON string
+            # See: https://github.com/BerriAI/litellm/issues/18922
+            if "tool_calls" in response_json_message and response_json_message["tool_calls"]:
+                transformed_tool_calls = []
+                for tc in response_json_message["tool_calls"]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", {})
+                    # Stringify arguments if it's a dict
+                    if isinstance(args, dict):
+                        args = json.dumps(args)
+                    transformed_tool_calls.append({
+                        "id": tc.get("id", f"call_{str(uuid.uuid4())}"),
+                        "type": "function",
+                        "function": {
+                            "name": func.get("name", ""),
+                            "arguments": args,
+                        }
+                    })
+                response_json_message["tool_calls"] = transformed_tool_calls
+
             _message = litellm.Message(**response_json_message)
             model_response.choices[0].message = _message  # type: ignore
             model_response.choices[0].finish_reason = self._get_finish_reason(
