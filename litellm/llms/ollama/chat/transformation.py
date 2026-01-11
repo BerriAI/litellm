@@ -353,6 +353,22 @@ class OllamaChatConfig(BaseConfig):
 
         return data
 
+    def _get_finish_reason(
+        self, message: litellm.Message, received_finish_reason: str
+    ) -> str:
+        """
+        Determine the correct finish_reason based on message content.
+
+        If tool_calls are present, return "tool_calls" to ensure clients
+        properly process the tool call response.
+
+        Follows the same pattern as OpenAI provider's _get_finish_reason.
+        Fixes: https://github.com/BerriAI/litellm/issues/18922
+        """
+        if message.tool_calls is not None:
+            return "tool_calls"
+        return received_finish_reason
+
     def transform_response(
         self,
         model: str,
@@ -428,9 +444,11 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-
             _message = litellm.Message(**response_json_message)
             model_response.choices[0].message = _message  # type: ignore
+            model_response.choices[0].finish_reason = self._get_finish_reason(
+                _message, "stop"
+            )
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
         prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
@@ -563,6 +581,10 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason", "stop")
+                # Ensure finish_reason is "tool_calls" when tool_calls are present
+                # Fixes: https://github.com/BerriAI/litellm/issues/18922
+                if tool_calls is not None and finish_reason != "tool_calls":
+                    finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
                         delta=delta,
