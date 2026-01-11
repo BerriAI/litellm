@@ -59,6 +59,56 @@ pip install litellm==1.80.14
 
 ---
 
+## Performance - 50% Overhead Reduction
+
+LiteLLM now sends 2.5× more requests to LLM providers by reducing wrapper function overhead across all endpoints.
+
+### Before
+
+```
+============================================================
+Fake LLM Provier Stats (When called by LiteLLM)
+============================================================
+Requests/Second:       10746.68
+
+Latency Statistics (seconds):
+   Mean:               0.2039s
+   Median (p50):       0.2310s
+   Min:                0.0323s
+   Max:                0.3928s
+   Std Dev:            0.1166s
+   p95:                0.3574s
+   p99:                0.3748s
+
+Status Codes:
+   200: 6000
+```
+
+### After
+
+```
+============================================================
+Fake LLM Provier Stats (When called by LiteLLM)
+============================================================
+Requests/Second:       4224.49
+
+Latency Statistics (seconds):
+   Mean:               0.5300s
+   Median (p50):       0.5871s
+   Min:                0.0885s
+   Max:                1.0482s
+   Std Dev:            0.3065s
+   p95:                0.9750s
+   p99:                1.0444s
+
+Status Codes:
+   200: 6000
+```
+
+> The benchmarks run LiteLLM locally with a lightweight LLM provider to eliminate network latency, isolating internal overhead and bottlenecks so we can focus on reducing pure LiteLLM overhead on a single instance.
+
+---
+
 ### UI Usage - Endpoint Activity
 
 <Image
