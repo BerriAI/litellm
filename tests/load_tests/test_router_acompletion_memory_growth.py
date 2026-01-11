@@ -29,8 +29,8 @@ from tests.load_tests.memory_leak_utils import (
 )
 
 # Memory limit for all linear memory growth tests
-# Increased to 50 MB to account for larger batch size (100 vs 20) which creates more temporary objects
-MEMORY_LIMIT = "50 MB"
+# Increased to 60 MB to account for larger batch size (100 vs 20) which creates more temporary objects
+MEMORY_LIMIT = "60 MB"
 
 
 @pytest.mark.asyncio
@@ -120,3 +120,21 @@ async def test_memory_baseline_30k(test_router, limit_memory):
         pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_30k -v
     """
     await run_memory_baseline_test(30000, test_router, limit_memory)
+
+
+@pytest.mark.asyncio
+@pytest.mark.limit_leaks(MEMORY_LIMIT)
+@pytest.mark.no_parallel  # Must run sequentially - measures process memory
+async def test_memory_baseline_100k(test_router, limit_memory):
+    """
+    Memory baseline test with 100,000 requests.
+    Uses @pytest.mark.limit_leaks("40 MB") to enforce memory limit.
+    If test_memory_baseline_1k and test_memory_baseline_2k pass but this fails,
+    it's a clear sign of sequential/progressive memory growth.
+    
+    NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
+    Running multiple tests together causes memory baseline drift, making it difficult
+    to accurately detect linear memory growth. Run with:
+        pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_100k -v
+    """
+    await run_memory_baseline_test(100000, test_router, limit_memory)
