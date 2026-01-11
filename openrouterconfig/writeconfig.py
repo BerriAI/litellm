@@ -59,7 +59,7 @@ def generate_config():
             'maximum_spend_logs_retention_period': '7d'
         },
         'litellm_settings': {
-            'callbacks': ['smtp_email', 'langfuse', 'openmeter']
+            'callbacks': ['smtp_email', 'langfuse', 'openmeter','amberflo.litellm.callback']
         },
         'model_list': []
     }
