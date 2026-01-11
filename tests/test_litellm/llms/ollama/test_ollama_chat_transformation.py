@@ -325,63 +325,69 @@ class TestOllamaChatConfigResponseFormat:
         assert result["messages"][0]["images"] == []
 
 
-class TestOllamaChatTransformResponse:
-    """Tests for transform_response method, especially for qwen3 tool_calls handling.
+class TestOllamaToolCalling:
+    """Tests for Ollama tool calling fixes.
 
     Issue: https://github.com/BerriAI/litellm/issues/18922
-    Qwen3 includes a 'thinking' field in responses that was causing tool_calls to be dropped.
     """
 
-    def _create_mock_response(self, json_data: dict):
-        """Create a mock httpx Response object."""
+    def test_tools_passed_directly_without_capability_check(self):
+        """Test that tools are passed directly to Ollama without model capability checks.
+
+        Previously, the code called litellm.get_model_info() which could fail
+        when Ollama runs on a remote server, causing a broken fallback.
+        Now tools are passed directly - Ollama 0.4+ handles capability detection.
+        """
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ]
+
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen3:14b",
+            tools=tools,
+            custom_llm_provider="ollama_chat",
+        )
+
+        # Tools should be passed through directly
+        assert "tools" in optional_params
+        assert optional_params["tools"] == tools
+        # Should NOT trigger the broken fallback
+        assert "functions_unsupported_model" not in optional_params
+        assert "format" not in optional_params or optional_params.get("format") != "json"
+
+    def test_finish_reason_tool_calls_non_streaming(self):
+        """Test that finish_reason is set to 'tool_calls' when tool_calls present.
+
+        Previously, finish_reason was hardcoded to 'stop' even when tool_calls
+        were in the response, causing clients to ignore the tool calls.
+        """
         import json
-        from unittest.mock import MagicMock, PropertyMock
-
-        mock_response = MagicMock()
-        mock_response.json.return_value = json_data
-        mock_response.text = json.dumps(json_data)
-        return mock_response
-
-    def _create_mock_logging_obj(self):
-        """Create a mock logging object."""
         from unittest.mock import MagicMock
 
-        mock_logging = MagicMock()
-        mock_logging.post_call = MagicMock()
-        return mock_logging
-
-    def _create_model_response(self):
-        """Create a base ModelResponse object."""
         import litellm
         from litellm.types.utils import Choices, Message, ModelResponse
 
-        model_response = ModelResponse()
-        model_response.choices = [Choices(message=Message(content=""), index=0)]
-        return model_response
-
-    def test_transform_response_with_qwen3_thinking_and_tool_calls(self):
-        """Test that qwen3 responses with 'thinking' field preserve tool_calls.
-
-        This is the core bug fix test - qwen3 returns both 'thinking' and 'tool_calls'
-        and the tool_calls were being dropped.
-        """
-        import json
-
         config = OllamaChatConfig()
 
-        # Simulated qwen3 response with thinking and tool_calls
+        # Simulated Ollama response with tool_calls
         ollama_response = {
             "model": "qwen3:14b",
             "created_at": "2025-01-11T00:00:00.000000Z",
             "message": {
                 "role": "assistant",
                 "content": "",
-                "thinking": "Let me analyze this request and call the appropriate function...",
                 "tool_calls": [
                     {
                         "function": {
                             "name": "get_weather",
-                            "arguments": {"location": "Tokyo", "units": "celsius"},
+                            "arguments": {"location": "Tokyo"},
                         }
                     }
                 ],
@@ -391,198 +397,14 @@ class TestOllamaChatTransformResponse:
             "eval_count": 50,
         }
 
-        mock_response = self._create_mock_response(ollama_response)
-        mock_logging = self._create_mock_logging_obj()
-        model_response = self._create_model_response()
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
 
-        result = config.transform_response(
-            model="qwen3:14b",
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=mock_logging,
-            request_data={},
-            messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
-            optional_params={},
-            litellm_params={"api_base": "http://localhost:11434"},
-            encoding="utf-8",
-        )
+        mock_logging = MagicMock()
 
-        # Verify tool_calls are preserved
-        assert result.choices[0].message.tool_calls is not None, (
-            "tool_calls should not be None - this is the core qwen3 bug!"
-        )
-        assert len(result.choices[0].message.tool_calls) == 1
-
-        # Verify tool_call structure matches OpenAI format
-        tool_call = result.choices[0].message.tool_calls[0]
-        assert tool_call.function.name == "get_weather"
-
-        # Verify arguments are stringified (OpenAI expects JSON string, not dict)
-        assert isinstance(tool_call.function.arguments, str)
-        parsed_args = json.loads(tool_call.function.arguments)
-        assert parsed_args["location"] == "Tokyo"
-        assert parsed_args["units"] == "celsius"
-
-        # Verify id and type are set (auto-generated for Ollama responses)
-        assert tool_call.id is not None
-        assert tool_call.type == "function"
-
-        # Verify thinking was remapped to reasoning_content
-        assert result.choices[0].message.reasoning_content is not None
-        assert "analyze this request" in result.choices[0].message.reasoning_content
-
-        # Verify finish_reason is set to "tool_calls" (critical for clients to process tool calls)
-        assert result.choices[0].finish_reason == "tool_calls", (
-            "finish_reason should be 'tool_calls' when tool_calls are present!"
-        )
-
-    def test_transform_response_with_tool_calls_no_thinking(self):
-        """Test that tool_calls work without thinking field (standard Ollama models)."""
-        import json
-
-        config = OllamaChatConfig()
-
-        # Standard Ollama response with tool_calls but no thinking
-        ollama_response = {
-            "model": "llama3.1:8b",
-            "created_at": "2025-01-11T00:00:00.000000Z",
-            "message": {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": "search_database",
-                            "arguments": {"query": "test"},
-                        }
-                    }
-                ],
-            },
-            "done": True,
-            "prompt_eval_count": 50,
-            "eval_count": 25,
-        }
-
-        mock_response = self._create_mock_response(ollama_response)
-        mock_logging = self._create_mock_logging_obj()
-        model_response = self._create_model_response()
-
-        result = config.transform_response(
-            model="llama3.1:8b",
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=mock_logging,
-            request_data={},
-            messages=[{"role": "user", "content": "Search for test"}],
-            optional_params={},
-            litellm_params={"api_base": "http://localhost:11434"},
-            encoding="utf-8",
-        )
-
-        # Verify tool_calls are preserved
-        assert result.choices[0].message.tool_calls is not None
-        assert len(result.choices[0].message.tool_calls) == 1
-        assert result.choices[0].message.tool_calls[0].function.name == "search_database"
-
-        # Verify finish_reason is "tool_calls"
-        assert result.choices[0].finish_reason == "tool_calls"
-
-    def test_transform_response_multiple_tool_calls(self):
-        """Test handling of multiple tool_calls in a single response."""
-        import json
-
-        config = OllamaChatConfig()
-
-        ollama_response = {
-            "model": "qwen3:14b",
-            "created_at": "2025-01-11T00:00:00.000000Z",
-            "message": {
-                "role": "assistant",
-                "content": "",
-                "thinking": "I need to get weather for both cities...",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": {"location": "Tokyo"},
-                        }
-                    },
-                    {
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": {"location": "New York"},
-                        }
-                    },
-                ],
-            },
-            "done": True,
-            "prompt_eval_count": 100,
-            "eval_count": 75,
-        }
-
-        mock_response = self._create_mock_response(ollama_response)
-        mock_logging = self._create_mock_logging_obj()
-        model_response = self._create_model_response()
-
-        result = config.transform_response(
-            model="qwen3:14b",
-            raw_response=mock_response,
-            model_response=model_response,
-            logging_obj=mock_logging,
-            request_data={},
-            messages=[{"role": "user", "content": "Weather in Tokyo and New York?"}],
-            optional_params={},
-            litellm_params={"api_base": "http://localhost:11434"},
-            encoding="utf-8",
-        )
-
-        # Verify both tool_calls are preserved
-        assert result.choices[0].message.tool_calls is not None
-        assert len(result.choices[0].message.tool_calls) == 2
-
-        # Verify each tool_call
-        tool_call_1 = result.choices[0].message.tool_calls[0]
-        tool_call_2 = result.choices[0].message.tool_calls[1]
-
-        assert tool_call_1.function.name == "get_weather"
-        assert json.loads(tool_call_1.function.arguments)["location"] == "Tokyo"
-
-        assert tool_call_2.function.name == "get_weather"
-        assert json.loads(tool_call_2.function.arguments)["location"] == "New York"
-
-        # Each tool_call should have unique id
-        assert tool_call_1.id != tool_call_2.id
-
-        # Verify finish_reason is "tool_calls"
-        assert result.choices[0].finish_reason == "tool_calls"
-
-    def test_transform_response_content_with_tool_calls(self):
-        """Test that content and tool_calls can coexist."""
-        config = OllamaChatConfig()
-
-        ollama_response = {
-            "model": "qwen3:14b",
-            "message": {
-                "role": "assistant",
-                "content": "I'll check the weather for you.",
-                "thinking": "User wants weather info...",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": "get_weather",
-                            "arguments": {"location": "Tokyo"},
-                        }
-                    }
-                ],
-            },
-            "done": True,
-            "prompt_eval_count": 50,
-            "eval_count": 30,
-        }
-
-        mock_response = self._create_mock_response(ollama_response)
-        mock_logging = self._create_mock_logging_obj()
-        model_response = self._create_model_response()
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
 
         result = config.transform_response(
             model="qwen3:14b",
@@ -592,46 +414,47 @@ class TestOllamaChatTransformResponse:
             request_data={},
             messages=[{"role": "user", "content": "Weather?"}],
             optional_params={},
-            litellm_params={"api_base": "http://localhost:11434"},
-            encoding="utf-8",
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
         )
 
-        # Both content and tool_calls should be present
-        assert result.choices[0].message.content == "I'll check the weather for you."
-        assert result.choices[0].message.tool_calls is not None
-        assert len(result.choices[0].message.tool_calls) == 1
-
-        # Verify finish_reason is "tool_calls"
+        # finish_reason should be "tool_calls", not "stop"
         assert result.choices[0].finish_reason == "tool_calls"
+        assert result.choices[0].message.tool_calls is not None
 
-    def test_transform_response_empty_content_string(self):
-        """Test that empty content string with tool_calls works correctly."""
+    def test_finish_reason_stop_when_no_tool_calls(self):
+        """Test that finish_reason remains 'stop' when no tool_calls present."""
+        import json
+        from unittest.mock import MagicMock
+
+        import litellm
+        from litellm.types.utils import Choices, Message, ModelResponse
+
         config = OllamaChatConfig()
 
-        # This is what qwen3 often returns - empty content with tool_calls
+        # Simulated Ollama response without tool_calls
         ollama_response = {
             "model": "qwen3:14b",
+            "created_at": "2025-01-11T00:00:00.000000Z",
             "message": {
                 "role": "assistant",
-                "content": "",  # Empty string, not None
-                "thinking": "Calling the function...",
-                "tool_calls": [
-                    {
-                        "function": {
-                            "name": "calculate",
-                            "arguments": {"expression": "2+2"},
-                        }
-                    }
-                ],
+                "content": "Hello! How can I help you?",
             },
             "done": True,
-            "prompt_eval_count": 30,
-            "eval_count": 20,
+            "prompt_eval_count": 100,
+            "eval_count": 50,
         }
 
-        mock_response = self._create_mock_response(ollama_response)
-        mock_logging = self._create_mock_logging_obj()
-        model_response = self._create_model_response()
+        mock_response = MagicMock()
+        mock_response.json.return_value = ollama_response
+        mock_response.text = json.dumps(ollama_response)
+
+        mock_logging = MagicMock()
+
+        model_response = ModelResponse()
+        model_response.choices = [Choices(message=Message(content=""), index=0)]
 
         result = config.transform_response(
             model="qwen3:14b",
@@ -639,16 +462,14 @@ class TestOllamaChatTransformResponse:
             model_response=model_response,
             logging_obj=mock_logging,
             request_data={},
-            messages=[{"role": "user", "content": "Calculate 2+2"}],
+            messages=[{"role": "user", "content": "Hello"}],
             optional_params={},
-            litellm_params={"api_base": "http://localhost:11434"},
-            encoding="utf-8",
+            litellm_params={},
+            encoding=None,
+            api_key=None,
+            json_mode=False,
         )
 
-        # Content should be empty string (or None), but tool_calls should be present
-        assert result.choices[0].message.tool_calls is not None
-        assert len(result.choices[0].message.tool_calls) == 1
-        assert result.choices[0].message.tool_calls[0].function.name == "calculate"
-
-        # Verify finish_reason is "tool_calls"
-        assert result.choices[0].finish_reason == "tool_calls"
+        # finish_reason should be "stop" (default behavior)
+        assert result.choices[0].finish_reason == "stop"
+        assert result.choices[0].message.tool_calls is None

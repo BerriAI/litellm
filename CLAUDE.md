@@ -1,137 +1,108 @@
-# LiteLLM Bug Fix: Qwen3 Tool Calls Dropped
+# CLAUDE.md
 
-## Issue
-https://github.com/BerriAI/litellm/issues/18922
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Problem Summary
-When using qwen3 models through LiteLLM's Ollama provider, `tool_calls` are dropped from the response. The response contains only `content: "{}"` while valid `tool_calls` from Ollama are lost.
+## Development Commands
 
-**Root Cause**: Qwen3 includes a `thinking` field in its responses that qwen2.5 does not. The Ollama response handler doesn't properly handle responses that have both `thinking` and `tool_calls`.
+### Installation
+- `make install-dev` - Install core development dependencies
+- `make install-proxy-dev` - Install proxy development dependencies with full feature set
+- `make install-test-deps` - Install all test dependencies
 
-## Files to Investigate
+### Testing
+- `make test` - Run all tests
+- `make test-unit` - Run unit tests (tests/test_litellm) with 4 parallel workers
+- `make test-integration` - Run integration tests (excludes unit tests)
+- `pytest tests/` - Direct pytest execution
 
-1. **`litellm/llms/ollama/completion/transformation.py`** - Ollama response transformation
-2. **`litellm/llms/ollama_chat.py`** - Ollama chat handler (legacy)
-3. **`litellm/llms/ollama/chat/transformation.py`** - Ollama chat transformation
+### Code Quality
+- `make lint` - Run all linting (Ruff, MyPy, Black, circular imports, import safety)
+- `make format` - Apply Black code formatting
+- `make lint-ruff` - Run Ruff linting only
+- `make lint-mypy` - Run MyPy type checking only
 
-## Expected Fix Location
+### Single Test Files
+- `poetry run pytest tests/path/to/test_file.py -v` - Run specific test file
+- `poetry run pytest tests/path/to/test_file.py::test_function -v` - Run specific test
 
-Look for where the Ollama response message is parsed. The code likely does something like:
-```python
-content = message.get("content", "")
-```
+### Running Scripts
+- `poetry run python script.py` - Run Python scripts (use for non-test files)
 
-But doesn't extract:
-```python
-tool_calls = message.get("tool_calls", [])
-thinking = message.get("thinking", "")  # qwen3 specific
-```
+### GitHub Issue & PR Templates
+When contributing to the project, use the appropriate templates:
 
-## Test Cases
+**Bug Reports** (`.github/ISSUE_TEMPLATE/bug_report.yml`):
+- Describe what happened vs. what you expected
+- Include relevant log output
+- Specify your LiteLLM version
 
-### Test 1: Qwen3 with tool_calls should work
+**Feature Requests** (`.github/ISSUE_TEMPLATE/feature_request.yml`):
+- Describe the feature clearly
+- Explain the motivation and use case
 
-```python
-def test_ollama_qwen3_tool_calls():
-    """Test that qwen3 tool_calls are properly forwarded."""
-    import litellm
+**Pull Requests** (`.github/pull_request_template.md`):
+- Add at least 1 test in `tests/litellm/`
+- Ensure `make test-unit` passes
 
-    response = litellm.completion(
-        model="ollama/qwen3:14b",
-        messages=[{"role": "user", "content": "What's the weather in Tokyo?"}],
-        tools=[{
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather for a location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {"location": {"type": "string"}},
-                    "required": ["location"]
-                }
-            }
-        }],
-        api_base="http://localhost:11434"
-    )
+## Architecture Overview
 
-    # This currently fails - tool_calls is None
-    assert response.choices[0].message.tool_calls is not None
-    assert len(response.choices[0].message.tool_calls) > 0
-    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
-```
+LiteLLM is a unified interface for 100+ LLM providers with two main components:
 
-### Test 2: Mock Ollama response with thinking field
+### Core Library (`litellm/`)
+- **Main entry point**: `litellm/main.py` - Contains core completion() function
+- **Provider implementations**: `litellm/llms/` - Each provider has its own subdirectory
+- **Router system**: `litellm/router.py` + `litellm/router_utils/` - Load balancing and fallback logic
+- **Type definitions**: `litellm/types/` - Pydantic models and type hints
+- **Integrations**: `litellm/integrations/` - Third-party observability, caching, logging
+- **Caching**: `litellm/caching/` - Multiple cache backends (Redis, in-memory, S3, etc.)
 
-```python
-def test_ollama_response_with_thinking_field():
-    """Test that responses with 'thinking' field preserve tool_calls."""
-    from litellm.llms.ollama.chat.transformation import OllamaChatConfig
+### Proxy Server (`litellm/proxy/`)
+- **Main server**: `proxy_server.py` - FastAPI application
+- **Authentication**: `auth/` - API key management, JWT, OAuth2
+- **Database**: `db/` - Prisma ORM with PostgreSQL/SQLite support
+- **Management endpoints**: `management_endpoints/` - Admin APIs for keys, teams, models
+- **Pass-through endpoints**: `pass_through_endpoints/` - Provider-specific API forwarding
+- **Guardrails**: `guardrails/` - Safety and content filtering hooks
+- **UI Dashboard**: Served from `_experimental/out/` (Next.js build)
 
-    # Simulated Ollama response (what qwen3 returns)
-    mock_ollama_response = {
-        "message": {
-            "role": "assistant",
-            "content": "",
-            "thinking": "Let me check the weather function...",
-            "tool_calls": [{
-                "id": "call_abc123",
-                "function": {
-                    "name": "get_weather",
-                    "arguments": {"location": "Tokyo"}
-                }
-            }]
-        },
-        "done": True
-    }
+## Key Patterns
 
-    # Transform to OpenAI format
-    # The fix should ensure tool_calls are preserved
-    result = transform_ollama_response(mock_ollama_response)
+### Provider Implementation
+- Providers inherit from base classes in `litellm/llms/base.py`
+- Each provider has transformation functions for input/output formatting
+- Support both sync and async operations
+- Handle streaming responses and function calling
 
-    assert result["choices"][0]["message"]["tool_calls"] is not None
-    assert result["choices"][0]["message"]["tool_calls"][0]["function"]["name"] == "get_weather"
-```
+### Error Handling
+- Provider-specific exceptions mapped to OpenAI-compatible errors
+- Fallback logic handled by Router system
+- Comprehensive logging through `litellm/_logging.py`
 
-### Test 3: Arguments should be JSON string (OpenAI format)
+### Configuration
+- YAML config files for proxy server (see `proxy/example_config_yaml/`)
+- Environment variables for API keys and settings
+- Database schema managed via Prisma (`proxy/schema.prisma`)
 
-```python
-def test_ollama_tool_call_arguments_are_stringified():
-    """Ollama returns arguments as dict, OpenAI expects JSON string."""
-    # Ollama returns: {"arguments": {"location": "Tokyo"}}
-    # OpenAI expects: {"arguments": "{\"location\": \"Tokyo\"}"}
+## Development Notes
 
-    # The fix should stringify the arguments
-    assert isinstance(
-        result["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"],
-        str
-    )
-```
+### Code Style
+- Uses Black formatter, Ruff linter, MyPy type checker
+- Pydantic v2 for data validation
+- Async/await patterns throughout
+- Type hints required for all public APIs
 
-## Reproduction Commands
+### Testing Strategy
+- Unit tests in `tests/test_litellm/`
+- Integration tests for each provider in `tests/llm_translation/`
+- Proxy tests in `tests/proxy_unit_tests/`
+- Load tests in `tests/load_tests/`
 
-```bash
-# Direct Ollama (works)
-curl -s http://localhost:11434/api/chat -d '{
-  "model": "qwen3:14b",
-  "messages": [{"role": "user", "content": "Weather in Tokyo?"}],
-  "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"location": {"type": "string"}}}}}],
-  "stream": false
-}' | jq '.message.tool_calls'
-# Returns: [{"function": {"name": "get_weather", "arguments": {"location": "Tokyo"}}}]
+### Database Migrations
+- Prisma handles schema migrations
+- Migration files auto-generated with `prisma migrate dev`
+- Always test migrations against both PostgreSQL and SQLite
 
-# Through LiteLLM (broken)
-curl -s http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer sk-xxx" \
-  -d '{"model": "qwen3", "messages": [{"role": "user", "content": "Weather in Tokyo?"}], "tools": [...]}' \
-  | jq '.choices[0].message'
-# Returns: {"content": "{}", "role": "assistant"}  # tool_calls missing!
-```
-
-## Fix Checklist
-
-- [ ] Find where Ollama response is transformed to OpenAI format
-- [ ] Ensure `tool_calls` is extracted from `message.tool_calls`
-- [ ] Handle the `thinking` field (either include it or ignore it, but don't let it break tool_calls)
-- [ ] Stringify `arguments` dict to JSON string for OpenAI compatibility
-- [ ] Add unit test for qwen3-style responses with `thinking` field
-- [ ] Test with actual qwen3:14b model
+### Enterprise Features
+- Enterprise-specific code in `enterprise/` directory
+- Optional features enabled via environment variables
+- Separate licensing and authentication for enterprise features

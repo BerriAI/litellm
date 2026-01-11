@@ -192,12 +192,11 @@ class OllamaChatConfig(BaseConfig):
             ### FUNCTION CALLING LOGIC ###
             # Ollama 0.4+ supports native tool calling - pass tools directly
             # and let Ollama handle model capability detection
-            # See: https://github.com/BerriAI/litellm/issues/18922
+            # Fixes: https://github.com/BerriAI/litellm/issues/18922
             if param == "tools":
                 optional_params["tools"] = value
 
             if param == "functions":
-                # Convert functions to tools format for Ollama
                 optional_params["tools"] = value
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
@@ -322,22 +321,6 @@ class OllamaChatConfig(BaseConfig):
 
         return data
 
-    def _get_finish_reason(
-        self, message: litellm.Message, received_finish_reason: str
-    ) -> str:
-        """
-        Determine the correct finish_reason based on message content.
-
-        If tool_calls are present, return "tool_calls" to ensure clients
-        properly process the tool call response.
-
-        Follows the same pattern as OpenAI provider's _get_finish_reason.
-        Fixes: https://github.com/BerriAI/litellm/issues/18922
-        """
-        if message.tool_calls is not None:
-            return "tool_calls"
-        return received_finish_reason
-
     def transform_response(
         self,
         model: str,
@@ -413,32 +396,13 @@ class OllamaChatConfig(BaseConfig):
             model_response.choices[0].message = message  # type: ignore
             model_response.choices[0].finish_reason = "tool_calls"
         else:
-            # Transform Ollama tool_calls to OpenAI format if present
-            # Ollama returns arguments as dict, OpenAI expects JSON string
-            # See: https://github.com/BerriAI/litellm/issues/18922
-            if "tool_calls" in response_json_message and response_json_message["tool_calls"]:
-                transformed_tool_calls = []
-                for tc in response_json_message["tool_calls"]:
-                    func = tc.get("function", {})
-                    args = func.get("arguments", {})
-                    # Stringify arguments if it's a dict
-                    if isinstance(args, dict):
-                        args = json.dumps(args)
-                    transformed_tool_calls.append({
-                        "id": tc.get("id", f"call_{str(uuid.uuid4())}"),
-                        "type": "function",
-                        "function": {
-                            "name": func.get("name", ""),
-                            "arguments": args,
-                        }
-                    })
-                response_json_message["tool_calls"] = transformed_tool_calls
 
             _message = litellm.Message(**response_json_message)
             model_response.choices[0].message = _message  # type: ignore
-            model_response.choices[0].finish_reason = self._get_finish_reason(
-                _message, "stop"
-            )
+            # Set finish_reason to "tool_calls" when tool_calls are present
+            # Fixes: https://github.com/BerriAI/litellm/issues/18922
+            if _message.tool_calls:
+                model_response.choices[0].finish_reason = "tool_calls"
         model_response.created = int(time.time())
         model_response.model = "ollama_chat/" + model
         prompt_tokens = response_json.get("prompt_eval_count", litellm.token_counter(messages=messages))  # type: ignore
@@ -571,9 +535,9 @@ class OllamaChatCompletionResponseIterator(BaseModelResponseIterator):
 
             if chunk["done"] is True:
                 finish_reason = chunk.get("done_reason", "stop")
-                # Ensure finish_reason is "tool_calls" when tool_calls are present
+                # Override finish_reason when tool_calls are present
                 # Fixes: https://github.com/BerriAI/litellm/issues/18922
-                if tool_calls is not None and finish_reason != "tool_calls":
+                if tool_calls is not None:
                     finish_reason = "tool_calls"
                 choices = [
                     StreamingChoices(
