@@ -318,8 +318,58 @@ async def run_memory_baseline_test(num_requests: int, router: Router, limit_memo
         else:
             print(f"[Batch {batch_num}/{total_batches}] Completed in {batch_duration:.2f}s ({BATCH_SIZE/batch_duration:.1f} req/s)")
     
+    # Check memory before cleanup
+    memory_before_cleanup = process.memory_info().rss / 1024 / 1024
+    print(f"\n[Memory] Before cleanup: {memory_before_cleanup:.2f} MB (+{memory_before_cleanup - start_memory:.2f} MB)")
+    
+    # EXTREMELY AGGRESSIVE CLEANUP to ensure test memory doesn't pollute measurements
+    print("[Cleanup] Starting EXTRA AGGRESSIVE garbage collection...")
+    
+    # Step 1: Force immediate cleanup of all generations
+    collected_total = 0
+    for gen in range(3):
+        collected = gc.collect(gen)
+        collected_total += collected
+        if collected > 0:
+            print(f"[Cleanup] Generation {gen}: collected {collected} objects")
+    
+    # Step 2: Multiple full GC passes to catch circular references
+    print("[Cleanup] Running full GC passes...")
+    for i in range(5):  # 5 passes to be thorough
+        collected = gc.collect()
+        collected_total += collected
+        if collected > 0:
+            print(f"[Cleanup] Full GC pass {i+1}: collected {collected} objects")
+        else:
+            print(f"[Cleanup] Full GC pass {i+1}: no objects to collect (clean!)")
+    
+    # Step 3: Check for uncollectable objects (memory leaks!)
+    uncollectable = len(gc.garbage)
+    if uncollectable > 0:
+        print(f"[Cleanup] WARNING: {uncollectable} uncollectable objects found (potential leak!)")
+        print(f"[Cleanup] Uncollectable types: {set(type(obj).__name__ for obj in gc.garbage[:10])}")
+    else:
+        print(f"[Cleanup] No uncollectable objects (no circular reference leaks)")
+    
+    # Step 4: Wait for OS to release memory
+    print("[Cleanup] Waiting for OS to release memory...")
+    time.sleep(0.5)
+    
+    # Step 5: Final GC to catch anything released during wait
+    final_gc = gc.collect()
+    collected_total += final_gc
+    if final_gc > 0:
+        print(f"[Cleanup] Final GC: collected {final_gc} additional objects")
+    
     # Final memory check
-    final_memory = process.memory_info().rss / 1024 / 1024
-    print(f"\n[Router Memory Test] Completed {num_requests:,} requests")
-    print(f"[Router Memory Test] Memory usage: {final_memory - start_memory:.2f} MB")
-    print("=" * 80)
+    memory_after_cleanup = process.memory_info().rss / 1024 / 1024
+    print(f"\n[Memory] After cleanup: {memory_after_cleanup:.2f} MB (+{memory_after_cleanup - start_memory:.2f} MB from start)")
+    print(f"[Memory] Cleanup freed: {memory_before_cleanup - memory_after_cleanup:.2f} MB")
+    print(f"[Memory] Total objects collected: {collected_total:,}")
+    
+    # Summary
+    print(f"\n{'='*80}")
+    print(f"[Router Memory Test] Completed {num_requests:,} requests")
+    print(f"[Router Memory Test] Actual router memory usage: {memory_after_cleanup - start_memory:.2f} MB")
+    print(f"[Router Memory Test] Test artifacts cleaned: {memory_before_cleanup - memory_after_cleanup:.2f} MB")
+    print(f"{'='*80}\n")
