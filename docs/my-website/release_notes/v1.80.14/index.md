@@ -53,8 +53,8 @@ pip install litellm==1.80.14
 - **MCP Global Mode** - [Configure MCP servers globally with visibility controls](../../docs/mcp)
 - **Interactions API Bridge** - [Use all LiteLLM providers with the Interactions API](../../docs/interactions)
 - **RAG Query Endpoint** - [New RAG Search/Query endpoint for retrieval-augmented generation](../../docs/search/index)
+- **UI Usage - Endpoint Activity** - [Users can now see Endpoint Activity Metrics in the UI](../../docs/proxy/endpoint_activity.md)
 - **50% Overhead Reduction** - LiteLLM now sends 2.5× more requests to LLM providers
-- **UI Usage - Endpoint Activity** - Users can now see Endpoint Activity Metrics in the UI.
 
 
 ---
