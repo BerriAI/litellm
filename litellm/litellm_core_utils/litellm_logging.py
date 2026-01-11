@@ -1854,7 +1854,7 @@ class Logging(LiteLLMLoggingBaseClass):
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_async_logging_request = (
+        is_sync_request = (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
             and litellm_params.get(CallTypes.aresponses.value, False) is not True
             and litellm_params.get(CallTypes.aembedding.value, False) is not True
@@ -2221,7 +2221,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         isinstance(callback, CustomLogger)
-                        and is_async_logging_request
+                        and is_sync_request
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
@@ -2249,7 +2249,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         callable(callback) is True
-                        and is_async_logging_request
+                        and is_sync_request
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
@@ -2700,7 +2700,7 @@ class Logging(LiteLLMLoggingBaseClass):
         ):  # prevent double logging
             return
         litellm_params = self.model_call_details.get("litellm_params", {})
-        is_async_logging_request = (
+        is_sync_request = (
             litellm_params.get(CallTypes.acompletion.value, False) is not True
             and litellm_params.get(CallTypes.aresponses.value, False) is not True
             and litellm_params.get(CallTypes.aembedding.value, False) is not True
@@ -2800,7 +2800,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     if (
                         isinstance(callback, CustomLogger)
-                        and is_async_logging_request
+                        and is_sync_request
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,
