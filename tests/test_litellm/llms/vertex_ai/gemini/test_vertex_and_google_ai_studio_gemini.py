@@ -10,11 +10,13 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
 from litellm.types.llms.vertex_ai import UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
+from litellm.utils import CustomStreamWrapper
 
 
 def test_top_logprobs():
@@ -1603,6 +1605,39 @@ def test_vertex_ai_annotation_streaming_events():
     assert annotation["url_citation"]["end_index"] == 50
     assert "google.com" in annotation["url_citation"]["url"]
     assert "Weather information" in annotation["url_citation"]["title"]
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
+    class DummyLogging:
+        def __init__(self):
+            self.model_call_details = {"litellm_params": {}}
+            self.optional_params = {}
+            self.messages = []
+            self.completion_start_time = None
+            self.stream_options = None
+
+        def failure_handler(self, *args, **kwargs):
+            return None
+
+        async def async_failure_handler(self, *args, **kwargs):
+            return None
+
+    async def failing_make_call(client=None, **kwargs):
+        raise VertexAIError(status_code=400, message="bad input", headers={})
+
+    stream = CustomStreamWrapper(
+        completion_stream=None,
+        make_call=failing_make_call,
+        model="gemini-3-pro-preview",
+        logging_obj=DummyLogging(),
+        custom_llm_provider="vertex_ai_beta",
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await stream.__anext__()
+
+    assert getattr(exc_info.value, "status_code", None) == 400
 
 
 def test_vertex_ai_annotation_conversion():

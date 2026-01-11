@@ -158,6 +158,31 @@ class TestGenericGuardrailAPIConfiguration:
             == "https://api.test.guardrail.com/beta/litellm_basic_guardrail_api"
         )
 
+    def test_api_key_sets_x_api_key_header(self):
+        """Test that api_key is set as x-api-key header"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            api_key="test-api-key-123",
+        )
+        assert guardrail.headers.get("x-api-key") == "test-api-key-123"
+
+    def test_api_key_with_existing_headers(self):
+        """Test that api_key is added to existing headers"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            api_key="test-api-key-456",
+            headers={"Custom-Header": "custom-value"},
+        )
+        assert guardrail.headers.get("x-api-key") == "test-api-key-456"
+        assert guardrail.headers.get("Custom-Header") == "custom-value"
+
+    def test_no_api_key_no_x_api_key_header(self):
+        """Test that x-api-key header is not set when api_key is not provided"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+        )
+        assert "x-api-key" not in guardrail.headers
+
 
 class TestMetadataExtraction:
     """Test metadata extraction from request data"""
@@ -444,6 +469,39 @@ class TestImageSupport:
 
             # Verify result includes images
             assert result_images == ["https://example.com/image.jpg"]
+
+
+class TestApiKeyHeader:
+    """Test API key header handling"""
+
+    @pytest.mark.asyncio
+    async def test_x_api_key_header_sent_in_request(self, mock_request_data_input):
+        """Test that x-api-key header is sent in the API request when api_key is provided"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            api_key="my-secret-api-key",
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            # Verify API was called with x-api-key header
+            call_args = mock_post.call_args
+            headers = call_args.kwargs["headers"]
+            assert headers.get("x-api-key") == "my-secret-api-key"
 
 
 class TestAdditionalParams:

@@ -18,6 +18,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
 import type { UploadProps } from "antd";
 import { Form, Typography } from "antd";
+import { PlusCircleOutlined } from "@ant-design/icons";
 import React, { useEffect, useMemo, useState } from "react";
 import AddModelTab from "../../../components/add_model/add_model_tab";
 import HealthCheckComponent from "../../../components/model_dashboard/HealthCheckComponent";
@@ -273,6 +274,42 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 <p className="text-sm text-gray-600">Add and manage models for the proxy</p>
               )}
             </div>
+          </div>
+
+          {/* Missing Provider Banner */}
+          <div className="mb-4 px-4 py-3 bg-blue-50 rounded-lg border border-blue-100 flex items-center gap-4">
+            <div className="flex-shrink-0 w-10 h-10 bg-white rounded-full flex items-center justify-center border border-blue-200">
+              <PlusCircleOutlined style={{ fontSize: "18px", color: "#6366f1" }} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <h4 className="text-gray-900 font-semibold text-sm m-0">Missing a provider?</h4>
+              <p className="text-gray-500 text-xs m-0 mt-0.5">
+                The LiteLLM engineering team is constantly adding support for new LLM models, providers, endpoints. If
+                you don&apos;t see the one you need, let us know and we&apos;ll prioritize it.
+              </p>
+            </div>
+            <a
+              href="https://models.litellm.ai/?request=true"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              Request Provider
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-4 w-4"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                />
+              </svg>
+            </a>
           </div>
           {selectedModelId && !isLoading ? (
             <ModelInfoView

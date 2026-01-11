@@ -188,6 +188,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         static_headers: staticHeadersList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
+        allow_all_keys: allowAllKeysRaw,
         ...restValues
       } = values;
 
@@ -278,6 +279,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        allow_all_keys: Boolean(allowAllKeysRaw),
         static_headers: staticHeaders,
       };
 

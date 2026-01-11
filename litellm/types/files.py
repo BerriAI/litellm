@@ -1,6 +1,8 @@
 from enum import Enum
 from types import MappingProxyType
-from typing import List, Set, Mapping
+from typing import Any, Dict, List, Literal, Mapping, Set, Union
+
+from typing_extensions import Required, TypedDict
 
 """
 Base Enums/Consts
@@ -281,3 +283,41 @@ GEMINI_1_5_ACCEPTED_FILE_TYPES: Set[FileType] = {
 
 def is_gemini_1_5_accepted_file_type(file_type: FileType) -> bool:
     return file_type in GEMINI_1_5_ACCEPTED_FILE_TYPES
+
+
+"""
+Two-Step File Upload Types
+"""
+
+
+class TwoStepFileUploadRequest(TypedDict):
+    """
+    Request structure for two-step file upload process.
+    
+    Step 1: Initial request to get upload URL
+    Step 2: Upload file content to the upload URL
+    
+    Used by providers like Manus and Google Cloud Storage.
+    """
+
+    method: Required[str]
+    url: Required[str]
+    headers: Required[Dict[str, str]]
+    data: Required[Union[str, bytes, Dict[str, Any]]]
+
+
+class TwoStepFileUploadConfig(TypedDict, total=False):
+    """
+    Configuration for two-step file upload process.
+    
+    Properties:
+        initial_request: Request to create file record and get upload URL
+        upload_request: Request to upload actual file content
+        upload_url_location: Where to find upload URL ('headers' or 'body')
+        upload_url_key: Key name for upload URL in response (default: 'upload_url')
+    """
+
+    initial_request: Required[TwoStepFileUploadRequest]
+    upload_request: Required[TwoStepFileUploadRequest]
+    upload_url_location: Required[Literal["headers", "body"]]
+    upload_url_key: str

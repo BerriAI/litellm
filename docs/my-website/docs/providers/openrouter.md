@@ -1,5 +1,5 @@
 # OpenRouter
-LiteLLM supports all the text / chat / vision models from [OpenRouter](https://openrouter.ai/docs)
+LiteLLM supports all the text / chat / vision / embedding models from [OpenRouter](https://openrouter.ai/docs)
 
 <a target="_blank" href="https://colab.research.google.com/github/BerriAI/litellm/blob/main/cookbook/LiteLLM_OpenRouter.ipynb">
   <img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open In Colab"/>
@@ -77,4 +77,19 @@ response = completion(
             transforms = [""],
             route= ""
         )
+```
+
+## Embedding
+
+```python
+from litellm import embedding
+import os
+
+os.environ["OPENROUTER_API_KEY"] = "your-api-key"
+
+response = embedding(
+    model="openrouter/openai/text-embedding-3-small",
+    input=["good morning from litellm", "this is another item"],
+)
+print(response)
 ```

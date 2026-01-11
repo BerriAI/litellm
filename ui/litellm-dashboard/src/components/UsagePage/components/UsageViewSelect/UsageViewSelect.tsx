@@ -78,7 +78,6 @@ const OPTIONS: OptionConfig[] = [
     description: "View usage by AI agents",
     icon: <RobotOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
-    badgeText: "New",
   },
   {
     value: "user-agent-activity",

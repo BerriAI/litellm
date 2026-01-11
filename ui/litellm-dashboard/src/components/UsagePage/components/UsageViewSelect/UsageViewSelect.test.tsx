@@ -109,13 +109,4 @@ describe("UsageViewSelect", () => {
 
     expect(mockOnChange).toHaveBeenCalledWith("team");
   });
-
-  it("should render badge when option has badgeText", () => {
-    render(<UsageViewSelect value="agent" onChange={mockOnChange} isAdmin={true} />);
-
-    const badge = screen.getByTestId("antd-badge");
-    expect(badge).toBeInTheDocument();
-    expect(badge).toHaveAttribute("data-color", "blue");
-    expect(screen.getByTestId("antd-badge-count")).toHaveTextContent("New");
-  });
 });

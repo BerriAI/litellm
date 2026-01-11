@@ -1,7 +1,7 @@
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { getSSOSettings } from "@/components/networking";
 import { useQuery, UseQueryResult } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
-import { getSSOSettings } from "@/components/networking";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 export interface SSOFieldSchema {
   description: string;
@@ -27,13 +27,15 @@ export interface SSOSettingsValues {
   proxy_base_url: string | null;
   user_email: string | null;
   ui_access_mode: string | null;
-  role_mappings: {
-    provider: string;
-    group_claim: string;
-    default_role: "internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer";
-    roles: {
-      [key: string]: string[];
-    };
+  role_mappings: RoleMappings;
+}
+
+export interface RoleMappings {
+  provider: string;
+  group_claim: string;
+  default_role: "internal_user" | "internal_user_viewer" | "proxy_admin" | "proxy_admin_viewer";
+  roles: {
+    [key: string]: string[];
   };
 }
 

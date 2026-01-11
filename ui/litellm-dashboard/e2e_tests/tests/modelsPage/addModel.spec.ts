@@ -5,7 +5,7 @@ test.describe("Add Model", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("Able to see all models for a specific provider in the model dropdown", async ({ page }) => {
-    await page.goto("http://localhost:4000/ui");
+    await page.goto("/ui");
 
     await page.getByText("Models + Endpoints").click();
     await page.getByRole("tab", { name: "Add Model" }).click();
@@ -14,7 +14,7 @@ test.describe("Add Model", () => {
     await providerInputDropdown.fill("Anthropic");
     await page.waitForTimeout(1000);
     await providerInputDropdown.press("Enter");
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
 
     const providerModelsDropdown = page.locator(".ant-select-selection-overflow").first();
     await providerModelsDropdown.click();

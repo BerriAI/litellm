@@ -530,7 +530,7 @@ class TestPassthroughCallTypeHandling:
         )
         assert (
             ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="aembedding")
-            == "embeddings"
+            == "embedding"
         )
         assert (
             ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="aresponses")

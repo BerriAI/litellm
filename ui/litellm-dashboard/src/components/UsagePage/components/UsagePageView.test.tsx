@@ -70,8 +70,9 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
-vi.mock("antd", async () => {
+vi.mock("antd", async (importOriginal) => {
   const React = await import("react");
+  const actual = await importOriginal<typeof import("antd")>();
 
   function Select(props: any) {
     const { value, onChange, options, ...rest } = props;
@@ -111,7 +112,34 @@ vi.mock("antd", async () => {
   }
   (Badge as any).displayName = "AntdBadge";
 
-  return { Select, Alert, Badge };
+  function Table({ columns, dataSource, ...rest }: any) {
+    return React.createElement(
+      "div",
+      { ...rest, "data-testid": "antd-table" },
+      columns?.map((col: any) =>
+        React.createElement("div", { key: col.key, "data-testid": `column-${col.key}` }, col.title),
+      ),
+      dataSource?.map((row: any) =>
+        React.createElement(
+          "div",
+          { key: row.key, "data-testid": `row-${row.key}` },
+          columns?.map((col: any) => {
+            const value = col.render ? col.render(row[col.dataIndex], row) : row[col.dataIndex];
+            return React.createElement("div", { key: col.key }, value);
+          }),
+        ),
+      ),
+    );
+  }
+  (Table as any).displayName = "Table";
+
+  return {
+    ...actual,
+    Select,
+    Alert,
+    Badge,
+    Table,
+  };
 });
 
 vi.mock("@ant-design/icons", async () => {
@@ -341,9 +369,11 @@ describe("NewUsage", () => {
     });
 
     // Check that key metrics are displayed
-    expect(screen.getByText("Total Requests")).toBeInTheDocument();
+    const totalRequestElements = screen.getAllByText("Total Requests");
+    expect(totalRequestElements.length).toBeGreaterThan(0);
     expect(screen.getByText("1,500")).toBeInTheDocument();
-    expect(screen.getByText("Successful Requests")).toBeInTheDocument();
+    const successfulRequestLabelElements = screen.getAllByText("Successful Requests");
+    expect(successfulRequestLabelElements.length).toBeGreaterThan(0);
     // Use getAllByText since this value appears in multiple places (metrics card + table)
     const successfulRequestElements = screen.getAllByText("1,450");
     expect(successfulRequestElements.length).toBeGreaterThan(0);
@@ -357,10 +387,14 @@ describe("NewUsage", () => {
     });
 
     // Check for usage metrics cards
-    expect(screen.getByText("Total Requests")).toBeInTheDocument();
-    expect(screen.getByText("Successful Requests")).toBeInTheDocument();
-    expect(screen.getByText("Failed Requests")).toBeInTheDocument();
-    expect(screen.getByText("Total Tokens")).toBeInTheDocument();
+    const totalRequestElements = screen.getAllByText("Total Requests");
+    expect(totalRequestElements.length).toBeGreaterThan(0);
+    const successfulRequestElements = screen.getAllByText("Successful Requests");
+    expect(successfulRequestElements.length).toBeGreaterThan(0);
+    const failedRequestElements = screen.getAllByText("Failed Requests");
+    expect(failedRequestElements.length).toBeGreaterThan(0);
+    const totalTokensElements = screen.getAllByText("Total Tokens");
+    expect(totalTokensElements.length).toBeGreaterThan(0);
 
     // Check for chart titles
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();

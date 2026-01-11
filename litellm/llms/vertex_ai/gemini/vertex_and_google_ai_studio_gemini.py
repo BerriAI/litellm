@@ -480,20 +480,21 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 or tool_name == VertexToolName.CODE_EXECUTION.value
             ):  # code_execution maintained for backwards compatibility
                 code_execution = self.get_tool_value(tool, "codeExecution")
-            elif tool_name and tool_name == VertexToolName.GOOGLE_SEARCH.value:
-                googleSearch = self.get_tool_value(
-                    tool, VertexToolName.GOOGLE_SEARCH.value
-                )
-            elif (
-                tool_name and tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+            elif tool_name and (
+                tool_name == VertexToolName.GOOGLE_SEARCH.value
+                or tool_name == "google_search"
             ):
-                googleSearchRetrieval = self.get_tool_value(
-                    tool, VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
-                )
-            elif tool_name and tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value:
-                enterpriseWebSearch = self.get_tool_value(
-                    tool, VertexToolName.ENTERPRISE_WEB_SEARCH.value
-                )
+                googleSearch = self.get_tool_value(tool, tool_name)
+            elif tool_name and (
+                tool_name == VertexToolName.GOOGLE_SEARCH_RETRIEVAL.value
+                or tool_name == "google_search_retrieval"
+            ):
+                googleSearchRetrieval = self.get_tool_value(tool, tool_name)
+            elif tool_name and (
+                tool_name == VertexToolName.ENTERPRISE_WEB_SEARCH.value
+                or tool_name == "enterprise_web_search"
+            ):
+                enterpriseWebSearch = self.get_tool_value(tool, tool_name)
             elif tool_name and (
                 tool_name == VertexToolName.URL_CONTEXT.value
                 or tool_name == "urlContext"
@@ -1811,6 +1812,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         functions: Optional[ChatCompletionToolCallFunctionChunk] = None
         thinking_blocks: Optional[List[ChatCompletionThinkingBlock]] = None
         reasoning_content: Optional[str] = None
+        thought_signatures: Optional[Any] = None
 
         for idx, candidate in enumerate(_candidates):
             if "content" not in candidate:

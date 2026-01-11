@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Form, Select, Tooltip, Collapse, Input, Space, Button } from "antd";
+import { Form, Select, Tooltip, Collapse, Input, Space, Button, Switch } from "antd";
 import { InfoCircleOutlined, MinusCircleOutlined, PlusOutlined } from "@ant-design/icons";
 import { MCPServer } from "./types";
 const { Panel } = Collapse;
@@ -38,6 +38,11 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         }));
         form.setFieldValue("static_headers", staticHeaders);
       }
+      if (typeof mcpServer.allow_all_keys === "boolean") {
+        form.setFieldValue("allow_all_keys", mcpServer.allow_all_keys);
+      }
+    } else {
+      form.setFieldValue("allow_all_keys", false);
     }
   }, [mcpServer, form]);
 
@@ -57,6 +62,26 @@ const MCPPermissionManagement: React.FC<MCPPermissionManagementProps> = ({
         className="border-0"
       >
         <div className="space-y-6 pt-4">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <span className="text-sm font-medium text-gray-700 flex items-center">
+                Allow All LiteLLM Keys
+                <Tooltip title="When enabled, every API key can access this MCP server.">
+                  <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                </Tooltip>
+              </span>
+              <p className="text-sm text-gray-600 mt-1">Enable if this server should be &quot;public&quot; to all keys.</p>
+            </div>
+            <Form.Item
+              name="allow_all_keys"
+              valuePropName="checked"
+              initialValue={mcpServer?.allow_all_keys ?? false}
+              className="mb-0"
+            >
+              <Switch />
+            </Form.Item>
+          </div>
+
           <Form.Item
             label={
               <span className="text-sm font-medium text-gray-700 flex items-center">

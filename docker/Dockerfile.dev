@@ -40,7 +40,8 @@ COPY enterprise/ ./enterprise/
 COPY docker/ ./docker/
 
 # Build Admin UI once
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# Convert Windows line endings to Unix and make executable
+RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -79,8 +80,12 @@ RUN pip install --no-cache-dir *.whl /wheels/* --no-index --find-links=/wheels/ 
     rm -rf /wheels
 
 # Generate prisma client and set permissions
+# Convert Windows line endings to Unix for entrypoint scripts
 RUN prisma generate && \
-    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh
+    sed -i 's/\r$//' docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && \
+    chmod +x docker/entrypoint.sh && \
+    chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 

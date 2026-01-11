@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import secrets
@@ -433,9 +434,11 @@ def get_logging_payload(  # noqa: PLR0915
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
-            response=_get_response_for_spend_logs_payload(standard_logging_payload),
+            response=_get_response_for_spend_logs_payload(
+                payload=standard_logging_payload, kwargs=kwargs
+            ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
-                metadata=metadata, litellm_params=litellm_params
+                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -642,9 +645,12 @@ def _sanitize_request_body_for_spend_logs_payload(
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
+    kwargs: Optional[dict] = None,
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
+    
+    If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
         _proxy_server_request = cast(
@@ -652,6 +658,27 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+            
+            # Apply message redaction if turn_off_message_logging is enabled
+            if kwargs is not None:
+                from litellm.litellm_core_utils.redact_messages import (
+                    perform_redaction,
+                    should_redact_message_logging,
+                )
+
+                # Build model_call_details dict to check redaction settings
+                model_call_details = {
+                    "litellm_params": litellm_params,
+                    "standard_callback_dynamic_params": kwargs.get(
+                        "standard_callback_dynamic_params"
+                    ),
+                }
+                
+                # If redaction is enabled, deep copy request body before redacting
+                if should_redact_message_logging(model_call_details=model_call_details):
+                    _request_body = copy.deepcopy(_request_body)
+                    perform_redaction(model_call_details=_request_body, result=None)
+            
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
@@ -685,6 +712,7 @@ def _get_vector_store_request_for_spend_logs_payload(
 
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
+    kwargs: Optional[dict] = None,
 ) -> str:
     if payload is None:
         return "{}"
@@ -692,6 +720,26 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
+        
+        # Apply message redaction if turn_off_message_logging is enabled
+        if kwargs is not None:
+            from litellm.litellm_core_utils.redact_messages import (
+                perform_redaction,
+                should_redact_message_logging,
+            )
+            
+            litellm_params = kwargs.get("litellm_params", {})
+            model_call_details = {
+                "litellm_params": litellm_params,
+                "standard_callback_dynamic_params": kwargs.get(
+                    "standard_callback_dynamic_params"
+                ),
+            }
+            
+            # If redaction is enabled, deep copy response before redacting
+            if should_redact_message_logging(model_call_details=model_call_details):
+                response_obj = copy.deepcopy(response_obj)
+                response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}

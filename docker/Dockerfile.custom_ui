@@ -32,8 +32,9 @@ RUN rm -rf /app/litellm/proxy/_experimental/out/* && \
 WORKDIR /app
 
 # Make sure your docker/entrypoint.sh is executable
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x docker/prod_entrypoint.sh
+# Convert Windows line endings to Unix for entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
+RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 # Expose the necessary port
 EXPOSE 4000/tcp

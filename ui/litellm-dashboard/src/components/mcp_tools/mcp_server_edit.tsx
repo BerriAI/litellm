@@ -286,7 +286,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!accessToken) return;
     try {
       // Ensure access groups is always a string array
-      const { static_headers: staticHeadersList, credentials: credentialValues, ...restValues } = values;
+      const {
+        static_headers: staticHeadersList,
+        credentials: credentialValues,
+        allow_all_keys: allowAllKeysRaw,
+        ...restValues
+      } = values;
 
       const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
         typeof g === "string" ? g : g.name || String(g),
@@ -339,6 +344,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
+        allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
       };
 
       const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);

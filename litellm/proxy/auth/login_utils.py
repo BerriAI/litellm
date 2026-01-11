@@ -188,7 +188,7 @@ async def authenticate_user(  # noqa: PLR0915
         _user_row = cast(
             Optional[LiteLLM_UserTable],
             await prisma_client.db.litellm_usertable.find_first(
-                where={"user_email": {"equals": username}}
+                where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
         )
 
