@@ -2056,20 +2056,29 @@ jobs:
             pip install "httpx>=0.24.0"
             pip install "uvicorn>=0.23.0"
       - run:
-          name: Run Linear Memory Growth Tests
+          name: Run Router Memory Growth Tests
           command: |
-            echo "Running memory leak tests individually to avoid baseline drift..."
+            echo "Running Router memory leak tests individually to avoid baseline drift..."
             echo "Running test_memory_baseline_1k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v -s --tb=short
+            python -m pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_1k -v -s --tb=short
             echo "Running test_memory_baseline_2k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_2k -v -s --tb=short
+            python -m pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_2k -v -s --tb=short
             echo "Running test_memory_baseline_4k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_4k -v -s --tb=short
+            python -m pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_4k -v -s --tb=short
             echo "Running test_memory_baseline_10k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_10k -v -s --tb=short
-            echo "Running test_memory_baseline_30k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_30k -v -s --tb=short
-          no_output_timeout: 60m
+            python -m pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_10k -v -s --tb=short
+          no_output_timeout: 30m
+      - run:
+          name: Run Proxy Server Memory Growth Tests
+          command: |
+            echo "Running Proxy server memory leak tests individually to avoid baseline drift..."
+            echo "Running test_proxy_memory_baseline_1k..."
+            python -m pytest tests/load_tests/test_proxy_chat_completions_memory_growth.py::test_proxy_memory_baseline_1k -v -s --tb=short
+            echo "Running test_proxy_memory_baseline_10k..."
+            python -m pytest tests/load_tests/test_proxy_chat_completions_memory_growth.py::test_proxy_memory_baseline_10k -v -s --tb=short
+            echo "Running test_proxy_memory_baseline_20k..."
+            python -m pytest tests/load_tests/test_proxy_chat_completions_memory_growth.py::test_proxy_memory_baseline_20k -v -s --tb=short
+          no_output_timeout: 30m
 
   db_migration_disable_update_check:
     machine:
