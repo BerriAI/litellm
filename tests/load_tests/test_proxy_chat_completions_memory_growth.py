@@ -423,6 +423,7 @@ async def test_proxy_memory_baseline_30k(proxy_server, limit_memory):
 
 
 
+# We're only supposed to make it here if we're in a good place, meaning the memory limit needs to be strict enough to catch any possible OOMs from the previous tests.
 @pytest.mark.asyncio
 @pytest.mark.limit_leaks(MEMORY_LIMIT)
 @pytest.mark.no_parallel  # Must run sequentially - measures process memory
@@ -456,3 +457,21 @@ async def test_proxy_memory_baseline_500k(proxy_server, limit_memory):
         pytest tests/load_tests/test_proxy_chat_completions_memory_growth.py::test_proxy_memory_baseline_500k -v
     """
     await run_proxy_memory_baseline_test(500000, proxy_server, limit_memory)
+
+
+@pytest.mark.asyncio
+@pytest.mark.limit_leaks(MEMORY_LIMIT)
+@pytest.mark.no_parallel  # Must run sequentially - measures process memory
+async def test_proxy_memory_baseline_1m(proxy_server, limit_memory):
+    """
+    Memory baseline test with 1,000,000 requests to the proxy server.
+    Uses @pytest.mark.limit_leaks("40 MB") to enforce memory limit.
+    If test_proxy_memory_baseline_1k and test_proxy_memory_baseline_2k pass but this fails,
+    it's a clear sign of sequential/progressive memory growth.
+    
+    NOTE: This test should be run INDIVIDUALLY, not with other tests in this file.
+    Running multiple tests together causes memory baseline drift, making it difficult
+    to accurately detect linear memory growth. Run with:
+        pytest tests/load_tests/test_proxy_chat_completions_memory_growth.py::test_proxy_memory_baseline_1m -v
+    """
+    await run_proxy_memory_baseline_test(1000000, proxy_server, limit_memory)
