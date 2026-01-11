@@ -69,7 +69,7 @@ LiteLLM now sends 2.5× more requests to LLM providers by replacing sequential i
 
 ```
 ============================================================
-Fake LLM Provier Stats (When called by LiteLLM)
+Fake LLM Provider Stats (When called by LiteLLM)
 ============================================================
 Total Time:            0.56s
 Requests/Second:       10746.68
@@ -91,7 +91,7 @@ Status Codes:
 
 ```
 ============================================================
-Fake LLM Provier Stats (When called by LiteLLM)
+Fake LLM Provider Stats (When called by LiteLLM)
 ============================================================
 Total Time:            1.42s
 Requests/Second:       4224.49
