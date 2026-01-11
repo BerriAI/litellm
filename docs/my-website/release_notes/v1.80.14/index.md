@@ -61,7 +61,7 @@ pip install litellm==1.80.14
 
 ## Performance - 50% Overhead Reduction
 
-LiteLLM now sends 2.5× more requests to LLM providers by reducing wrapper function overhead across all endpoints.
+LiteLLM now sends 2.5× more requests to LLM providers by replacing sequential if/elif chains with O(1) dictionary lookups for provider configuration resolution (92.7% faster). This optimization has a high impact because it runs inside the client decorator, which is invoked on every HTTP request to the proxy server.
 
 ### Before
 
