@@ -71,11 +71,6 @@ LiteLLM now sends 2.5× more requests to LLM providers by replacing sequential i
 ============================================================
 Fake LLM Provier Stats (When called by LiteLLM)
 ============================================================
-Total Requests:        6000
-Successful Requests:   6000
-Failed Requests:       0
-Success Rate:          100.00%
-Error Rate:            0.00%
 Total Time:            0.56s
 Requests/Second:       10746.68
 
@@ -98,11 +93,6 @@ Status Codes:
 ============================================================
 Fake LLM Provier Stats (When called by LiteLLM)
 ============================================================
-Total Requests:        6000
-Successful Requests:   6000
-Failed Requests:       0
-Success Rate:          100.00%
-Error Rate:            0.00%
 Total Time:            1.42s
 Requests/Second:       4224.49
 
