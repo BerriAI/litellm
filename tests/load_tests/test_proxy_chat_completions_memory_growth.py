@@ -41,7 +41,7 @@ from tests.load_tests.memory_leak_utils import (
 )
 
 # Memory limit for all linear memory growth tests
-MEMORY_LIMIT = "170 MB"
+MEMORY_LIMIT = "45 MB"
 
 # Test Configuration
 TEST_API_KEY = "sk-1234"
