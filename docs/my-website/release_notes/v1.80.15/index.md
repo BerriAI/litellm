@@ -1,6 +1,6 @@
 ---
-title: "v1.80.14 - Manus API Support"
-slug: "v1-80-14"
+title: "v1.80.15 - Manus API Support"
+slug: "v1-80-15"
 date: 2026-01-10T10:00:00
 authors:
   - name: Krrish Dholakia
