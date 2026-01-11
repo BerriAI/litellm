@@ -2069,6 +2069,8 @@ jobs:
             python -m pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_10k -v -s --tb=short
             echo "Running test_memory_baseline_30k..."
             python -m pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_30k -v -s --tb=short
+            echo "Running test_memory_baseline_100k..."
+            python -m pytest tests/load_tests/test_router_acompletion_memory_growth.py::test_memory_baseline_100k -v -s --tb=short
           no_output_timeout: 30m
       - run:
           name: Run Proxy Server Memory Growth Tests
