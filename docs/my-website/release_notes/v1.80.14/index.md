@@ -53,7 +53,7 @@ pip install litellm==1.80.14
 - **MCP Global Mode** - [Configure MCP servers globally with visibility controls](../../docs/mcp)
 - **Interactions API Bridge** - [Use all LiteLLM providers with the Interactions API](../../docs/interactions)
 - **RAG Query Endpoint** - [New RAG Search/Query endpoint for retrieval-augmented generation](../../docs/search/index)
-- **92.7% Faster Provider Config Lookup** - Major performance improvement for provider configuration
+- **50% Overhead Reduction** - LiteLLM now sends 2.5× more requests to LLM providers
 - **UI Usage - Endpoint Activity** - Users can now see Endpoint Activity Metrics in the UI.
 
 
@@ -65,10 +65,18 @@ LiteLLM now sends 2.5× more requests to LLM providers by reducing wrapper funct
 
 ### Before
 
+> **Note:** Worse-looking provider metrics are a good sign here—they indicate requests spend less time inside LiteLLM.
+
 ```
 ============================================================
 Fake LLM Provier Stats (When called by LiteLLM)
 ============================================================
+Total Requests:        6000
+Successful Requests:   6000
+Failed Requests:       0
+Success Rate:          100.00%
+Error Rate:            0.00%
+Total Time:            0.56s
 Requests/Second:       10746.68
 
 Latency Statistics (seconds):
@@ -90,6 +98,12 @@ Status Codes:
 ============================================================
 Fake LLM Provier Stats (When called by LiteLLM)
 ============================================================
+Total Requests:        6000
+Successful Requests:   6000
+Failed Requests:       0
+Success Rate:          100.00%
+Error Rate:            0.00%
+Total Time:            1.42s
 Requests/Second:       4224.49
 
 Latency Statistics (seconds):
