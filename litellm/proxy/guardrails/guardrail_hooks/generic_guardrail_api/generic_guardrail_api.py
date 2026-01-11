@@ -223,9 +223,10 @@ class GenericGuardrailAPI(CustomGuardrail):
 
         try:
             # Make the API request
+            # Use mode="json" to ensure all iterables are converted to lists
             response = await self.async_handler.post(
                 url=self.api_base,
-                json=guardrail_request.model_dump(),
+                json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
             )
 
