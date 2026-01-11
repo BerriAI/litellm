@@ -29,7 +29,8 @@ from tests.load_tests.memory_leak_utils import (
 )
 
 # Memory limit for all linear memory growth tests
-MEMORY_LIMIT = "40 MB"
+# Increased to 50 MB to account for larger batch size (100 vs 20) which creates more temporary objects
+MEMORY_LIMIT = "50 MB"
 
 
 @pytest.mark.asyncio

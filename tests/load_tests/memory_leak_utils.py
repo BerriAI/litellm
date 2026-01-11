@@ -254,8 +254,7 @@ def test_router(mock_server):
 async def run_memory_baseline_test(num_requests: int, router: Router, limit_memory):
     """Helper function to run memory baseline test with specified number of requests.
     
-    Makes requests concurrently in batches for speed, with proper error handling
-    that doesn't fail the test on individual request failures.
+    Makes requests concurrently in large batches for speed, optimized for performance.
     
     Args:
         num_requests: Number of requests to make.
@@ -268,16 +267,28 @@ async def run_memory_baseline_test(num_requests: int, router: Router, limit_memo
         async def test_memory(test_router, limit_memory):
             await run_memory_baseline_test(1000, test_router, limit_memory)
     """
+    import asyncio
+    
     # Fixture is used automatically by pytest - reference it to suppress linter warning
     _ = limit_memory
     
-    # Make requests concurrently in batches for speed
-    # Batch size of 20 provides good balance between speed and memory pressure
-    BATCH_SIZE = 20
+    # Track memory throughout test
+    process = psutil.Process(os.getpid())
+    start_memory = process.memory_info().rss / 1024 / 1024
+    print(f"[Memory] Test start: {start_memory:.2f} MB")
+    
+    # Make requests concurrently in large batches for speed
+    # Large batch size = faster tests (temporary memory spike is accounted for in limit)
+    BATCH_SIZE = 100
+    
+    batch_num = 0
+    total_batches = (num_requests + BATCH_SIZE - 1) // BATCH_SIZE
     
     for batch_start in range(0, num_requests, BATCH_SIZE):
+        batch_num += 1
         batch_end = min(batch_start + BATCH_SIZE, num_requests)
-        # Create concurrent tasks for this batch
+        
+        # Create tasks directly for maximum speed
         tasks = [
             router.acompletion(
                 model=TEST_MODEL_NAME,
@@ -285,36 +296,30 @@ async def run_memory_baseline_test(num_requests: int, router: Router, limit_memo
             )
             for i in range(batch_start, batch_end)
         ]
-        # Execute batch concurrently
-        # Note: return_exceptions=True allows test to continue even if some requests fail
-        import asyncio
+        
+        print(f"[Batch {batch_num}/{total_batches}] Executing batch {batch_start}-{batch_end}...")
+        batch_start_time = time.time()
+        
+        # Execute batch concurrently (return_exceptions=True to not fail on individual errors)
         responses = await asyncio.gather(*tasks, return_exceptions=True)
-        # Filter out failed requests but continue with test
-        valid_responses = []
-        failed_count = 0
-        for i, response in enumerate(responses):
-            if isinstance(response, Exception):
-                failed_count += 1
-                # Log exception but continue
-                print(f"  Warning: Request {batch_start + i} failed: {type(response).__name__}: {response}")
-            elif response is None:
-                failed_count += 1
-                print(f"  Warning: Request {batch_start + i} returned None")
-            else:
-                valid_responses.append(response)
+        batch_duration = time.time() - batch_start_time
         
-        # Continue with valid responses - don't fail the test
-        # If all failed, that's logged but test continues (might indicate bigger issue)
-        if failed_count > 0:
-            print(f"  Note: {failed_count}/{len(responses)} requests failed in batch {batch_start}-{batch_end}, continuing with {len(valid_responses)} valid responses")
-        
-        # Use valid_responses for cleanup
-        responses = valid_responses
-        # Clean up batch
+        # Clean up batch immediately to avoid memory accumulation
+        if responses:
+            for resp in responses:
+                del resp
         del responses
         del tasks
-        del valid_responses
-        # GC after each batch to prevent accumulation
-        gc.collect()
+        
+        # Periodic memory check every 10 batches
+        if batch_num % 10 == 0:
+            current_memory = process.memory_info().rss / 1024 / 1024
+            print(f"[Batch {batch_num}/{total_batches}] Completed in {batch_duration:.2f}s ({BATCH_SIZE/batch_duration:.1f} req/s) | Memory: {current_memory:.2f} MB (+{current_memory - start_memory:.2f} MB)")
+        else:
+            print(f"[Batch {batch_num}/{total_batches}] Completed in {batch_duration:.2f}s ({BATCH_SIZE/batch_duration:.1f} req/s)")
     
-    print(f"[Simple Memory Test] Completed {num_requests} requests")
+    # Final memory check
+    final_memory = process.memory_info().rss / 1024 / 1024
+    print(f"\n[Router Memory Test] Completed {num_requests:,} requests")
+    print(f"[Router Memory Test] Memory usage: {final_memory - start_memory:.2f} MB")
+    print("=" * 80)
