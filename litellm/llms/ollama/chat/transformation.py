@@ -190,46 +190,15 @@ class OllamaChatConfig(BaseConfig):
                 else:
                     optional_params["think"] = value in {"low", "medium", "high"}
             ### FUNCTION CALLING LOGIC ###
+            # Ollama 0.4+ supports native tool calling - pass tools directly
+            # and let Ollama handle model capability detection
+            # See: https://github.com/BerriAI/litellm/issues/18922
             if param == "tools":
-                ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
-                try:
-                    model_info = litellm.get_model_info(
-                        model=model, custom_llm_provider="ollama"
-                    )
-                    if model_info.get("supports_function_calling") is True:
-                        optional_params["tools"] = value
-                    else:
-                        raise Exception
-                except Exception:
-                    optional_params["format"] = "json"
-                    litellm.add_function_to_prompt = (
-                        True  # so that main.py adds the function call to the prompt
-                    )
-                    optional_params["functions_unsupported_model"] = value
-
-                    if len(optional_params["functions_unsupported_model"]) == 1:
-                        optional_params["function_name"] = optional_params[
-                            "functions_unsupported_model"
-                        ][0]["function"]["name"]
+                optional_params["tools"] = value
 
             if param == "functions":
-                ## CHECK IF MODEL SUPPORTS TOOL CALLING ##
-                try:
-                    model_info = litellm.get_model_info(
-                        model=model, custom_llm_provider="ollama"
-                    )
-                    if model_info.get("supports_function_calling") is True:
-                        optional_params["tools"] = value
-                    else:
-                        raise Exception
-                except Exception:
-                    optional_params["format"] = "json"
-                    litellm.add_function_to_prompt = (
-                        True  # so that main.py adds the function call to the prompt
-                    )
-                    optional_params["functions_unsupported_model"] = (
-                        non_default_params.get("functions")
-                    )
+                # Convert functions to tools format for Ollama
+                optional_params["tools"] = value
         non_default_params.pop("tool_choice", None)  # causes ollama requests to hang
         non_default_params.pop("functions", None)  # causes ollama requests to hang
         return optional_params
