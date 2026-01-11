@@ -1855,10 +1855,11 @@ class Logging(LiteLLMLoggingBaseClass):
         )
         litellm_params = self.model_call_details.get("litellm_params", {})
         is_async_logging_request = (
-            litellm_params.get("acompletion", False) is not True
-            and litellm_params.get("aembedding", False) is not True
-            and litellm_params.get("aimage_generation", False) is not True
-            and litellm_params.get("atranscription", False) is not True
+            litellm_params.get(CallTypes.acompletion.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses.value, False) is not True
+            and litellm_params.get(CallTypes.aembedding.value, False) is not True
+            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
+            and litellm_params.get(CallTypes.atranscription.value, False) is not True
         )
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
@@ -2700,9 +2701,13 @@ class Logging(LiteLLMLoggingBaseClass):
             return
         litellm_params = self.model_call_details.get("litellm_params", {})
         is_async_logging_request = (
-            litellm_params.get("acompletion", False) is not True
-            and litellm_params.get("aembedding", False) is not True
+            litellm_params.get(CallTypes.acompletion.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses.value, False) is not True
+            and litellm_params.get(CallTypes.aembedding.value, False) is not True
+            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
+            and litellm_params.get(CallTypes.atranscription.value, False) is not True
         )
+
         try:
             start_time, end_time = self._failure_handler_helper_fn(
                 exception=exception,
