@@ -8,7 +8,7 @@ import { provider_map, Providers } from "../provider_info_helpers";
 const { Link } = Typography;
 
 interface ProviderSpecificFieldsProps {
-  selectedProvider: Providers;
+  selectedProvider: Providers | string;
   uploadProps?: UploadProps;
 }
 

@@ -172,11 +172,16 @@ def create_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+                ProviderConfigManager.get_provider_skills_api_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            skills_api_provider_config = None
 
         if skills_api_provider_config is None:
             raise ValueError(
@@ -354,11 +359,16 @@ def list_skills(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+                ProviderConfigManager.get_provider_skills_api_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            skills_api_provider_config = None
 
         if skills_api_provider_config is None:
             raise ValueError(f"LIST skills is not supported for {custom_llm_provider}")
@@ -528,11 +538,16 @@ def get_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+                ProviderConfigManager.get_provider_skills_api_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            skills_api_provider_config = None
 
         if skills_api_provider_config is None:
             raise ValueError(f"GET skill is not supported for {custom_llm_provider}")
@@ -694,11 +709,16 @@ def delete_skill(
             )
 
         # Get provider config for external providers (Anthropic, etc.)
-        skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
-            ProviderConfigManager.get_provider_skills_api_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            skills_api_provider_config: Optional[BaseSkillsAPIConfig] = (
+                ProviderConfigManager.get_provider_skills_api_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            skills_api_provider_config = None
 
         if skills_api_provider_config is None:
             raise ValueError(

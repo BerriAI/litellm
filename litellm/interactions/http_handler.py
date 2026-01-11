@@ -204,10 +204,16 @@ class InteractionsHTTPHandler:
         Create a new interaction (async version).
         """
         if client is None:
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -398,10 +404,16 @@ class InteractionsHTTPHandler:
     ) -> InteractionsAPIResponse:
         """Get an interaction by ID (async version)."""
         if client is None:
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -520,10 +532,16 @@ class InteractionsHTTPHandler:
     ) -> DeleteInteractionResult:
         """Delete an interaction by ID (async version)."""
         if client is None:
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -643,10 +661,16 @@ class InteractionsHTTPHandler:
     ) -> CancelInteractionResult:
         """Cancel an interaction by ID (async version)."""
         if client is None:
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 

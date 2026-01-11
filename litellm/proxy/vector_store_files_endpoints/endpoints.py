@@ -15,7 +15,7 @@ from litellm.proxy.common_utils.openai_endpoint_utils import (
 from litellm.proxy.vector_store_endpoints.utils import (
     is_allowed_to_call_vector_store_files_endpoint,
 )
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import LlmProviders, get_llm_provider_enum
 
 router = APIRouter()
 
@@ -62,9 +62,12 @@ async def _resolve_provider(
     if provider is None:
         provider = "openai"
 
+    # Use the utility function that handles both enum and JSON providers
     try:
-        return LlmProviders(provider)
-    except Exception:
+        return get_llm_provider_enum(provider)  # type: ignore
+    except (ValueError, Exception):
+        # ValueError: provider not in enum and not a JSON provider
+        # Exception: any other error (e.g., import error)
         return None
 
 

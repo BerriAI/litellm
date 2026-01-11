@@ -3032,7 +3032,70 @@ class LlmProviders(str, Enum):
 
 
 # Create a set of all provider values for quick lookup
-LlmProvidersSet = {provider.value for provider in LlmProviders}
+# Include both enum providers and JSON-configured providers
+def _get_all_provider_values() -> set:
+    """Get all provider values including JSON-configured ones"""
+    providers_set = {provider.value for provider in LlmProviders}
+    try:
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        JSONProviderRegistry.load()
+        for provider_slug in JSONProviderRegistry.list_providers():
+            providers_set.add(provider_slug)
+    except Exception:
+        pass
+    return providers_set
+
+LlmProvidersSet = _get_all_provider_values()
+
+
+def get_llm_provider_enum(provider: str) -> Union[LlmProviders, Any]:
+    """
+    Get LlmProviders enum value for a provider string.
+    Handles both enum providers and JSON-configured providers.
+    
+    For JSON providers, returns a compatible object that quacks like LlmProviders.
+    For enum providers, returns the actual enum value.
+    
+    Args:
+        provider: Provider string (e.g., "openai", "publicai")
+        
+    Returns:
+        LlmProviders enum value or JSONProvider-like object
+    """
+    try:
+        return LlmProviders(provider)
+    except ValueError:
+        # Provider not in enum - check if it's a JSON provider
+        try:
+            from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+            JSONProviderRegistry.load()
+            if JSONProviderRegistry.exists(provider):
+                # Return a type that quacks like LlmProviders
+                class _JSONProvider:
+                    def __init__(self, value: str):
+                        self.value = value
+                        self.name = value.upper().replace("-", "_")
+                    
+                    def __eq__(self, other):
+                        if isinstance(other, LlmProviders):
+                            return self.value == other.value
+                        if isinstance(other, _JSONProvider):
+                            return self.value == other.value
+                        return self.value == str(other)
+                    
+                    def __hash__(self):
+                        return hash(self.value)
+                    
+                    def __str__(self):
+                        return self.value
+                    
+                    def __repr__(self):
+                        return f"<JSONProvider.{self.name}: '{self.value}'>"
+                
+                return _JSONProvider(provider)  # type: ignore
+        except Exception:
+            pass
+        raise ValueError(f"Unknown provider: {provider}")
 
 # File and Batch API providers that are OpenAI-compatible
 OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {

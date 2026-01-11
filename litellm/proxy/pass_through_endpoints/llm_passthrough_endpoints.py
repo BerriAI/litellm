@@ -92,13 +92,17 @@ async def llm_passthrough_factory_proxy_route(
     """
     Factory function for creating pass-through endpoints for LLM providers.
     """
-    from litellm.types.utils import LlmProviders
+    from litellm.types.utils import LlmProviders, get_llm_provider_enum
     from litellm.utils import ProviderConfigManager
 
-    provider_config = ProviderConfigManager.get_provider_model_info(
-        provider=LlmProviders(custom_llm_provider),
-        model=None,
-    )
+    try:
+        provider_enum = get_llm_provider_enum(custom_llm_provider)
+        provider_config = ProviderConfigManager.get_provider_model_info(
+            provider=provider_enum,
+            model=None,
+        )
+    except ValueError:
+        provider_config = None
     if provider_config is None:
         raise HTTPException(
             status_code=404, detail=f"Provider {custom_llm_provider} not found"

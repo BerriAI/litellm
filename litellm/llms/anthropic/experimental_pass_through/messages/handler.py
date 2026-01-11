@@ -177,12 +177,17 @@ def anthropic_messages_handler(
     if custom_llm_provider is not None and custom_llm_provider in [
         provider.value for provider in LlmProviders
     ]:
-        anthropic_messages_provider_config = (
-            ProviderConfigManager.get_provider_anthropic_messages_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            anthropic_messages_provider_config = (
+                ProviderConfigManager.get_provider_anthropic_messages_config(
+                    model=model,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            anthropic_messages_provider_config = None
     if anthropic_messages_provider_config is None:
         # Handle non-Anthropic models using the adapter
         return (

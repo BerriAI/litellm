@@ -56,10 +56,16 @@ class OpenAITextCompletion(BaseLLM):
 
             # don't send max retries to the api, if set
 
-            provider_config = ProviderConfigManager.get_provider_text_completion_config(
-                model=model,
-                provider=LlmProviders(custom_llm_provider),
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                provider_config = ProviderConfigManager.get_provider_text_completion_config(
+                    model=model,
+                    provider=provider_enum,
+                )
+            except ValueError:
+                # Provider not found, use default
+                provider_config = None
 
             data = provider_config.transform_text_completion_request(
                 model=model,

@@ -133,10 +133,16 @@ class GenerateContentHelper:
         # get provider config
         generate_content_provider_config: Optional[
             BaseGoogleGenAIGenerateContentConfig
-        ] = ProviderConfigManager.get_provider_google_genai_generate_content_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
-        )
+        ] = None
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            generate_content_provider_config = ProviderConfigManager.get_provider_google_genai_generate_content_config(
+                model=model,
+                provider=provider_enum,
+            )
+        except ValueError:
+            generate_content_provider_config = None
 
         if generate_content_provider_config is None:
             # Use adapter to transform to completion format when provider config is None

@@ -618,12 +618,17 @@ def responses(
             )
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=model,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            responses_api_provider_config = None
 
         local_vars.update(kwargs)
         # Get ResponsesAPIOptionalRequestParams with only valid parameters
@@ -816,12 +821,17 @@ def delete_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            responses_api_provider_config = None
 
         if responses_api_provider_config is None:
             raise ValueError(
@@ -996,12 +1006,17 @@ def get_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            responses_api_provider_config = None
 
         if responses_api_provider_config is None:
             raise ValueError(
@@ -1153,12 +1168,17 @@ def list_input_items(
         if custom_llm_provider is None:
             raise ValueError("custom_llm_provider is required but passed as None")
 
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            responses_api_provider_config = None
 
         if responses_api_provider_config is None:
             raise ValueError(
@@ -1311,12 +1331,17 @@ def cancel_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            responses_api_provider_config = None
 
         if responses_api_provider_config is None:
             raise ValueError(
@@ -1487,12 +1512,17 @@ def compact_responses(
             raise ValueError("custom_llm_provider is required but passed as None")
 
         # get provider config
-        responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
-            ProviderConfigManager.get_provider_responses_api_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            responses_api_provider_config: Optional[BaseResponsesAPIConfig] = (
+                ProviderConfigManager.get_provider_responses_api_config(
+                    model=model,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            responses_api_provider_config = None
 
         if responses_api_provider_config is None:
             raise ValueError(

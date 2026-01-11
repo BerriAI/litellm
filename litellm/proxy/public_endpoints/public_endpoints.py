@@ -134,6 +134,7 @@ async def get_supported_providers() -> List[str]:
 async def get_provider_fields() -> List[ProviderCreateInfo]:
     """
     Return provider metadata required by the dashboard create-model flow.
+    Includes both hardcoded providers from JSON file and dynamically loaded JSON-configured providers.
     """
 
     provider_create_fields_path = os.path.join(
@@ -145,6 +146,67 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
 
     with open(provider_create_fields_path, "r") as f:
         provider_create_fields = json.load(f)
+
+        # Add providers from providers.json (OpenAI-like providers)
+    try:
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        existing_provider_names = {p["provider"] for p in provider_create_fields}
+
+        for slug in JSONProviderRegistry.list_providers():
+            # Skip if already in provider_create_fields.json
+            if slug in existing_provider_names:
+                continue
+
+            provider_config = JSONProviderRegistry.get(slug)
+            if not provider_config:
+                continue
+
+            # Generate credential fields based on provider configuration
+            credential_fields = []
+            
+            # Add api_base field if api_base_env is configured or base_url is provided
+            if provider_config.api_base_env or provider_config.base_url:
+                credential_fields.append({
+                    "key": "api_base",
+                    "label": "API Base",
+                    "placeholder": provider_config.base_url,
+                    "tooltip": f"Base URL for {slug.title()}. Default: {provider_config.base_url}" + (
+                        f". You can also set the environment variable {provider_config.api_base_env}." 
+                        if provider_config.api_base_env else ""
+                    ),
+                    "required": False,
+                    "field_type": "text",
+                    "options": None,
+                    "default_value": provider_config.base_url if provider_config.base_url else None
+                })
+
+            # Add api_key field if api_key_env is configured
+            if provider_config.api_key_env:
+                credential_fields.append({
+                    "key": "api_key",
+                    "label": "API Key",
+                    "placeholder": None,
+                    "tooltip": f"API key for {slug.title()}. You can set the environment variable {provider_config.api_key_env} or provide the key directly.",
+                    "required": True,
+                    "field_type": "password",
+                    "options": None,
+                    "default_value": None
+                })
+            
+
+
+            provider_create_fields.append({
+                "provider": slug.title(),
+                "provider_display_name": slug.title(),
+                "litellm_provider": slug,
+                "credential_fields": credential_fields,
+                "default_model_placeholder": "{model}",
+            })
+    except Exception as e:
+        # Log error but don't fail the endpoint
+        import logging
+        logging.warning(f"Failed to load providers from providers.json: {e}")
 
     return provider_create_fields
 

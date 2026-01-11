@@ -30,16 +30,28 @@ def get_supported_openai_params(  # noqa: PLR0915
         except BadRequestError:
             return None
 
+    from litellm.types.utils import get_llm_provider_enum
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    JSONProviderRegistry.load()
+    
+    provider_config = None
     if custom_llm_provider in LlmProvidersSet:
-        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
-    elif custom_llm_provider.split("/")[0] in LlmProvidersSet:
-        provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider.split("/")[0])
-        )
-    else:
-        provider_config = None
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=provider_enum
+            )
+        except ValueError:
+            provider_config = None
+    elif custom_llm_provider.split("/")[0] in LlmProvidersSet or JSONProviderRegistry.exists(custom_llm_provider.split("/")[0]):
+        try:
+            provider_prefix = custom_llm_provider.split("/")[0]
+            provider_enum = get_llm_provider_enum(provider_prefix)
+            provider_config = litellm.ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=provider_enum
+            )
+        except ValueError:
+            provider_config = None
 
     if provider_config and request_type == "chat_completion":
         return provider_config.get_supported_openai_params(model=model)

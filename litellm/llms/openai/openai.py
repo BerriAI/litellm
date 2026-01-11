@@ -556,8 +556,10 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
 
             if custom_llm_provider is not None and model is not None:
                 try:
+                    from litellm.types.utils import get_llm_provider_enum
+                    provider_enum = get_llm_provider_enum(custom_llm_provider)
                     provider_config = ProviderConfigManager.get_provider_chat_config(
-                        model=model, provider=LlmProviders(custom_llm_provider)
+                        model=model, provider=provider_enum
                     )
                 except ValueError:
                     # JSON-configured providers may not be in LlmProviders enum

@@ -1,9 +1,12 @@
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { TextInput } from "@tremor/react";
 import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "antd";
 import type { UploadProps } from "antd/es/upload";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
+import { ProviderLogo } from "../molecules/models/ProviderLogo";
+import type { ProviderCreateInfo } from "../networking";
+import { Providers } from "../provider_info_helpers";
 const { Link } = Typography;
 
 interface AddCredentialsModalProps {
@@ -15,7 +18,26 @@ interface AddCredentialsModalProps {
 
 const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps }) => {
   const [form] = Form.useForm();
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
+  const [selectedProvider, setSelectedProvider] = useState<string | Providers>(Providers.OpenAI);
+
+  const {
+    data: providerMetadata,
+    isLoading: isProviderMetadataLoading,
+    error: providerMetadataError,
+  } = useProviderFields();
+
+  const sortedProviderMetadata: ProviderCreateInfo[] = useMemo(() => {
+    if (!providerMetadata || !Array.isArray(providerMetadata)) {
+      return [];
+    }
+    return [...providerMetadata].sort((a, b) => a.provider_display_name.localeCompare(b.provider_display_name));
+  }, [providerMetadata]);
+
+  const providerMetadataErrorText = providerMetadataError
+    ? providerMetadataError instanceof Error
+      ? providerMetadataError.message
+      : "Failed to load providers"
+    : null;
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -58,34 +80,32 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
         >
           <AntdSelect
             showSearch
+            loading={isProviderMetadataLoading}
+            placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
+            optionFilterProp="data-label"
             onChange={(value) => {
-              setSelectedProvider(value as Providers);
+              setSelectedProvider(value);
               form.setFieldValue("custom_llm_provider", value);
             }}
           >
-            {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => (
-              <AntdSelect.Option key={providerEnum} value={providerEnum}>
-                <div className="flex items-center space-x-2">
-                  <img
-                    src={providerLogoMap[providerDisplayName]}
-                    alt={`${providerEnum} logo`}
-                    className="w-5 h-5"
-                    onError={(e) => {
-                      const target = e.target as HTMLImageElement;
-                      const parent = target.parentElement;
-                      if (parent) {
-                        const fallbackDiv = document.createElement("div");
-                        fallbackDiv.className =
-                          "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                        fallbackDiv.textContent = providerDisplayName.charAt(0);
-                        parent.replaceChild(fallbackDiv, target);
-                      }
-                    }}
-                  />
-                  <span>{providerDisplayName}</span>
-                </div>
+            {providerMetadataErrorText && sortedProviderMetadata.length === 0 && (
+              <AntdSelect.Option key="__error" value="">
+                {providerMetadataErrorText}
               </AntdSelect.Option>
-            ))}
+            )}
+            {sortedProviderMetadata.map((providerInfo) => {
+              const displayName = providerInfo.provider_display_name;
+              const providerKey = providerInfo.provider;
+
+              return (
+                <AntdSelect.Option key={providerKey} value={providerKey} data-label={displayName}>
+                  <div className="flex items-center space-x-2">
+                    <ProviderLogo provider={providerKey} className="w-5 h-5" />
+                    <span>{displayName}</span>
+                  </div>
+                </AntdSelect.Option>
+              );
+            })}
           </AntdSelect>
         </Form.Item>
 

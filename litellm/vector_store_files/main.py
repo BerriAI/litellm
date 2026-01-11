@@ -134,9 +134,14 @@ def create(
             vector_store_id=vector_store_id, **kwargs
         )
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-            provider=LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider) if custom_llm_provider else None
+            provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+                provider=provider_enum
+            ) if provider_enum else None
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Vector store file create is not supported for {custom_llm_provider}"
@@ -268,9 +273,14 @@ def list(
             vector_store_id=vector_store_id, **kwargs
         )
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-            provider=LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider) if custom_llm_provider else None
+            provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+                provider=provider_enum
+            ) if provider_enum else None
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Vector store file list is not supported for {custom_llm_provider}"
@@ -383,9 +393,14 @@ def retrieve(
             vector_store_id=vector_store_id, **kwargs
         )
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-            provider=LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider) if custom_llm_provider else None
+            provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+                provider=provider_enum
+            ) if provider_enum else None
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Vector store file retrieve is not supported for {custom_llm_provider}"
@@ -496,9 +511,14 @@ def retrieve_content(
             vector_store_id=vector_store_id, **kwargs
         )
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-            provider=LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider) if custom_llm_provider else None
+            provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+                provider=provider_enum
+            ) if provider_enum else None
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Vector store file content retrieve is not supported for {custom_llm_provider}"
@@ -613,9 +633,14 @@ def update(
             vector_store_id=vector_store_id, **kwargs
         )
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-            provider=LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider) if custom_llm_provider else None
+            provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+                provider=provider_enum
+            ) if provider_enum else None
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Vector store file update is not supported for {custom_llm_provider}"
@@ -735,9 +760,14 @@ def delete(
             vector_store_id=vector_store_id, **kwargs
         )
 
-        provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
-            provider=LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider) if custom_llm_provider else None
+            provider_config = ProviderConfigManager.get_provider_vector_store_files_config(
+                provider=provider_enum
+            ) if provider_enum else None
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Vector store file delete is not supported for {custom_llm_provider}"

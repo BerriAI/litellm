@@ -160,10 +160,15 @@ def create_file(
                 extra_body=extra_body,
             )
 
-        provider_config = ProviderConfigManager.get_provider_files_config(
-            model="",
-            provider=LlmProviders(custom_llm_provider),
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_config = ProviderConfigManager.get_provider_files_config(
+                model="",
+                provider=provider_enum,
+            )
+        except ValueError:
+            provider_config = None
         if provider_config is not None:
             response = base_llm_http_handler.create_file(
                 provider_config=provider_config,

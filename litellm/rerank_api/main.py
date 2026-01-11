@@ -129,14 +129,19 @@ def rerank(  # noqa: PLR0915
             api_key=optional_params.api_key,
         )
 
-        rerank_provider_config: BaseRerankConfig = (
-            ProviderConfigManager.get_provider_rerank_config(
-                model=model,
-                provider=litellm.LlmProviders(_custom_llm_provider),
-                api_base=optional_params.api_base,
-                present_version_params=present_version_params,
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(_custom_llm_provider)
+            rerank_provider_config: BaseRerankConfig = (
+                ProviderConfigManager.get_provider_rerank_config(
+                    model=model,
+                    provider=provider_enum,
+                    api_base=optional_params.api_base,
+                    present_version_params=present_version_params,
+                )
             )
-        )
+        except ValueError:
+            rerank_provider_config = None
 
         optional_rerank_params: Dict = get_optional_rerank_params(
             rerank_provider_config=rerank_provider_config,
