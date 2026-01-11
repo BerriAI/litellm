@@ -6996,19 +6996,16 @@ class Router:
                 if model_name:
                     return model_name
 
-        # Strategy 4: Wildcard patterns (e.g., vertex_ai/*)
+        # Strategy 4: Wildcard patterns using PatternMatchRouter
         # For video status/content, we need to match model_id like "veo-3.0-generate-preview"
         # to wildcard patterns like "vertex_ai/*"
         if custom_llm_provider:
-            wildcard_pattern = f"{custom_llm_provider}/*"
-            for deployment in all_models:
-                model_name = deployment.get("model_name")
-                litellm_params = deployment.get("litellm_params", {})
-                actual_model = litellm_params.get("model")
-
-                # Check if this deployment matches the wildcard pattern
-                if actual_model == wildcard_pattern or model_name == wildcard_pattern:
-                    # Return the wildcard model_name so that credentials are injected
+            full_model_name = f"{custom_llm_provider}/{model_id}"
+            pattern_deployments = self.pattern_router.route(full_model_name)
+            if pattern_deployments:
+                # Return the first matching wildcard model_name
+                for deployment in pattern_deployments:
+                    model_name = deployment.get("model_name")
                     if model_name:
                         return model_name
 
