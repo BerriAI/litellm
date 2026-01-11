@@ -16,7 +16,8 @@ RUN apk add --no-cache \
     bash \
     gcc \
     openssl \
-    openssl-dev
+    openssl-dev \
+    rust
 
 RUN python -m pip install build
 
