@@ -189,7 +189,7 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
-from .llms.gemini.common_utils import get_api_key_from_env, get_vertex_api_key_from_env
+from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
@@ -3230,12 +3230,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
 
-            vertex_api_key = (
-                api_key
-                or get_vertex_api_key_from_env()
-                or litellm.api_key
-            )
-
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = safe_deep_copy(optional_params or {})
@@ -3277,7 +3271,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
                     vertex_credentials=vertex_credentials,
-                    gemini_api_key=vertex_api_key,  # Support for Vertex AI API Key
+                    gemini_api_key=None,
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,
@@ -4698,6 +4692,51 @@ def embedding(  # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=cohere_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
+        elif custom_llm_provider == "openrouter":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("OPENROUTER_API_BASE")
+                or "https://openrouter.ai/api/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.openrouter_key
+                or get_secret("OPENROUTER_API_KEY")
+                or get_secret("OR_API_KEY")
+            )
+
+            openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
+            openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
+
+            openrouter_headers = {
+                "HTTP-Referer": openrouter_site_url,
+                "X-Title": openrouter_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                openrouter_headers.update(_headers)
+
+            headers = openrouter_headers
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
