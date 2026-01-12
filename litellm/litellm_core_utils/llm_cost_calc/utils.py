@@ -485,9 +485,14 @@ def _calculate_input_cost(
         model_info, "input_cost_per_audio_token", prompt_tokens_details["audio_tokens"]
     )
 
-    ### IMAGE TOKEN COST (for gpt-image-1 and similar models)
+    ### IMAGE TOKEN COST
+    # For image token costs:
+    # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
+    image_token_cost_key = "input_cost_per_image_token"
+    if model_info.get(image_token_cost_key) is None:
+        image_token_cost_key = "input_cost_per_token"
     prompt_cost += calculate_cost_component(
-        model_info, "input_cost_per_image_token", prompt_tokens_details["image_tokens"]
+        model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
     )
 
     ### CACHE WRITING COST - Now uses tiered pricing
@@ -521,7 +526,7 @@ def _calculate_input_cost(
     return prompt_cost
 
 
-def generic_cost_per_token(
+def generic_cost_per_token(  # noqa: PLR0915
     model: str,
     usage: Usage,
     custom_llm_provider: str,

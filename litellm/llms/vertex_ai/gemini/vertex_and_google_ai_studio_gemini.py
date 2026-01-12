@@ -1515,8 +1515,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
-        text_tokens: Optional[int] = None
         image_tokens: Optional[int] = None
+        text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
@@ -1535,6 +1535,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "AUDIO":
                     response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
+
         #########################################################
 
         ## CANDIDATES TOKEN DETAILS (e.g., for image generation models) ##
