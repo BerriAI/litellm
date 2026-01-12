@@ -993,7 +993,9 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
     model_name: str
     litellm_params: dict
     model_info: dict
+    created_at: Optional[datetime] = None
     created_by: str
+    updated_at: Optional[datetime] = None
     updated_by: str
 
     @model_validator(mode="before")
@@ -1942,7 +1944,7 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         description="connect to a postgres db - needed for generating temporary keys + tracking spend / key",
     )
     database_connection_pool_limit: Optional[int] = Field(
-        100,
+        10,
         description="default connection pool for prisma client connecting to postgres db",
     )
     database_connection_timeout: Optional[float] = Field(

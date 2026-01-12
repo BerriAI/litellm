@@ -229,7 +229,7 @@ from litellm.proxy.batches_endpoints.endpoints import router as batches_router
 from litellm.proxy.caching_routes import router as caching_router
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
-    create_streaming_response,
+    create_response,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
@@ -658,7 +658,7 @@ async def _initialize_shared_aiohttp_session():
 
 
 @asynccontextmanager
-async def proxy_startup_event(app: FastAPI):
+async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     global prisma_client, master_key, use_background_health_checks, llm_router, llm_model_list, general_settings, proxy_budget_rescheduler_min_time, proxy_budget_rescheduler_max_time, litellm_proxy_admin_name, db_writer_client, store_model_in_db, premium_user, _license_check, proxy_batch_polling_interval, shared_aiohttp_session
     import json
 
@@ -787,6 +787,17 @@ async def proxy_startup_event(app: FastAPI):
             verbose_proxy_logger.info("SESSION REUSE: Closed shared aiohttp session")
         except Exception as e:
             verbose_proxy_logger.error(f"Error closing shared aiohttp session: {e}")
+
+    # Shutdown event - stop RDS IAM token refresh background task
+    if (
+        prisma_client is not None
+        and hasattr(prisma_client, "db")
+        and hasattr(prisma_client.db, "stop_token_refresh_task")
+    ):
+        try:
+            await prisma_client.db.stop_token_refresh_task()
+        except Exception as e:
+            verbose_proxy_logger.error(f"Error stopping token refresh task: {e}")
 
     await proxy_shutdown_event()  # type: ignore[reportGeneralTypeIssues]
 
@@ -3972,7 +3983,7 @@ class ProxyConfig:
         )
 
         try:
-            await global_mcp_server_manager._add_mcp_servers_from_db_to_in_memory_registry()
+            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
@@ -4646,6 +4657,7 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
             general_settings=general_settings,
@@ -4914,6 +4926,14 @@ class ProxyStartupEvent:
                     raise e
 
                 await prisma_client.connect()
+
+                ## Start RDS IAM token refresh background task if enabled ##
+                # This proactively refreshes IAM tokens before they expire,
+                # preventing the 15-minute connection failure bug (#16220)
+                if hasattr(prisma_client, "db") and hasattr(
+                    prisma_client.db, "start_token_refresh_task"
+                ):
+                    await prisma_client.db.start_token_refresh_task()
 
                 ## Add necessary views to proxy ##
                 asyncio.create_task(
@@ -6824,7 +6844,7 @@ async def run_thread(
         if (
             "stream" in data and data["stream"] is True
         ):  # use generate_responses to stream responses
-            return await create_streaming_response(
+            return await create_response(
                 generator=async_assistants_data_generator(
                     user_api_key_dict=user_api_key_dict,
                     response=response,
