@@ -28,6 +28,9 @@ from litellm.constants import DYNAMIC_RATE_LIMIT_ERROR_THRESHOLD_PER_MINUTE
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import get_model_rate_limit_from_metadata
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    get_str_from_messages,
+)
 from litellm.types.llms.openai import BaseLiteLLMOpenAIResponseObject
 from litellm.types.utils import ModelResponse, Usage
 
@@ -284,14 +287,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         input_text = data.get("input")  # For embeddings
 
         if messages:
-            # Chat completions
+            # Chat completions - use shared utility for text extraction
             try:
-                total_chars = sum(
-                    len(str(m.get("content", "")))
-                    for m in messages
-                    if isinstance(m, dict)
-                )
-                estimated_input_tokens = total_chars // DEFAULT_CHARS_PER_TOKEN
+                total_text = get_str_from_messages(messages)
+                total_chars = len(total_text)
+                estimated_input_tokens = max(1, total_chars // DEFAULT_CHARS_PER_TOKEN)
             except Exception as e:
                 verbose_proxy_logger.debug(
                     f"Token counting failed, using fallback estimation: {str(e)}"
