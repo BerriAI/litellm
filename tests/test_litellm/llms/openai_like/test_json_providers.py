@@ -126,6 +126,369 @@ class TestJSONProviderLoader:
         assert config is not None
         assert config.custom_llm_provider == "publicai"
 
+    def test_provider_detection_by_api_base(self):
+        """Test that JSON providers are detected by api_base automatically"""
+        from litellm.litellm_core_utils.get_llm_provider_logic import (
+            get_llm_provider,
+        )
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        # Ensure providers are loaded
+        JSONProviderRegistry.load()
+
+        # Get publicai config to use its base_url
+        publicai_config = JSONProviderRegistry.get("publicai")
+        assert publicai_config is not None
+
+        # Test: When only api_base is provided (matching JSON provider base_url),
+        # the provider should be automatically detected
+        model, provider, api_key, api_base = get_llm_provider(
+            model="gpt-4",
+            custom_llm_provider=None,
+            api_base=publicai_config.base_url,
+            api_key=None,
+        )
+
+        # Verify provider was detected correctly
+        assert provider == "publicai"
+        assert api_base == publicai_config.base_url
+        assert model == "gpt-4"
+
+        # Test with api_base that has trailing slash (should still match)
+        model2, provider2, api_key2, api_base2 = get_llm_provider(
+            model="gpt-4",
+            custom_llm_provider=None,
+            api_base=publicai_config.base_url + "/",
+            api_key=None,
+        )
+
+        assert provider2 == "publicai"
+        assert api_base2 == publicai_config.base_url + "/"
+
+        # Test with api_base that includes a subpath (should still match)
+        model3, provider3, api_key3, api_base3 = get_llm_provider(
+            model="gpt-4",
+            custom_llm_provider=None,
+            api_base=publicai_config.base_url + "/chat",
+            api_key=None,
+        )
+
+        assert provider3 == "publicai"
+        assert api_base3 == publicai_config.base_url + "/chat"
+
+
+class TestDynamicProviderEnum:
+    """Test get_llm_provider_enum function for dynamic provider support"""
+
+    def test_get_llm_provider_enum_with_enum_provider(self):
+        """Test get_llm_provider_enum with standard enum provider"""
+        from litellm.types.utils import get_llm_provider_enum, LlmProviders
+
+        # Test with a standard enum provider
+        result = get_llm_provider_enum("openai")
+        assert isinstance(result, LlmProviders)
+        assert result == LlmProviders.OPENAI
+        assert result.value == "openai"
+
+    def test_get_llm_provider_enum_with_json_provider(self):
+        """Test get_llm_provider_enum with JSON-configured provider"""
+        from litellm.types.utils import get_llm_provider_enum, LlmProviders
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        # Ensure providers are loaded
+        JSONProviderRegistry.load()
+
+        # Find a JSON provider that is NOT in the enum
+        # Try synthetic, poe, chutes, etc. - these should be JSON-only providers
+        json_provider_name = None
+        for provider_name in ["synthetic", "poe", "chutes", "nano-gpt", "apertis", "llamagate"]:
+            if JSONProviderRegistry.exists(provider_name):
+                # Check if it's NOT in enum
+                try:
+                    LlmProviders(provider_name)
+                    # If we get here, it's in enum, skip it
+                    continue
+                except ValueError:
+                    # Not in enum, use this one
+                    json_provider_name = provider_name
+                    break
+
+        if json_provider_name is None:
+            # Fallback: use any JSON provider and check it's not an enum
+            all_json_providers = JSONProviderRegistry.list_providers()
+            for provider_name in all_json_providers:
+                try:
+                    LlmProviders(provider_name)
+                    continue
+                except ValueError:
+                    json_provider_name = provider_name
+                    break
+
+        if json_provider_name is None:
+            # Skip test if no JSON-only provider found
+            if pytest:
+                pytest.skip("No JSON-only provider found for testing")
+            return
+
+        # Test with a JSON provider that's not in enum
+        result = get_llm_provider_enum(json_provider_name)
+        assert result is not None
+        assert hasattr(result, "value")
+        assert result.value == json_provider_name
+        assert hasattr(result, "name")
+        # JSON provider should return the value when converted to string
+        assert str(result) == json_provider_name
+
+    def test_get_llm_provider_enum_with_invalid_provider(self):
+        """Test get_llm_provider_enum raises ValueError for invalid provider"""
+        from litellm.types.utils import get_llm_provider_enum
+
+        # Test with invalid provider
+        try:
+            get_llm_provider_enum("invalid_provider_xyz")
+            assert False, "Expected ValueError for invalid provider"
+        except ValueError as e:
+            assert "Unknown provider" in str(e)
+
+    def test_get_llm_provider_enum_json_provider_equality(self):
+        """Test JSON provider enum-like object equality"""
+        from litellm.types.utils import get_llm_provider_enum, LlmProviders
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+
+        # Find a JSON provider that is NOT in the enum
+        json_provider_name = None
+        for provider_name in ["synthetic", "poe", "chutes", "nano-gpt", "apertis", "llamagate"]:
+            if JSONProviderRegistry.exists(provider_name):
+                try:
+                    LlmProviders(provider_name)
+                    continue
+                except ValueError:
+                    json_provider_name = provider_name
+                    break
+
+        if json_provider_name is None:
+            if pytest:
+                pytest.skip("No JSON-only provider found for testing")
+            return
+
+        json_provider = get_llm_provider_enum(json_provider_name)
+        enum_provider = LlmProviders.OPENAI
+
+        # Test __eq__ method
+        assert json_provider == json_provider_name
+        assert json_provider != "openai"
+        assert json_provider != enum_provider
+
+        # Test hash
+        assert hash(json_provider) == hash(json_provider_name)
+
+    def test_get_llm_provider_enum_with_multiple_json_providers(self):
+        """Test get_llm_provider_enum with multiple JSON providers"""
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+
+        # Test multiple JSON providers
+        providers_to_test = ["publicai", "synthetic", "poe", "chutes"]
+        for provider_name in providers_to_test:
+            if JSONProviderRegistry.exists(provider_name):
+                result = get_llm_provider_enum(provider_name)
+                assert result is not None
+                assert result.value == provider_name
+
+
+class TestDynamicConstantsIntegration:
+    """Test dynamic addition of JSON providers to constants"""
+
+    def test_get_json_provider_endpoints(self):
+        """Test _get_json_provider_endpoints function"""
+        from litellm.constants import _get_json_provider_endpoints
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+        endpoints = _get_json_provider_endpoints()
+
+        # Should return a list
+        assert isinstance(endpoints, list)
+
+        # Should include JSON provider endpoints
+        all_providers = JSONProviderRegistry.get_all_providers()
+        expected_endpoints = [config.base_url for config in all_providers.values()]
+        for endpoint in expected_endpoints:
+            assert endpoint in endpoints
+
+    def test_get_json_provider_names(self):
+        """Test _get_json_provider_names function"""
+        from litellm.constants import _get_json_provider_names
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+        provider_names = _get_json_provider_names()
+
+        # Should return a list
+        assert isinstance(provider_names, list)
+
+        # Should include JSON provider names
+        expected_names = JSONProviderRegistry.list_providers()
+        for name in expected_names:
+            assert name in provider_names
+
+    def test_openai_compatible_endpoints_includes_json_providers(self):
+        """Test that openai_compatible_endpoints includes JSON provider endpoints"""
+        from litellm.constants import openai_compatible_endpoints
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+        all_providers = JSONProviderRegistry.get_all_providers()
+
+        # Check that JSON provider endpoints are in the list
+        for config in all_providers.values():
+            assert config.base_url in openai_compatible_endpoints
+
+    def test_openai_compatible_providers_includes_json_providers(self):
+        """Test that openai_compatible_providers includes JSON provider names"""
+        from litellm.constants import openai_compatible_providers
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+        json_provider_names = JSONProviderRegistry.list_providers()
+
+        # Check that JSON provider names are in the list
+        for name in json_provider_names:
+            assert name in openai_compatible_providers
+
+    def test_openai_text_completion_compatible_providers_includes_json_providers(self):
+        """Test that openai_text_completion_compatible_providers includes JSON providers"""
+        from litellm.constants import openai_text_completion_compatible_providers
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+        json_provider_names = JSONProviderRegistry.list_providers()
+
+        # JSON providers should be included in text completion compatible providers
+        for name in json_provider_names:
+            assert name in openai_text_completion_compatible_providers
+
+
+class TestDynamicProviderErrorHandling:
+    """Test error handling when using get_llm_provider_enum in various contexts"""
+
+    def test_get_llm_provider_enum_in_batches_context(self):
+        """Test that get_llm_provider_enum works correctly in batches context"""
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+
+        # Test that get_llm_provider_enum can handle JSON providers
+        # This simulates what happens in batches.main when it calls get_llm_provider_enum
+        json_provider_name = None
+        for provider_name in ["synthetic", "poe", "chutes", "nano-gpt", "apertis", "llamagate"]:
+            if JSONProviderRegistry.exists(provider_name):
+                json_provider_name = provider_name
+                break
+
+        if json_provider_name:
+            # Should not raise ValueError for JSON provider
+            result = get_llm_provider_enum(json_provider_name)
+            assert result is not None
+            assert result.value == json_provider_name
+
+    def test_get_llm_provider_enum_in_containers_context(self):
+        """Test that get_llm_provider_enum works correctly in containers context"""
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+
+        # Test that get_llm_provider_enum can handle JSON providers
+        json_provider_name = None
+        for provider_name in ["synthetic", "poe", "chutes", "nano-gpt", "apertis", "llamagate"]:
+            if JSONProviderRegistry.exists(provider_name):
+                json_provider_name = provider_name
+                break
+
+        if json_provider_name:
+            # Should not raise ValueError for JSON provider
+            try:
+                result = get_llm_provider_enum(json_provider_name)
+                assert result is not None
+            except ValueError as e:
+                # Should not raise "Unknown provider" error
+                assert "Unknown provider" not in str(e)
+
+    def test_get_llm_provider_enum_in_files_context(self):
+        """Test that get_llm_provider_enum works correctly in files context"""
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+
+        # Test that get_llm_provider_enum can handle JSON providers
+        json_provider_name = None
+        for provider_name in ["synthetic", "poe", "chutes", "nano-gpt", "apertis", "llamagate"]:
+            if JSONProviderRegistry.exists(provider_name):
+                json_provider_name = provider_name
+                break
+
+        if json_provider_name:
+            # Should not raise ValueError for JSON provider
+            try:
+                result = get_llm_provider_enum(json_provider_name)
+                assert result is not None
+            except ValueError as e:
+                # Should not raise "Unknown provider" error
+                assert "Unknown provider" not in str(e)
+
+    def test_get_llm_provider_enum_in_images_context(self):
+        """Test that get_llm_provider_enum works correctly in images context"""
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+
+        # Test that get_llm_provider_enum can handle JSON providers
+        json_provider_name = None
+        for provider_name in ["synthetic", "poe", "chutes", "nano-gpt", "apertis", "llamagate"]:
+            if JSONProviderRegistry.exists(provider_name):
+                json_provider_name = provider_name
+                break
+
+        if json_provider_name:
+            # Should not raise ValueError for JSON provider
+            try:
+                result = get_llm_provider_enum(json_provider_name)
+                assert result is not None
+            except ValueError as e:
+                # Should not raise "Unknown provider" error
+                assert "Unknown provider" not in str(e)
+
+    def test_get_llm_provider_enum_in_cost_calculator_context(self):
+        """Test that get_llm_provider_enum works correctly in cost_calculator context"""
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+        JSONProviderRegistry.load()
+
+        # Test that get_llm_provider_enum can handle JSON providers
+        json_provider_name = None
+        for provider_name in ["synthetic", "poe", "chutes", "nano-gpt", "apertis", "llamagate"]:
+            if JSONProviderRegistry.exists(provider_name):
+                json_provider_name = provider_name
+                break
+
+        if json_provider_name:
+            # Should not raise ValueError for JSON provider
+            try:
+                result = get_llm_provider_enum(json_provider_name)
+                assert result is not None
+            except ValueError as e:
+                # Should not raise "Unknown provider" error
+                assert "Unknown provider" not in str(e)
+
 
 class TestPublicAIIntegration:
     """Integration tests for PublicAI provider"""
@@ -283,9 +646,9 @@ if __name__ == "__main__":
     test_loader.test_parameter_mapping()
     print("   ✓ Parameter mapping works")
     
-    print("\n4. Testing excluded params...")
-    test_loader.test_excluded_params()
-    print("   ✓ Excluded params work")
+    print("\n4. Testing provider detection by api_base...")
+    test_loader.test_provider_detection_by_api_base()
+    print("   ✓ Provider detection by api_base works")
     
     print("\n5. Testing provider resolution...")
     test_loader.test_provider_resolution()
