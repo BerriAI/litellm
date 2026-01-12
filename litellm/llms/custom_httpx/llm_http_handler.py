@@ -14,6 +14,7 @@ from typing import (
 )
 
 import httpx  # type: ignore
+from openai.types.file_deleted import FileDeleted
 
 import litellm
 import litellm.litellm_core_utils
@@ -71,6 +72,7 @@ from litellm.types.containers.main import (
     ContainerObject,
     DeleteContainerResult,
 )
+from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -82,6 +84,7 @@ from litellm.types.llms.anthropic_skills import (
 from litellm.types.llms.openai import (
     CreateBatchRequest,
     CreateFileRequest,
+    FileContentRequest,
     HttpxBinaryResponseContent,
     OpenAIFileObject,
     ResponseInputParam,
@@ -2782,6 +2785,38 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
+    def _extract_upload_url_from_response(
+        self,
+        response: httpx.Response,
+        upload_url_location: str,
+        upload_url_key: str = "upload_url",
+    ) -> tuple[Optional[str], Optional[dict]]:
+        """
+        Extract upload URL from initial file creation response.
+        
+        Args:
+            response: HTTP response from initial file creation request
+            upload_url_location: Where to find URL ('headers' or 'body')
+            upload_url_key: Key name for URL in response body (default: 'upload_url')
+            
+        Returns:
+            Tuple of (upload_url, response_data)
+            - upload_url: The extracted upload URL, or None if not found
+            - response_data: Parsed response body (for 'body' location), or None
+        """
+        if upload_url_location == "headers":
+            # Google Cloud Storage style - URL in X-Goog-Upload-URL header
+            upload_url = response.headers.get("X-Goog-Upload-URL")
+            return upload_url, None
+        else:
+            # Response body style (e.g., Manus, S3 presigned URLs)
+            try:
+                response_data = response.json()
+                upload_url = response_data.get(upload_url_key)
+                return upload_url, response_data if upload_url else None
+            except Exception:
+                return None, None
+
     def create_file(
         self,
         create_file_data: CreateFileRequest,
@@ -2844,14 +2879,58 @@ class BaseLLMHTTPHandler:
         else:
             sync_httpx_client = client
 
-        if isinstance(transformed_request, dict) and "method" in transformed_request:
+        if isinstance(transformed_request, dict) and "initial_request" in transformed_request:
+            # Handle two-step uploads (TwoStepFileUploadConfig)
+            # Used by providers like Manus, Google Cloud Storage
+            try:
+                # Step 1: Initial request to get upload URL
+                initial_response = sync_httpx_client.post(
+                    url=api_base,
+                    headers={
+                        **headers,
+                        **transformed_request["initial_request"]["headers"],
+                    },
+                    data=json.dumps(transformed_request["initial_request"]["data"]),
+                    timeout=timeout,
+                )
+
+                # Extract upload URL from response
+                upload_url, initial_response_data = self._extract_upload_url_from_response(
+                    response=initial_response,
+                    upload_url_location=transformed_request.get("upload_url_location", "headers"),
+                    upload_url_key=transformed_request.get("upload_url_key", "upload_url"),
+                )
+
+                if not upload_url:
+                    raise ValueError("Failed to get upload URL from initial request")
+
+                # Step 2: Upload the actual file
+                upload_method = transformed_request["upload_request"].get("method", "POST").lower()
+                upload_response = getattr(sync_httpx_client, upload_method)(
+                    url=upload_url,
+                    headers=transformed_request["upload_request"]["headers"],
+                    data=transformed_request["upload_request"]["data"],
+                    timeout=timeout,
+                )
+                
+                # Store initial response for transformation
+                if initial_response_data:
+                    litellm_params["initial_file_response"] = initial_response_data
+            except Exception as e:
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+        elif isinstance(transformed_request, dict) and "method" in transformed_request and "initial_request" not in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
+            # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
+            presigned_request = cast(Dict[str, Any], transformed_request)
             upload_response = getattr(
-                sync_httpx_client, transformed_request["method"].lower()
+                sync_httpx_client, presigned_request["method"].lower()
             )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
+                url=presigned_request["url"],
+                headers=presigned_request["headers"],
+                data=presigned_request["data"],
                 timeout=timeout,
             )
         elif isinstance(transformed_request, str) or isinstance(
@@ -2879,36 +2958,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         else:
-            try:
-                # Step 1: Initial request to get upload URL
-                initial_response = sync_httpx_client.post(
-                    url=api_base,
-                    headers={
-                        **headers,
-                        **transformed_request["initial_request"]["headers"],
-                    },
-                    data=json.dumps(transformed_request["initial_request"]["data"]),
-                    timeout=timeout,
-                )
-
-                # Extract upload URL from response headers
-                upload_url = initial_response.headers.get("X-Goog-Upload-URL")
-
-                if not upload_url:
-                    raise ValueError("Failed to get upload URL from initial request")
-
-                # Step 2: Upload the actual file
-                upload_response = sync_httpx_client.post(
-                    url=upload_url,
-                    headers=transformed_request["upload_request"]["headers"],
-                    data=transformed_request["upload_request"]["data"],
-                    timeout=timeout,
-                )
-            except Exception as e:
-                raise self._handle_error(
-                    e=e,
-                    provider_config=provider_config,
-                )
+            raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
         # Store the upload URL in litellm_params for the transformation method
         litellm_params_with_url = dict(litellm_params)
@@ -2923,7 +2973,7 @@ class BaseLLMHTTPHandler:
 
     async def async_create_file(
         self,
-        transformed_request: Union[bytes, str, dict],
+        transformed_request: Union[bytes, str, dict, "TwoStepFileUploadConfig"],
         litellm_params: dict,
         provider_config: BaseFilesConfig,
         headers: dict,
@@ -2955,14 +3005,59 @@ class BaseLLMHTTPHandler:
             },
         )
 
-        if isinstance(transformed_request, dict) and "method" in transformed_request:
+        if isinstance(transformed_request, dict) and "initial_request" in transformed_request:
+            # Handle two-step uploads (TwoStepFileUploadConfig)
+            # Used by providers like Manus, Google Cloud Storage
+            try:
+                # Step 1: Initial request to get upload URL
+                initial_response = await async_httpx_client.post(
+                    url=api_base,
+                    headers={
+                        **headers,
+                        **transformed_request["initial_request"]["headers"],
+                    },
+                    data=json.dumps(transformed_request["initial_request"]["data"]),
+                    timeout=timeout,
+                )
+
+                # Extract upload URL from response
+                upload_url, initial_response_data = self._extract_upload_url_from_response(
+                    response=initial_response,
+                    upload_url_location=transformed_request.get("upload_url_location", "headers"),
+                    upload_url_key=transformed_request.get("upload_url_key", "upload_url"),
+                )
+
+                if not upload_url:
+                    raise ValueError("Failed to get upload URL from initial request")
+
+                # Step 2: Upload the actual file
+                upload_method = transformed_request["upload_request"].get("method", "POST").lower()
+                upload_response = await getattr(async_httpx_client, upload_method)(
+                    url=upload_url,
+                    headers=transformed_request["upload_request"]["headers"],
+                    data=transformed_request["upload_request"]["data"],
+                    timeout=timeout,
+                )
+                
+                # Store initial response for transformation
+                if initial_response_data:
+                    litellm_params["initial_file_response"] = initial_response_data
+            except Exception as e:
+                verbose_logger.exception(f"Error creating file: {e}")
+                raise self._handle_error(
+                    e=e,
+                    provider_config=provider_config,
+                )
+        elif isinstance(transformed_request, dict) and "method" in transformed_request and "initial_request" not in transformed_request:
             # Handle pre-signed requests (e.g., from Bedrock S3 uploads)
+            # Type narrowing: this is a plain dict, not TwoStepFileUploadConfig
+            presigned_request = cast(Dict[str, Any], transformed_request)
             upload_response = await getattr(
-                async_httpx_client, transformed_request["method"].lower()
+                async_httpx_client, presigned_request["method"].lower()
             )(
-                url=transformed_request["url"],
-                headers=transformed_request["headers"],
-                data=transformed_request["data"],
+                url=presigned_request["url"],
+                headers=presigned_request["headers"],
+                data=presigned_request["data"],
                 timeout=timeout,
             )
         elif isinstance(transformed_request, str) or isinstance(
@@ -2990,37 +3085,7 @@ class BaseLLMHTTPHandler:
                     timeout=timeout,
                 )
         else:
-            try:
-                # Step 1: Initial request to get upload URL
-                initial_response = await async_httpx_client.post(
-                    url=api_base,
-                    headers={
-                        **headers,
-                        **transformed_request["initial_request"]["headers"],
-                    },
-                    data=json.dumps(transformed_request["initial_request"]["data"]),
-                    timeout=timeout,
-                )
-
-                # Extract upload URL from response headers
-                upload_url = initial_response.headers.get("X-Goog-Upload-URL")
-
-                if not upload_url:
-                    raise ValueError("Failed to get upload URL from initial request")
-
-                # Step 2: Upload the actual file
-                upload_response = await async_httpx_client.post(
-                    url=upload_url,
-                    headers=transformed_request["upload_request"]["headers"],
-                    data=transformed_request["upload_request"]["data"],
-                    timeout=timeout,
-                )
-            except Exception as e:
-                verbose_logger.exception(f"Error creating file: {e}")
-                raise self._handle_error(
-                    e=e,
-                    provider_config=provider_config,
-                )
+            raise ValueError(f"Unsupported transformed_request type: {type(transformed_request)}")
 
         return provider_config.transform_create_file_response(
             model=None,
@@ -3734,29 +3799,525 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
         )
 
-    def list_files(self):
+    def retrieve_file(
+        self,
+        file_id: str,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Union[OpenAIFileObject, Coroutine[Any, Any, OpenAIFileObject]]:
         """
-        Lists all files
+        Retrieve file metadata by ID
         """
-        pass
+        if _is_async:
+            return self.async_retrieve_file(
+                file_id=file_id,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                headers=headers,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
 
-    def delete_file(self):
-        """
-        Deletes a file
-        """
-        pass
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
 
-    def retrieve_file(self):
-        """
-        Returns the metadata of the file
-        """
-        pass
+        # Get URL and params from provider config
+        url, params = provider_config.transform_retrieve_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
 
-    def retrieve_file_content(self):
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_id,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_retrieve_file_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    async def async_retrieve_file(
+        self,
+        file_id: str,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> OpenAIFileObject:
         """
-        Returns the content of the file
+        Async retrieve file metadata by ID
         """
-        pass
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_retrieve_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_id,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_retrieve_file_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    def delete_file(
+        self,
+        file_id: str,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Union["FileDeleted", Coroutine[Any, Any, "FileDeleted"]]:
+        """
+        Delete a file by ID
+        """
+        if _is_async:
+            return self.async_delete_file(
+                file_id=file_id,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                headers=headers,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_delete_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_id,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.delete(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_delete_file_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    async def async_delete_file(
+        self,
+        file_id: str,
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> "FileDeleted":
+        """
+        Async delete a file by ID
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_delete_file_request(
+            file_id=file_id,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_id,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.delete(
+                url=url, headers=headers, params=params, timeout=timeout
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_delete_file_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    def list_files(
+        self,
+        purpose: Optional[str],
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Union[List[OpenAIFileObject], Coroutine[Any, Any, List[OpenAIFileObject]]]:
+        """
+        List all files
+        """
+        if _is_async:
+            return self.async_list_files(
+                purpose=purpose,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                headers=headers,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_list_files_request(
+            purpose=purpose,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "purpose": purpose,
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_list_files_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    async def async_list_files(
+        self,
+        purpose: Optional[str],
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> List[OpenAIFileObject]:
+        """
+        Async list all files
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_list_files_request(
+            purpose=purpose,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "purpose": purpose,
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_list_files_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    def retrieve_file_content(
+        self,
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        _is_async: bool = False,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> Union["HttpxBinaryResponseContent", Coroutine[Any, Any, "HttpxBinaryResponseContent"]]:
+        """
+        Retrieve file content by ID
+        """
+        if _is_async:
+            return self.async_retrieve_file_content(
+                file_content_request=file_content_request,
+                provider_config=provider_config,
+                litellm_params=litellm_params,
+                headers=headers,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+            )
+
+        if client is None or not isinstance(client, HTTPHandler):
+            sync_httpx_client = _get_httpx_client()
+        else:
+            sync_httpx_client = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_file_content_request(
+            file_content_request=file_content_request,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_content_request.get("file_id"),
+            },
+        )
+
+        try:
+            response = sync_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_file_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
+
+    async def async_retrieve_file_content(
+        self,
+        file_content_request: "FileContentRequest",
+        provider_config: BaseFilesConfig,
+        litellm_params: dict,
+        headers: dict,
+        logging_obj: LiteLLMLoggingObj,
+        client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> "HttpxBinaryResponseContent":
+        """
+        Async retrieve file content by ID
+        """
+        if client is None or not isinstance(client, AsyncHTTPHandler):
+            async_httpx_client = get_async_httpx_client(
+                llm_provider=provider_config.custom_llm_provider
+            )
+        else:
+            async_httpx_client = client
+
+        # Get URL and params from provider config
+        url, params = provider_config.transform_file_content_request(
+            file_content_request=file_content_request,
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        # Validate environment and get headers
+        headers = provider_config.validate_environment(
+            api_key=litellm_params.get("api_key"),
+            headers=headers,
+            model="",
+            messages=[],
+            optional_params={},
+            litellm_params=litellm_params,
+        )
+
+        logging_obj.pre_call(
+            input="",
+            api_key="",
+            additional_args={
+                "api_base": url,
+                "headers": headers,
+                "file_id": file_content_request.get("file_id"),
+            },
+        )
+
+        try:
+            response = await async_httpx_client.get(
+                url=url, headers=headers, params=params
+            )
+        except Exception as e:
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+        return provider_config.transform_file_content_response(
+            raw_response=response,
+            logging_obj=logging_obj,
+            litellm_params=litellm_params,
+        )
 
     def _prepare_fake_stream_request(
         self,

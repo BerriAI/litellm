@@ -386,9 +386,9 @@ class Router:
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
         self.deployment_latency_map = {}
         ### CACHING ###
-        cache_type: Literal["local", "redis", "redis-semantic", "s3", "disk"] = (
-            "local"  # default to an in-memory cache
-        )
+        cache_type: Literal[
+            "local", "redis", "redis-semantic", "s3", "disk"
+        ] = "local"  # default to an in-memory cache
         redis_cache = None
         cache_config: Dict[str, Any] = {}
 
@@ -430,9 +430,9 @@ class Router:
         self.default_max_parallel_requests = default_max_parallel_requests
         self.provider_default_deployment_ids: List[str] = []
         self.pattern_router = PatternMatchRouter()
-        self.team_pattern_routers: Dict[str, PatternMatchRouter] = (
-            {}
-        )  # {"TEAM_ID": PatternMatchRouter}
+        self.team_pattern_routers: Dict[
+            str, PatternMatchRouter
+        ] = {}  # {"TEAM_ID": PatternMatchRouter}
         self.auto_routers: Dict[str, "AutoRouter"] = {}
 
         # Initialize model_group_alias early since it's used in set_model_list
@@ -613,9 +613,9 @@ class Router:
                 )
             )
 
-        self.model_group_retry_policy: Optional[Dict[str, RetryPolicy]] = (
-            model_group_retry_policy
-        )
+        self.model_group_retry_policy: Optional[
+            Dict[str, RetryPolicy]
+        ] = model_group_retry_policy
 
         self.allowed_fails_policy: Optional[AllowedFailsPolicy] = None
         if allowed_fails_policy is not None:
@@ -722,7 +722,10 @@ class Router:
         valid_strategy_strings = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
 
         if routing_strategy is not None:
-            is_valid_string = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
+            is_valid_string = (
+                isinstance(routing_strategy, str)
+                and routing_strategy in valid_strategy_strings
+            )
             is_valid_enum = isinstance(routing_strategy, RoutingStrategy)
             if not is_valid_string and not is_valid_enum:
                 raise ValueError(
@@ -1071,7 +1074,7 @@ class Router:
         self.delete_container = self.factory_function(
             delete_container, call_type="delete_container"
         )
-        
+
         # Auto-register JSON-generated container file endpoints
         for name, func in container_file_endpoints.items():
             setattr(self, name, self.factory_function(func, call_type=name))  # type: ignore[arg-type]
@@ -1500,10 +1503,7 @@ class Router:
 
     async def _acompletion(
         self, model: str, messages: List[Dict[str, str]], **kwargs
-    ) -> Union[
-        ModelResponse,
-        CustomStreamWrapper,
-    ]:
+    ) -> Union[ModelResponse, CustomStreamWrapper,]:
         """
         - Get an available deployment
         - call it with a semaphore over the call
@@ -3021,7 +3021,9 @@ class Router:
         kwargs["original_generic_function"] = original_function
         kwargs["original_function"] = self._aguardrail_helper
         self._update_kwargs_before_fallbacks(
-            model=guardrail_name, kwargs=kwargs, metadata_variable_name="litellm_metadata"
+            model=guardrail_name,
+            kwargs=kwargs,
+            metadata_variable_name="litellm_metadata",
         )
         verbose_router_logger.debug(
             f"Inside aguardrail() - guardrail_name: {guardrail_name}; kwargs: {kwargs}"
@@ -3314,8 +3316,7 @@ class Router:
             kwargs["model"] = model
             kwargs["input"] = input
             kwargs["original_function"] = self._embedding
-            kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            kwargs.setdefault("metadata", {}).update({"model_group": model})
+            self._update_kwargs_before_fallbacks(model=model, kwargs=kwargs)
             response = self.function_with_fallbacks(**kwargs)
             return response
         except Exception as e:
@@ -3617,9 +3618,9 @@ class Router:
                 healthy_deployments=healthy_deployments, responses=responses
             )
             returned_response = cast(OpenAIFileObject, responses[0])
-            returned_response._hidden_params["model_file_id_mapping"] = (
-                model_file_id_mapping
-            )
+            returned_response._hidden_params[
+                "model_file_id_mapping"
+            ] = model_file_id_mapping
             return returned_response
         except Exception as e:
             verbose_router_logger.exception(
@@ -4366,11 +4367,11 @@ class Router:
 
             if isinstance(e, litellm.ContextWindowExceededError):
                 if context_window_fallbacks is not None:
-                    context_window_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=context_window_fallbacks,
-                            model_group=model_group,
-                        )
+                    context_window_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=context_window_fallbacks,
+                        model_group=model_group,
                     )
                     if context_window_fallback_model_group is None:
                         raise original_exception
@@ -4402,11 +4403,11 @@ class Router:
                     e.message += "\n{}".format(error_message)
             elif isinstance(e, litellm.ContentPolicyViolationError):
                 if content_policy_fallbacks is not None:
-                    content_policy_fallback_model_group: Optional[List[str]] = (
-                        self._get_fallback_model_group_from_fallbacks(
-                            fallbacks=content_policy_fallbacks,
-                            model_group=model_group,
-                        )
+                    content_policy_fallback_model_group: Optional[
+                        List[str]
+                    ] = self._get_fallback_model_group_from_fallbacks(
+                        fallbacks=content_policy_fallbacks,
+                        model_group=model_group,
                     )
                     if content_policy_fallback_model_group is None:
                         raise original_exception
@@ -4485,21 +4486,9 @@ class Router:
 
         if hasattr(original_exception, "message"):
             # add the available fallbacks to the exception
-            deployment_info = ""
-            if kwargs is not None:
-                metadata = kwargs.get('metadata', {})
-                if metadata and 'deployment' in metadata:
-                    deployment_info = f"\nUsed Deployment: {metadata['deployment']}"
-                    if 'model_info' in metadata:
-                        model_info = metadata['model_info']
-                        if isinstance(model_info, dict):
-                            deployment_info += f"\nDeployment ID: {model_info.get('id', 'unknown')}"
-            
-            original_exception.message += (  # type: ignore
-                f". Received Model Group={model_group}"
-                f"\nAvailable Model Group Fallbacks={fallback_model_group}"
-                f"{deployment_info}"
-                f"\n\n💡 Tip: If using wildcard patterns (e.g., 'openai/*'), ensure all matching deployments have credentials with access to this model."
+            original_exception.message += ". Received Model Group={}\nAvailable Model Group Fallbacks={}".format(  # type: ignore
+                model_group,
+                fallback_model_group,
             )
             if len(fallback_failure_exception_str) > 0:
                 original_exception.message += (  # type: ignore
@@ -5681,26 +5670,26 @@ class Router:
         """
         from litellm.router_strategy.auto_router.auto_router import AutoRouter
 
-        auto_router_config_path: Optional[str] = (
-            deployment.litellm_params.auto_router_config_path
-        )
+        auto_router_config_path: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_config_path
         auto_router_config: Optional[str] = deployment.litellm_params.auto_router_config
         if auto_router_config_path is None and auto_router_config is None:
             raise ValueError(
                 "auto_router_config_path or auto_router_config is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        default_model: Optional[str] = (
-            deployment.litellm_params.auto_router_default_model
-        )
+        default_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_default_model
         if default_model is None:
             raise ValueError(
                 "auto_router_default_model is required for auto-router deployments. Please set it in the litellm_params"
             )
 
-        embedding_model: Optional[str] = (
-            deployment.litellm_params.auto_router_embedding_model
-        )
+        embedding_model: Optional[
+            str
+        ] = deployment.litellm_params.auto_router_embedding_model
         if embedding_model is None:
             raise ValueError(
                 "auto_router_embedding_model is required for auto-router deployments. Please set it in the litellm_params"
@@ -6247,9 +6236,9 @@ class Router:
 
         # Add custom_llm_provider
         if deployment.litellm_params.custom_llm_provider:
-            credentials["custom_llm_provider"] = (
-                deployment.litellm_params.custom_llm_provider
-            )
+            credentials[
+                "custom_llm_provider"
+            ] = deployment.litellm_params.custom_llm_provider
         elif "/" in deployment.litellm_params.model:
             # Extract provider from "provider/model" format
             credentials["custom_llm_provider"] = deployment.litellm_params.model.split(
@@ -6943,42 +6932,44 @@ class Router:
         """
         return candidate_id in self.model_id_to_deployment_index_map
 
-    def resolve_model_name_from_model_id(self, model_id: Optional[str]) -> Optional[str]:
+    def resolve_model_name_from_model_id(
+        self, model_id: Optional[str]
+    ) -> Optional[str]:
         """
         Resolve model_name from model_id.
-        
+
         This method attempts to find the correct model_name to use with the router
         so that litellm_params can be automatically injected from the model config.
-        
+
         Strategy:
         1. First, check if model_id directly matches a model_name or deployment ID
         2. If not, search through router's model_list to find a match by litellm_params.model
         3. Return the model_name if found, None otherwise
-        
+
         Args:
             model_id: The model_id extracted from decoded video_id
                      (could be model_name or litellm_params.model value)
-        
+
         Returns:
             model_name if found, None otherwise. If None, the request will fall through
             to normal flow using environment variables.
         """
         if not model_id:
             return None
-        
+
         # Strategy 1: Check if model_id directly matches a model_name or deployment ID
         if model_id in self.model_names or self.has_model_id(model_id):
             return model_id
-        
+
         # Strategy 2: Search through router's model_list to find by litellm_params.model
         all_models = self.get_model_list(model_name=None)
         if not all_models:
             return None
-        
+
         for deployment in all_models:
             litellm_params = deployment.get("litellm_params", {})
             actual_model = litellm_params.get("model")
-            
+
             # Match by exact match or by checking if actual_model ends with /model_id or :model_id
             # e.g., model_id="veo-2.0-generate-001" matches actual_model="vertex_ai/veo-2.0-generate-001"
             matches = (
@@ -6986,12 +6977,12 @@ class Router:
                 or (actual_model and actual_model.endswith(f"/{model_id}"))
                 or (actual_model and actual_model.endswith(f":{model_id}"))
             )
-            
+
             if matches:
                 model_name = deployment.get("model_name")
                 if model_name:
                     return model_name
-        
+
         # No match found
         return None
 
@@ -7676,10 +7667,6 @@ class Router:
             )
 
             if pattern_deployments:
-                verbose_router_logger.debug(
-                    f"Pattern match for model='{model}': Found {len(pattern_deployments)} deployments. "
-                    f"Deployment IDs: {[d.get('model_info', {}).get('id', 'unknown') for d in pattern_deployments]}"
-                )
                 return model, pattern_deployments
 
             if (
@@ -7785,14 +7772,18 @@ class Router:
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(f"healthy_deployments after team filter: {healthy_deployments}")
+        verbose_router_logger.debug(
+            f"healthy_deployments after team filter: {healthy_deployments}"
+        )
 
         healthy_deployments = filter_web_search_deployments(
             healthy_deployments=healthy_deployments,
             request_kwargs=request_kwargs,
         )
 
-        verbose_router_logger.debug(f"healthy_deployments after web search filter: {healthy_deployments}")
+        verbose_router_logger.debug(
+            f"healthy_deployments after web search filter: {healthy_deployments}"
+        )
 
         if isinstance(healthy_deployments, dict):
             return healthy_deployments
