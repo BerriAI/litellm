@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.10.rc.1 - Agent Gateway: Azure Foundry & Bedrock AgentCore"
+title: "[Preview] v1.80.15.rc.1 - Manus API Support"
 slug: "v1-80-15"
 date: 2026-01-10T10:00:00
 authors:
