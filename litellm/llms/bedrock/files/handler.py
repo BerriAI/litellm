@@ -142,6 +142,7 @@ class BedrockFilesHandler(BaseAWSLLM):
             aws_secret_access_key=credentials.secret_key,
             aws_session_token=credentials.token,
             region_name=aws_region_name,
+            verify=self._get_ssl_verify(),
         )
         
         # Download file from S3
