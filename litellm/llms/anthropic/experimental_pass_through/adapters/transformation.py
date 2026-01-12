@@ -14,6 +14,10 @@ from typing import (
 
 from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingChoice
 
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    parse_tool_call_arguments,
+)
+
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -425,15 +429,15 @@ class LiteLLMAnthropicMessagesAdapter:
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
-        
+
         Anthropic thinking format: {'type': 'enabled'|'disabled', 'budget_tokens': int}
         OpenAI reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'default'
         """
         if not isinstance(thinking, dict):
             return None
-        
+
         thinking_type = thinking.get("type", "disabled")
-        
+
         if thinking_type == "disabled":
             return None
         elif thinking_type == "enabled":
@@ -446,7 +450,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "low"
             else:
                 return "minimal"
-        
+
         return None
 
     def translate_anthropic_tool_choice_to_openai(
@@ -676,10 +680,10 @@ class LiteLLMAnthropicMessagesAdapter:
                         type="tool_use",
                         id=tool_call.id,
                         name=tool_call.function.name or "",
-                        input=(
-                            json.loads(tool_call.function.arguments)
-                            if tool_call.function.arguments
-                            else {}
+                        input=parse_tool_call_arguments(
+                            tool_call.function.arguments,
+                            tool_name=tool_call.function.name,
+                            context="Anthropic pass-through adapter",
                         ),
                     )
                     # Add provider_specific_fields if signature is present
