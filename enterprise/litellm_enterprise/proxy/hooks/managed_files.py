@@ -250,15 +250,21 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         Get all file ids created by the user for a list of model object ids
 
         Returns:
-         - List of OpenAIFileObject's
+         - List of OpenAIFileObject's with unified_file_id as the id
         """
-        file_ids = await self.prisma_client.db.litellm_managedfiletable.find_many(
+        file_records = await self.prisma_client.db.litellm_managedfiletable.find_many(
             where={
                 "created_by": user_api_key_dict.user_id,
                 "flat_model_file_ids": {"hasSome": model_object_ids},
             }
         )
-        return [OpenAIFileObject(**file_object.file_object) for file_object in file_ids]
+        result = []
+        for file_record in file_records:
+            file_obj = OpenAIFileObject(**file_record.file_object)
+            # Use the unified_file_id (encoded) instead of the provider file ID
+            file_obj.id = file_record.unified_file_id
+            result.append(file_obj)
+        return result
 
     async def check_managed_file_id_access(
         self, data: Dict, user_api_key_dict: UserAPIKeyAuth
@@ -755,8 +761,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     try:
                         # Use litellm to retrieve the file object from the provider
                         from litellm import afile_retrieve
+                        provider = model_name.split("/")[0] if model_name and "/" in model_name else "openai"
                         file_object = await afile_retrieve(
-                            custom_llm_provider=model_name.split("/")[0] if model_name and "/" in model_name else "openai",
+                            custom_llm_provider=cast(Literal["openai", "azure", "hosted_vllm", "manus"], provider),
                             file_id=original_output_file_id
                         )
                         verbose_logger.debug(
