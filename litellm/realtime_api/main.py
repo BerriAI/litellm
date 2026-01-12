@@ -97,21 +97,15 @@ async def _arealtime(
         # set API KEY
         api_key = (
             dynamic_api_key
+            or kwargs.get("litellm_params", {}).get("api_key")
             or litellm.api_key
             or litellm.openai_key
             or get_secret_str("AZURE_API_KEY")
         )
 
-        api_version = (
-            api_version
-            or litellm_params.api_version
-            or "2024-10-01-preview"
-        )
-        
-        realtime_protocol = (
-            kwargs.get("realtime_protocol")
-            or "beta"
-        )
+        api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
+
+        realtime_protocol = kwargs.get("realtime_protocol") or "beta"
         await azure_realtime.async_realtime(
             model=model,
             websocket=websocket,
@@ -134,6 +128,7 @@ async def _arealtime(
         # set API KEY
         api_key = (
             dynamic_api_key
+            or kwargs.get("litellm_params", {}).get("api_key")
             or litellm.api_key
             or litellm.openai_key
             or get_secret_str("OPENAI_API_KEY")
@@ -189,7 +184,8 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", query_params={"model": model}
+            api_base=api_base or "https://api.openai.com/",
+            query_params={"model": model},
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
