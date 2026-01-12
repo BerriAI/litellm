@@ -249,6 +249,83 @@ async def test_authenticate_user_wrong_password():
 
 
 @pytest.mark.asyncio
+async def test_authenticate_user_email_case_insensitive_login():
+    """Test that email lookup is case-insensitive during login"""
+    master_key = "sk-1234"
+    stored_email = "testemail@test.com"
+    login_email_mixed_case = "testEmail@test.com"
+    correct_password = "correct-password"
+    hashed_password = hash_token(token=correct_password)
+
+    # `LiteLLM_UserTable` does not define a `password` field, but `authenticate_user()`
+    # expects `user_row.password` to exist (invite-link login). Use a simple object.
+    mock_user = MagicMock()
+    mock_user.user_id = "test-user-123"
+    mock_user.user_email = stored_email
+    mock_user.password = hashed_password
+    mock_user.user_role = LitellmUserRoles.INTERNAL_USER
+
+    def mock_find_first(**kwargs):
+        where = kwargs.get("where", {})
+        user_email = where.get("user_email", {})
+        if user_email.get("mode") != "insensitive":
+            return None
+        if str(user_email.get("equals", "")).lower() == stored_email.lower():
+            return mock_user
+        return None
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        side_effect=mock_find_first
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://test:test@localhost/test",
+            "UI_USERNAME": "admin",
+            "UI_PASSWORD": "admin-password",
+        },
+    ):
+        with patch(
+            "litellm.proxy.auth.login_utils.expire_previous_ui_session_tokens",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with patch(
+                "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+                new_callable=AsyncMock,
+            ) as mock_generate_key:
+                mock_generate_key.side_effect = [
+                    {"token": "token-1"},
+                    {"token": "token-2"},
+                ]
+
+                result_mixed = await authenticate_user(
+                    username=login_email_mixed_case,
+                    password=correct_password,
+                    master_key=master_key,
+                    prisma_client=mock_prisma_client,
+                )
+                result_lower = await authenticate_user(
+                    username=stored_email,
+                    password=correct_password,
+                    master_key=master_key,
+                    prisma_client=mock_prisma_client,
+                )
+
+    assert result_mixed.user_id == result_lower.user_id == "test-user-123"
+    assert result_mixed.user_email == result_lower.user_email == stored_email
+
+    calls = mock_prisma_client.db.litellm_usertable.find_first.await_args_list
+    assert len(calls) == 2
+    for call, expected_username in zip(calls, [login_email_mixed_case, stored_email]):
+        where = call.kwargs["where"]
+        assert where["user_email"]["equals"] == expected_username
+        assert where["user_email"]["mode"] == "insensitive"
+
+
+@pytest.mark.asyncio
 async def test_authenticate_user_database_required_for_admin():
     """Test that database is required for admin login"""
     master_key = "sk-1234"

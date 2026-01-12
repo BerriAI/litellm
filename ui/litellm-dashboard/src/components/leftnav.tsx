@@ -152,7 +152,11 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           page: "new_usage",
           icon: <BarChartOutlined />,
           roles: [...all_admin_roles, ...internalUserRoles],
-          label: <span className="flex items-center gap-4">Usage</span>,
+          label: (
+            <span className="flex items-center gap-4">
+              Usage <NewBadge />
+            </span>
+          ),
         },
         {
           key: "logs",
@@ -260,11 +264,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
         {
           key: "settings",
           page: "settings",
-          label: (
-            <span className="flex items-center gap-4">
-              Settings <NewBadge />
-            </span>
-          ),
+          label: <span className="flex items-center gap-4">Settings</span>,
           icon: <SettingOutlined />,
           roles: all_admin_roles,
           children: [

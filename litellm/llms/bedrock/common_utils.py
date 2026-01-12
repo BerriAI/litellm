@@ -132,6 +132,38 @@ def add_custom_header(headers):
     return callback
 
 
+def _get_bedrock_client_ssl_verify() -> Union[bool, str]:
+    """
+    Get SSL verification setting for Bedrock client.
+    
+    Returns the SSL verification setting which can be:
+    - True: Use default SSL verification
+    - False: Disable SSL verification
+    - str: Path to a custom CA bundle file
+    """
+    from litellm.secret_managers.main import str_to_bool
+    
+    ssl_verify: Union[bool, str, None] = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+    
+    # Convert string "False"/"True" to boolean
+    if isinstance(ssl_verify, str):
+        # Check if it's a file path
+        if os.path.exists(ssl_verify):
+            return ssl_verify  # Keep the file path
+        # Otherwise try to convert to boolean
+        ssl_verify_bool = str_to_bool(ssl_verify)
+        if ssl_verify_bool is not None:
+            ssl_verify = ssl_verify_bool
+    
+    # Check SSL_CERT_FILE environment variable for custom CA bundle
+    if ssl_verify is True or ssl_verify == "True":
+        ssl_cert_file = os.getenv("SSL_CERT_FILE")
+        if ssl_cert_file and os.path.exists(ssl_cert_file):
+            return ssl_cert_file
+    
+    return ssl_verify if ssl_verify is not None else True
+
+
 def init_bedrock_client(
     region_name=None,
     aws_access_key_id: Optional[str] = None,
@@ -177,8 +209,7 @@ def init_bedrock_client(
         aws_web_identity_token,
     ) = params_to_check
 
-    # SSL certificates (a.k.a CA bundle) used to verify the identity of requested hosts.
-    ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+    ssl_verify = _get_bedrock_client_ssl_verify()
 
     ### SET REGION NAME
     if region_name:
@@ -229,7 +260,7 @@ def init_bedrock_client(
                 status_code=401,
             )
 
-        sts_client = boto3.client("sts")
+        sts_client = boto3.client("sts", verify=ssl_verify)
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
         # https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts/client/assume_role_with_web_identity.html
