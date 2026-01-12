@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from pathlib import Path
@@ -29,7 +29,7 @@ def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
 
 
-def _get_nested(d: Dict[str, Any], path: Sequence[str]) -> Any:
+def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
     cur: Any = d
     if isinstance(cur, str):
         cur = json.loads(cur)
@@ -154,7 +154,7 @@ def _resolve_value(
     kwargs: Dict[str, Any],
     env: Dict[str, str],
     config: Dict[str, Any],
-    service_like: Optional[Dict[str, Any]],
+    service_like: Optional[Union[Dict[str, Any], str]],
     vcap_service: Optional[Dict[str, Any]]
 ) -> Optional[str]:
     # 1) explicit kwargs
