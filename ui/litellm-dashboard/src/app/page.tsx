@@ -27,6 +27,7 @@ import PromptsPanel from "@/components/prompts";
 import PublicModelHub from "@/components/public_model_hub";
 import { SearchTools } from "@/components/search_tools";
 import Settings from "@/components/settings";
+import { SurveyPrompt, SurveyModal } from "@/components/survey";
 import TagManagement from "@/components/tag_management";
 import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
@@ -118,6 +119,15 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
+
+  // Survey state - show by default if not previously dismissed
+  const [showSurveyPrompt, setShowSurveyPrompt] = useState(() => {
+    if (typeof window !== "undefined") {
+      return !localStorage.getItem("litellm_survey_shown");
+    }
+    return false;
+  });
+  const [showSurveyModal, setShowSurveyModal] = useState(false);
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -261,6 +271,27 @@ export default function CreateKeyPage() {
       fetchOrganizations(accessToken, setOrganizations);
     }
   }, [accessToken, userID, userRole]);
+
+  const handleOpenSurvey = () => {
+    setShowSurveyPrompt(false);
+    setShowSurveyModal(true);
+  };
+
+  const handleDismissSurveyPrompt = () => {
+    localStorage.setItem("litellm_survey_shown", "true");
+    setShowSurveyPrompt(false);
+  };
+
+  const handleSurveyComplete = () => {
+    localStorage.setItem("litellm_survey_shown", "true");
+    setShowSurveyModal(false);
+  };
+
+  const handleSurveyModalClose = () => {
+    // If they close the modal without completing, show the prompt again
+    setShowSurveyModal(false);
+    setShowSurveyPrompt(true);
+  };
 
   if (authLoading || redirectToLogin) {
     return <LoadingScreen />;
@@ -457,6 +488,18 @@ export default function CreateKeyPage() {
                   />
                 )}
               </div>
+
+              {/* Survey Components */}
+              <SurveyPrompt
+                isVisible={showSurveyPrompt}
+                onOpen={handleOpenSurvey}
+                onDismiss={handleDismissSurveyPrompt}
+              />
+              <SurveyModal
+                isOpen={showSurveyModal}
+                onClose={handleSurveyModalClose}
+                onComplete={handleSurveyComplete}
+              />
             </div>
           )}
         </ThemeProvider>
