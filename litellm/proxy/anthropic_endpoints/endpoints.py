@@ -11,7 +11,7 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
-    create_streaming_response,
+    create_response,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
@@ -106,7 +106,7 @@ async def anthropic_response(  # noqa: PLR0915
                 )
             )
 
-            return await create_streaming_response(
+            return await create_response(
                 generator=selected_data_generator,
                 media_type="text/event-stream",
                 headers={},

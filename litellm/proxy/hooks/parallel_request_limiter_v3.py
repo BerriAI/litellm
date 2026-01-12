@@ -1704,25 +1704,55 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     def _get_total_tokens_from_usage(
         self, usage: Any | None, rate_limit_type: Literal["output", "input", "total"]
     ) -> int:
-        # Get total tokens from response
+        """
+        Get total tokens from response usage for rate limiting.
+
+        For 'input' and 'total' rate limit types, cached tokens are excluded
+        because providers like AWS Bedrock don't count cached tokens toward
+        rate limits. This aligns LiteLLM's TPM calculation with provider behavior.
+        """
         total_tokens = 0
-        # spot fix for /responses api
+        cached_tokens = 0
+
         if usage:
             if isinstance(usage, Usage):
                 if rate_limit_type == "output":
-                    total_tokens = usage.completion_tokens
+                    total_tokens = usage.completion_tokens or 0
                 elif rate_limit_type == "input":
-                    total_tokens = usage.prompt_tokens
+                    total_tokens = usage.prompt_tokens or 0
                 elif rate_limit_type == "total":
-                    total_tokens = usage.total_tokens
+                    total_tokens = usage.total_tokens or 0
+
+                # Get cached tokens to exclude from input/total
+                if rate_limit_type in ("input", "total"):
+                    if (
+                        hasattr(usage, "prompt_tokens_details")
+                        and usage.prompt_tokens_details is not None
+                    ):
+                        cached_tokens = (
+                            getattr(usage.prompt_tokens_details, "cached_tokens", 0)
+                            or 0
+                        )
+
             elif isinstance(usage, dict):
-                # Responses API usage comes as a dict in ResponsesAPIResponse
+                # Responses API usage comes as a dict
                 if rate_limit_type == "output":
-                    total_tokens = usage.get("completion_tokens", 0)
+                    total_tokens = usage.get("completion_tokens", 0) or 0
                 elif rate_limit_type == "input":
-                    total_tokens = usage.get("prompt_tokens", 0)
+                    total_tokens = usage.get("prompt_tokens", 0) or 0
                 elif rate_limit_type == "total":
-                    total_tokens = usage.get("total_tokens", 0)
+                    total_tokens = usage.get("total_tokens", 0) or 0
+
+                # Get cached tokens from dict
+                if rate_limit_type in ("input", "total"):
+                    prompt_details = usage.get("prompt_tokens_details") or {}
+                    if isinstance(prompt_details, dict):
+                        cached_tokens = prompt_details.get("cached_tokens", 0) or 0
+
+        # Subtract cached tokens for input/total (providers don't count them)
+        if cached_tokens > 0:
+            total_tokens = max(0, total_tokens - cached_tokens)
+
         return total_tokens
 
     async def _execute_token_increment_script(

@@ -154,8 +154,8 @@ class TestAzureAIFlux2ImageEdit(BaseLLMImageEditTest):
         return {
             "model": "azure_ai/flux.2-pro",
             "image": SINGLE_TEST_IMAGE,
-            "api_base": os.getenv("AZURE_AI_API_BASE", "https://litellm-ci-cd-prod.services.ai.azure.com"),
-            "api_key": os.getenv("AZURE_AI_API_KEY"),
+            "api_base": "https://litellm-ci-cd-prod.services.ai.azure.com",
+            "api_key": os.getenv("AZURE_API_KEY"),
             "api_version": "preview",
         }
 
