@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.80.11"
+version = "1.80.15"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -59,7 +59,7 @@ websockets = {version = "^15.0.1", optional = true}
 boto3 = {version = "1.36.0", optional = true}
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = "^1.21.2", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.16", optional = true}
+litellm-proxy-extras = {version = "0.4.21", optional = true}
 rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.27", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
@@ -72,7 +72,7 @@ soundfile = {version = "^0.12.1", optional = true}
 # - 1.68.0-1.68.1 has reconnect bug (https://github.com/grpc/grpc/issues/38290)
 # - 1.75.0+ has Python 3.14 wheels and bug fix
 grpcio = [
-    {version = ">=1.62.3,<1.68.0", python = "<3.14"},
+    {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14"},
     {version = ">=1.75.0", python = ">=3.14"},
 ]
 
@@ -167,7 +167,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.80.11"
+version = "1.80.15"
 version_files = [
     "pyproject.toml:^version"
 ]
@@ -179,4 +179,14 @@ plugins = "pydantic.mypy"
 asyncio_mode = "auto"
 markers = [
     "asyncio: mark test as an asyncio test",
+    "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",
+    "no_parallel: mark test to run sequentially (not in parallel) - typically for memory measurement tests",
+]
+filterwarnings = [
+    # Suppress Pydantic serializer warnings from mock server responses (non-critical for memory tests)
+    # These occur because the mock server returns a simplified response format
+    "ignore:Pydantic serializer warnings:UserWarning",
+    "ignore::UserWarning:pydantic.main",
+    # Suppress pytest-asyncio event loop deprecation warning (handled automatically by pytest-asyncio)
+    "ignore::DeprecationWarning:pytest_asyncio.plugin",
 ]

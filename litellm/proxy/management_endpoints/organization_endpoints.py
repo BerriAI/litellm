@@ -24,8 +24,11 @@ from litellm.proxy.management_endpoints.budget_management_endpoints import (
     new_budget,
     update_budget,
 )
-from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.proxy.management_endpoints.common_utils import (
+    _set_object_metadata_field,
+    _user_has_admin_view,
+)
 from litellm.proxy.management_helpers.object_permission_utils import (
     handle_update_object_permission_common,
 )
@@ -34,11 +37,10 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient
-from litellm.utils import _update_dictionary
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
 )
-from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.utils import _update_dictionary
 
 router = APIRouter()
 
@@ -166,6 +168,18 @@ async def new_organization(
     if llm_router is None:
         raise HTTPException(
             status_code=500, detail={"error": CommonProxyErrors.no_llm_router.value}
+        )
+
+    # Validate budget values are not negative
+    if data.max_budget is not None and data.max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+        )
+    if data.soft_budget is not None and data.soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
         )
 
     user_object_correct_type: Optional[LiteLLM_UserTable] = None
@@ -413,6 +427,18 @@ async def update_organization(
 
     # Create validated data model
     data = LiteLLM_OrganizationTableUpdate(**raw_data_with_flat_budget_fields)
+
+    # Validate budget values are not negative
+    if data.max_budget is not None and data.max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"max_budget cannot be negative. Received: {data.max_budget}"}
+        )
+    if data.soft_budget is not None and data.soft_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"soft_budget cannot be negative. Received: {data.soft_budget}"}
+        )
 
     if data.updated_by is None:
         data.updated_by = user_api_key_dict.user_id
