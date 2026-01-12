@@ -191,7 +191,7 @@ def test_watsonx_chat_completions_endpoint_space_id(
     my_fake_space_id = "xxx-xxx-xxx-xxx-xxx"
     monkeypatch.setenv("WATSONX_SPACE_ID", my_fake_space_id)
 
-    monkeypatch.delenv("WATSONX_PROJECT_ID")
+    monkeypatch.delenv("WATSONX_PROJECT_ID", raising=False)
 
     model = "watsonx/another-model"
     messages = [{"role": "user", "content": "Test message"}]

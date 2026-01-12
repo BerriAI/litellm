@@ -93,19 +93,25 @@ class IBMWatsonXAudioTranscriptionConfig(
         - file: the audio file
         - model: the model name (without watsonx/ prefix)
         - project_id: the project ID (as form field, not query param)
+        - space_id: the space ID (as form field, not query param)
         - other optional params
         """
         # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
 
-        # Get API params to extract project_id
+        # Get API params to extract project_id or space_id
         api_params = _get_api_params(params=optional_params.copy(), model=model)
 
         # Initialize form data with required fields
-        form_data: WatsonXAudioTranscriptionRequestBody = {
-            "model": model,
-            "project_id": api_params.get("project_id", ""),
-        }
+        form_data: WatsonXAudioTranscriptionRequestBody = {"model": model}
+
+        project_id = api_params.get("project_id")
+        space_id = api_params.get("space_id")
+
+        if project_id:
+            form_data["project_id"] = project_id
+        elif space_id:
+            form_data["space_id"] = space_id
 
         # Add supported OpenAI params to form data
         supported_params = self.get_supported_openai_params(model)
@@ -141,7 +147,7 @@ class IBMWatsonXAudioTranscriptionConfig(
 
         URL format: {api_base}/ml/v1/audio/transcriptions?version={version}
 
-        Note: project_id is sent as form data, not as a query parameter
+        Note: project_id or space_id is sent as form data, not as a query parameter
         """
         # Get base URL
         url = self._get_base_url(api_base=api_base)

@@ -27,8 +27,11 @@ class WatsonXAudioTranscriptionRequestBody(TypedDict):
     model: str
     """Model name (e.g., 'whisper-large-v3-turbo')"""
 
-    project_id: str
-    """WatsonX project ID (required)"""
+    project_id: NotRequired[str]
+    """WatsonX project ID (optional)"""
+
+    space_id: NotRequired[str]
+    """WatsonX space ID (optional)"""
 
     language: NotRequired[str]
     """Language code (e.g., 'en', 'es')"""
