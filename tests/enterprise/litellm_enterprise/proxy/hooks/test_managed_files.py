@@ -381,11 +381,13 @@ async def test_output_file_id_for_batch_retrieve():
 @pytest.mark.asyncio
 async def test_async_post_call_success_hook_twice_assert_no_unique_violation():
     import asyncio
+
+    from openai.types.batch import BatchRequestCounts
+
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.proxy_server import proxy_logging_obj
     from litellm.proxy.utils import PrismaClient
     from litellm.types.utils import LiteLLMBatch
-    from litellm.proxy._types import UserAPIKeyAuth
-    from openai.types.batch import BatchRequestCounts
 
     # Use AsyncMock instead of real database connection
     prisma_client = AsyncMock()
@@ -463,7 +465,7 @@ def test_update_responses_input_with_unified_file_id():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         update_responses_input_with_model_file_ids,
     )
-    
+
     # Create a base64-encoded unified file ID
     # This decodes to: litellm_proxy:application/pdf;unified_id,6c0b5890-8914-48e0-b8f4-0ae5ed3c14a5;target_model_names,gpt-4o;llm_output_file_id,file-ECBPW7ML9g7XHdwGgUPZaM;llm_output_file_model_id,e26453f9e76e7993680d0068d98c1f4cc205bbad0967a33c664893568ca743c2
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
@@ -503,7 +505,7 @@ def test_update_responses_input_with_regular_file_id():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         update_responses_input_with_model_file_ids,
     )
-    
+
     # Regular OpenAI file ID (not a unified file ID)
     regular_file_id = "file-abc123xyz"
     
@@ -556,7 +558,7 @@ def test_update_responses_input_with_multiple_file_ids():
     from litellm.litellm_core_utils.prompt_templates.common_utils import (
         update_responses_input_with_model_file_ids,
     )
-    
+
     # Unified file ID
     unified_file_id = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
     # Regular OpenAI file ID
@@ -590,3 +592,76 @@ def test_update_responses_input_with_multiple_file_ids():
     assert updated_input[0]["content"][2]["file_id"] == regular_file_id
     # Verify text content was preserved
     assert updated_input[0]["content"][1]["text"] == "Compare these files"
+
+
+@pytest.mark.asyncio
+async def test_get_user_created_file_ids_returns_encoded_ids():
+    """
+    Test that get_user_created_file_ids returns file objects with unified_file_id
+    (encoded) instead of the provider file ID.
+    """
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    prisma_client = AsyncMock()
+    
+    # Create mock database records with unified_file_id and file_object
+    unified_file_id_1 = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9wZGY7dW5pZmllZF9pZCw2YzBiNTg5MC04OTE0LTQ4ZTAtYjhmNC0wYWU1ZWQzYzE0YTU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1FQ0JQVzdNTDlnN1hIZHdHZ1VQWmFNO2xsbV9vdXRwdXRfZmlsZV9tb2RlbF9pZCxlMjY0NTNmOWU3NmU3OTkzNjgwZDAwNjhkOThjMWY0Y2MyMDViYmFkMDk2N2EzM2M2NjQ4OTM1NjhjYTc0M2My"
+    unified_file_id_2 = "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsYWJjMTIzNDU7dGFyZ2V0X21vZGVsX25hbWVzLGdwdC00bztsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZS1YWVoxMjM7bGxtX291dHB1dF9maWxlX21vZGVsX2lkLG1vZGVsaWQxMjM"
+    
+    mock_record_1 = MagicMock()
+    mock_record_1.unified_file_id = unified_file_id_1
+    mock_record_1.file_object = {
+        "id": "file-ECBPW7ML9g7XHdwGgUPZaM",  # Provider file ID
+        "object": "file",
+        "purpose": "batch",
+        "created_at": 1234567890,
+        "bytes": 1024,
+        "filename": "test1.jsonl",
+        "status": "uploaded",
+    }
+    
+    mock_record_2 = MagicMock()
+    mock_record_2.unified_file_id = unified_file_id_2
+    mock_record_2.file_object = {
+        "id": "file-XYZ123",  # Provider file ID
+        "object": "file",
+        "purpose": "batch",
+        "created_at": 1234567891,
+        "bytes": 2048,
+        "filename": "test2.jsonl",
+        "status": "uploaded",
+    }
+    
+    prisma_client.db.litellm_managedfiletable.find_many.return_value = [
+        mock_record_1,
+        mock_record_2,
+    ]
+    
+    proxy_managed_files = _PROXY_LiteLLMManagedFiles(
+        DualCache(), prisma_client=prisma_client
+    )
+    
+    user_api_key_dict = UserAPIKeyAuth(user_id="test-user-123")
+    model_object_ids = ["file-ECBPW7ML9g7XHdwGgUPZaM", "file-XYZ123"]
+    
+    result = await proxy_managed_files.get_user_created_file_ids(
+        user_api_key_dict=user_api_key_dict,
+        model_object_ids=model_object_ids,
+    )
+    
+    # Verify we got 2 file objects back
+    assert len(result) == 2
+    
+    # Verify the IDs are the unified_file_ids (encoded), not the provider file IDs
+    assert result[0].id == unified_file_id_1
+    assert result[1].id == unified_file_id_2
+    
+    # Verify the IDs are NOT the provider file IDs
+    assert result[0].id != "file-ECBPW7ML9g7XHdwGgUPZaM"
+    assert result[1].id != "file-XYZ123"
+    
+    # Verify other fields are preserved
+    assert result[0].filename == "test1.jsonl"
+    assert result[1].filename == "test2.jsonl"
+    assert result[0].purpose == "batch"
+    assert result[1].purpose == "batch"
