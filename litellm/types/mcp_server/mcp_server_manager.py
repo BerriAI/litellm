@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict
@@ -50,4 +51,5 @@ class MCPServer(BaseModel):
     env: Optional[Dict[str, str]] = None
     access_groups: Optional[List[str]] = None
     allow_all_keys: bool = False
+    updated_at: Optional[datetime] = None
     model_config = ConfigDict(arbitrary_types_allowed=True)
