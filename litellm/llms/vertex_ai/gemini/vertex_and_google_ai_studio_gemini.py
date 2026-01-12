@@ -1536,8 +1536,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         cached_tokens: Optional[int] = None
         audio_tokens: Optional[int] = None
-        text_tokens: Optional[int] = None
         image_tokens: Optional[int] = None
+        text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
@@ -1556,6 +1556,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "AUDIO":
                     response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
+
         #########################################################
 
         ## CANDIDATES TOKEN DETAILS (e.g., for image generation models) ##
@@ -1587,6 +1588,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
 
+        ## Parse promptTokensDetails (total tokens by modality, includes cached + non-cached)
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
@@ -1595,21 +1597,38 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "IMAGE":
                     image_tokens = detail.get("tokenCount", 0)
+
+        ## Parse cacheTokensDetails (breakdown of cached tokens by modality)
+        ## When explicit caching is used, Gemini provides this field to show which modalities were cached
+        cached_text_tokens: Optional[int] = None
+        cached_audio_tokens: Optional[int] = None
+        cached_image_tokens: Optional[int] = None
+
+        if "cacheTokensDetails" in usage_metadata:
+            for detail in usage_metadata["cacheTokensDetails"]:
+                if detail["modality"] == "AUDIO":
+                    cached_audio_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "TEXT":
+                    cached_text_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "IMAGE":
+                    cached_image_tokens = detail.get("tokenCount", 0)
+
+        ## Calculate non-cached tokens by subtracting cached from total (per modality)
+        ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
+        ## See: https://github.com/BerriAI/litellm/issues/18750
+        if cached_text_tokens is not None and text_tokens is not None:
+            text_tokens = text_tokens - cached_text_tokens
+        if cached_audio_tokens is not None and audio_tokens is not None:
+            audio_tokens = audio_tokens - cached_audio_tokens
+        if cached_image_tokens is not None and image_tokens is not None:
+            image_tokens = image_tokens - cached_image_tokens
+
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
             # Also add reasoning tokens to response_tokens_details
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
             response_tokens_details.reasoning_tokens = reasoning_tokens
-
-        ## adjust 'text_tokens' to subtract cached tokens
-        if (
-            (audio_tokens is None or audio_tokens == 0)
-            and text_tokens is not None
-            and text_tokens > 0
-            and cached_tokens is not None
-        ):
-            text_tokens = text_tokens - cached_tokens
 
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
@@ -1632,6 +1651,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_tokens=completion_tokens,
             total_tokens=usage_metadata.get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
+            cache_read_input_tokens=cached_tokens,
             reasoning_tokens=reasoning_tokens,
             completion_tokens_details=response_tokens_details,
         )
