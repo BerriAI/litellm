@@ -2192,7 +2192,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                     if (
                         callback == "openmeter"
-                        and is_async_logging_request
+                        and is_sync_request
                     ):
                         global openMeterLogger
                         if openMeterLogger is None:
