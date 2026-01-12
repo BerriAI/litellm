@@ -83,6 +83,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["structured_messages"] = (
                     messages  # pass the openai /chat/completions messages to the guardrail, as-is
                 )
+            # Pass tools (function definitions) to the guardrail
+            tools = data.get("tools")
+            if tools:
+                inputs["tools"] = tools
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,

@@ -993,7 +993,9 @@ class LiteLLM_ProxyModelTable(LiteLLMPydanticObjectBase):
     model_name: str
     litellm_params: dict
     model_info: dict
+    created_at: Optional[datetime] = None
     created_by: str
+    updated_at: Optional[datetime] = None
     updated_by: str
 
     @model_validator(mode="before")

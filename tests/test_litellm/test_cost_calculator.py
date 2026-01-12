@@ -41,17 +41,17 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     assert result == 1000
 
 
-def test_cost_calculator_with_usage():
+def test_cost_calculator_with_usage(monkeypatch):
     from litellm import get_model_info
 
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     usage = Usage(
-        prompt_tokens=100,
+        prompt_tokens=120,
         completion_tokens=100,
         prompt_tokens_details=PromptTokensDetailsWrapper(
-            text_tokens=10, audio_tokens=90
+            text_tokens=10, audio_tokens=90, image_tokens=20,
         ),
     )
     mr = ModelResponse(usage=usage, model="gemini-2.0-flash-001")
@@ -68,11 +68,49 @@ def test_cost_calculator_with_usage():
 
     model_info = litellm.model_cost["gemini-2.0-flash-001"]
 
+    # Step 1: Test a model where input_cost_per_image_token is not set.
+    # In this case the calculation should use input_cost_per_token as fallback.
+    assert model_info.get("input_cost_per_image_token") is None, "Test case expects that input_cost_per_image_token is not set"
+
     expected_cost = (
         usage.prompt_tokens_details.audio_tokens
         * model_info["input_cost_per_audio_token"]
         + usage.prompt_tokens_details.text_tokens * model_info["input_cost_per_token"]
+        + usage.prompt_tokens_details.image_tokens * model_info["input_cost_per_token"]
         + usage.completion_tokens * model_info["output_cost_per_token"]
+    )
+
+    assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
+
+    # Step 2: Set input_cost_per_image_token.
+    # In this case the explicit cost information should be used.
+    temp_model_info_object = dict(model_info)
+    temp_model_info_object["input_cost_per_image_token"] = 0.5
+
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {
+            "gemini-2.0-flash-001": temp_model_info_object
+        },
+    )
+
+    result = response_cost_calculator(
+        response_object=mr,
+        model="",
+        custom_llm_provider="vertex_ai",
+        call_type="acompletion",
+        optional_params={},
+        cache_hit=None,
+        base_model=None,
+    )
+
+    expected_cost = (
+        usage.prompt_tokens_details.audio_tokens
+        * temp_model_info_object["input_cost_per_audio_token"]
+        + usage.prompt_tokens_details.text_tokens * temp_model_info_object["input_cost_per_token"]
+        + usage.prompt_tokens_details.image_tokens * temp_model_info_object["input_cost_per_image_token"]
+        + usage.completion_tokens * temp_model_info_object["output_cost_per_token"]
     )
 
     assert result == expected_cost, f"Got {result}, Expected {expected_cost}"
@@ -1377,3 +1415,92 @@ def test_completion_cost_service_tier_priority():
     
     # Costs should be similar (all using flex)
     assert abs(cost_from_params - cost_from_usage) < 1e-6, "Costs from params and usage should be similar (both flex)"
+
+
+def test_gemini_cache_tokens_details_no_negative_values():
+    """
+    Test for Issue #18750: Negative text_tokens with Gemini caching
+    
+    When using Gemini with explicit caching, the response includes cacheTokensDetails
+    which breaks down cached tokens by modality. This test ensures that:
+    1. text_tokens is never negative
+    2. We correctly subtract cached tokens per modality (not total)
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    # Scenario from issue #18750: Image + text with explicit caching
+    # Real Gemini response structure when using cached content
+    completion_response = {
+        "usageMetadata": {
+            "promptTokenCount": 9660,
+            "candidatesTokenCount": 7,
+            "totalTokenCount": 9667,
+            "cachedContentTokenCount": 9651,
+            # Total tokens by modality (includes cached + non-cached)
+            "promptTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 9402},
+                {"modality": "IMAGE", "tokenCount": 258}
+            ],
+            # Breakdown of cached tokens by modality
+            "cacheTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 9393},
+                {"modality": "IMAGE", "tokenCount": 258}
+            ]
+        }
+    }
+
+    usage = VertexGeminiConfig._calculate_usage(completion_response)
+
+    # Text tokens should be non-cached text only: 9402 - 9393 = 9
+    assert usage.prompt_tokens_details.text_tokens == 9, \
+        f"Expected text_tokens=9, got {usage.prompt_tokens_details.text_tokens}"
+
+    # Image tokens should be non-cached image only: 258 - 258 = 0
+    assert usage.prompt_tokens_details.image_tokens == 0, \
+        f"Expected image_tokens=0, got {usage.prompt_tokens_details.image_tokens}"
+
+    # Total cached should match
+    assert usage.prompt_tokens_details.cached_tokens == 9651, \
+        f"Expected cached_tokens=9651, got {usage.prompt_tokens_details.cached_tokens}"
+
+    # MOST IMPORTANT: text_tokens should NEVER be negative
+    assert usage.prompt_tokens_details.text_tokens >= 0, \
+        f"BUG: text_tokens is negative ({usage.prompt_tokens_details.text_tokens})! This was the issue in #18750"
+
+    print("✅ Issue #18750 fix verified: text_tokens is correctly calculated and non-negative")
+
+
+def test_gemini_without_cache_tokens_details():
+    """
+    Test Gemini response without cacheTokensDetails (implicit caching or no cache)
+    
+    When cacheTokensDetails is not present, we should use promptTokensDetails as-is
+    without subtracting anything.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    completion_response = {
+        "usageMetadata": {
+            "promptTokenCount": 264,
+            "candidatesTokenCount": 15,
+            "totalTokenCount": 279,
+            "promptTokensDetails": [
+                {"modality": "TEXT", "tokenCount": 6},
+                {"modality": "IMAGE", "tokenCount": 258}
+            ]
+            # No cacheTokensDetails
+        }
+    }
+
+    usage = VertexGeminiConfig._calculate_usage(completion_response)
+
+    # Should use promptTokensDetails values directly
+    assert usage.prompt_tokens_details.text_tokens == 6
+    assert usage.prompt_tokens_details.image_tokens == 258
+    assert usage.prompt_tokens_details.text_tokens >= 0
+
+    print("✅ Gemini without cacheTokensDetails works correctly")
