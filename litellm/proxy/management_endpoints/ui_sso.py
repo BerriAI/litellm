@@ -57,6 +57,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
     has_admin_ui_access,
@@ -341,7 +342,7 @@ def generic_response_convertor(
     if role_mappings is not None and role_mappings.provider.lower() in ["generic", "okta"]:
         # Use role_mappings to determine role from groups
         group_claim = role_mappings.group_claim
-        user_groups_raw = get_nested_value(response, group_claim)
+        user_groups_raw: Any = get_nested_value(response, group_claim)
         
         # Handle different formats: could be a list, string (comma-separated), or single value
         user_groups: List[str] = []
@@ -1450,8 +1451,6 @@ class SSOAuthenticationHandler:
                 return await google_sso.get_login_redirect(state=state)
         # Microsoft SSO Auth
         elif microsoft_client_id is not None:
-            from fastapi_sso.sso.microsoft import MicrosoftSSO
-
             microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
             microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
             if microsoft_client_secret is None:
@@ -1461,7 +1460,7 @@ class SSOAuthenticationHandler:
                     param="MICROSOFT_CLIENT_SECRET",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            microsoft_sso = MicrosoftSSO(
+            microsoft_sso = CustomMicrosoftSSO(
                 client_id=microsoft_client_id,
                 client_secret=microsoft_client_secret,
                 tenant=microsoft_tenant,
@@ -2277,8 +2276,6 @@ class MicrosoftSSOHandler:
         Args:
             return_raw_sso_response: If True, return the raw SSO response
         """
-        from fastapi_sso.sso.microsoft import MicrosoftSSO
-
         microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
         microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
         if microsoft_client_secret is None:
@@ -2295,7 +2292,7 @@ class MicrosoftSSOHandler:
                 param="MICROSOFT_TENANT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        microsoft_sso = MicrosoftSSO(
+        microsoft_sso = CustomMicrosoftSSO(
             client_id=microsoft_client_id,
             client_secret=microsoft_client_secret,
             tenant=microsoft_tenant,

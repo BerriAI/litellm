@@ -18,7 +18,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy._types import LiteLLM_UserTable, NewTeamRequest, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
-from litellm.proxy.management_endpoints.custom_microsoft_sso import CustomMicrosoftSSO
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
