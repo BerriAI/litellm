@@ -23340,13 +23340,13 @@
         "supports_tool_choice": true
     },
     "openrouter/openai/gpt-oss-20b": {
-        "input_cost_per_token": 1.8e-07,
+        "input_cost_per_token": 2e-08,
         "litellm_provider": "openrouter",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 8e-07,
+        "output_cost_per_token": 1e-07,
         "source": "https://openrouter.ai/openai/gpt-oss-20b",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
