@@ -2,7 +2,8 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch, AsyncMock
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../..")
@@ -10,10 +11,15 @@ sys.path.insert(
 
 import pytest
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
+
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     db_health_cache,
+    health_license_endpoint,
     health_services_endpoint,
+)
+from litellm.proxy.health_endpoints._health_endpoints import (
+    test_model_connection as health_test_model_connection,
 )
 
 # Import shared proxy test helpers from conftest
@@ -125,6 +131,185 @@ async def test_health_services_endpoint_sqs(status, error_message):
         assert result["status"] == status
         assert result["message"] == error_message
         mock_instance.async_health_check.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_health_license_endpoint_with_active_license():
+    license_data = {
+        "expiration_date": "2099-01-01",
+        "allowed_features": ["feature-a"],
+        "max_users": 100,
+        "max_teams": 5,
+    }
+    mock_license_check = SimpleNamespace(
+        license_str="test-license",
+        public_key=None,
+        airgapped_license_data=license_data,
+        verify_license_without_api_request=MagicMock(return_value=True),
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server._license_check",
+        mock_license_check,
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user",
+        True,
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user_data",
+        license_data,
+    ):
+        response = await health_license_endpoint(user_api_key_dict=MagicMock())
+
+    assert response["has_license"] is True
+    assert response["license_type"] == "enterprise"
+    assert response["expiration_date"] == "2099-01-01"
+    assert response["allowed_features"] == ["feature-a"]
+    assert response["limits"] == {"max_users": 100, "max_teams": 5}
+
+
+@pytest.mark.asyncio
+async def test_health_license_endpoint_without_valid_license():
+    mock_license_check = SimpleNamespace(
+        license_str="invalid-key",
+        public_key=None,
+        airgapped_license_data=None,
+        verify_license_without_api_request=MagicMock(return_value=False),
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server._license_check",
+        mock_license_check,
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user",
+        False,
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user_data",
+        None,
+    ):
+        response = await health_license_endpoint(user_api_key_dict=MagicMock())
+
+    assert response["has_license"] is True
+    assert response["license_type"] == "community"
+    assert response["expiration_date"] is None
+    assert response["allowed_features"] == []
+    assert response["limits"] == {"max_users": None, "max_teams": None}
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_loads_config_from_router():
+    """
+    Test that /health/test_connection automatically loads model configuration
+    (including resolved environment variables) from the router when model name is provided.
+    """
+    # Mock request
+    mock_request = MagicMock()
+    
+    # Mock user_api_key_dict
+    mock_user_api_key_dict = MagicMock()
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.token = "test-token"
+    
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+    
+    # Mock router with model configuration
+    mock_router = MagicMock()
+    mock_deployment = {
+        "model_name": "gpt-4o",
+        "litellm_params": {
+            "model": "azure/gpt-4o",
+            "api_key": "resolved-api-key-from-env",
+            "api_base": "https://resolved-endpoint.openai.azure.com/",
+            "api_version": "2024-10-21",
+        },
+        "model_info": {},
+    }
+    mock_router.get_model_list.return_value = [mock_deployment]
+    
+    # Mock ModelManagementAuthChecks - patch at the source module since it's imported inside the function
+    mock_can_user_make_model_call = AsyncMock()
+    
+    # Mock litellm.ahealth_check
+    mock_health_check_result = {
+        "status": "healthy",
+        "response_time_ms": 100,
+    }
+    mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
+    
+    # Mock run_with_timeout
+    mock_run_with_timeout = AsyncMock(return_value=mock_health_check_result)
+    
+    # Mock _update_litellm_params_for_health_check
+    def mock_update_params(model_info, litellm_params):
+        # Just return params with messages added
+        params = litellm_params.copy()
+        params["messages"] = [{"role": "user", "content": "test"}]
+        return params
+    
+    # Mock _resolve_os_environ_variables
+    def mock_resolve_os_environ(params):
+        return params
+    
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client,
+    ), patch(
+        "litellm.proxy.proxy_server.llm_router",
+        mock_router,
+    ), patch(
+        "litellm.proxy.proxy_server.premium_user",
+        False,
+    ), patch(
+        "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+        mock_can_user_make_model_call,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+        mock_ahealth_check,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+        mock_run_with_timeout,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+        mock_update_params,
+    ), patch(
+        "litellm.proxy.health_endpoints._health_endpoints._resolve_os_environ_variables",
+        mock_resolve_os_environ,
+    ):
+        # Call the endpoint with only model name (no credentials)
+        result = await health_test_model_connection(
+            request=mock_request,
+            mode="chat",
+            litellm_params={"model": "gpt-4o"},
+            model_info={},
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+        
+        # Verify router.get_model_list was called with the model name
+        mock_router.get_model_list.assert_called_once_with(model_name="gpt-4o")
+        
+        # Verify that run_with_timeout was called (which wraps ahealth_check)
+        assert mock_run_with_timeout.called
+        
+        # Get the call args to verify merged params
+        call_args = mock_run_with_timeout.call_args
+        assert call_args is not None
+        
+        # The first arg should be the coroutine from ahealth_check
+        # We need to check what was passed to ahealth_check
+        ahealth_check_call_args = mock_ahealth_check.call_args
+        assert ahealth_check_call_args is not None
+        model_params = ahealth_check_call_args.kwargs.get("model_params", {})
+        
+        # Verify that config params were loaded and merged
+        # Note: request params override config params, so model from request is used
+        assert model_params.get("api_key") == "resolved-api-key-from-env"
+        assert model_params.get("api_base") == "https://resolved-endpoint.openai.azure.com/"
+        assert model_params.get("api_version") == "2024-10-21"
+        assert model_params.get("model") == "gpt-4o"  # Request param overrides config param
+        
+        # Verify result
+        assert result["status"] == "success"
+        assert "result" in result
 
 
 @pytest.fixture(scope="function")
@@ -256,4 +441,3 @@ def test_health_readiness(proxy_client):
             f"Unexpected db status: {db_status}"
     
     print("="*60 + "\n")
-

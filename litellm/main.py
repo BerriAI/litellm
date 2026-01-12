@@ -97,6 +97,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIModelRoute,
     get_vertex_ai_model_route,
@@ -104,10 +105,22 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.realtime_api.main import _realtime_health_check
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import RawRequestTypedDict, StreamingChoices
+from litellm.types.utils import (
+    ModelResponseStream,
+    RawRequestTypedDict,
+    StreamingChoices,
+)
 from litellm.utils import (
+    Choices,
     CustomStreamWrapper,
+    EmbeddingResponse,
+    Message,
+    ModelResponse,
     ProviderConfigManager,
+    TextChoices,
+    TextCompletionResponse,
+    TextCompletionStreamWrapper,
+    TranscriptionResponse,
     Usage,
     _get_model_info_helper,
     add_provider_specific_params_to_optional_params,
@@ -165,7 +178,8 @@ from .llms.azure_ai.anthropic.handler import AzureAnthropicChatCompletion
 from .llms.azure_ai.embed import AzureAIEmbedding
 from .llms.bedrock.chat import BedrockConverseLLM, BedrockLLM
 from .llms.bedrock.embed.embedding import BedrockEmbedding
-from .llms.bedrock.image.image_handler import BedrockImageGeneration
+from .llms.bedrock.image_edit.handler import BedrockImageEdit
+from .llms.bedrock.image_generation.image_handler import BedrockImageGeneration
 from .llms.bytez.chat.transformation import BytezChatConfig
 from .llms.clarifai.chat.transformation import ClarifaiConfig
 from .llms.codestral.completion.handler import CodestralTextCompletion
@@ -238,18 +252,6 @@ from .types.utils import (
     all_litellm_params,
 )
 
-from litellm.types.utils import ModelResponseStream
-from litellm.utils import (
-    Choices,
-    EmbeddingResponse,
-    Message,
-    ModelResponse,
-    TextChoices,
-    TextCompletionResponse,
-    TextCompletionStreamWrapper,
-    TranscriptionResponse,
-)
-
 ####### ENVIRONMENT VARIABLES ###################
 openai_chat_completions = OpenAIChatCompletion()
 openai_text_completions = OpenAITextCompletion()
@@ -271,6 +273,7 @@ codestral_text_completions = CodestralTextCompletion()
 bedrock_converse_chat_completion = BedrockConverseLLM()
 bedrock_embedding = BedrockEmbedding()
 bedrock_image_generation = BedrockImageGeneration()
+bedrock_image_edit = BedrockImageEdit()
 vertex_chat_completion = VertexLLM()
 vertex_embedding = VertexEmbedding()
 vertex_multimodal_embedding = VertexMultimodalEmbedding()
@@ -2138,6 +2141,49 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "gigachat":
+            # GigaChat - Sber AI's LLM (Russia)
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.gigachat_key
+                or get_secret("GIGACHAT_API_KEY")
+                or get_secret("GIGACHAT_CREDENTIALS")
+            )
+
+            headers = headers or litellm.headers or {}
+
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=_get_encoding(),
+                    stream=stream,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
         elif custom_llm_provider == "sap":
             headers = headers or litellm.headers
             ## LOAD CONFIG - if set
@@ -2244,6 +2290,42 @@ def completion(  # type: ignore # noqa: PLR0915
             logging.post_call(
                 input=messages, api_key=api_key, original_response=response
             )
+        elif custom_llm_provider == "minimax":
+            api_key = (
+                api_key
+                or get_secret_str("MINIMAX_API_KEY")
+                or litellm.api_key
+            )
+
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("MINIMAX_API_BASE")
+                or "https://api.minimax.io/v1"
+            )
+
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                model_response=model_response,
+                encoding=_get_encoding(),
+                logging_obj=logging,
+                optional_params=optional_params,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                shared_session=shared_session,
+                acompletion=acompletion,
+                stream=stream,
+                api_key=api_key,
+                headers=headers,
+                client=client,
+                provider_config=provider_config,
+            )
+            logging.post_call(
+                input=messages, api_key=api_key, original_response=response
+            )
         elif (
             model in litellm.open_ai_chat_completion_models
             or custom_llm_provider == "custom_openai"
@@ -2261,6 +2343,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
+            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -4618,6 +4701,51 @@ def embedding(  # noqa: PLR0915
                 litellm_params=litellm_params_dict,
                 headers=headers,
             )
+        elif custom_llm_provider == "openrouter":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("OPENROUTER_API_BASE")
+                or "https://openrouter.ai/api/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.openrouter_key
+                or get_secret("OPENROUTER_API_KEY")
+                or get_secret("OR_API_KEY")
+            )
+
+            openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
+            openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
+
+            openrouter_headers = {
+                "HTTP-Referer": openrouter_site_url,
+                "X-Title": openrouter_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                openrouter_headers.update(_headers)
+
+            headers = openrouter_headers
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
         elif custom_llm_provider == "huggingface":
             api_key = (
                 api_key
@@ -5183,6 +5311,28 @@ def embedding(  # noqa: PLR0915
                 client=client,
                 aembedding=aembedding,
                 litellm_params={},
+            )
+        elif custom_llm_provider == "gigachat":
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.gigachat_key
+                or get_secret_str("GIGACHAT_CREDENTIALS")
+                or get_secret_str("GIGACHAT_API_KEY")
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
             )
         else:
             raise LiteLLMUnknownProvider(
@@ -6467,6 +6617,75 @@ def speech(  # noqa: PLR0915
             api_key=api_key,
             **kwargs,
         )
+    elif custom_llm_provider == "minimax":
+        from litellm.llms.minimax.text_to_speech.transformation import (
+            MinimaxTextToSpeechConfig,
+        )
+
+        # MiniMax Text-to-Speech
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = MinimaxTextToSpeechConfig()
+
+        minimax_config = cast(
+            MinimaxTextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        if api_base is not None:
+            litellm_params_dict["api_base"] = api_base
+        if api_key is not None:
+            litellm_params_dict["api_key"] = api_key
+
+        # Convert voice to string if it's a dict (minimax handler expects Optional[str])
+        voice_str: Optional[str] = None
+        if isinstance(voice, str):
+            voice_str = voice
+        elif isinstance(voice, dict):
+            # Extract voice_id from dict if needed
+            voice_str = voice.get("voice_id") or voice.get("id") or voice.get("name")
+
+        response = base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice_str,
+            text_to_speech_provider_config=minimax_config,
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            client=client,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "aws_polly":
+        from litellm.llms.aws_polly.text_to_speech.transformation import (
+            AWSPollyTextToSpeechConfig,
+        )
+
+        # AWS Polly Text-to-Speech
+        if text_to_speech_provider_config is None:
+            text_to_speech_provider_config = AWSPollyTextToSpeechConfig()
+
+        # Cast to specific AWS Polly config type to access dispatch method
+        aws_polly_config = cast(
+            AWSPollyTextToSpeechConfig, text_to_speech_provider_config
+        )
+
+        response = aws_polly_config.dispatch_text_to_speech(
+            model=model,
+            input=input,
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params_dict=litellm_params_dict,
+            logging_obj=logging_obj,
+            timeout=timeout,
+            extra_headers=extra_headers,
+            base_llm_http_handler=base_llm_http_handler,
+            aspeech=aspeech or False,
+            api_base=api_base,
+            api_key=api_key,
+            **kwargs,
+        )
 
     if response is None:
         raise Exception(
@@ -6546,7 +6765,16 @@ async def ahealth_check(
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        custom_llm_provider_from_params = model_params.get("custom_llm_provider", None)
+        api_base_from_params = model_params.get("api_base", None)
+        api_key_from_params = model_params.get("api_key", None)
+        
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider_from_params,
+            api_base=api_base_from_params,
+            api_key=api_key_from_params,
+        )
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
@@ -6901,6 +7129,7 @@ def _get_encoding():
     global _encoding_cache
     if _encoding_cache is None:
         import sys
+
         # Access via module to trigger __getattr__ if not cached
         _encoding_cache = sys.modules[__name__].encoding
     return _encoding_cache

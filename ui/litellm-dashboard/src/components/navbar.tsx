@@ -1,20 +1,27 @@
-import Link from "next/link";
-import React, { useState, useEffect } from "react";
-import type { MenuProps } from "antd";
-import { Dropdown, Tooltip } from "antd";
+import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
 import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 import {
-  UserOutlined,
-  LogoutOutlined,
+  emitLocalStorageChange,
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "@/utils/localStorageUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
+import {
   CrownOutlined,
+  LogoutOutlined,
   MailOutlined,
-  SafetyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  SafetyOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
-import { useTheme } from "@/contexts/ThemeContext";
+import type { MenuProps } from "antd";
+import { Dropdown, Switch, Tooltip } from "antd";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
 
 interface NavbarProps {
   userID: string | null;
@@ -42,28 +49,15 @@ const Navbar: React.FC<NavbarProps> = ({
   onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
+  console.log("baseUrl", baseUrl);
   const [logoutUrl, setLogoutUrl] = useState("");
-  const [version, setVersion] = useState("");
+  const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
   const { logoUrl } = useTheme();
+  const { data: healthData } = useHealthReadiness();
+  const version = healthData?.litellm_version;
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
-
-  useEffect(() => {
-    const fetchVersion = async () => {
-      try {
-        const response = await fetch(`${baseUrl}/health/readiness`);
-        const data = await response.json();
-        if (data.litellm_version) {
-          setVersion(data.litellm_version);
-        }
-      } catch (error) {
-        console.error("Failed to fetch version:", error);
-      }
-    };
-
-    fetchVersion();
-  }, [baseUrl]);
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -78,6 +72,11 @@ const Navbar: React.FC<NavbarProps> = ({
 
     initializeProxySettings();
   }, [accessToken]);
+
+  useEffect(() => {
+    const storedValue = getLocalStorageItem("disableShowNewBadge");
+    setDisableShowNewBadge(storedValue === "true");
+  }, []);
 
   useEffect(() => {
     setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
@@ -129,6 +128,28 @@ const Navbar: React.FC<NavbarProps> = ({
                 {userEmail || "Unknown"}
               </span>
             </div>
+            <div
+              className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-gray-500 text-xs">Hide New Feature Indicators</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={disableShowNewBadge}
+                onChange={(checked) => {
+                  setDisableShowNewBadge(checked);
+                  if (checked) {
+                    setLocalStorageItem("disableShowNewBadge", "true");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  } else {
+                    removeLocalStorageItem("disableShowNewBadge");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  }
+                }}
+                aria-label="Toggle hide new feature indicators"
+              />
+            </div>
           </div>
         </div>
       ),
@@ -148,11 +169,7 @@ const Navbar: React.FC<NavbarProps> = ({
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
-          {" "}
-          {/* Increased height from h-12 to h-14 */}
-          {/* Left side with collapse toggle and logo */}
           <div className="flex items-center flex-shrink-0">
-            {/* Collapse/Expand Toggle Button - Larger */}
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
@@ -164,12 +181,12 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <div className="flex items-center">
-              <Link href="/" className="flex items-center">
+              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
                   <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
-                  <span 
+                  <span
                     className="absolute -top-1 -right-2 text-lg animate-bounce"
-                    style={{ animationDuration: '2s' }}
+                    style={{ animationDuration: "2s" }}
                     title="Happy Holidays!"
                   >
                     🎄

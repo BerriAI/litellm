@@ -903,6 +903,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     functions: List
     user: str
     metadata: dict  # litellm specific param
+    reasoning_effort: str  # OpenAI o1/o3 reasoning parameter
 
 
 class ChatCompletionDeltaChunk(TypedDict, total=False):
@@ -1028,6 +1029,19 @@ OpenAIImageGenerationOptionalParams = Literal[
     "user",
 ]
 
+OpenAIImageEditOptionalParams = Literal[
+    "background",
+    "n",
+    "mask"
+    "output_compression",
+    "output_format",
+    "quality",
+    "partial_images",
+    "response_format",
+    "size",
+    "style",
+    "user",
+]
 
 class ComputerToolParam(TypedDict, total=False):
     display_height: Required[float]
@@ -1182,6 +1196,39 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def output_text(self) -> str:
+        """
+        Convenience property that aggregates all `output_text` items from the `output` list.
+
+        If no `output_text` content blocks exist, then an empty string is returned.
+
+        This matches the OpenAI SDK's Response.output_text behavior.
+        """
+        texts: List[str] = []
+        for output_item in self.output:
+            # Handle both dict and object access patterns
+            if isinstance(output_item, dict):
+                item_type = output_item.get("type")
+                content = output_item.get("content", [])
+            else:
+                item_type = getattr(output_item, "type", None)
+                content = getattr(output_item, "content", [])
+
+            if item_type == "message":
+                for content_item in content:
+                    if isinstance(content_item, dict):
+                        content_type = content_item.get("type")
+                        text = content_item.get("text", "")
+                    else:
+                        content_type = getattr(content_item, "type", None)
+                        text = getattr(content_item, "text", "") or ""
+
+                    if content_type == "output_text":
+                        texts.append(text)
+
+        return "".join(texts)
 
 
 class ResponsesAPIStreamEvents(str, Enum):

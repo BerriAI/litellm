@@ -837,6 +837,317 @@ def test_cost_discount_not_applied_to_other_providers():
     print(f"  - Cost remains unchanged: ${cost_with_selective_discount:.6f}")
 
 
+def test_cost_margin_percentage():
+    """
+    Test that percentage-based cost margin is applied correctly
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original config
+    original_margin_config = litellm.cost_margin_config.copy()
+
+    # Create mock response
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Calculate cost without margin
+    litellm.cost_margin_config = {}
+    cost_without_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Set 10% margin for openai
+    litellm.cost_margin_config = {"openai": 0.10}
+
+    # Calculate cost with margin
+    cost_with_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Restore original config
+    litellm.cost_margin_config = original_margin_config
+
+    # Verify margin is applied (10% margin means 110% of original cost)
+    expected_cost = cost_without_margin * 1.10
+    assert cost_with_margin == pytest.approx(expected_cost, rel=1e-9)
+
+    print(f"✓ Cost margin percentage test passed:")
+    print(f"  - Original cost: ${cost_without_margin:.6f}")
+    print(f"  - Cost with margin (10%): ${cost_with_margin:.6f}")
+    print(f"  - Margin added: ${cost_with_margin - cost_without_margin:.6f}")
+
+
+def test_cost_margin_fixed_amount():
+    """
+    Test that fixed amount cost margin is applied correctly
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original config
+    original_margin_config = litellm.cost_margin_config.copy()
+
+    # Create mock response
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Calculate cost without margin
+    litellm.cost_margin_config = {}
+    cost_without_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Set $0.001 fixed margin for openai
+    litellm.cost_margin_config = {"openai": {"fixed_amount": 0.001}}
+
+    # Calculate cost with margin
+    cost_with_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Restore original config
+    litellm.cost_margin_config = original_margin_config
+
+    # Verify fixed margin is applied
+    expected_cost = cost_without_margin + 0.001
+    assert cost_with_margin == pytest.approx(expected_cost, rel=1e-9)
+
+    print(f"✓ Cost margin fixed amount test passed:")
+    print(f"  - Original cost: ${cost_without_margin:.6f}")
+    print(f"  - Cost with margin ($0.001): ${cost_with_margin:.6f}")
+    print(f"  - Margin added: ${cost_with_margin - cost_without_margin:.6f}")
+
+
+def test_cost_margin_combined():
+    """
+    Test that combined percentage and fixed amount margin is applied correctly
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original config
+    original_margin_config = litellm.cost_margin_config.copy()
+
+    # Create mock response
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Calculate cost without margin
+    litellm.cost_margin_config = {}
+    cost_without_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Set 8% margin + $0.0005 fixed for openai
+    litellm.cost_margin_config = {"openai": {"percentage": 0.08, "fixed_amount": 0.0005}}
+
+    # Calculate cost with margin
+    cost_with_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Restore original config
+    litellm.cost_margin_config = original_margin_config
+
+    # Verify combined margin is applied
+    expected_cost = cost_without_margin * 1.08 + 0.0005
+    assert cost_with_margin == pytest.approx(expected_cost, rel=1e-9)
+
+    print(f"✓ Cost margin combined test passed:")
+    print(f"  - Original cost: ${cost_without_margin:.6f}")
+    print(f"  - Cost with margin (8% + $0.0005): ${cost_with_margin:.6f}")
+    print(f"  - Margin added: ${cost_with_margin - cost_without_margin:.6f}")
+
+
+def test_cost_margin_global():
+    """
+    Test that global margin is applied when no provider-specific margin is configured
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original config
+    original_margin_config = litellm.cost_margin_config.copy()
+
+    # Create mock response
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Calculate cost without margin
+    litellm.cost_margin_config = {}
+    cost_without_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Set 5% global margin (no provider-specific margin)
+    litellm.cost_margin_config = {"global": 0.05}
+
+    # Calculate cost with global margin
+    cost_with_global_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Restore original config
+    litellm.cost_margin_config = original_margin_config
+
+    # Verify global margin is applied
+    expected_cost = cost_without_margin * 1.05
+    assert cost_with_global_margin == pytest.approx(expected_cost, rel=1e-9)
+
+    print(f"✓ Cost margin global test passed:")
+    print(f"  - Original cost: ${cost_without_margin:.6f}")
+    print(f"  - Cost with global margin (5%): ${cost_with_global_margin:.6f}")
+    print(f"  - Margin added: ${cost_with_global_margin - cost_without_margin:.6f}")
+
+
+def test_cost_margin_provider_overrides_global():
+    """
+    Test that provider-specific margin overrides global margin
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original config
+    original_margin_config = litellm.cost_margin_config.copy()
+
+    # Create mock response
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Calculate cost without margin
+    litellm.cost_margin_config = {}
+    cost_without_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Set 5% global margin and 10% provider-specific margin
+    litellm.cost_margin_config = {"global": 0.05, "openai": 0.10}
+
+    # Calculate cost - should use provider-specific margin (10%), not global (5%)
+    cost_with_provider_margin = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Restore original config
+    litellm.cost_margin_config = original_margin_config
+
+    # Verify provider-specific margin is used (not global)
+    expected_cost = cost_without_margin * 1.10  # 10% from provider, not 5% from global
+    assert cost_with_provider_margin == pytest.approx(expected_cost, rel=1e-9)
+
+    print(f"✓ Cost margin provider override test passed:")
+    print(f"  - Original cost: ${cost_without_margin:.6f}")
+    print(f"  - Cost with provider margin (10%, overrides 5% global): ${cost_with_provider_margin:.6f}")
+    print(f"  - Margin added: ${cost_with_provider_margin - cost_without_margin:.6f}")
+
+
+def test_cost_margin_with_discount():
+    """
+    Test that margin is applied after discount (independent calculation)
+    """
+    from litellm import completion_cost
+    from litellm.types.utils import Usage
+
+    # Save original configs
+    original_margin_config = litellm.cost_margin_config.copy()
+    original_discount_config = litellm.cost_discount_config.copy()
+
+    # Create mock response
+    response = ModelResponse(
+        id="test-id",
+        choices=[],
+        created=1234567890,
+        model="gpt-4",
+        object="chat.completion",
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Calculate base cost
+    litellm.cost_margin_config = {}
+    litellm.cost_discount_config = {}
+    base_cost = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Set 5% discount and 10% margin
+    litellm.cost_discount_config = {"openai": 0.05}
+    litellm.cost_margin_config = {"openai": 0.10}
+
+    # Calculate cost with both discount and margin
+    cost_with_both = completion_cost(
+        completion_response=response,
+        model="gpt-4",
+        custom_llm_provider="openai",
+    )
+
+    # Restore original configs
+    litellm.cost_margin_config = original_margin_config
+    litellm.cost_discount_config = original_discount_config
+
+    # Verify: discount applied first, then margin
+    # Base cost -> discount: base * 0.95 -> margin: (base * 0.95) * 1.10
+    expected_cost = base_cost * 0.95 * 1.10
+    assert cost_with_both == pytest.approx(expected_cost, rel=1e-9)
+
+    print(f"✓ Cost margin with discount test passed:")
+    print(f"  - Base cost: ${base_cost:.6f}")
+    print(f"  - Cost with 5% discount + 10% margin: ${cost_with_both:.6f}")
+    print(f"  - Expected: ${expected_cost:.6f}")
+
+
 def test_azure_image_generation_cost_calculator():
     from unittest.mock import MagicMock
 
@@ -855,7 +1166,7 @@ def test_azure_image_generation_cost_calculator():
                 ImageObject(
                     b64_json=None,
                     revised_prompt="A futuristic, techno-inspired green duck wearing cool modern sunglasses. The duck has a sleek, metallic appearance with glowing neon green accents, standing on a high-tech urban background with holographic billboards and illuminated city lights in the distance. The duck's feathers have a glossy, high-tech sheen, resembling a robotic design but still maintaining its avian features. The scene has a vibrant, cyberpunk aesthetic with a neon color palette.",
-                    url="https://dalleprodsec.blob.core.windows.net/private/images/caa17dc4-357d-4257-8938-eeea9baa8d0a/generated_00.png?se=2025-10-31T00%3A47%3A59Z&sig=KHRjLz3vMahbw94JtxL02S6t2AueeRMaiqj4z35HKDM%3D&ske=2025-11-05T00%3A26%3A20Z&skoid=e52d5ed7-0657-4f62-bc12-7e5dbb260a96&sks=b&skt=2025-10-29T00%3A26%3A20Z&sktid=33e01921-4d64-4f8c-a055-5bdaffd5e33d&skv=2020-10-02&sp=r&spr=https&sr=b&sv=2020-10-02",
+                    url="test-azure-blob-url-with-sas-token",
                 )
             ],
             output_format=None,

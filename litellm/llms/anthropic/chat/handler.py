@@ -692,12 +692,15 @@ class ModelResponseIterator:
                     text = content_block_start["content_block"]["text"]
                 elif content_block_start["content_block"]["type"] == "tool_use" or content_block_start["content_block"]["type"] == "server_tool_use":
                     self.tool_index += 1
+                    # Use empty string for arguments in content_block_start - actual arguments
+                    # come in subsequent content_block_delta chunks and get accumulated.
+                    # Using str(input) here would prepend '{}' causing invalid JSON accumulation.
                     tool_use = ChatCompletionToolCallChunk(
                         id=content_block_start["content_block"]["id"],
                         type="function",
                         function=ChatCompletionToolCallFunctionChunk(
                             name=content_block_start["content_block"]["name"],
-                            arguments=str(content_block_start["content_block"]["input"]),
+                            arguments="",
                         ),
                         index=self.tool_index,
                     )

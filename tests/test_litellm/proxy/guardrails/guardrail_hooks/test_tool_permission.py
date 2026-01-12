@@ -558,3 +558,73 @@ class TestToolPermissionGuardrailIntegration:
         assert is_allowed is True
         assert rule_id is None
         assert "default" in (message or "")
+
+    def test_case_insensitive_default_action(self):
+        """Test that default_action accepts capitalized values and normalizes them"""
+        # Test capitalized 'Deny'
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="test-case-insensitive",
+            rules=[],
+            default_action="Deny",  # Should be normalized to 'deny'
+        )
+        assert guardrail.default_action == "deny"
+
+        # Test capitalized 'Allow'
+        guardrail2 = ToolPermissionGuardrail(
+            guardrail_name="test-case-insensitive2",
+            rules=[],
+            default_action="Allow",  # Should be normalized to 'allow'
+        )
+        assert guardrail2.default_action == "allow"
+
+        # Test uppercase 'DENY'
+        guardrail3 = ToolPermissionGuardrail(
+            guardrail_name="test-case-insensitive3",
+            rules=[],
+            default_action="DENY",  # Should be normalized to 'deny'
+        )
+        assert guardrail3.default_action == "deny"
+
+    def test_case_insensitive_on_disallowed_action(self):
+        """Test that on_disallowed_action accepts capitalized values and normalizes them"""
+        # Test capitalized 'Block'
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="test-on-disallowed",
+            rules=[],
+            default_action="deny",
+            on_disallowed_action="Block",  # Should be normalized to 'block'
+        )
+        assert guardrail.on_disallowed_action == "block"
+
+        # Test capitalized 'Rewrite'
+        guardrail2 = ToolPermissionGuardrail(
+            guardrail_name="test-on-disallowed2",
+            rules=[],
+            default_action="deny",
+            on_disallowed_action="Rewrite",  # Should be normalized to 'rewrite'
+        )
+        assert guardrail2.on_disallowed_action == "rewrite"
+
+    def test_case_insensitive_decision_in_rules(self):
+        """Test that decision field in rules accepts capitalized values and normalizes them"""
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name="test-decision-case",
+            rules=[
+                {"id": "allow_bash", "tool_name": r"^Bash$", "decision": "Allow"},  # Capitalized
+                {"id": "deny_read", "tool_name": r"^Read$", "decision": "DENY"},  # Uppercase
+            ],
+            default_action="deny",
+        )
+
+        # Verify rules are normalized
+        assert guardrail.rules[0].decision == "allow"
+        assert guardrail.rules[1].decision == "deny"
+
+        # Verify functionality still works
+        is_allowed, rule_id, _ = guardrail._check_tool_permission("Bash")
+        assert is_allowed is True
+        assert rule_id == "allow_bash"
+
+        is_allowed, rule_id, _ = guardrail._check_tool_permission("Read")
+        assert is_allowed is False
+        assert rule_id == "deny_read"

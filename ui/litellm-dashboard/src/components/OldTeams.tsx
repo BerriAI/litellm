@@ -1,3 +1,4 @@
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import AvailableTeamsPanel from "@/components/team/available_teams";
 import TeamInfoView from "@/components/team/team_info";
 import TeamSSOSettings from "@/components/TeamSSOSettings";
@@ -149,6 +150,18 @@ const getAdminOrganizations = (
   return [];
 };
 
+const getOrganizationAlias = (
+  organizationId: string | null | undefined,
+  organizations: Organization[] | null | undefined,
+): string => {
+  if (!organizationId || !organizations) {
+    return organizationId || "N/A";
+  }
+
+  const organization = organizations.find((org) => org.organization_id === organizationId);
+  return organization?.organization_alias || organizationId;
+};
+
 // @deprecated
 const Teams: React.FC<TeamProps> = ({
   teams,
@@ -161,6 +174,7 @@ const Teams: React.FC<TeamProps> = ({
   premiumUser = false,
 }) => {
   console.log(`organizations: ${JSON.stringify(organizations)}`);
+  const { data: organizationsData } = useOrganizations();
   const [lastRefreshed, setLastRefreshed] = useState("");
   const [currentOrg, setCurrentOrg] = useState<Organization | null>(null);
   const [currentOrgForCreateTeam, setCurrentOrgForCreateTeam] = useState<Organization | null>(null);
@@ -407,6 +421,20 @@ const Teams: React.FC<TeamProps> = ({
           formValues.metadata = JSON.stringify(metadata);
         }
 
+        if (formValues.secret_manager_settings) {
+          if (typeof formValues.secret_manager_settings === "string") {
+            if (formValues.secret_manager_settings.trim() === "") {
+              delete formValues.secret_manager_settings;
+            } else {
+              try {
+                formValues.secret_manager_settings = JSON.parse(formValues.secret_manager_settings);
+              } catch (e) {
+                throw new Error("Failed to parse secret manager settings: " + e);
+              }
+            }
+          }
+        }
+
         // Transform allowed_vector_store_ids and allowed_mcp_servers_and_groups into object_permission
         if (
           (formValues.allowed_vector_store_ids && formValues.allowed_vector_store_ids.length > 0) ||
@@ -619,6 +647,7 @@ const Teams: React.FC<TeamProps> = ({
               is_proxy_admin={userRole == "Admin"}
               userModels={userModels}
               editTeam={editTeam}
+              premiumUser={premiumUser}
             />
           ) : (
             <TabGroup className="gap-2 h-[75vh] w-full">
@@ -925,7 +954,9 @@ const Teams: React.FC<TeamProps> = ({
                                       </div>
                                     </TableCell>
 
-                                    <TableCell>{team.organization_id}</TableCell>
+                                    <TableCell>
+                                      {getOrganizationAlias(team.organization_id, organizationsData || organizations)}
+                                    </TableCell>
                                     <TableCell>
                                       <Text>
                                         {perTeamInfo &&
@@ -1245,6 +1276,36 @@ const Teams: React.FC<TeamProps> = ({
                         help="Additional team metadata. Enter metadata as JSON object."
                       >
                         <Input.TextArea rows={4} />
+                      </Form.Item>
+                      <Form.Item
+                        label="Secret Manager Settings"
+                        name="secret_manager_settings"
+                        help={
+                          premiumUser
+                            ? "Enter secret manager configuration as a JSON object."
+                            : "Premium feature - Upgrade to manage secret manager settings."
+                        }
+                        rules={[
+                          {
+                            validator: async (_, value) => {
+                              if (!value) {
+                                return Promise.resolve();
+                              }
+                              try {
+                                JSON.parse(value);
+                                return Promise.resolve();
+                              } catch (error) {
+                                return Promise.reject(new Error("Please enter valid JSON"));
+                              }
+                            },
+                          },
+                        ]}
+                      >
+                        <Input.TextArea
+                          rows={4}
+                          placeholder='{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}'
+                          disabled={!premiumUser}
+                        />
                       </Form.Item>
                       <Form.Item
                         label={
