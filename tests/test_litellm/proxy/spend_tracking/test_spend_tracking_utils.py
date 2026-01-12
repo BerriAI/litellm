@@ -19,6 +19,7 @@ import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_proxy_server_request_for_spend_logs_payload,
     _get_response_for_spend_logs_payload,
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
@@ -849,4 +850,64 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
     assert (
         metadata.get("litellm_overhead_time_ms") is None
     ), "litellm_overhead_time_ms should be None when overhead is not provided"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_enabled(
+    mock_should_store,
+):
+    """
+    Test that both request body and response are redacted when turn_off_message_logging is enabled.
+    """
+    mock_should_store.return_value = True
+
+    # Test request redaction
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "messages": [{"role": "user", "content": "secret message"}],
+                "model": "gpt-4",
+            }
+        }
+    }
+    metadata = {}
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": True,
+        },
+    }
+
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    parsed_request = json.loads(request_result)
+    assert parsed_request["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert parsed_request["model"] == "gpt-4"
+
+    # Test response redaction - use dict response to verify redaction
+    response_dict = {
+        "id": "test-id",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "secret response"},
+            }
+        ],
+        "model": "gpt-4",
+    }
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": response_dict},
+    )
+
+    response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
+
+    # When redaction is enabled and response is a dict (not ModelResponse),
+    # perform_redaction returns {"text": "redacted-by-litellm"}
+    parsed_response = json.loads(response_result)
+    assert parsed_response == {"text": "redacted-by-litellm"}
 

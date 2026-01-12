@@ -142,7 +142,47 @@ def completion(
 - `tool_call_id`: *str (optional)* - Tool call that this message is responding to.
 
 
-[**See All Message Values**](https://github.com/BerriAI/litellm/blob/8600ec77042dacad324d3879a2bd918fc6a719fa/litellm/types/llms/openai.py#L392)
+[**See All Message Values**](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L664)
+
+#### Content Types
+
+`content` can be a string (text only) or a list of content blocks (multimodal):
+
+| Type | Description | Docs |
+|------|-------------|------|
+| `text` | Text content | [Type Definition](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L598) |
+| `image_url` | Images | [Vision](./vision.md) |
+| `input_audio` | Audio input | [Audio](./audio.md) |
+| `video_url` | Video input | [Type Definition](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L625) |
+| `file` | Files | [Document Understanding](./document_understanding.md) |
+| `document` | Documents/PDFs | [Document Understanding](./document_understanding.md) |
+
+**Examples:**
+```python
+# Text
+messages=[{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}]
+
+# Image
+messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}]}]
+
+# Audio
+messages=[{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}]}]
+
+# Video
+messages=[{"role": "user", "content": [{"type": "video_url", "video_url": {"url": "https://example.com/video.mp4"}}]}]
+
+# File
+messages=[{"role": "user", "content": [{"type": "file", "file": {"file_id": "https://example.com/doc.pdf"}}]}]
+
+# Document
+messages=[{"role": "user", "content": [{"type": "document", "source": {"type": "text", "media_type": "application/pdf", "data": "<base64>"}}]}]
+
+# Combining multiple types (multimodal)
+messages=[{"role": "user", "content": [
+    {"type": "text", "text": "Generate a product description based on this image"},
+    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+]}]
+```
 
 ## Optional Fields
 

@@ -2335,6 +2335,7 @@
         "audio_speech": false,
         "moderations": false,
         "batches": false,
+        "files": true,
         "rerank": false,
         "a2a": true,
         "interactions": true

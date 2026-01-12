@@ -95,8 +95,17 @@ class PangeaHandler(CustomGuardrail):
         self.pangea_input_recipe = pangea_input_recipe
         self.pangea_output_recipe = pangea_output_recipe
 
+        supported_event_hooks = [
+            GuardrailEventHooks.pre_call,
+            GuardrailEventHooks.post_call,
+        ]
+
         # Pass relevant kwargs to the parent class
-        super().__init__(guardrail_name=guardrail_name, **kwargs)
+        super().__init__(
+            guardrail_name=guardrail_name,
+            supported_event_hooks=supported_event_hooks,
+            **kwargs
+        )
         verbose_proxy_logger.debug(
             f"Initialized Pangea Guardrail: name={guardrail_name}, recipe={pangea_input_recipe}, api_base={self.api_base}"
         )
