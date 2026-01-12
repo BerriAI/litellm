@@ -1120,12 +1120,13 @@ async def test_google_generate_content_with_openai():
         
         # Print the response for verification
         print(f"Response: {response}")
-        ######################################################### 
+        #########################################################
         # validate only expected fields were sent to litellm.completion
         passed_fields = set(call_kwargs.keys())
         # remove any GenericLiteLLMParams fields
         passed_fields = passed_fields - set(GenericLiteLLMParams.model_fields.keys())
-        assert passed_fields == set(["model", "messages"]), f"Expected only model and messages to be passed through, got {passed_fields}"
+        # extra_headers is now explicitly passed through for providers that need custom headers
+        assert passed_fields == set(["model", "messages", "extra_headers"]), f"Expected model, messages, and extra_headers to be passed through, got {passed_fields}"
 @pytest.mark.asyncio
 async def test_agenerate_content_x_goog_api_key_header():
     """

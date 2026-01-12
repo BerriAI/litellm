@@ -62,6 +62,7 @@ from litellm.utils import (
     ModelResponse,
     Usage,
     add_dummy_tool,
+    any_assistant_message_has_thinking_blocks,
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
@@ -1013,10 +1014,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        #
+        # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
+        # If any message has thinking_blocks, we must keep thinking enabled, otherwise
+        # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
+        # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
             optional_params.get("thinking") is not None
             and messages is not None
             and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+            and not any_assistant_message_has_thinking_blocks(messages)
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)
@@ -1159,6 +1166,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 pass
             ## WEB SEARCH TOOL RESULT - preserve web search results for multi-turn conversations
             elif content["type"] == "web_search_tool_result":
+                if web_search_results is None:
+                    web_search_results = []
+                web_search_results.append(content)
+            ## WEB FETCH TOOL RESULT - preserve web fetch results for multi-turn conversations
+            ## Fixes: https://github.com/BerriAI/litellm/issues/18137
+            elif content["type"] == "web_fetch_tool_result":
                 if web_search_results is None:
                     web_search_results = []
                 web_search_results.append(content)

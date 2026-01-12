@@ -213,7 +213,7 @@ def completion(
             response = httpx_client.get(url=prediction_url, headers=headers)
             if (
                 response.status_code == 200
-                and response.json().get("status") == "processing"
+                and response.json().get("status") in ["processing", "starting"]
             ):
                 continue
             return litellm.ReplicateConfig().transform_response(
@@ -284,7 +284,7 @@ async def async_completion(
         response = await async_handler.get(url=prediction_url, headers=headers)
         if (
             response.status_code == 200
-            and response.json().get("status") == "processing"
+            and response.json().get("status") in ["processing", "starting"]
         ):
             continue
         return litellm.ReplicateConfig().transform_response(

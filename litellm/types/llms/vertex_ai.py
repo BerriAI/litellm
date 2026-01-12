@@ -260,6 +260,7 @@ class UsageMetadata(TypedDict, total=False):
     responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
     candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
