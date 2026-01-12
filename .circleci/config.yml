@@ -1465,7 +1465,7 @@ jobs:
       - run:
           name: Run core tests
           command: |
-            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+            python -m pytest tests/test_litellm --ignore=tests/test_litellm/proxy --ignore=tests/test_litellm/llms --ignore=tests/test_litellm/integrations --ignore=tests/test_litellm/litellm_core_utils --cov=litellm --cov-report=xml --junitxml=test-results/junit-core.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1479,6 +1479,60 @@ jobs:
           paths:
             - litellm_core_tests_coverage.xml
             - litellm_core_tests_coverage
+  litellm_mapped_tests_litellm_core_utils:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: xlarge
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Run litellm_core_utils tests
+          command: |
+            python -m pytest tests/test_litellm/litellm_core_utils --cov=litellm --cov-report=xml --junitxml=test-results/junit-litellm-core-utils.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_core_utils_tests_coverage.xml
+            mv .coverage litellm_core_utils_tests_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_core_utils_tests_coverage.xml
+            - litellm_core_utils_tests_coverage
+  litellm_mapped_tests_integrations:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: xlarge
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Run integrations tests
+          command: |
+            python -m pytest tests/test_litellm/integrations --cov=litellm --cov-report=xml --junitxml=test-results/junit-integrations.xml --durations=10 -n 16 --maxfail=5 --timeout=300 -vv --log-cli-level=WARNING
+          no_output_timeout: 120m
+      - run:
+          name: Rename the coverage files
+          command: |
+            mv coverage.xml litellm_integrations_tests_coverage.xml
+            mv .coverage litellm_integrations_tests_coverage
+      - store_test_results:
+          path: test-results
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm_integrations_tests_coverage.xml
+            - litellm_integrations_tests_coverage
   litellm_mapped_enterprise_tests:
     docker:
       - image: cimg/python:3.11
@@ -1960,6 +2014,7 @@ jobs:
       - run: ruff check ./litellm
       # - run: python ./tests/documentation_tests/test_general_setting_keys.py
       - run: python ./tests/code_coverage_tests/check_licenses.py
+      - run: python ./tests/code_coverage_tests/check_provider_folders_documented.py
       - run: python ./tests/code_coverage_tests/router_code_coverage.py
       - run: python ./tests/code_coverage_tests/test_chat_completion_imports.py
       - run: python ./tests/code_coverage_tests/info_log_check.py
@@ -1980,7 +2035,41 @@ jobs:
       - run: python ./tests/code_coverage_tests/check_unsafe_enterprise_import.py
       - run: python ./tests/code_coverage_tests/ban_copy_deepcopy_kwargs.py
       - run: python ./tests/code_coverage_tests/check_fastuuid_usage.py
+      - run: python ./tests/code_coverage_tests/memory_test.py
       - run: helm lint ./deploy/charts/litellm-helm
+
+  memory_leak_tests:
+    docker:
+      - image: cimg/python:3.11
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
+    working_directory: ~/project
+    resource_class: large
+    steps:
+      - setup_litellm_test_deps
+      - run:
+          name: Install Memory Test Dependencies
+          command: |
+            pip install "psutil>=5.9.0"
+            pip install "fastapi>=0.100.0"
+            pip install "httpx>=0.24.0"
+            pip install "uvicorn>=0.23.0"
+      - run:
+          name: Run Linear Memory Growth Tests
+          command: |
+            echo "Running memory leak tests individually to avoid baseline drift..."
+            echo "Running test_memory_baseline_1k..."
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v -s --tb=short
+            echo "Running test_memory_baseline_2k..."
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_2k -v -s --tb=short
+            echo "Running test_memory_baseline_4k..."
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_4k -v -s --tb=short
+            echo "Running test_memory_baseline_10k..."
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_10k -v -s --tb=short
+            echo "Running test_memory_baseline_30k..."
+            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_30k -v -s --tb=short
+          no_output_timeout: 60m
 
   db_migration_disable_update_check:
     machine:
@@ -2008,10 +2097,13 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install aiohttp
             pip install apscheduler
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Build Docker image
+          name: Load Docker Database Image
           command: |
-            docker build -t myapp . -f ./docker/Dockerfile.database
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           command: |
@@ -2024,7 +2116,7 @@ jobs:
               -v $(pwd)/litellm/proxy/example_config_yaml/bad_schema.prisma:/app/litellm/proxy/schema.prisma \
               -v $(pwd)/litellm/proxy/example_config_yaml/disable_schema_update.yaml:/app/config.yaml \
               --name my-app \
-              myapp:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000
       - run:
@@ -2043,10 +2135,11 @@ jobs:
           name: Check container logs for expected message
           command: |
             echo "=== Printing Full Container Startup Logs ==="
-            docker logs my-app
+            LOG_OUTPUT="$(docker logs my-app 2>&1)"
+            printf '%s\n' "$LOG_OUTPUT"
             echo "=== End of Full Container Startup Logs ==="
 
-            if docker logs my-app 2>&1 | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
+            if printf '%s\n' "$LOG_OUTPUT" | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
               echo "Expected message found in logs. Test passed."
             else
               echo "Expected message not found in logs. Test failed."
@@ -2276,9 +2369,13 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           command: |
@@ -2313,7 +2410,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/oai_misc_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2416,9 +2513,13 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2451,7 +2552,7 @@ jobs:
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/otel_test_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_guardrail.py:/app/custom_guardrail.py \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2502,7 +2603,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app-3 \
               -v $(pwd)/litellm/proxy/example_config_yaml/enterprise_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug
@@ -2577,9 +2678,13 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2603,7 +2708,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/spend_tracking_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2690,9 +2795,13 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container 1
           # intentionally give bad redis credentials here
@@ -2712,7 +2821,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -2733,7 +2842,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app-2 \
               -v $(pwd)/litellm/proxy/example_config_yaml/multi_instance_simple_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4001 \
               --detailed_debug
@@ -2826,9 +2935,13 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           # intentionally give bad redis credentials here
@@ -2843,7 +2956,7 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/store_model_db_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -3058,10 +3171,13 @@ jobs:
       - run:
           name: Wait for PostgreSQL to be ready
           command: dockerize -wait tcp://localhost:5432 -timeout 1m
-      # Run pytest and generate JUnit XML report
+      - attach_workspace:
+          at: ~/project
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Run Docker container
           command: |
@@ -3083,7 +3199,7 @@ jobs:
               --name my-app \
               -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
               -v $(pwd)/litellm/proxy/example_config_yaml/custom_auth_basic.py:/app/custom_auth_basic.py \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug \
@@ -3421,6 +3537,37 @@ jobs:
               --coverage.reporter=html \
               --coverage.reportsDirectory=coverage/html
 
+  build_docker_database_image:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+
+      - run:
+          name: Upgrade Docker
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            docker version
+
+      - run:
+          name: Build Docker image
+          command: |
+            docker build \
+              -t litellm-docker-database:ci \
+              -f docker/Dockerfile.database .
+
+      - run:
+          name: Save Docker image to workspace root
+          command: |
+            docker save litellm-docker-database:ci | gzip > litellm-docker-database.tar.gz
+
+      - persist_to_workspace:
+          root: .
+          paths:
+            - litellm-docker-database.tar.gz
+
   e2e_ui_testing:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3432,68 +3579,54 @@ jobs:
       - attach_workspace:
           at: ~/project
       - run:
-          name: Upgrade Docker to v24.x (API 1.44+)
+          name: Load Docker Database Image
           command: |
-            curl -fsSL https://get.docker.com | sh
-            sudo usermod -aG docker $USER
-            docker version
-      - run:
-          name: Install Python 3.9
-          command: |
-            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
-            bash miniconda.sh -b -p $HOME/miniconda
-            export PATH="$HOME/miniconda/bin:$PATH"
-            conda init bash
-            source ~/.bashrc
-            conda create -n myenv python=3.9 -y
-            conda activate myenv
-            python --version
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
       - run:
           name: Install Dependencies
           command: |
             npm install -D @playwright/test
-            npm install @google-cloud/vertexai
-            pip install "pytest==7.3.1"
-            pip install "pytest-retry==1.6.3"
-            pip install "pytest-asyncio==0.21.1"
-            pip install aiohttp
-            pip install "openai==1.100.1"
-            python -m pip install --upgrade pip
-            pip install "pydantic==2.10.2"
-            pip install "pytest==7.3.1"
-            pip install "pytest-mock==3.12.0"
-            pip install "pytest-asyncio==0.21.1"
-            pip install "mypy==1.18.2"
-            pip install pyarrow
-            pip install numpydoc
-            pip install prisma
-            pip install fastapi
-            pip install jsonschema
-            pip install "httpx==0.24.1"
-            pip install "anyio==3.7.1"
-            pip install "asyncio==3.4.3"
       - run:
           name: Install Playwright Browsers
           command: |
             npx playwright install
-
       - run:
-          name: Build Docker image
-          command: docker build -t my-app:latest -f ./docker/Dockerfile.database .
+          name: Install Neon CLI
+          command: |
+            npm i -g neonctl
+      - run:
+          name: Create Neon branch
+          command: |
+            export EXPIRES_AT=$(date -u -d "+3 hours" +"%Y-%m-%dT%H:%M:%SZ")
+            echo "Expires at: $EXPIRES_AT"
+            neon branches create \
+              --project-id $NEON_PROJECT_ID \
+              --name preview/commit-${CIRCLE_SHA1:0:7} \
+              --expires-at $EXPIRES_AT \
+              --parent br-fancy-paper-ad1olsb3 \
+              --api-key $NEON_API_KEY || true
       - run:
           name: Run Docker container
           command: |
+            E2E_UI_TEST_DATABASE_URL=$(neon connection-string \
+              --project-id $NEON_PROJECT_ID \
+              --api-key $NEON_API_KEY \
+              --branch preview/commit-${CIRCLE_SHA1:0:7} \
+              --database-name yuneng-trial-db \
+              --role neondb_owner)
+            echo $E2E_UI_TEST_DATABASE_URL
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$SMALL_DATABASE_URL \
+              -e DATABASE_URL=$E2E_UI_TEST_DATABASE_URL \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e UI_USERNAME="admin" \
               -e UI_PASSWORD="gm" \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              --name my-app \
+              --name litellm-docker-database \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
-              my-app:latest \
+              litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
               --detailed_debug
@@ -3507,7 +3640,7 @@ jobs:
             sudo rm dockerize-linux-amd64-v0.6.1.tar.gz
       - run:
           name: Start outputting logs
-          command: docker logs -f my-app
+          command: docker logs -f litellm-docker-database
           background: true
       - run:
           name: Wait for app to be ready
@@ -3515,7 +3648,10 @@ jobs:
       - run:
           name: Run Playwright Tests
           command: |
-            npx playwright test e2e_ui_tests/ --reporter=html --output=test-results
+            npx playwright test \
+              --config ui/litellm-dashboard/e2e_tests/playwright.config.ts \
+              --reporter=html \
+              --output=test-results
           no_output_timeout: 120m
       - store_artifacts:
           path: test-results
@@ -3685,6 +3821,12 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - memory_leak_tests:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - ui_build:
           filters:
             branches:
@@ -3705,9 +3847,17 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - build_docker_database_image:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - e2e_ui_testing:
+          context: e2e_ui_tests
           requires:
             - ui_build
+            - build_docker_database_image
           filters:
             branches:
               only:
@@ -3720,30 +3870,40 @@ workflows:
                 - main
                 - /litellm_.*/
       - e2e_openai_endpoints:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_logging_guardrails_model_info_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_spend_accuracy_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_multi_instance_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
                 - main
                 - /litellm_.*/
       - proxy_store_model_in_db_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
@@ -3756,6 +3916,8 @@ workflows:
                 - main
                 - /litellm_.*/
       - proxy_pass_through_endpoint_tests:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
@@ -3827,6 +3989,18 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - litellm_mapped_tests_integrations:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - litellm_mapped_tests_litellm_core_utils:
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - batches_testing:
           filters:
             branches:
@@ -3875,6 +4049,8 @@ workflows:
             - litellm_mapped_tests_proxy
             - litellm_mapped_tests_llms
             - litellm_mapped_tests_core
+            - litellm_mapped_tests_integrations
+            - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing
@@ -3894,6 +4070,8 @@ workflows:
             - litellm_assistants_api_testing
             - auth_ui_unit_tests
       - db_migration_disable_update_check:
+          requires:
+            - build_docker_database_image
           filters:
             branches:
               only:
@@ -3944,6 +4122,8 @@ workflows:
             - litellm_mapped_tests_proxy
             - litellm_mapped_tests_llms
             - litellm_mapped_tests_core
+            - litellm_mapped_tests_integrations
+            - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
             - batches_testing
             - litellm_utils_testing

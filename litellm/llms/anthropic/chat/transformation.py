@@ -54,11 +54,15 @@ from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
 )
 from litellm.types.utils import Message as LitellmMessage
-from litellm.types.utils import PromptTokensDetailsWrapper, ServerToolUse
+from litellm.types.utils import (
+    PromptTokensDetailsWrapper,
+    ServerToolUse,
+)
 from litellm.utils import (
     ModelResponse,
     Usage,
     add_dummy_tool,
+    any_assistant_message_has_thinking_blocks,
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
@@ -204,9 +208,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
 
     def get_cache_control_headers(self) -> dict:
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         return {
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "prompt-caching-2024-07-31",
         }
 
     def _map_tool_choice(
@@ -1008,10 +1014,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         # Drop thinking param if thinking is enabled but thinking_blocks are missing
         # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        #
+        # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
+        # If any message has thinking_blocks, we must keep thinking enabled, otherwise
+        # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
+        # Related issue: https://github.com/BerriAI/litellm/issues/18926
         if (
             optional_params.get("thinking") is not None
             and messages is not None
             and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+            and not any_assistant_message_has_thinking_blocks(messages)
         ):
             if litellm.modify_params:
                 optional_params.pop("thinking", None)
@@ -1034,7 +1046,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             anthropic_messages = anthropic_messages_pt(
                 model=model,
                 messages=messages,
-                llm_provider="anthropic",
+                llm_provider=self.custom_llm_provider or "anthropic",
             )
         except Exception as e:
             raise AnthropicError(
@@ -1157,6 +1169,12 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 if web_search_results is None:
                     web_search_results = []
                 web_search_results.append(content)
+            ## WEB FETCH TOOL RESULT - preserve web fetch results for multi-turn conversations
+            ## Fixes: https://github.com/BerriAI/litellm/issues/18137
+            elif content["type"] == "web_fetch_tool_result":
+                if web_search_results is None:
+                    web_search_results = []
+                web_search_results.append(content)
             elif content.get("thinking", None) is not None:
                 if thinking_blocks is None:
                     thinking_blocks = []
@@ -1260,14 +1278,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             cache_creation_tokens=cache_creation_input_tokens,
             cache_creation_token_details=cache_creation_token_details,
         )
-        completion_token_details = (
-            CompletionTokensDetailsWrapper(
-                reasoning_tokens=token_counter(
-                    text=reasoning_content, count_response_tokens=True
-                )
-            )
+        # Always populate completion_token_details, not just when there's reasoning_content
+        reasoning_tokens = (
+            token_counter(text=reasoning_content, count_response_tokens=True)
             if reasoning_content
-            else None
+            else 0
+        )
+        completion_token_details = CompletionTokensDetailsWrapper(
+            reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else None,
+            text_tokens=completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens,
         )
         total_tokens = prompt_tokens + completion_tokens
 

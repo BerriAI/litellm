@@ -278,6 +278,7 @@ MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB = int(
 DEFAULT_MAX_TOKENS_FOR_TRITON = int(os.getenv("DEFAULT_MAX_TOKENS_FOR_TRITON", 2000))
 #### Networking settings ####
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", 6000))  # time in seconds
+DEFAULT_A2A_AGENT_TIMEOUT: float = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
 STREAM_SSE_DONE_STRING: str = "[DONE]"
 STREAM_SSE_DATA_PREFIX: str = "data: "
 ### SPEND TRACKING ###
@@ -375,6 +376,7 @@ LITELLM_CHAT_PROVIDERS = [
     "perplexity",
     "mistral",
     "groq",
+    "gigachat",
     "nvidia_nim",
     "cerebras",
     "baseten",
@@ -907,6 +909,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "twelvelabs",
     "openai",
     "stability",
+    "moonshot",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -1200,6 +1203,8 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES = [
     "public_agent_groups",
     "public_model_groups",
     "public_model_groups_links",
+    "cost_discount_config",
+    "cost_margin_config",
 ]
 SPECIAL_LITELLM_AUTH_TOKEN = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(

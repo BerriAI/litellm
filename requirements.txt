@@ -15,12 +15,12 @@ redis==5.2.1 # redis caching
 prisma==0.11.0 # for db
 nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
-pynacl==1.5.0 # for encrypting keys
+pynacl==1.6.2 # for encrypting keys
 google-cloud-aiplatform==1.47.0 # for vertex ai calls
 google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
 google-genai==1.22.0
 anthropic[vertex]==0.54.0
-mcp==1.23.0 ; python_version >= "3.10"    # for MCP server
+mcp==1.25.0 ; python_version >= "3.10"    # for MCP server
 google-generativeai==0.5.0 # for vertex ai calls
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
@@ -41,13 +41,13 @@ opentelemetry-api==1.25.0
 opentelemetry-sdk==1.25.0
 opentelemetry-exporter-otlp==1.25.0
 # grpcio: 1.68.0-1.68.1 has reconnect bug (#38290), 1.75+ has Python 3.14 wheels + fix
-grpcio>=1.62.3,<1.68.0; python_version < "3.14"
+grpcio>=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0; python_version < "3.14"
 grpcio>=1.75.0; python_version >= "3.14"
 sentry_sdk==2.21.0 # for sentry error handling
 detect-secrets==1.5.0 # Enterprise - secret detection / masking in LLM requests
 cryptography==44.0.1
 tzdata==2025.1 # IANA time zone database
-litellm-proxy-extras==0.4.16 # for proxy extras - e.g. prisma migrations
+litellm-proxy-extras==0.4.21 # for proxy extras - e.g. prisma migrations
 llm-sandbox==0.3.31 # for skill execution in sandbox
 ### LITELLM PACKAGE DEPENDENCIES
 python-dotenv==1.0.1 # for env
@@ -57,7 +57,7 @@ tokenizers==0.20.2 # for calculating usage
 click==8.1.7 # for proxy cli
 rich==13.7.1 # for litellm proxy cli
 jinja2==3.1.6 # for prompt templates
-aiohttp==3.12.14 # for network calls
+aiohttp==3.13.3 # for network calls
 aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic>=2.11,<3 # proxy + openai req. + mcp

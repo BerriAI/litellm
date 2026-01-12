@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 warnings.filterwarnings(
     "ignore", message=".*Accessing the.*attribute on the instance is deprecated.*"
 )
-### INIT VARIABLES #######################
+### INIT VARIABLES ########################
 import threading
 import os
 from typing import (
@@ -26,7 +26,6 @@ from typing import (
     overload,
     Type,
 )
-from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
 from litellm.types.integrations.datadog import DatadogInitParams
 from litellm._logging import (
     set_verbose,
@@ -74,39 +73,24 @@ from litellm.constants import (
     DEFAULT_SOFT_BUDGET,
     DEFAULT_ALLOWED_FAILS,
 )
-from litellm.types.secret_managers.main import (
-    KeyManagementSystem,
-    KeyManagementSettings,
-)
-from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
-    LiteLLM_UpperboundKeyGenerateParams,
-)
-from litellm.types.utils import LlmProviders
-from litellm.types.utils import PriorityReservationSettings
-from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 import httpx
 import dotenv
-from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+# register_async_client_cleanup is lazy-loaded and called on first access
 
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
-
-# Register async client cleanup to prevent resource leaks
-register_async_client_cleanup()
 ####################################################
 if set_verbose:
     _turn_on_debug()
 ####################################################
 ### Callbacks /Logging / Success / Failure Handlers #####
-CALLBACK_TYPES = Union[str, Callable, CustomLogger]
+CALLBACK_TYPES = Union[str, Callable, "CustomLogger"]  # CustomLogger is lazy-loaded
 input_callback: List[CALLBACK_TYPES] = []
 success_callback: List[CALLBACK_TYPES] = []
 failure_callback: List[CALLBACK_TYPES] = []
 service_callback: List[CALLBACK_TYPES] = []
-logging_callback_manager = LoggingCallbackManager()
+# logging_callback_manager is lazy-loaded via __getattr__
 _custom_logger_compatible_callbacks_literal = Literal[
     "lago",
     "openmeter",
@@ -150,7 +134,9 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "bitbucket",
     "gitlab",
     "cloudzero",
+    "focus",
     "posthog",
+    "levo",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None
@@ -158,7 +144,7 @@ _known_custom_logger_compatible_callbacks: List = list(
     get_args(_custom_logger_compatible_callbacks_literal)
 )
 callbacks: List[
-    Union[Callable, _custom_logger_compatible_callbacks_literal, CustomLogger]
+    Union[Callable, _custom_logger_compatible_callbacks_literal, "CustomLogger"]  # CustomLogger is lazy-loaded
 ] = []
 callback_settings: Dict[str, Dict[str, Any]] = {}
 initialized_langfuse_clients: int = 0
@@ -175,13 +161,13 @@ generic_api_use_v1: Optional[bool] = (
     False  # if you want to use v1 generic api logged payload
 )
 argilla_transformation_object: Optional[Dict[str, Any]] = None
-_async_input_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_input_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_success_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_success_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
-_async_failure_callback: List[Union[str, Callable, CustomLogger]] = (
+_async_failure_callback: List[Union[str, Callable, "CustomLogger"]] = (  # CustomLogger is lazy-loaded
     []
 )  # internal variable - async custom callbacks are routed here.
 pre_call_rules: List[Callable] = []
@@ -212,6 +198,7 @@ retry = True
 api_key: Optional[str] = None
 openai_key: Optional[str] = None
 groq_key: Optional[str] = None
+gigachat_key: Optional[str] = None
 databricks_key: Optional[str] = None
 openai_like_key: Optional[str] = None
 azure_key: Optional[str] = None
@@ -290,6 +277,7 @@ banned_keywords_list: Optional[Union[str, List]] = None
 llm_guard_mode: Literal["all", "key-specific", "request-specific"] = "all"
 guardrail_name_config_map: Dict[str, GuardrailItem] = {}
 include_cost_in_streaming_usage: bool = False
+reasoning_auto_summary: bool = False
 ### PROMPTS ####
 from litellm.types.prompts.init_prompts import PromptSpec
 
@@ -388,9 +376,7 @@ public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 priority_reservation: Optional[
     Dict[str, Union[float, "PriorityReservationDict"]]
 ] = None
-priority_reservation_settings: "PriorityReservationSettings" = (
-    PriorityReservationSettings()
-)
+# priority_reservation_settings is lazy-loaded via __getattr__
 
 
 ######## Networking Settings ########
@@ -423,8 +409,11 @@ secret_manager_client: Optional[Any] = (
     None  # list of instantiated key management clients - e.g. azure kv, infisical, etc.
 )
 _google_kms_resource_name: Optional[str] = None
-_key_management_system: Optional[KeyManagementSystem] = None
-_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+_key_management_system: Optional["KeyManagementSystem"] = None
+# Note: KeyManagementSettings must be eagerly imported because _key_management_settings
+# is accessed during import time in secret_managers/main.py
+# We'll import it after the lazy import system is set up
+# We can't define it here because KeyManagementSettings is lazy-loaded
 #### PII MASKING ####
 output_parse_pii: bool = False
 #############################################
@@ -434,6 +423,13 @@ model_cost = get_model_cost_map(url=model_cost_map_url)
 cost_discount_config: Dict[str, float] = (
     {}
 )  # Provider-specific cost discounts {"vertex_ai": 0.05} = 5% discount
+cost_margin_config: Dict[str, Union[float, Dict[str, float]]] = (
+    {}
+)  # Provider-specific or global cost margins. Examples:
+# Percentage: {"openai": 0.10} = 10% margin
+# Fixed: {"openai": {"fixed_amount": 0.001}} = $0.001 per request
+# Global: {"global": 0.05} = 5% global margin on all providers
+# Combined: {"vertex_ai": {"percentage": 0.08, "fixed_amount": 0.0005}}
 custom_prompt_dict: Dict[str, dict] = {}
 check_provider_endpoint = False
 
@@ -491,6 +487,7 @@ vertex_mistral_models: Set = set()
 vertex_openai_models: Set = set()
 vertex_minimax_models: Set = set()
 vertex_moonshot_models: Set = set()
+vertex_zai_models: Set = set()
 ai21_models: Set = set()
 ai21_chat_models: Set = set()
 nlp_cloud_models: Set = set()
@@ -560,6 +557,10 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+minimax_models: Set = set()
+aws_polly_models: Set = set()
+gigachat_models: Set = set()
+llamagate_models: Set = set()
 
 
 def is_bedrock_pricing_only_model(key: str) -> bool:
@@ -665,6 +666,9 @@ def add_known_models():
         elif value.get("litellm_provider") == "vertex_ai-moonshot_models":
             key = key.replace("vertex_ai/", "")
             vertex_moonshot_models.add(key)
+        elif value.get("litellm_provider") == "vertex_ai-zai_models":
+            key = key.replace("vertex_ai/", "")
+            vertex_zai_models.add(key)
         elif value.get("litellm_provider") == "ai21":
             if value.get("mode") == "chat":
                 ai21_chat_models.add(key)
@@ -808,6 +812,14 @@ def add_known_models():
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "minimax":
+            minimax_models.add(key)
+        elif value.get("litellm_provider") == "aws_polly":
+            aws_polly_models.add(key)
+        elif value.get("litellm_provider") == "gigachat":
+            gigachat_models.add(key)
+        elif value.get("litellm_provider") == "llamagate":
+            llamagate_models.add(key)
 
 
 add_known_models()
@@ -920,7 +932,7 @@ model_list = list(
 
 model_list_set = set(model_list)
 
-provider_list: List[Union[LlmProviders, str]] = list(LlmProviders)
+# provider_list is lazy-loaded via __getattr__ to avoid importing LlmProviders at import time
 
 
 models_by_provider: dict = {
@@ -943,7 +955,8 @@ models_by_provider: dict = {
     | vertex_language_models
     | vertex_deepseek_models
     | vertex_minimax_models
-    | vertex_moonshot_models,
+    | vertex_moonshot_models
+    | vertex_zai_models,
     "ai21": ai21_models,
     "bedrock": bedrock_models | bedrock_converse_models,
     "petals": petals_models,
@@ -1012,6 +1025,10 @@ models_by_provider: dict = {
     "amazon_nova": amazon_nova_models,
     "stability": stability_models,
     "github_copilot": github_copilot_models,
+    "minimax": minimax_models,
+    "aws_polly": aws_polly_models,
+    "gigachat": gigachat_models,
+    "llamagate": llamagate_models,
 }
 
 # mapping for those models which have larger equivalents
@@ -1055,9 +1072,15 @@ openai_image_generation_models = ["dall-e-2", "dall-e-3"]
 ####### VIDEO GENERATION MODELS ###################
 openai_video_generation_models = ["sora-2"]
 
-from .timeout import timeout
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-from litellm.litellm_core_utils.core_helpers import remove_index_from_tool_calls
+# timeout is lazy-loaded via __getattr__
+# get_llm_provider is lazy-loaded via __getattr__
+# remove_index_from_tool_calls is lazy-loaded via __getattr__
+
+# Import KeyManagementSettings here (before utils import) because _key_management_settings
+# is accessed during import time in secret_managers/main.py (via dd_tracing -> datadog -> _service_logger -> utils)
+from litellm.types.secret_managers.main import KeyManagementSettings
+_key_management_settings: KeyManagementSettings = KeyManagementSettings()
+
 # client must be imported immediately as it's used as a decorator at function definition time
 from .utils import client
 # Note: Most other utils imports are lazy-loaded via __getattr__ to avoid loading utils.py
@@ -1066,32 +1089,11 @@ from .utils import client
 from .llms.custom_llm import CustomLLM
 from .llms.anthropic.common_utils import AnthropicModelInfo
 from .llms.ai21.chat.transformation import AI21ChatConfig, AI21ChatConfig as AI21Config
-from .llms.meta_llama.chat.transformation import LlamaAPIConfig
-from .llms.anthropic.experimental_pass_through.messages.transformation import (
-    AnthropicMessagesConfig,
-)
-from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeMessagesConfig,
-)
-from .llms.together_ai.chat import TogetherAIConfig
-from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig
-from .llms.cloudflare.chat.transformation import CloudflareChatConfig
-from .llms.novita.chat.transformation import NovitaConfig
 from .llms.deprecated_providers.palm import (
     PalmConfig,
 )  # here to prevent breaking changes
-from .llms.nlp_cloud.chat.handler import NLPCloudConfig
-from .llms.petals.completion.transformation import PetalsConfig
 from .llms.deprecated_providers.aleph_alpha import AlephAlphaConfig
-from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexGeminiConfig,
-    VertexGeminiConfig as VertexAIConfig,
-)
 from .llms.gemini.common_utils import GeminiModelInfo
-from .llms.gemini.chat.transformation import (
-    GoogleAIStudioGeminiConfig,
-    GoogleAIStudioGeminiConfig as GeminiConfig,  # aliased to maintain backwards compatibility
-)
 
 
 from .llms.vertex_ai.vertex_embeddings.transformation import (
@@ -1100,227 +1102,21 @@ from .llms.vertex_ai.vertex_embeddings.transformation import (
 
 vertexAITextEmbeddingConfig = VertexAITextEmbeddingConfig()
 
-from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import (
-    VertexAIAnthropicConfig,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import (
-    VertexAILlama3Config,
-)
-from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import (
-    VertexAIAi21Config,
-)
-from .llms.ollama.chat.transformation import OllamaChatConfig
-from .llms.ollama.completion.transformation import OllamaConfig
-from .llms.sagemaker.completion.transformation import SagemakerConfig
-from .llms.sagemaker.chat.transformation import SagemakerChatConfig
-from .llms.bedrock.chat.invoke_handler import (
-    AmazonCohereChatConfig,
-    bedrock_tool_name_mappings,
-)
 
-from .llms.bedrock.common_utils import (
-    AmazonBedrockGlobalConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import (
-    AmazonAI21Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import (
-    AmazonInvokeNovaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_qwen2_transformation import (
-    AmazonQwen2Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import (
-    AmazonQwen3Config,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import (
-    AmazonAnthropicConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
-    AmazonAnthropicClaudeConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import (
-    AmazonCohereConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import (
-    AmazonLlamaConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import (
-    AmazonDeepSeekR1Config,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import (
-    AmazonMistralConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import (
-    AmazonTitanConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import (
-    AmazonTwelveLabsPegasusConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
-    AmazonInvokeConfig,
-)
-from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
-    AmazonBedrockOpenAIConfig,
-)
-
-from .llms.bedrock.image_generation.amazon_stability1_transformation import AmazonStabilityConfig
-from .llms.bedrock.image_generation.amazon_stability3_transformation import AmazonStability3Config
-from .llms.bedrock.image_generation.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig
-from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config
-from .llms.bedrock.embed.amazon_titan_multimodal_transformation import (
-    AmazonTitanMultimodalEmbeddingG1Config,
-)
 from .llms.bedrock.embed.amazon_titan_v2_transformation import (
     AmazonTitanV2Config,
 )
-from .llms.cohere.chat.transformation import CohereChatConfig
-from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig
-from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig
-from .llms.bedrock.embed.twelvelabs_marengo_transformation import (
-    TwelveLabsMarengoEmbeddingConfig,
-)
-from .llms.bedrock.embed.amazon_nova_transformation import (
-    AmazonNovaEmbeddingConfig,
-)
-from .llms.openai.openai import OpenAIConfig, MistralEmbeddingConfig
-from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig
-from .llms.deepinfra.chat.transformation import DeepInfraConfig
-from .llms.deepgram.audio_transcription.transformation import (
-    DeepgramAudioTranscriptionConfig,
-)
 from .llms.topaz.common_utils import TopazModelInfo
-from .llms.topaz.image_variations.transformation import TopazImageVariationConfig
-from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig
-from .llms.groq.chat.transformation import GroqChatConfig
-from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig
-from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig
-from .llms.voyage.embedding.transformation_contextual import (
-    VoyageContextualEmbeddingConfig,
-)
-from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig
-from .llms.azure_ai.chat.transformation import AzureAIStudioConfig
-from .llms.mistral.chat.transformation import MistralConfig
-from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig
-from .llms.azure.responses.o_series_transformation import (
-    AzureOpenAIOSeriesResponsesAPIConfig,
-)
-from .llms.xai.responses.transformation import XAIResponsesAPIConfig
-from .llms.litellm_proxy.responses.transformation import (
-    LiteLLMProxyResponsesAPIConfig,
-)
-from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
-from .llms.openai.chat.o_series_transformation import (
-    OpenAIOSeriesConfig as OpenAIO1Config,  # maintain backwards compatibility
-    OpenAIOSeriesConfig,
-)
-from .llms.anthropic.skills.transformation import AnthropicSkillsConfig
-from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 
-from .llms.gradient_ai.chat.transformation import GradientAIConfig
-
-openaiOSeriesConfig = OpenAIOSeriesConfig()
-from .llms.openai.chat.gpt_transformation import (
-    OpenAIGPTConfig,
-)
-from .llms.openai.chat.gpt_5_transformation import (
-    OpenAIGPT5Config,
-)
-from .llms.openai.transcriptions.whisper_transformation import (
-    OpenAIWhisperAudioTranscriptionConfig,
-)
-from .llms.openai.transcriptions.gpt_transformation import (
-    OpenAIGPTAudioTranscriptionConfig,
-)
-
-openAIGPTConfig = OpenAIGPTConfig()
-from .llms.openai.chat.gpt_audio_transformation import (
-    OpenAIGPTAudioConfig,
-)
-
-openAIGPTAudioConfig = OpenAIGPTAudioConfig()
-openAIGPT5Config = OpenAIGPT5Config()
-
-from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig
-from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig
-
-nvidiaNimConfig = NvidiaNimConfig()
-nvidiaNimEmbeddingConfig = NvidiaNimEmbeddingConfig()
-
-from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig
-from .llms.cerebras.chat import CerebrasConfig
-from .llms.baseten.chat import BasetenConfig
-from .llms.sambanova.chat import SambanovaConfig
-from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig
-from .llms.fireworks_ai.chat.transformation import FireworksAIConfig
-from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig
-from .llms.fireworks_ai.audio_transcription.transformation import (
-    FireworksAIAudioTranscriptionConfig,
-)
-from .llms.fireworks_ai.embed.fireworks_ai_transformation import (
-    FireworksAIEmbeddingConfig,
-)
-from .llms.friendliai.chat.transformation import FriendliaiChatConfig
-from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
-from .llms.xai.chat.transformation import XAIChatConfig
+# OpenAIOSeriesConfig is lazy loaded - openaiOSeriesConfig will be created on first access
+# OpenAIGPTConfig, OpenAIGPT5Config, etc. are lazy loaded - instances will be created on first access
 from .llms.xai.common_utils import XAIModelInfo
-from .llms.zai.chat.transformation import ZAIChatConfig
-from .llms.aiml.chat.transformation import AIMLChatConfig
-from .llms.volcengine.chat.transformation import (
-    VolcEngineChatConfig as VolcEngineConfig,
-)
-from .llms.codestral.completion.transformation import CodestralTextCompletionConfig
-from .llms.azure.azure import (
-    AzureOpenAIError,
-    AzureOpenAIAssistantsAPIConfig,
-)
-from .llms.heroku.chat.transformation import HerokuChatConfig
-from .llms.cometapi.chat.transformation import CometAPIConfig
-from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig
-from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config
-from .llms.azure.completion.transformation import AzureOpenAITextConfig
-from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig
-from .llms.llamafile.chat.transformation import LlamafileChatConfig
-from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig
-from .llms.vllm.completion.transformation import VLLMConfig
-from .llms.deepseek.chat.transformation import DeepSeekChatConfig
-from .llms.lm_studio.chat.transformation import LMStudioChatConfig
-from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig
-from .llms.nscale.chat.transformation import NscaleConfig
-from .llms.perplexity.chat.transformation import PerplexityChatConfig
-from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config
-from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig
-from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig
-from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
-from .llms.sap.embed.transformation import GenAIHubEmbeddingConfig
-from .llms.watsonx.audio_transcription.transformation import (
-    IBMWatsonXAudioTranscriptionConfig,
-)
-from .llms.github_copilot.chat.transformation import GithubCopilotConfig
-from .llms.github_copilot.responses.transformation import (
-    GithubCopilotResponsesAPIConfig,
-)
-from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig
-from .llms.nebius.chat.transformation import NebiusConfig
-from .llms.wandb.chat.transformation import WandbConfig
-from .llms.dashscope.chat.transformation import DashScopeChatConfig
-from .llms.moonshot.chat.transformation import MoonshotChatConfig
 # PublicAI now uses JSON-based configuration (see litellm/llms/openai_like/providers.json)
-from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig
-from .llms.v0.chat.transformation import V0ChatConfig
-from .llms.oci.chat.transformation import OCIChatConfig
-from .llms.morph.chat.transformation import MorphChatConfig
-from .llms.ragflow.chat.transformation import RAGFlowConfig
-from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig
-from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig
-from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig
-from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig
-from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig
-from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig
-from .llms.lemonade.chat.transformation import LemonadeChatConfig
-from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig
-from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig
+# All remaining configs are now lazy loaded - see _lazy_imports_registry.py
+
+# Import LlmProviders here (before main import) because it's imported during import time
+# in multiple places including openai.py (via main import)
+from litellm.types.utils import LlmProviders
 
 ## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore
@@ -1517,6 +1313,171 @@ if TYPE_CHECKING:
     from .llms.voyage.rerank.transformation import VoyageRerankConfig as VoyageRerankConfig
     from .llms.clarifai.chat.transformation import ClarifaiConfig as ClarifaiConfig
     from .llms.ai21.chat.transformation import AI21ChatConfig as AI21ChatConfig
+    from .llms.meta_llama.chat.transformation import LlamaAPIConfig as LlamaAPIConfig
+    from .llms.together_ai.completion.transformation import TogetherAITextCompletionConfig as TogetherAITextCompletionConfig
+    from .llms.cloudflare.chat.transformation import CloudflareChatConfig as CloudflareChatConfig
+    from .llms.novita.chat.transformation import NovitaConfig as NovitaConfig
+    from .llms.petals.completion.transformation import PetalsConfig as PetalsConfig
+    from .llms.ollama.chat.transformation import OllamaChatConfig as OllamaChatConfig
+    from .llms.ollama.completion.transformation import OllamaConfig as OllamaConfig
+    from .llms.sagemaker.completion.transformation import SagemakerConfig as SagemakerConfig
+    from .llms.sagemaker.chat.transformation import SagemakerChatConfig as SagemakerChatConfig
+    from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
+    from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as AnthropicMessagesConfig
+    from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig
+    from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
+    from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
+    from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as VertexGeminiConfig
+    from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as GoogleAIStudioGeminiConfig
+    from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig as VertexAIAnthropicConfig
+    from .llms.vertex_ai.vertex_ai_partner_models.llama3.transformation import VertexAILlama3Config as VertexAILlama3Config
+    from .llms.vertex_ai.vertex_ai_partner_models.ai21.transformation import VertexAIAi21Config as VertexAIAi21Config
+    from .llms.bedrock.chat.invoke_handler import AmazonCohereChatConfig as AmazonCohereChatConfig
+    from .llms.bedrock.common_utils import AmazonBedrockGlobalConfig as AmazonBedrockGlobalConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_ai21_transformation import AmazonAI21Config as AmazonAI21Config
+    from .llms.bedrock.chat.invoke_transformations.amazon_nova_transformation import AmazonInvokeNovaConfig as AmazonInvokeNovaConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_qwen2_transformation import AmazonQwen2Config as AmazonQwen2Config
+    from .llms.bedrock.chat.invoke_transformations.amazon_qwen3_transformation import AmazonQwen3Config as AmazonQwen3Config
+    from .llms.bedrock.chat.invoke_transformations.anthropic_claude2_transformation import AmazonAnthropicConfig as AmazonAnthropicConfig
+    from .llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeConfig as AmazonAnthropicClaudeConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_cohere_transformation import AmazonCohereConfig as AmazonCohereConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import AmazonLlamaConfig as AmazonLlamaConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import AmazonDeepSeekR1Config as AmazonDeepSeekR1Config
+    from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import AmazonMistralConfig as AmazonMistralConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_moonshot_transformation import AmazonMoonshotConfig as AmazonMoonshotConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import AmazonTitanConfig as AmazonTitanConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import AmazonTwelveLabsPegasusConfig as AmazonTwelveLabsPegasusConfig
+    from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig as AmazonInvokeConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import AmazonBedrockOpenAIConfig as AmazonBedrockOpenAIConfig
+    from .llms.bedrock.image_generation.amazon_stability1_transformation import AmazonStabilityConfig as AmazonStabilityConfig
+    from .llms.bedrock.image_generation.amazon_stability3_transformation import AmazonStability3Config as AmazonStability3Config
+    from .llms.bedrock.image_generation.amazon_nova_canvas_transformation import AmazonNovaCanvasConfig as AmazonNovaCanvasConfig
+    from .llms.bedrock.embed.amazon_titan_g1_transformation import AmazonTitanG1Config as AmazonTitanG1Config
+    from .llms.bedrock.embed.amazon_titan_multimodal_transformation import AmazonTitanMultimodalEmbeddingG1Config as AmazonTitanMultimodalEmbeddingG1Config
+    from .llms.cohere.chat.v2_transformation import CohereV2ChatConfig as CohereV2ChatConfig
+    from .llms.bedrock.embed.cohere_transformation import BedrockCohereEmbeddingConfig as BedrockCohereEmbeddingConfig
+    from .llms.bedrock.embed.twelvelabs_marengo_transformation import TwelveLabsMarengoEmbeddingConfig as TwelveLabsMarengoEmbeddingConfig
+    from .llms.bedrock.embed.amazon_nova_transformation import AmazonNovaEmbeddingConfig as AmazonNovaEmbeddingConfig
+    from .llms.openai.openai import OpenAIConfig as OpenAIConfig, MistralEmbeddingConfig as MistralEmbeddingConfig
+    from .llms.openai.image_variations.transformation import OpenAIImageVariationConfig as OpenAIImageVariationConfig
+    from .llms.deepgram.audio_transcription.transformation import DeepgramAudioTranscriptionConfig as DeepgramAudioTranscriptionConfig
+    from .llms.topaz.image_variations.transformation import TopazImageVariationConfig as TopazImageVariationConfig
+    from litellm.llms.openai.completion.transformation import OpenAITextCompletionConfig as OpenAITextCompletionConfig
+    from .llms.groq.chat.transformation import GroqChatConfig as GroqChatConfig
+    from .llms.voyage.embedding.transformation import VoyageEmbeddingConfig as VoyageEmbeddingConfig
+    from .llms.voyage.embedding.transformation_contextual import VoyageContextualEmbeddingConfig as VoyageContextualEmbeddingConfig
+    from .llms.infinity.embedding.transformation import InfinityEmbeddingConfig as InfinityEmbeddingConfig
+    from .llms.azure_ai.chat.transformation import AzureAIStudioConfig as AzureAIStudioConfig
+    from .llms.mistral.chat.transformation import MistralConfig as MistralConfig
+    from .llms.openai.responses.transformation import OpenAIResponsesAPIConfig as OpenAIResponsesAPIConfig
+    from .llms.azure.responses.transformation import AzureOpenAIResponsesAPIConfig as AzureOpenAIResponsesAPIConfig
+    from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig
+    from .llms.xai.responses.transformation import XAIResponsesAPIConfig as XAIResponsesAPIConfig
+    from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
+    from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
+    from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
+    from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
+    from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig
+    from .llms.base_llm.skills.transformation import BaseSkillsAPIConfig as BaseSkillsAPIConfig
+    from .llms.gradient_ai.chat.transformation import GradientAIConfig as GradientAIConfig
+    from .llms.openai.chat.gpt_transformation import OpenAIGPTConfig as OpenAIGPTConfig
+    from .llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config as OpenAIGPT5Config
+    from .llms.openai.transcriptions.whisper_transformation import OpenAIWhisperAudioTranscriptionConfig as OpenAIWhisperAudioTranscriptionConfig
+    from .llms.openai.transcriptions.gpt_transformation import OpenAIGPTAudioTranscriptionConfig as OpenAIGPTAudioTranscriptionConfig
+    from .llms.openai.chat.gpt_audio_transformation import OpenAIGPTAudioConfig as OpenAIGPTAudioConfig
+    from .llms.nvidia_nim.chat.transformation import NvidiaNimConfig as NvidiaNimConfig
+    from .llms.nvidia_nim.embed import NvidiaNimEmbeddingConfig as NvidiaNimEmbeddingConfig
+    
+    # Type stubs for lazy-loaded config instances
+    openaiOSeriesConfig: OpenAIOSeriesConfig
+    openAIGPTConfig: OpenAIGPTConfig
+    openAIGPTAudioConfig: OpenAIGPTAudioConfig
+    openAIGPT5Config: OpenAIGPT5Config
+    nvidiaNimConfig: NvidiaNimConfig
+    nvidiaNimEmbeddingConfig: NvidiaNimEmbeddingConfig
+    
+    # Import config classes that need type stubs (for mypy) - import with _ prefix to avoid circular reference
+    from .llms.vllm.completion.transformation import VLLMConfig as _VLLMConfig
+    from .llms.deepseek.chat.transformation import DeepSeekChatConfig as _DeepSeekChatConfig
+    from .llms.sap.chat.transformation import GenAIHubOrchestrationConfig as _GenAIHubOrchestrationConfig
+    from .llms.sap.embed.transformation import GenAIHubEmbeddingConfig as _GenAIHubEmbeddingConfig
+    from .llms.azure.chat.o_series_transformation import AzureOpenAIO1Config as _AzureOpenAIO1Config
+    from .llms.perplexity.chat.transformation import PerplexityChatConfig as _PerplexityChatConfig
+    from .llms.nscale.chat.transformation import NscaleConfig as _NscaleConfig
+    from .llms.watsonx.chat.transformation import IBMWatsonXChatConfig as _IBMWatsonXChatConfig
+    from .llms.watsonx.completion.transformation import IBMWatsonXAIConfig as _IBMWatsonXAIConfig
+    from .llms.litellm_proxy.chat.transformation import LiteLLMProxyChatConfig as _LiteLLMProxyChatConfig
+    from .llms.deepinfra.chat.transformation import DeepInfraConfig as _DeepInfraConfig
+    from .llms.llamafile.chat.transformation import LlamafileChatConfig as _LlamafileChatConfig
+    from .llms.lm_studio.chat.transformation import LMStudioChatConfig as _LMStudioChatConfig
+    from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig as _LmStudioEmbeddingConfig
+    from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig as _IBMWatsonXEmbeddingConfig
+    from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
+    
+    # Type stubs for lazy-loaded config classes (to help mypy understand types)
+    VLLMConfig: Type[_VLLMConfig]
+    DeepSeekChatConfig: Type[_DeepSeekChatConfig]
+    GenAIHubOrchestrationConfig: Type[_GenAIHubOrchestrationConfig]
+    GenAIHubEmbeddingConfig: Type[_GenAIHubEmbeddingConfig]
+    AzureOpenAIO1Config: Type[_AzureOpenAIO1Config]
+    PerplexityChatConfig: Type[_PerplexityChatConfig]
+    NscaleConfig: Type[_NscaleConfig]
+    IBMWatsonXChatConfig: Type[_IBMWatsonXChatConfig]
+    IBMWatsonXAIConfig: Type[_IBMWatsonXAIConfig]
+    LiteLLMProxyChatConfig: Type[_LiteLLMProxyChatConfig]
+    DeepInfraConfig: Type[_DeepInfraConfig]
+    LlamafileChatConfig: Type[_LlamafileChatConfig]
+    LMStudioChatConfig: Type[_LMStudioChatConfig]
+    LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
+    IBMWatsonXEmbeddingConfig: Type[_IBMWatsonXEmbeddingConfig]
+    VertexAIConfig: Type[_VertexGeminiConfig]  # Alias for VertexGeminiConfig
+    
+    from .llms.featherless_ai.chat.transformation import FeatherlessAIConfig as FeatherlessAIConfig
+    from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
+    from .llms.baseten.chat import BasetenConfig as BasetenConfig
+    from .llms.sambanova.chat import SambanovaConfig as SambanovaConfig
+    from .llms.sambanova.embedding.transformation import SambaNovaEmbeddingConfig as SambaNovaEmbeddingConfig
+    from .llms.fireworks_ai.chat.transformation import FireworksAIConfig as FireworksAIConfig
+    from .llms.fireworks_ai.completion.transformation import FireworksAITextCompletionConfig as FireworksAITextCompletionConfig
+    from .llms.fireworks_ai.audio_transcription.transformation import FireworksAIAudioTranscriptionConfig as FireworksAIAudioTranscriptionConfig
+    from .llms.fireworks_ai.embed.fireworks_ai_transformation import FireworksAIEmbeddingConfig as FireworksAIEmbeddingConfig
+    from .llms.friendliai.chat.transformation import FriendliaiChatConfig as FriendliaiChatConfig
+    from .llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig as JinaAIEmbeddingConfig
+    from .llms.xai.chat.transformation import XAIChatConfig as XAIChatConfig
+    from .llms.zai.chat.transformation import ZAIChatConfig as ZAIChatConfig
+    from .llms.aiml.chat.transformation import AIMLChatConfig as AIMLChatConfig
+    from .llms.volcengine.chat.transformation import VolcEngineChatConfig as VolcEngineChatConfig, VolcEngineChatConfig as VolcEngineConfig
+    from .llms.codestral.completion.transformation import CodestralTextCompletionConfig as CodestralTextCompletionConfig
+    from .llms.azure.azure import AzureOpenAIAssistantsAPIConfig as AzureOpenAIAssistantsAPIConfig
+    from .llms.heroku.chat.transformation import HerokuChatConfig as HerokuChatConfig
+    from .llms.cometapi.chat.transformation import CometAPIConfig as CometAPIConfig
+    from .llms.azure.chat.gpt_transformation import AzureOpenAIConfig as AzureOpenAIConfig
+    from .llms.azure.chat.gpt_5_transformation import AzureOpenAIGPT5Config as AzureOpenAIGPT5Config
+    from .llms.azure.completion.transformation import AzureOpenAITextConfig as AzureOpenAITextConfig
+    from .llms.hosted_vllm.chat.transformation import HostedVLLMChatConfig as HostedVLLMChatConfig
+    from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
+    from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
+    from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig
+    from .llms.gigachat.chat.transformation import GigaChatConfig as GigaChatConfig
+    from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig as GigaChatEmbeddingConfig
+    from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
+    from .llms.wandb.chat.transformation import WandbConfig as WandbConfig
+    from .llms.dashscope.chat.transformation import DashScopeChatConfig as DashScopeChatConfig
+    from .llms.moonshot.chat.transformation import MoonshotChatConfig as MoonshotChatConfig
+    from .llms.docker_model_runner.chat.transformation import DockerModelRunnerChatConfig as DockerModelRunnerChatConfig
+    from .llms.v0.chat.transformation import V0ChatConfig as V0ChatConfig
+    from .llms.oci.chat.transformation import OCIChatConfig as OCIChatConfig
+    from .llms.morph.chat.transformation import MorphChatConfig as MorphChatConfig
+    from .llms.ragflow.chat.transformation import RAGFlowConfig as RAGFlowConfig
+    from .llms.lambda_ai.chat.transformation import LambdaAIChatConfig as LambdaAIChatConfig
+    from .llms.hyperbolic.chat.transformation import HyperbolicChatConfig as HyperbolicChatConfig
+    from .llms.vercel_ai_gateway.chat.transformation import VercelAIGatewayConfig as VercelAIGatewayConfig
+    from .llms.ovhcloud.chat.transformation import OVHCloudChatConfig as OVHCloudChatConfig
+    from .llms.ovhcloud.embedding.transformation import OVHCloudEmbeddingConfig as OVHCloudEmbeddingConfig
+    from .llms.cometapi.embed.transformation import CometAPIEmbeddingConfig as CometAPIEmbeddingConfig
+    from .llms.lemonade.chat.transformation import LemonadeChatConfig as LemonadeChatConfig
+    from .llms.snowflake.embedding.transformation import SnowflakeEmbeddingConfig as SnowflakeEmbeddingConfig
+    from .llms.amazon_nova.chat.transformation import AmazonNovaChatConfig as AmazonNovaChatConfig
     from litellm.caching.llm_caching_handler import LLMClientCache
     from litellm.types.llms.bedrock import COHERE_EMBEDDING_INPUT_TYPES
     from litellm.types.utils import (
@@ -1526,6 +1487,10 @@ if TYPE_CHECKING:
         StandardKeyGenerationConfig,
     )
     from litellm.types.guardrails import GuardrailItem
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        DefaultTeamSSOParams,
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
 
     # Cost calculator functions
     cost_per_token: Callable[..., Tuple[float, float]]
@@ -1562,6 +1527,7 @@ if TYPE_CHECKING:
     get_first_chars_messages: Callable[..., str]
     get_provider_fields: Callable[..., List]
     get_valid_models: Callable[..., list]
+    remove_index_from_tool_calls: Callable[..., None]
 
     # Response types - truly lazy loaded only (not in main.py or elsewhere)
     ModelResponseListIterator: Type[Any]
@@ -1570,11 +1536,59 @@ if TYPE_CHECKING:
     module_level_aclient: AsyncHTTPHandler
     module_level_client: HTTPHandler
 
+    # Bedrock tool name mappings instance (lazy-loaded)
+    from litellm.caching.caching import InMemoryCache
+    bedrock_tool_name_mappings: InMemoryCache
+
+    # Azure exception class (lazy-loaded)
+    from litellm.llms.azure.common_utils import AzureOpenAIError
+
+    # Secret manager types (lazy-loaded)
+    from litellm.types.secret_managers.main import (
+        KeyManagementSystem,
+        KeyManagementSettings,  # Not lazy-loaded - needed for _key_management_settings initialization
+    )
+
+    # Custom logger class (lazy-loaded)
+    from litellm.integrations.custom_logger import CustomLogger
+    
+    # Datadog LLM observability params (lazy-loaded)
+    from litellm.types.integrations.datadog_llm_obs import DatadogLLMObsInitParams
+    
+    # Logging callback manager class and instance (lazy-loaded)
+    from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
+    logging_callback_manager: LoggingCallbackManager
+    
+    # provider_list is lazy-loaded
+    from litellm.types.utils import LlmProviders
+    provider_list: List[Union[LlmProviders, str]]
+
     # Note: AmazonConverseConfig and OpenAILikeChatConfig are imported above in TYPE_CHECKING block
+
+
+# Track if async client cleanup has been registered (for lazy loading)
+_async_client_cleanup_registered = False
+
+# Eager loading for backwards compatibility with VCR and other HTTP recording tools
+# When LITELLM_DISABLE_LAZY_LOADING is set, lazy-loaded attributes are loaded at import time
+# For now, this only affects encoding (tiktoken) as it was the only reported issue
+# See: https://github.com/BerriAI/litellm/issues/18659
+# This ensures encoding is initialized before VCR starts recording HTTP requests
+if os.getenv("LITELLM_DISABLE_LAZY_LOADING", "").lower() in ("1", "true", "yes", "on"):
+    # Load encoding at import time (pre-#18070 behavior)
+    # This ensures encoding is initialized before VCR starts recording
+    from .main import encoding
 
 
 def __getattr__(name: str) -> Any:
     """Lazy import handler with cached registry for improved performance."""
+    global _async_client_cleanup_registered
+    # Register async client cleanup on first access (only once)
+    if not _async_client_cleanup_registered:
+        from litellm.llms.custom_httpx.async_client_cleanup import register_async_client_cleanup
+        register_async_client_cleanup()
+        _async_client_cleanup_registered = True
+    
     # Use cached registry from _lazy_imports instead of importing tuples every time
     from ._lazy_imports import _get_lazy_import_registry
     
@@ -1594,6 +1608,101 @@ def __getattr__(name: str) -> Any:
             from .main import encoding as _encoding
             _globals["encoding"] = _encoding
         return _globals["encoding"]
+    
+    # Lazy load bedrock_tool_name_mappings instance
+    if name == "bedrock_tool_name_mappings":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "bedrock_tool_name_mappings" not in _globals:
+            from .llms.bedrock.chat.invoke_handler import bedrock_tool_name_mappings as _bedrock_tool_name_mappings
+            _globals["bedrock_tool_name_mappings"] = _bedrock_tool_name_mappings
+        return _globals["bedrock_tool_name_mappings"]
+    
+    # Lazy load AzureOpenAIError exception class
+    if name == "AzureOpenAIError":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "AzureOpenAIError" not in _globals:
+            from .llms.azure.common_utils import AzureOpenAIError as _AzureOpenAIError
+            _globals["AzureOpenAIError"] = _AzureOpenAIError
+        return _globals["AzureOpenAIError"]
+    
+    # Lazy load openaiOSeriesConfig instance
+    if name == "openaiOSeriesConfig":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        if "openaiOSeriesConfig" not in _globals:
+            # Import the config class and instantiate it
+            config_class = __getattr__("OpenAIOSeriesConfig")
+            _globals["openaiOSeriesConfig"] = config_class()
+        return _globals["openaiOSeriesConfig"]
+    
+    # Lazy load other config instances
+    _config_instances = {
+        "openAIGPTConfig": "OpenAIGPTConfig",
+        "openAIGPTAudioConfig": "OpenAIGPTAudioConfig",
+        "openAIGPT5Config": "OpenAIGPT5Config",
+        "nvidiaNimConfig": "NvidiaNimConfig",
+        "nvidiaNimEmbeddingConfig": "NvidiaNimEmbeddingConfig",
+    }
+    if name in _config_instances:
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        if name not in _globals:
+            # Import the config class and instantiate it
+            config_class = __getattr__(_config_instances[name])
+            _globals[name] = config_class()
+        return _globals[name]
+    
+    # Handle OpenAIO1Config alias
+    if name == "OpenAIO1Config":
+        return __getattr__("OpenAIOSeriesConfig")
+    
+    # Lazy load provider_list
+    if name == "provider_list":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "provider_list" not in _globals:
+            # LlmProviders is eagerly imported above, so we can import it directly
+            from litellm.types.utils import LlmProviders
+            _globals["provider_list"] = list(LlmProviders)
+        return _globals["provider_list"]
+    
+    # Lazy load priority_reservation_settings instance
+    if name == "priority_reservation_settings":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "priority_reservation_settings" not in _globals:
+            # Import the class and instantiate it
+            PriorityReservationSettings = __getattr__("PriorityReservationSettings")
+            _globals["priority_reservation_settings"] = PriorityReservationSettings()
+        return _globals["priority_reservation_settings"]
+    
+    # Lazy load logging_callback_manager instance
+    if name == "logging_callback_manager":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "logging_callback_manager" not in _globals:
+            # Import the class and instantiate it
+            LoggingCallbackManager = __getattr__("LoggingCallbackManager")
+            _globals["logging_callback_manager"] = LoggingCallbackManager()
+        return _globals["logging_callback_manager"]
+    
+    # Lazy load _service_logger module
+    if name == "_service_logger":
+        from ._lazy_imports import _get_litellm_globals
+        _globals = _get_litellm_globals()
+        # Check if already cached
+        if "_service_logger" not in _globals:
+            # Import the module lazily
+            import litellm._service_logger
+            _globals["_service_logger"] = litellm._service_logger
+        return _globals["_service_logger"]
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 

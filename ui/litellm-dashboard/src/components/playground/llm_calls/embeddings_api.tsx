@@ -7,6 +7,7 @@ export async function makeOpenAIEmbeddingsRequest(
   selectedModel: string,
   accessToken: string,
   tags?: string[],
+  customBaseUrl?: string,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
@@ -18,7 +19,7 @@ export async function makeOpenAIEmbeddingsRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {

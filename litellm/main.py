@@ -110,26 +110,13 @@ from litellm.types.utils import (
     RawRequestTypedDict,
     StreamingChoices,
 )
-from litellm.types.utils import (
-    ModelResponseStream,
-    RawRequestTypedDict,
-    StreamingChoices,
-)
 from litellm.utils import (
-    Choices,
     Choices,
     CustomStreamWrapper,
     EmbeddingResponse,
     Message,
     ModelResponse,
-    EmbeddingResponse,
-    Message,
-    ModelResponse,
     ProviderConfigManager,
-    TextChoices,
-    TextCompletionResponse,
-    TextCompletionStreamWrapper,
-    TranscriptionResponse,
     TextChoices,
     TextCompletionResponse,
     TextCompletionStreamWrapper,
@@ -2154,6 +2141,49 @@ def completion(  # type: ignore # noqa: PLR0915
                 logging_obj=logging,  # model call logging done inside the class as we make need to modify I/O to fit aleph alpha's requirements
                 client=client,
             )
+        elif custom_llm_provider == "gigachat":
+            # GigaChat - Sber AI's LLM (Russia)
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.gigachat_key
+                or get_secret("GIGACHAT_API_KEY")
+                or get_secret("GIGACHAT_CREDENTIALS")
+            )
+
+            headers = headers or litellm.headers or {}
+
+            ## COMPLETION CALL
+            try:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    timeout=timeout,
+                    client=client,
+                    custom_llm_provider=custom_llm_provider,
+                    encoding=_get_encoding(),
+                    stream=stream,
+                    provider_config=provider_config,
+                )
+            except Exception as e:
+                ## LOGGING - log the original exception returned
+                logging.post_call(
+                    input=messages,
+                    api_key=api_key,
+                    original_response=str(e),
+                    additional_args={"headers": headers},
+                )
+                raise e
+
         elif custom_llm_provider == "sap":
             headers = headers or litellm.headers
             ## LOAD CONFIG - if set
@@ -4557,8 +4587,8 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("OPENAI_API_KEY")
             )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
             
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
@@ -4626,8 +4656,8 @@ def embedding(  # noqa: PLR0915
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
 
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
@@ -4651,9 +4681,9 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_key
             )
 
-            if extra_headers is not None and isinstance(extra_headers, dict):
-                headers = extra_headers
-            else:
+            # Use the merged headers variable (already merged at the top of the function)
+            # Don't overwrite it with just extra_headers
+            if headers is None:
                 headers = {}
 
             response = base_llm_http_handler.embedding(
@@ -4662,6 +4692,51 @@ def embedding(  # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=cohere_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
+        elif custom_llm_provider == "openrouter":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("OPENROUTER_API_BASE")
+                or "https://openrouter.ai/api/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.openrouter_key
+                or get_secret("OPENROUTER_API_KEY")
+                or get_secret("OR_API_KEY")
+            )
+
+            openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
+            openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
+
+            openrouter_headers = {
+                "HTTP-Referer": openrouter_site_url,
+                "X-Title": openrouter_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                openrouter_headers.update(_headers)
+
+            headers = openrouter_headers
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
@@ -5237,6 +5312,28 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif custom_llm_provider == "gigachat":
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.gigachat_key
+                or get_secret_str("GIGACHAT_CREDENTIALS")
+                or get_secret_str("GIGACHAT_API_KEY")
+            )
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params={"ssl_verify": kwargs.get("ssl_verify", None)},
+            )
         else:
             raise LiteLLMUnknownProvider(
                 model=model, custom_llm_provider=custom_llm_provider
@@ -5550,11 +5647,9 @@ def text_completion(  # noqa: PLR0915
         )
         and isinstance(prompt, list)
         and len(prompt) > 0
-        and isinstance(prompt[0], list)
+        and (isinstance(prompt[0], list) or isinstance(prompt[0], int))
     ):
-        verbose_logger.warning(
-            msg="List of lists being passed. If this is for tokens, then it might not work across all models."
-        )
+        # Support for token IDs as prompt (list of integers or list of lists of integers)
         messages = [{"role": "user", "content": prompt}]  # type: ignore
     else:
         raise Exception(
@@ -6668,7 +6763,16 @@ async def ahealth_check(
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 
-        model, custom_llm_provider, _, _ = get_llm_provider(model=model)
+        custom_llm_provider_from_params = model_params.get("custom_llm_provider", None)
+        api_base_from_params = model_params.get("api_base", None)
+        api_key_from_params = model_params.get("api_key", None)
+        
+        model, custom_llm_provider, _, _ = get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider_from_params,
+            api_base=api_base_from_params,
+            api_key=api_key_from_params,
+        )
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
 

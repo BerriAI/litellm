@@ -17,7 +17,7 @@ from typing import (
 import httpx
 import orjson
 from fastapi import HTTPException, Request, status
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -96,16 +96,55 @@ async def _parse_event_data_for_error(event_line: Union[str, bytes]) -> Optional
     return None
 
 
-async def create_streaming_response(
+def _extract_error_from_sse_chunk(event_line: Union[str, bytes]) -> dict:
+    """
+    Extract error dictionary from SSE format chunk.
+
+    Args:
+        event_line: SSE format event line, e.g. "data: {"error": {...}}\n\n"
+
+    Returns:
+        Error dictionary in OpenAI API format
+    """
+    event_line = (
+        event_line.decode("utf-8") if isinstance(event_line, bytes) else event_line
+    )
+
+    # Default error format
+    default_error = {
+        "message": "Unknown error",
+        "type": "internal_server_error",
+        "param": None,
+        "code": "500",
+    }
+
+    if event_line.startswith("data: "):
+        json_str = event_line[len("data: ") :].strip()
+        if not json_str or json_str == "[DONE]":
+            return default_error
+
+        try:
+            data = orjson.loads(json_str)
+            if isinstance(data, dict) and "error" in data:
+                error_obj = data["error"]
+                if isinstance(error_obj, dict):
+                    return error_obj
+        except (orjson.JSONDecodeError, json.JSONDecodeError):
+            pass
+
+    return default_error
+
+
+async def create_response(
     generator: AsyncGenerator[str, None],
     media_type: str,
     headers: dict,
     default_status_code: int = status.HTTP_200_OK,
-) -> StreamingResponse:
+) -> Union[StreamingResponse, JSONResponse]:
     """
-    Creates a StreamingResponse by inspecting the first chunk for an error code.
-    The entire original generator content is streamed, but the HTTP status code
-    of the response is set based on the first chunk if it's a recognized error.
+    Create streaming response, checking if the first chunk is an error.
+    If the first chunk is an error, return a standard JSON error response.
+    Otherwise, return StreamingResponse and stream all content.
     """
     first_chunk_value: Optional[str] = None
     final_status_code = default_status_code
@@ -124,9 +163,27 @@ async def create_streaming_response(
                     first_chunk_value
                 )
                 if error_code_from_chunk is not None:
+                    # First chunk is an error, stream hasn't really started yet
+                    # Should return standard JSON error response instead of SSE format
                     final_status_code = error_code_from_chunk
                     verbose_proxy_logger.debug(
-                        f"Error detected in first stream chunk. Status code set to: {final_status_code}"
+                        f"Error detected in first stream chunk. Returning JSON error response with status code: {final_status_code}"
+                    )
+
+                    # Parse error content
+                    error_dict = _extract_error_from_sse_chunk(first_chunk_value)
+
+                    # Consume and close generator (avoid resource leak)
+                    try:
+                        await generator.aclose()
+                    except Exception:
+                        pass
+
+                    # Return JSON format error response
+                    return JSONResponse(
+                        status_code=final_status_code,
+                        content={"error": error_dict},
+                        headers=headers,
                     )
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error parsing first chunk value: {e}")
@@ -179,24 +236,26 @@ async def create_streaming_response(
 
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: Optional[LiteLLMLoggingObj],
-) -> Tuple[Optional[float], Optional[float]]:
+) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
     """
-    Extract discount information from logging object's cost breakdown.
+    Extract discount and margin information from logging object's cost breakdown.
 
     Returns:
-        Tuple of (original_cost, discount_amount)
+        Tuple of (original_cost, discount_amount, margin_total_amount, margin_percent)
     """
     if not litellm_logging_obj or not hasattr(litellm_logging_obj, "cost_breakdown"):
-        return None, None
+        return None, None, None, None
 
     cost_breakdown = litellm_logging_obj.cost_breakdown
     if not cost_breakdown:
-        return None, None
+        return None, None, None, None
 
     original_cost = cost_breakdown.get("original_cost")
     discount_amount = cost_breakdown.get("discount_amount")
+    margin_total_amount = cost_breakdown.get("margin_total_amount")
+    margin_percent = cost_breakdown.get("margin_percent")
 
-    return original_cost, discount_amount
+    return original_cost, discount_amount, margin_total_amount, margin_percent
 
 
 class ProxyBaseLLMRequestProcessing:
@@ -224,8 +283,8 @@ class ProxyBaseLLMRequestProcessing:
         exclude_values = {"", None, "None"}
         hidden_params = hidden_params or {}
 
-        # Extract discount info from cost_breakdown if available
-        original_cost, discount_amount = _get_cost_breakdown_from_logging_obj(
+        # Extract discount and margin info from cost_breakdown if available
+        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj
         )
 
@@ -235,7 +294,11 @@ class ProxyBaseLLMRequestProcessing:
         if response_cost is not None:
             try:
                 # Convert response_cost to float if it's a string
-                cost_value = float(response_cost) if isinstance(response_cost, str) else response_cost
+                cost_value = (
+                    float(response_cost)
+                    if isinstance(response_cost, str)
+                    else response_cost
+                )
                 if cost_value > 0:
                     updated_spend = current_spend + cost_value
             except (ValueError, TypeError):
@@ -257,6 +320,12 @@ class ProxyBaseLLMRequestProcessing:
             ),
             "x-litellm-response-cost-discount-amount": (
                 str(discount_amount) if discount_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-amount": (
+                str(margin_total_amount) if margin_total_amount is not None else None
+            ),
+            "x-litellm-response-cost-margin-percent": (
+                str(margin_percent) if margin_percent is not None else None
             ),
             "x-litellm-key-tpm-limit": str(user_api_key_dict.tpm_limit),
             "x-litellm-key-rpm-limit": str(user_api_key_dict.rpm_limit),
@@ -311,6 +380,7 @@ class ProxyBaseLLMRequestProcessing:
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
+            "acompact_responses",
             "acreate_batch",
             "aretrieve_batch",
             "alist_batches",
@@ -367,6 +437,16 @@ class ProxyBaseLLMRequestProcessing:
     ) -> Tuple[dict, LiteLLMLoggingObj]:
         start_time = datetime.now()  # start before calling guardrail hooks
 
+        # Calculate request queue time if arrival_time is available
+        # Use start_time.timestamp() to avoid extra time.time() call for better performance
+        proxy_server_request = self.data.get("proxy_server_request", {})
+        arrival_time = proxy_server_request.get("arrival_time")
+        queue_time_seconds = None
+        if arrival_time is not None:
+            # Convert start_time (datetime) to timestamp for calculation
+            processing_start_time = start_time.timestamp()
+            queue_time_seconds = processing_start_time - arrival_time
+
         self.data = await add_litellm_data_to_request(
             data=self.data,
             request=request,
@@ -375,6 +455,19 @@ class ProxyBaseLLMRequestProcessing:
             version=version,
             proxy_config=proxy_config,
         )
+
+        # Store queue time in metadata after add_litellm_data_to_request to ensure it's preserved
+        if queue_time_seconds is not None:
+            from litellm.proxy.litellm_pre_call_utils import _get_metadata_variable_name
+
+            _metadata_variable_name = _get_metadata_variable_name(request)
+            if _metadata_variable_name not in self.data:
+                self.data[_metadata_variable_name] = {}
+            if not isinstance(self.data[_metadata_variable_name], dict):
+                self.data[_metadata_variable_name] = {}
+            self.data[_metadata_variable_name][
+                "queue_time_seconds"
+            ] = queue_time_seconds
 
         self.data["model"] = (
             general_settings.get("completion_model", None)  # server default
@@ -431,6 +524,29 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
 
+        # Apply hierarchical router_settings (Key > Team > Global)
+        if llm_router is not None and proxy_config is not None:
+            from litellm.proxy.proxy_server import prisma_client
+            
+            router_settings = await proxy_config._get_hierarchical_router_settings(
+                user_api_key_dict=user_api_key_dict,
+                prisma_client=prisma_client,
+            )
+            
+            # If router_settings found (from key, team, or global), apply them
+            # This ensures key/team settings override global settings
+            if router_settings is not None and router_settings:
+                # Get model_list from current router
+                model_list = llm_router.get_model_list()
+                if model_list is not None:
+                    # Create user_config with model_list and router_settings
+                    # This creates a per-request router with the hierarchical settings
+                    user_config = {
+                        "model_list": model_list,
+                        **router_settings
+                    }
+                    self.data["user_config"] = user_config
+
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
 
@@ -449,6 +565,7 @@ class ProxyBaseLLMRequestProcessing:
             "aget_responses",
             "adelete_responses",
             "acancel_responses",
+            "acompact_responses",
             "atext_completion",
             "aimage_edit",
             "alist_input_items",
@@ -637,7 +754,7 @@ class ProxyBaseLLMRequestProcessing:
                         proxy_logging_obj=proxy_logging_obj,
                     )
                 )
-                return await create_streaming_response(
+                return await create_response(
                     generator=selected_data_generator,
                     media_type="text/event-stream",
                     headers=custom_headers,
@@ -648,7 +765,7 @@ class ProxyBaseLLMRequestProcessing:
                     user_api_key_dict=user_api_key_dict,
                     request_data=self.data,
                 )
-                return await create_streaming_response(
+                return await create_response(
                     generator=selected_data_generator,
                     media_type="text/event-stream",
                     headers=custom_headers,
@@ -890,11 +1007,11 @@ class ProxyBaseLLMRequestProcessing:
     @staticmethod
     def _get_pre_call_type(
         route_type: Literal["acompletion", "aembedding", "aresponses", "allm_passthrough_route"],
-    ) -> Literal["completion", "embeddings", "responses", "allm_passthrough_route"]:
+    ) -> Literal["completion", "embedding", "responses", "allm_passthrough_route"]:
         if route_type == "acompletion":
             return "completion"
         elif route_type == "aembedding":
-            return "embeddings"
+            return "embedding"
         elif route_type == "aresponses":
             return "responses"
         elif route_type == "allm_passthrough_route":
@@ -1145,9 +1262,9 @@ class ProxyBaseLLMRequestProcessing:
 
             # Add cache-related fields to **params (handled by Usage.__init__)
             if cache_creation_input_tokens is not None:
-                usage_kwargs["cache_creation_input_tokens"] = (
-                    cache_creation_input_tokens
-                )
+                usage_kwargs[
+                    "cache_creation_input_tokens"
+                ] = cache_creation_input_tokens
             if cache_read_input_tokens is not None:
                 usage_kwargs["cache_read_input_tokens"] = cache_read_input_tokens
 

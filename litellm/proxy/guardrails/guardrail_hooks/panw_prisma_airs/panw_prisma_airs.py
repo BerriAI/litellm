@@ -24,6 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
     httpxSpecialProvider,
 )
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import CallTypesLiteral, ModelResponse
 
 if TYPE_CHECKING:
@@ -523,6 +524,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         scan_result: Dict[str, Any],
         data: Dict[str, Any],
         start_time: datetime,
+        event_type: GuardrailEventHooks,
         is_response: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Handle API errors with fail-open/fail-closed logic."""
@@ -542,6 +544,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             start_time=start_time.timestamp(),
             end_time=end_time.timestamp(),
             duration=duration,
+            event_type=event_type,
         )
 
         if scan_result.get("_always_block"):
@@ -735,7 +738,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
             if scan_result.get("_is_transient") or scan_result.get("_always_block"):
                 return self._handle_api_error_with_logging(
-                    scan_result, data, start_time, is_response=False
+                    scan_result,
+                    data,
+                    start_time,
+                    is_response=False,
+                    event_type=GuardrailEventHooks.pre_call,
                 )
 
             end_time = datetime.now()
@@ -749,6 +756,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
+                event_type=GuardrailEventHooks.pre_call,
             )
 
             action = scan_result.get("action", "block")
@@ -872,7 +880,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
             if scan_result.get("_is_transient") or scan_result.get("_always_block"):
                 self._handle_api_error_with_logging(
-                    scan_result, data, start_time, is_response=True
+                    scan_result,
+                    data,
+                    start_time,
+                    is_response=True,
+                    event_type=GuardrailEventHooks.post_call,
                 )
                 return response
 
@@ -887,6 +899,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                 start_time=start_time.timestamp(),
                 end_time=end_time.timestamp(),
                 duration=(end_time - start_time).total_seconds(),
+                event_type=GuardrailEventHooks.post_call,
             )
 
             action = scan_result.get("action", "block")
@@ -1066,7 +1079,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
                 if scan_result.get("_is_transient") or scan_result.get("_always_block"):
                     self._handle_api_error_with_logging(
-                        scan_result, request_data, start_time, is_response=True
+                        scan_result,
+                        request_data,
+                        start_time,
+                        is_response=True,
+                        event_type=EventHooks.post_call,
                     )
                     for chunk in all_chunks:
                         yield chunk
@@ -1083,6 +1100,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=(end_time - start_time).total_seconds(),
+                    event_type=EventHooks.post_call,
                 )
 
                 # Add guardrail to applied guardrails header for observability

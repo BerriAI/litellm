@@ -40,7 +40,7 @@ COPY . .
 ENV LITELLM_NON_ROOT=true
 
 # Build Admin UI using the upstream command order while keeping a single RUN layer
-RUN mkdir -p /tmp/litellm_ui && \
+RUN mkdir -p /var/lib/litellm/ui && \
     npm install -g npm@latest && npm cache clean --force && \
     cd /app/ui/litellm-dashboard && \
     if [ -f "/app/enterprise/enterprise_ui/enterprise_colors.json" ]; then \
@@ -49,10 +49,10 @@ RUN mkdir -p /tmp/litellm_ui && \
     rm -f package-lock.json && \
     npm install --legacy-peer-deps && \
     npm run build && \
-    cp -r /app/ui/litellm-dashboard/out/* /tmp/litellm_ui/ && \
-    mkdir -p /tmp/litellm_assets && \
-    cp /app/litellm/proxy/logo.jpg /tmp/litellm_assets/logo.jpg && \
-    ( cd /tmp/litellm_ui && \
+    cp -r /app/ui/litellm-dashboard/out/* /var/lib/litellm/ui/ && \
+    mkdir -p /var/lib/litellm/assets && \
+    cp /app/litellm/proxy/logo.jpg /var/lib/litellm/assets/logo.jpg && \
+    ( cd /var/lib/litellm/ui && \
       for html_file in *.html; do \
         if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
           folder_name="${html_file%.html}" && \
@@ -111,8 +111,8 @@ COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /ap
 COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/
 COPY --from=builder /wheels/ /wheels/
-COPY --from=builder /tmp/litellm_ui /tmp/litellm_ui
-COPY --from=builder /tmp/litellm_assets /tmp/litellm_assets
+COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
+COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
 COPY --from=builder /app/.cache /app/.cache
 COPY --from=builder /app/litellm-proxy-extras /app/litellm-proxy-extras
 COPY --from=builder \
@@ -144,9 +144,12 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
     fi
 
 # Permissions, cleanup, and Prisma prep
-RUN chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
-    mkdir -p /nonexistent /.npm /tmp/litellm_assets /tmp/litellm_ui && \
-    chown -R nobody:nogroup /app /tmp/litellm_ui /tmp/litellm_assets /nonexistent /.npm && \
+# Convert Windows line endings to Unix for entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && \
+    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
+    mkdir -p /nonexistent /.npm /var/lib/litellm/assets /var/lib/litellm/ui && \
+    chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent /.npm && \
     pip uninstall jwt -y || true && \
     pip uninstall PyJWT -y || true && \
     pip install --no-index --find-links=/wheels/ PyJWT==2.10.1 --no-cache-dir && \
@@ -156,11 +159,11 @@ RUN chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
     LITELLM_PKG_MIGRATIONS_PATH="$(python -c 'import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))' 2>/dev/null || echo '')/migrations" && \
     [ -n "$LITELLM_PKG_MIGRATIONS_PATH" ] && chown -R nobody:nogroup $LITELLM_PKG_MIGRATIONS_PATH && \
     LITELLM_PROXY_EXTRAS_PATH=$(python -c "import os, litellm_proxy_extras; print(os.path.dirname(litellm_proxy_extras.__file__))" 2>/dev/null || echo "") && \
-    chgrp -R 0 $PRISMA_PATH /tmp/litellm_ui /tmp/litellm_assets && \
+    chgrp -R 0 $PRISMA_PATH /var/lib/litellm/ui /var/lib/litellm/assets && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chgrp -R 0 $LITELLM_PROXY_EXTRAS_PATH || true && \
-    chmod -R g=u $PRISMA_PATH /tmp/litellm_ui /tmp/litellm_assets && \
+    chmod -R g=u $PRISMA_PATH /var/lib/litellm/ui /var/lib/litellm/assets && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g=u $LITELLM_PROXY_EXTRAS_PATH || true && \
-    chmod -R g+w $PRISMA_PATH /tmp/litellm_ui /tmp/litellm_assets && \
+    chmod -R g+w $PRISMA_PATH /var/lib/litellm/ui /var/lib/litellm/assets && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true && \
     chmod -R g+rX $PRISMA_PATH && \
     chmod -R g+rX /app/.cache && \

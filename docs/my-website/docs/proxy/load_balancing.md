@@ -264,7 +264,14 @@ model_list:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
       order: 2  # 👈 Used when order=1 is unavailable
+
+router_settings:
+  enable_pre_call_checks: true  # 👈 Required for 'order' to work
 ```
+
+:::important
+The `order` parameter requires `enable_pre_call_checks: true` in `router_settings`.
+:::
 
 If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
 
