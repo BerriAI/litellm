@@ -86,6 +86,17 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
   const handleSubmit = async () => {
     setIsSubmitting(true);
     try {
+      // Map reason IDs to readable labels
+      const reasonLabels: Record<string, string> = {
+        oss_adoption: "OSS Adoption (stars, contributors, forks)",
+        ai_integration: "AI Integration (Langfuse, OTEL, S3, Azure Content Safety)",
+        unified_api: "Unified API (OpenAI-compatible)",
+        breadth_of_models: "Breadth of Models/Providers (/ocr, /batches, Bedrock, Azure OCR)",
+        other: "Other",
+      };
+
+      const readableReasons = data.reasons.map((r) => reasonLabels[r] || r);
+
       await fetch("https://hooks.zapier.com/hooks/catch/16331268/ugms6w0/", {
         method: "POST",
         mode: "no-cors",
@@ -93,10 +104,10 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          usingAtCompany: data.usingAtCompany,
+          usingAtCompany: data.usingAtCompany ? "Yes" : "No",
           companyName: data.companyName || null,
           startDate: data.startDate,
-          reasons: data.reasons,
+          reasons: readableReasons.join(", "),
           otherReason: data.otherReason || null,
           email: data.email || null,
           submittedAt: new Date().toISOString(),
