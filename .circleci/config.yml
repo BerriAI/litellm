@@ -1959,6 +1959,18 @@ jobs:
           command: |
             kind create cluster --name litellm-test
 
+      - run:
+          name: Build Docker image for helm tests
+          command: |
+            IMAGE_TAG=${CIRCLE_SHA1:-ci}
+            docker build -t litellm-ci:${IMAGE_TAG} -f docker/Dockerfile.database .
+
+      - run:
+          name: Load Docker image into Kind
+          command: |
+            IMAGE_TAG=${CIRCLE_SHA1:-ci}
+            kind load docker-image litellm-ci:${IMAGE_TAG} --name litellm-test
+
       # Run helm lint
       - run:
           name: Run helm lint
@@ -1969,7 +1981,11 @@ jobs:
       - run:
           name: Run helm tests
           command: |
-            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml
+            IMAGE_TAG=${CIRCLE_SHA1:-ci}
+            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml \
+              --set image.repository=litellm-ci \
+              --set image.tag=${IMAGE_TAG} \
+              --set image.pullPolicy=Never
             # Wait for pod to be ready
             echo "Waiting 30 seconds for pod to be ready..."
             sleep 30
