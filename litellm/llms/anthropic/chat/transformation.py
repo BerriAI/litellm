@@ -1154,6 +1154,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     index=idx,
                 )
                 tool_calls.append(tool_call)
+
             ## TOOL RESULTS - handle all tool result types (code execution, etc.)
             elif content["type"].endswith("_tool_result"):
                 # Skip tool_search_tool_result as it's internal metadata
@@ -1164,11 +1165,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                     if web_search_results is None:
                         web_search_results = []
                     web_search_results.append(content)
+                elif content["type"] == "web_fetch_tool_result":
+                    if web_search_results is None:
+                        web_search_results = []
+                    web_search_results.append(content)  
                 else:
                     # All other tool results (bash_code_execution_tool_result, text_editor_code_execution_tool_result, etc.)
                     if tool_results is None:
                         tool_results = []
                     tool_results.append(content)
+
             elif content.get("thinking", None) is not None:
                 if thinking_blocks is None:
                     thinking_blocks = []

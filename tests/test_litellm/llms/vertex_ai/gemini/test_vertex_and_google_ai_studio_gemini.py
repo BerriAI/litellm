@@ -14,6 +14,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.types.llms.vertex_ai import UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
@@ -2315,6 +2316,17 @@ def test_partial_json_chunk_on_first_chunk():
     assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
 
+
+def test_google_ai_studio_presence_penalty_supported():
+    """
+    Test that presence_penalty is supported for Google AI Studio Gemini.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/14753
+    """
+    config = GoogleAIStudioGeminiConfig()
+    supported_params = config.get_supported_openai_params(model="gemini-2.0-flash")
+
+    assert "presence_penalty" in supported_params
 # ==================== Tool Type Separation Tests ====================
 # These tests verify that each Tool object contains exactly one type per Vertex AI API spec
 # Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1beta1/Tool
@@ -2505,3 +2517,72 @@ def test_vertex_ai_multiple_function_declarations_grouped():
     func_names = [f["name"] for f in tools[0]["function_declarations"]]
     assert "func1" in func_names
     assert "func2" in func_names
+
+
+def test_gemini_3_flash_preview_token_usage_fallback():
+    """Test fallback logic when candidatesTokensDetails is missing (e.g. Gemini 3 Flash Preview)."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 2145,
+        "candidatesTokenCount": 509,
+        "totalTokenCount": 2654,
+        # candidatesTokensDetails intentionally omitted
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 509
+    assert result.prompt_tokens == 2145
+    assert result.total_tokens == 2654
+
+    # Text tokens should be derived from candidatesTokenCount
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.text_tokens == 509
+    assert result.completion_tokens_details.image_tokens is None
+    assert result.completion_tokens_details.audio_tokens is None
+
+
+def test_gemini_no_reasoning_fallback():
+    """Test fallback when reasoning_effort is absent and details are missing."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 264,
+        "totalTokenCount": 364,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 264
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.text_tokens == 264
+    assert (
+        result.completion_tokens_details.reasoning_tokens is None
+        or result.completion_tokens_details.reasoning_tokens == 0
+    )
+
+
+def test_gemini_token_usage_standard_response():
+    """Verify that standard responses with details are computed correctly and not overwritten."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 150,
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 40},
+            {"modality": "IMAGE", "tokenCount": 10},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 50
+    assert result.completion_tokens_details.text_tokens == 40
+    assert result.completion_tokens_details.image_tokens == 10
