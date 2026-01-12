@@ -525,30 +525,9 @@ class MCPRequestHandler:
     async def _get_allowed_mcp_servers_for_key(
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
     ) -> List[str]:
-        from litellm.proxy.auth.auth_checks import get_object_permission
-        from litellm.proxy.proxy_server import (
-            prisma_client,
-            proxy_logging_obj,
-            user_api_key_cache,
-        )
-
-        if user_api_key_auth is None:
-            return []
-
-        if user_api_key_auth.object_permission_id is None:
-            return []
-
-        if prisma_client is None:
-            verbose_logger.debug("prisma_client is None")
-            return []
-
         try:
-            key_object_permission = await get_object_permission(
-                object_permission_id=user_api_key_auth.object_permission_id,
-                prisma_client=prisma_client,
-                user_api_key_cache=user_api_key_cache,
-                parent_otel_span=user_api_key_auth.parent_otel_span,
-                proxy_logging_obj=proxy_logging_obj,
+            key_object_permission = await MCPRequestHandler._get_key_object_permission(
+                user_api_key_auth
             )
             if key_object_permission is None:
                 return []
@@ -583,12 +562,6 @@ class MCPRequestHandler:
         1. First checks if object_permission is already loaded on the team
         2. If not, fetches from DB using object_permission_id if it exists
         """
-        if user_api_key_auth is None:
-            return []
-
-        if user_api_key_auth.team_id is None:
-            return []
-
         try:
             # Use the helper method that properly handles fetching from DB if needed
             object_permissions = await MCPRequestHandler._get_team_object_permission(

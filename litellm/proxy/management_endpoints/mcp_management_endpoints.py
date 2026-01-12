@@ -16,7 +16,7 @@ Endpoints here:
 import importlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -24,6 +24,7 @@ from fastapi import (
     Form,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     status,
@@ -31,8 +32,8 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 import litellm
-from litellm._uuid import uuid
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload,
@@ -66,7 +67,6 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         build_effective_auth_contexts,
     )
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
@@ -75,8 +75,10 @@ if MCP_AVAILABLE:
         SpecialMCPServerName,
         UpdateMCPServerRequest,
         UserAPIKeyAuth,
+        UserMCPManagementMode,
     )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials
@@ -208,6 +210,10 @@ if MCP_AVAILABLE:
             command=payload.command,
             args=payload.args,
             env=payload.env,
+            authorization_url=payload.authorization_url,
+            token_url=payload.token_url,
+            registration_url=payload.registration_url,
+            allow_all_keys=payload.allow_all_keys,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -296,118 +302,21 @@ if MCP_AVAILABLE:
         access_groups_list = sorted(list(access_groups))
         return {"access_groups": access_groups_list}
 
-    @router.get(
-        "/server/{server_id}/health",
-        description="Perform health check on a specific MCP server",
-        dependencies=[Depends(user_api_key_auth)],
-    )
-    async def health_check_mcp_server(
-        server_id: str,
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ):
-        """
-        Perform a health check on the MCP server specified by the `server_id`
-        Parameters:
-        - server_id: str - Required. The unique identifier of the mcp server to health check.
-        ```
-        curl --location 'http://localhost:4000/v1/mcp/server/{server_id}/health' \
-        --header 'Authorization: Bearer your_api_key_here'
-        ```
-        """
-        # Check if server exists and user has access
-        prisma_client = get_prisma_client_or_throw(
-            "Database not connected. Connect a database to your proxy"
-        )
-
-        # check to see if server exists for all users
-        mcp_server = await get_mcp_server(prisma_client, server_id)
-        if mcp_server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server with id {server_id} not found"},
-            )
-
-        # Implement authz restriction from requested user
-        if not _user_has_admin_view(user_api_key_dict):
-            # Perform authz check to filter the mcp servers user has access to
-            mcp_server_records = await get_all_mcp_servers_for_user(
-                prisma_client, user_api_key_dict
-            )
-            exists = does_mcp_server_exist(mcp_server_records, server_id)
-
-            if not exists:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": f"User does not have permission to access mcp server with id {server_id}. You can only access mcp servers that you have access to."
-                    },
-                )
-
-        # Perform health check using server manager
-        try:
-            health_result = await global_mcp_server_manager.health_check_server(
-                server_id
-            )
-            return health_result
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error performing health check on MCP server {server_id}: {str(e)}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error performing health check: {str(e)}"},
-            )
-
-    @router.get(
-        "/server/health",
-        description="Perform health check on all accessible MCP servers",
-        dependencies=[Depends(user_api_key_auth)],
-    )
-    async def health_check_all_mcp_servers(
-        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    ):
-        """
-        Perform health checks on all MCP servers accessible to the user
-        ```
-        curl --location 'http://localhost:4000/v1/mcp/server/health' \
-        --header 'Authorization: Bearer your_api_key_here'
-        ```
-        """
-        # Use server manager to get health checks for allowed servers
-        try:
-            all_health_results = (
-                await global_mcp_server_manager.health_check_allowed_servers(
-                    user_api_key_auth=user_api_key_dict
-                )
-            )
-
-            return {
-                "total_servers": len(all_health_results),
-                "healthy_count": len(
-                    [r for r in all_health_results.values() if r["status"] == "healthy"]
-                ),
-                "unhealthy_count": len(
-                    [
-                        r
-                        for r in all_health_results.values()
-                        if r["status"] == "unhealthy"
-                    ]
-                ),
-                "unknown_count": len(
-                    [r for r in all_health_results.values() if r["status"] == "unknown"]
-                ),
-                "servers": all_health_results,
-            }
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                f"Error performing health checks on MCP servers: {str(e)}"
-            )
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail={"error": f"Error performing health checks: {str(e)}"},
-            )
-
     ## FastAPI Routes
+    def _get_user_mcp_management_mode() -> UserMCPManagementMode:
+        proxy_general_settings: dict = {}
+        try:
+            from litellm.proxy.proxy_server import (
+                general_settings as proxy_general_settings,
+            )
+        except Exception:
+            pass
+
+        mode = proxy_general_settings.get("user_mcp_management_mode")
+        if mode == "view_all":
+            return "view_all"
+        return "restricted"
+
     @router.get(
         "/server",
         description="Returns the mcp server list with associated teams",
@@ -425,18 +334,26 @@ if MCP_AVAILABLE:
         ```
         """
 
-        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+        user_mcp_management_mode = _get_user_mcp_management_mode()
 
-        aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
-        for auth_context in auth_contexts:
-            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
-                user_api_key_auth=auth_context
+        if user_mcp_management_mode == "view_all":
+            servers = await global_mcp_server_manager.get_all_mcp_servers_unfiltered()
+            redacted_mcp_servers = _redact_mcp_credentials_list(servers)
+        else:
+            auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+            aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
+            for auth_context in auth_contexts:
+                servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                    user_api_key_auth=auth_context
+                )
+                for server in servers:
+                    if server.server_id not in aggregated_servers:
+                        aggregated_servers[server.server_id] = server
+
+            redacted_mcp_servers = _redact_mcp_credentials_list(
+                aggregated_servers.values()
             )
-            for server in servers:
-                if server.server_id not in aggregated_servers:
-                    aggregated_servers[server.server_id] = server
-
-        redacted_mcp_servers = _redact_mcp_credentials_list(aggregated_servers.values())
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -446,6 +363,67 @@ if MCP_AVAILABLE:
                         server.mcp_info = {}
                     server.mcp_info["is_public"] = True
         return redacted_mcp_servers
+
+    @router.get(
+        "/server/health",
+        description="Health check for MCP servers",
+        dependencies=[Depends(user_api_key_auth)],
+    )
+    async def health_check_servers(
+        server_ids: Optional[List[str]] = Query(
+            None,
+            description="Server IDs to check. If not provided, checks all accessible servers.",
+        ),
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    ):
+        """
+        Perform health checks on one or more MCP servers.
+
+        Parameters:
+        - server_ids: Optional list of server IDs. If not provided, checks all accessible servers.
+
+        Returns:
+        - Health check results for requested servers
+
+        ```
+        # Check all accessible servers
+        curl --location 'http://localhost:4000/v1/mcp/server/health' \
+        --header 'Authorization: Bearer your_api_key_here'
+
+        # Check specific servers
+        curl --location 'http://localhost:4000/v1/mcp/server/health?server_ids=server-1&server_ids=server-2' \
+        --header 'Authorization: Bearer your_api_key_here'
+        ```
+        """
+        user_mcp_management_mode = _get_user_mcp_management_mode()
+
+        if user_mcp_management_mode == "view_all":
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(
+                server_ids=server_ids
+            )
+            return [
+                {"server_id": server.server_id, "status": server.status}
+                for server in servers
+            ]
+
+        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+        server_status_map: Dict[
+            str, Optional[Literal["healthy", "unhealthy", "unknown"]]
+        ] = {}
+        for auth_context in auth_contexts:
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
+                user_api_key_auth=auth_context,
+                server_ids=server_ids,
+            )
+            for server in servers:
+                if server.server_id not in server_status_map:
+                    server_status_map[server.server_id] = server.status
+
+        return [
+            {"server_id": server_id, "status": status}
+            for server_id, status in server_status_map.items()
+        ]
 
     @router.get(
         "/server/{server_id}",
@@ -484,15 +462,11 @@ if MCP_AVAILABLE:
                 server_id
             )
             # Update the server object with health check results
-            mcp_server.status = health_result.get("status", "unknown")
-            mcp_server.last_health_check = (
-                datetime.fromisoformat(
-                    health_result.get("last_health_check", datetime.now().isoformat())
-                )
-                if health_result.get("last_health_check")
-                else None
+            mcp_server.status = (
+                health_result.status if health_result.status else "unknown"
             )
-            mcp_server.health_check_error = health_result.get("error")
+            mcp_server.last_health_check = health_result.last_health_check
+            mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
             verbose_proxy_logger.debug(
                 f"Error performing health check on server {server_id}: {e}"
@@ -512,7 +486,7 @@ if MCP_AVAILABLE:
         exists = does_mcp_server_exist(mcp_server_records, server_id)
 
         if exists:
-            await global_mcp_server_manager.add_update_server(mcp_server)
+            await global_mcp_server_manager.add_server(mcp_server)
             return _redact_mcp_credentials(mcp_server)
         else:
             raise HTTPException(
@@ -586,7 +560,7 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
-            await global_mcp_server_manager.add_update_server(new_mcp_server)
+            await global_mcp_server_manager.add_server(new_mcp_server)
 
             # Ensure registry is up to date by reloading from database
             await global_mcp_server_manager.reload_servers_from_database()
@@ -867,7 +841,7 @@ if MCP_AVAILABLE:
                     "error": f"MCP Server not found, passed server_id={payload.server_id}"
                 },
             )
-        await global_mcp_server_manager.add_update_server(mcp_server_record_updated)
+        await global_mcp_server_manager.update_server(mcp_server_record_updated)
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()

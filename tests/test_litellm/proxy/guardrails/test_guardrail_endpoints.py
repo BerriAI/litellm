@@ -495,13 +495,13 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     mock_response = Mock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"action": "NONE", "outputs": []}
-    guardrail_hook.async_handler.post = AsyncMock(return_value=mock_response)
     
     test_request_data = {
         "api_key": "test-api-key-789"
     }
     
-    with patch.object(guardrail_hook, "_load_credentials") as mock_load_creds, \
+    with patch.object(guardrail_hook.async_handler, "post", AsyncMock(return_value=mock_response)), \
+         patch.object(guardrail_hook, "_load_credentials") as mock_load_creds, \
          patch.object(guardrail_hook, "convert_to_bedrock_format") as mock_convert, \
          patch.object(guardrail_hook, "get_guardrail_dynamic_request_body_params") as mock_get_params, \
          patch.object(guardrail_hook, "add_standard_logging_guardrail_information_to_request_data"), \

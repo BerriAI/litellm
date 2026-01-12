@@ -383,3 +383,388 @@ class TestGuardrailLoggingAggregation:
         assert isinstance(info, list)
         assert len(info) == 2
         assert info[1]["guardrail_name"] == "test_guardrail"
+
+
+class TestCustomGuardrailPassthroughSupport:
+    """Tests for passthrough endpoint guardrail support - Issue fixes."""
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_deployment_hook_with_httpx_response(self):
+        """
+        Test that async_post_call_success_deployment_hook handles raw httpx.Response objects
+        from passthrough endpoints without crashing with TypeError.
+        
+        This tests Fix #3: TypeError: TypedDict does not support instance and class checks
+        """
+        import httpx
+
+        custom_guardrail = CustomGuardrail()
+        
+        # Mock the async_post_call_success_hook to return None (guardrail didn't modify response)
+        custom_guardrail.async_post_call_success_hook = AsyncMock(return_value=None)
+        
+        # Create a mock httpx.Response object (typical passthrough response)
+        mock_response = AsyncMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_response.text = "Mock response"
+        
+        request_data = {
+            "guardrails": ["test_guardrail"],
+            "user_api_key_user_id": "test_user",
+            "user_api_key_team_id": "test_team",
+            "user_api_key_end_user_id": "test_end_user",
+            "user_api_key_hash": "test_hash",
+            "user_api_key_request_route": "passthrough_route",
+        }
+        
+        # This should not raise TypeError: TypedDict does not support instance and class checks
+        result = await custom_guardrail.async_post_call_success_deployment_hook(
+            request_data=request_data,
+            response=mock_response,
+            call_type=CallTypes.allm_passthrough_route,
+        )
+        
+        # When result is None, should return the original response
+        assert result == mock_response
+
+    @pytest.mark.asyncio
+    async def test_async_post_call_success_deployment_hook_with_none_call_type(self):
+        """
+        Test that async_post_call_success_deployment_hook handles None call_type gracefully.
+        
+        This ensures that even if call_type is None (before fix #1), the guardrail doesn't crash.
+        """
+        custom_guardrail = CustomGuardrail()
+        
+        # Mock the async_post_call_success_hook to return None
+        custom_guardrail.async_post_call_success_hook = AsyncMock(return_value=None)
+        
+        mock_response = AsyncMock()
+        
+        request_data = {
+            "guardrails": ["test_guardrail"],
+            "user_api_key_user_id": "test_user",
+        }
+        
+        # Call with None call_type - should not crash
+        result = await custom_guardrail.async_post_call_success_deployment_hook(
+            request_data=request_data,
+            response=mock_response,
+            call_type=None,
+        )
+        
+        # Should return the original response when result is None
+        assert result == mock_response
+
+    def test_is_valid_response_type_with_none(self):
+        """
+        Test _is_valid_response_type helper method correctly identifies None as invalid.
+        
+        This is part of Fix #3: Safely handling TypedDict types that don't support isinstance checks.
+        """
+        custom_guardrail = CustomGuardrail()
+        
+        # None should be invalid
+        assert custom_guardrail._is_valid_response_type(None) is False
+
+    def test_is_valid_response_type_with_typeddict_error(self):
+        """
+        Test _is_valid_response_type gracefully handles TypeError from TypedDict.
+        
+        This tests Fix #3: When isinstance() is called with TypedDict types, it raises TypeError.
+        The method should catch this and allow the response through.
+        """
+        from litellm.types.utils import ModelResponse
+        
+        custom_guardrail = CustomGuardrail()
+        
+        # Create a valid LiteLLM response object
+        response = ModelResponse(
+            id="test-id",
+            choices=[],
+            created=0,
+            model="test-model",
+            object="chat.completion",
+        )
+        
+        # This should return True (it's a valid response type or TypeError is caught)
+        result = custom_guardrail._is_valid_response_type(response)
+        assert result is True
+
+
+class TestPassthroughCallTypeHandling:
+    """Tests for passthrough call type handling in common_request_processing."""
+
+    def test_get_pre_call_type_with_allm_passthrough_route(self):
+        """
+        Test that _get_pre_call_type correctly maps allm_passthrough_route.
+
+        This tests Fix #1: allm_passthrough_route was not being handled, causing call_type to be None.
+        """
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        # Test the mapping
+        result = ProxyBaseLLMRequestProcessing._get_pre_call_type(
+            route_type="allm_passthrough_route"
+        )
+
+        # Should return allm_passthrough_route, not None
+        assert result == "allm_passthrough_route"
+
+    def test_get_pre_call_type_preserves_standard_mappings(self):
+        """
+        Test that _get_pre_call_type still correctly maps standard route types.
+
+        Ensures Fix #1 didn't break existing functionality.
+        """
+        from litellm.proxy.common_request_processing import (
+            ProxyBaseLLMRequestProcessing,
+        )
+
+        # Test standard mappings are preserved
+        assert (
+            ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="acompletion")
+            == "completion"
+        )
+        assert (
+            ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="aembedding")
+            == "embeddings"
+        )
+        assert (
+            ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="aresponses")
+            == "responses"
+        )
+
+
+class TestEventTypeLogging:
+    """Tests for event_type logging in guardrail information."""
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_infers_event_type_from_async_pre_call_hook(
+        self,
+    ):
+        """
+        Test that log_guardrail_information decorator correctly infers GuardrailEventHooks.pre_call
+        from async_pre_call_hook function name.
+        """
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_event_type_guardrail",
+                    event_hook=[
+                        GuardrailEventHooks.pre_call,
+                        GuardrailEventHooks.post_call,
+                    ],
+                )
+
+            @log_guardrail_information
+            async def async_pre_call_hook(self, data: dict, **kwargs):
+                return {"result": "pre_call_executed"}
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.async_pre_call_hook(data=request_data)
+
+        # Check that the guardrail_mode was set to pre_call (not the full list)
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_infers_event_type_from_async_post_call_success_hook(
+        self,
+    ):
+        """
+        Test that log_guardrail_information decorator correctly infers GuardrailEventHooks.post_call
+        from async_post_call_success_hook function name.
+        """
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_event_type_guardrail",
+                    event_hook=[
+                        GuardrailEventHooks.pre_call,
+                        GuardrailEventHooks.post_call,
+                    ],
+                )
+
+            @log_guardrail_information
+            async def async_post_call_success_hook(self, data: dict, **kwargs):
+                return {"result": "post_call_executed"}
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.async_post_call_success_hook(data=request_data)
+
+        # Check that the guardrail_mode was set to post_call (not the full list)
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.post_call
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_infers_event_type_from_async_moderation_hook(
+        self,
+    ):
+        """
+        Test that log_guardrail_information decorator correctly infers GuardrailEventHooks.during_call
+        from async_moderation_hook function name.
+        """
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_event_type_guardrail",
+                    event_hook=[
+                        GuardrailEventHooks.during_call,
+                        GuardrailEventHooks.post_call,
+                    ],
+                )
+
+            @log_guardrail_information
+            async def async_moderation_hook(self, data: dict, **kwargs):
+                return {"result": "moderation_executed"}
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.async_moderation_hook(data=request_data)
+
+        # Check that the guardrail_mode was set to during_call (not the full list)
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.during_call
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_infers_event_type_from_async_post_call_streaming_hook(
+        self,
+    ):
+        """
+        Test that log_guardrail_information decorator correctly infers GuardrailEventHooks.post_call
+        from async_post_call_streaming_hook function name.
+        """
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_event_type_guardrail",
+                    event_hook=[
+                        GuardrailEventHooks.pre_call,
+                        GuardrailEventHooks.post_call,
+                    ],
+                )
+
+            @log_guardrail_information
+            async def async_post_call_streaming_hook(self, data: dict, **kwargs):
+                return {"result": "streaming_executed"}
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.async_post_call_streaming_hook(data=request_data)
+
+        # Check that the guardrail_mode was set to post_call (not the full list)
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.post_call
+
+    @pytest.mark.asyncio
+    async def test_log_guardrail_information_returns_none_for_unknown_function_name(
+        self,
+    ):
+        """
+        Test that log_guardrail_information decorator returns None for event_type
+        when function name doesn't match known patterns, and falls back to self.event_hook.
+        """
+        from litellm.integrations.custom_guardrail import log_guardrail_information
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        class TestGuardrail(CustomGuardrail):
+            def __init__(self):
+                super().__init__(
+                    guardrail_name="test_event_type_guardrail",
+                    event_hook=GuardrailEventHooks.pre_call,
+                )
+
+            @log_guardrail_information
+            async def some_other_hook(self, data: dict, **kwargs):
+                return {"result": "other_hook_executed"}
+
+        guardrail = TestGuardrail()
+        request_data = {"metadata": {}}
+
+        await guardrail.some_other_hook(data=request_data)
+
+        # Check that the guardrail_mode falls back to self.event_hook
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call
+
+    def test_add_standard_logging_uses_event_type_over_event_hook(self):
+        """
+        Test that add_standard_logging_guardrail_information_to_request_data
+        prioritizes event_type parameter over self.event_hook.
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=[GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call],
+        )
+
+        request_data = {"metadata": {}}
+
+        # Call with explicit event_type
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            event_type=GuardrailEventHooks.post_call,
+        )
+
+        # Should use the provided event_type (post_call), not the full event_hook list
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.post_call
+
+    def test_add_standard_logging_falls_back_to_event_hook_when_event_type_is_none(
+        self,
+    ):
+        """
+        Test that add_standard_logging_guardrail_information_to_request_data
+        falls back to self.event_hook when event_type is None.
+        """
+        from litellm.types.guardrails import GuardrailEventHooks
+
+        guardrail = CustomGuardrail(
+            guardrail_name="test_guardrail",
+            event_hook=GuardrailEventHooks.pre_call,
+        )
+
+        request_data = {"metadata": {}}
+
+        # Call with event_type=None
+        guardrail.add_standard_logging_guardrail_information_to_request_data(
+            guardrail_json_response={"result": "ok"},
+            request_data=request_data,
+            guardrail_status="success",
+            event_type=None,
+        )
+
+        # Should fall back to self.event_hook
+        logged_info = request_data["metadata"]["standard_logging_guardrail_information"]
+        assert len(logged_info) == 1
+        assert logged_info[0]["guardrail_mode"] == GuardrailEventHooks.pre_call

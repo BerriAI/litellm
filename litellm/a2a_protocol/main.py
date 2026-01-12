@@ -12,6 +12,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
+from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -494,7 +495,7 @@ async def create_a2a_client(
 
 async def aget_agent_card(
     base_url: str,
-    timeout: float = 60.0,
+    timeout: float = DEFAULT_A2A_AGENT_TIMEOUT,
     extra_headers: Optional[Dict[str, str]] = None,
 ) -> "AgentCard":
     """

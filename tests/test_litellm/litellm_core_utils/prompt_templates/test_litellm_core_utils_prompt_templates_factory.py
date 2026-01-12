@@ -497,6 +497,57 @@ def test_convert_gemini_messages():
     )
 
 
+def test_convert_gemini_tool_call_result_with_image_url():
+    """
+    Test that image_url content type in tool results is handled correctly for Gemini.
+    Fixes: https://github.com/BerriAI/litellm/issues/18187
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_result,
+    )
+    from litellm.types.llms.openai import ChatCompletionToolMessage
+
+    # Test with string image_url format
+    message_str_format = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_123",
+        content=[{"type": "image_url", "image_url": "data:image/jpeg;base64,/9j/4AAQ"}],
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_123",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "get_image", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message_str_format,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    # Should have inline_data for the image
+    assert isinstance(result, list) and any("inline_data" in p for p in result)
+
+    # Test with dict image_url format (OpenAI standard)
+    message_dict_format = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_456",
+        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}],
+    )
+    last_message_with_tool_calls["tool_calls"][0]["id"] = "call_456"
+
+    result2 = convert_to_gemini_tool_call_result(
+        message=message_dict_format,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result2, list) and any("inline_data" in p for p in result2)
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly
@@ -1086,3 +1137,94 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert f"DocumentPDFmessages_" in block["document"]["name"]
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
+
+
+def test_anthropic_messages_pt_server_tool_use_passthrough():
+    """
+    Test that anthropic_messages_pt passes through server_tool_use and 
+    tool_search_tool_result blocks in assistant message content.
+    
+    These are Anthropic-native content types used for tool search functionality
+    that need to be preserved when reconstructing multi-turn conversations.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    messages = [
+        {
+            "role": "user",
+            "content": "I need help with time information."
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01ABC123",
+                    "name": "tool_search_tool_regex",
+                    "input": {"query": ".*time.*"}
+                },
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": "srvtoolu_01ABC123",
+                    "content": {
+                        "type": "tool_search_tool_search_result",
+                        "tool_references": [
+                            {"type": "tool_reference", "tool_name": "get_time"}
+                        ]
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "I found the time tool. How can I help you?"
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "What's the time in New York?"
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    # Verify we have 3 messages (user, assistant, user)
+    assert len(result) == 3
+    
+    # Verify the assistant message content
+    assistant_msg = result[1]
+    assert assistant_msg["role"] == "assistant"
+    assert isinstance(assistant_msg["content"], list)
+    
+    # Find the different content block types
+    content_types = [block.get("type") for block in assistant_msg["content"]]
+    
+    # Verify server_tool_use block is preserved
+    assert "server_tool_use" in content_types
+    server_tool_use_block = next(
+        b for b in assistant_msg["content"] if b.get("type") == "server_tool_use"
+    )
+    assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
+    assert server_tool_use_block["name"] == "tool_search_tool_regex"
+    assert server_tool_use_block["input"] == {"query": ".*time.*"}
+    
+    # Verify tool_search_tool_result block is preserved
+    assert "tool_search_tool_result" in content_types
+    tool_result_block = next(
+        b for b in assistant_msg["content"] if b.get("type") == "tool_search_tool_result"
+    )
+    assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
+    assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
+    assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
+    
+    # Verify text block is also preserved
+    assert "text" in content_types
+    text_block = next(
+        b for b in assistant_msg["content"] if b.get("type") == "text"
+    )
+    assert text_block["text"] == "I found the time tool. How can I help you?"

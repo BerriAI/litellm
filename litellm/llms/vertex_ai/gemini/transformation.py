@@ -115,7 +115,7 @@ def _process_gemini_image(
             and (image_type := format or _get_image_mime_type_from_url(image_url))
             is not None
         ):
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
+            file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
             
             if media_resolution_enum is not None and model is not None:
@@ -383,7 +383,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     and isinstance(_message_content, str)
                 ):
                     assistant_text = _message_content
-                    assistant_content.append(PartType(text=assistant_text))  # type: ignore
+                    # Check if message has thought_signatures in provider_specific_fields
+                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                    thought_signatures = None
+                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
+                        thought_signatures = provider_specific_fields.get("thought_signatures")
+                    
+                    # If we have thought signatures, add them to the part
+                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                        # Use the first signature for the text part (Gemini expects one signature per part)
+                        assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
+                    else:
+                        assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (

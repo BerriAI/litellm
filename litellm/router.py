@@ -136,6 +136,7 @@ from litellm.types.router import (
     CustomRoutingStrategyBase,
     Deployment,
     DeploymentTypedDict,
+    GuardrailTypedDict,
     LiteLLM_Params,
     MockRouterTestingParams,
     ModelGroupInfo,
@@ -214,6 +215,8 @@ class Router:
         assistants_config: Optional[AssistantsTypedDict] = None,
         ## SEARCH API ##
         search_tools: Optional[List[SearchToolTypedDict]] = None,
+        ## GUARDRAIL API ##
+        guardrail_list: Optional[List[GuardrailTypedDict]] = None,
         ## CACHING ##
         redis_url: Optional[str] = None,
         redis_host: Optional[str] = None,
@@ -375,6 +378,7 @@ class Router:
 
         self.assistants_config = assistants_config
         self.search_tools = search_tools or []
+        self.guardrail_list = guardrail_list or []
         self.deployment_names: List = (
             []
         )  # names of models under litellm_params. ex. azure/chatgpt-v-2
@@ -709,6 +713,23 @@ class Router:
         self, routing_strategy: Union[RoutingStrategy, str], routing_strategy_args: dict
     ):
         verbose_router_logger.info(f"Routing strategy: {routing_strategy}")
+
+        # Validate routing_strategy value to fail fast with helpful error
+        # See: https://github.com/BerriAI/litellm/issues/11330
+        # Derive valid strategies from RoutingStrategy enum + "simple-shuffle" (default, not in enum)
+        valid_strategy_strings = ["simple-shuffle"] + [s.value for s in RoutingStrategy]
+
+        if routing_strategy is not None:
+            is_valid_string = isinstance(routing_strategy, str) and routing_strategy in valid_strategy_strings
+            is_valid_enum = isinstance(routing_strategy, RoutingStrategy)
+            if not is_valid_string and not is_valid_enum:
+                raise ValueError(
+                    f"Invalid routing_strategy: '{routing_strategy}'. "
+                    f"Valid options: {valid_strategy_strings}. "
+                    f"Check 'router_settings.routing_strategy' in your config.yaml "
+                    f"or the 'routing_strategy' parameter if using the Router SDK directly."
+                )
+
         if (
             routing_strategy == RoutingStrategy.LEAST_BUSY.value
             or routing_strategy == RoutingStrategy.LEAST_BUSY
@@ -807,6 +828,9 @@ class Router:
         )
         self.acancel_responses = self.factory_function(
             litellm.acancel_responses, call_type="acancel_responses"
+        )
+        self.acompact_responses = self.factory_function(
+            litellm.acompact_responses, call_type="acompact_responses"
         )
         self.adelete_responses = self.factory_function(
             litellm.adelete_responses, call_type="adelete_responses"
@@ -2974,6 +2998,99 @@ class Router:
             **kwargs,
         )
 
+    async def aguardrail(
+        self,
+        guardrail_name: str,
+        original_function: Callable,
+        **kwargs,
+    ):
+        """
+        Execute a guardrail with load balancing and fallbacks.
+
+        Args:
+            guardrail_name: Name of the guardrail to execute
+            original_function: The guardrail's execution function (e.g., async_pre_call_hook)
+            **kwargs: Additional arguments passed to the guardrail
+
+        Returns:
+            Result from the guardrail execution
+        """
+        kwargs["model"] = guardrail_name  # For fallback system compatibility
+        kwargs["original_generic_function"] = original_function
+        kwargs["original_function"] = self._aguardrail_helper
+        self._update_kwargs_before_fallbacks(
+            model=guardrail_name, kwargs=kwargs, metadata_variable_name="litellm_metadata"
+        )
+        verbose_router_logger.debug(
+            f"Inside aguardrail() - guardrail_name: {guardrail_name}; kwargs: {kwargs}"
+        )
+        response = await self.async_function_with_fallbacks(**kwargs)
+        return response
+
+    async def _aguardrail_helper(
+        self,
+        model: str,
+        original_generic_function: Callable,
+        **kwargs,
+    ):
+        """
+        Helper for aguardrail - selects a guardrail deployment and executes it.
+        Called by async_function_with_fallbacks for each retry attempt.
+
+        Args:
+            model: The guardrail_name (named 'model' for fallback system compatibility)
+            original_generic_function: The guardrail's execution function
+            **kwargs: Additional arguments
+        """
+        guardrail_name = model
+        selected_guardrail = self.get_available_guardrail(
+            guardrail_name=guardrail_name,
+        )
+
+        verbose_router_logger.debug(
+            f"Selected guardrail deployment: {selected_guardrail.get('litellm_params', {}).get('guardrail')}"
+        )
+
+        # Pass the selected guardrail config to the original function
+        kwargs["selected_guardrail"] = selected_guardrail
+        response = await original_generic_function(**kwargs)
+        return response
+
+    def get_available_guardrail(
+        self,
+        guardrail_name: str,
+    ) -> "GuardrailTypedDict":
+        """
+        Select a guardrail deployment using the router's load balancing strategy.
+
+        Args:
+            guardrail_name: Name of the guardrail to select
+
+        Returns:
+            Selected guardrail configuration dict
+        """
+        from litellm.router_strategy.simple_shuffle import simple_shuffle
+
+        healthy_deployments = [
+            g for g in self.guardrail_list if g.get("guardrail_name") == guardrail_name
+        ]
+
+        if not healthy_deployments:
+            raise ValueError(f"No guardrail found with name: {guardrail_name}")
+
+        if len(healthy_deployments) == 1:
+            return healthy_deployments[0]
+
+        # Use simple_shuffle for weighted selection
+        return cast(
+            GuardrailTypedDict,
+            simple_shuffle(
+                llm_router_instance=self,
+                healthy_deployments=healthy_deployments,
+                model=guardrail_name,
+            ),
+        )
+
     async def _ageneric_api_call_with_fallbacks(
         self, model: str, original_function: Callable, **kwargs
     ):
@@ -3827,6 +3944,7 @@ class Router:
             "anthropic_messages",
             "aresponses",
             "acancel_responses",
+            "acompact_responses",
             "responses",
             "aget_responses",
             "adelete_responses",
@@ -3885,6 +4003,8 @@ class Router:
             "retrieve_container",
             "adelete_container",
             "delete_container",
+            "aupload_container_file",
+            "upload_container_file",
             "alist_container_files",
             "list_container_files",
             "aretrieve_container_file",
@@ -4036,6 +4156,7 @@ class Router:
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
+                "aupload_container_file",
                 "alist_container_files",
                 "aretrieve_container_file",
                 "adelete_container_file",
@@ -4055,6 +4176,7 @@ class Router:
             elif call_type in (
                 "aget_responses",
                 "acancel_responses",
+                "acompact_responses",
                 "adelete_responses",
                 "alist_input_items",
             ):
@@ -4586,7 +4708,7 @@ class Router:
                 except Exception as e:
                     ## LOGGING
                     kwargs = self.log_retry(kwargs=kwargs, e=e)
-                    remaining_retries = num_retries - current_attempt
+                    remaining_retries = num_retries - current_attempt - 1
                     _model: Optional[str] = kwargs.get("model")  # type: ignore
                     if _model is not None:
                         (
@@ -4609,7 +4731,15 @@ class Router:
 
             if type(original_exception) in litellm.LITELLM_EXCEPTION_TYPES:
                 setattr(original_exception, "max_retries", num_retries)
-                setattr(original_exception, "num_retries", current_attempt)
+                # current_attempt is 0-indexed (0 to num_retries-1), so after loop completion
+                # it represents the last attempt index. The actual number of retries attempted
+                # is current_attempt + 1, which equals num_retries when all retries are exhausted.
+                # We've already verified num_retries > 0 before entering the loop, so current_attempt
+                # will always be set (never None) when we reach this point.
+                actual_retries_attempted = (
+                    current_attempt + 1 if current_attempt is not None else num_retries
+                )
+                setattr(original_exception, "num_retries", actual_retries_attempted)
 
             raise original_exception
 
