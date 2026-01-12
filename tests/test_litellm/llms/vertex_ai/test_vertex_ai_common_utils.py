@@ -1254,8 +1254,8 @@ def test_build_vertex_schema_empty_properties():
     # Verify empty properties was removed
     assert "properties" not in go_back_schema, "Empty properties should be removed"
     
-    # Verify type was also removed (since object without properties is invalid in Gemini)
-    assert "type" not in go_back_schema, "Type should be removed when properties is empty"
+    # Verify type is kept as object (Gemini requires type: object even without properties)
+    assert go_back_schema.get("type") == "object", "Type should be kept as object when properties is empty"
     
     # Verify required was also removed
     assert "required" not in go_back_schema, "Required should be removed when properties is empty"
