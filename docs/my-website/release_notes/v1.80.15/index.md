@@ -1,6 +1,6 @@
 ---
-title: "v1.80.14 - Manus API Support"
-slug: "v1-80-14"
+title: "v1.80.15 - Manus API Support"
+slug: "v1-80-15"
 date: 2026-01-10T10:00:00
 authors:
   - name: Krrish Dholakia
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:v1.80.14-stable
+docker.litellm.ai/berriai/litellm:v1.80.15.rc.1
 ```
 
 </TabItem>
@@ -35,7 +35,7 @@ docker.litellm.ai/berriai/litellm:v1.80.14-stable
 <TabItem value="pip" label="Pip">
 
 ``` showLineNumbers title="pip install litellm"
-pip install litellm==1.80.14
+pip install litellm==1.80.15
 ```
 
 </TabItem>

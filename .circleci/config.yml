@@ -2135,10 +2135,11 @@ jobs:
           name: Check container logs for expected message
           command: |
             echo "=== Printing Full Container Startup Logs ==="
-            docker logs my-app
+            LOG_OUTPUT="$(docker logs my-app 2>&1)"
+            printf '%s\n' "$LOG_OUTPUT"
             echo "=== End of Full Container Startup Logs ==="
 
-            if docker logs my-app 2>&1 | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
+            if printf '%s\n' "$LOG_OUTPUT" | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
               echo "Expected message found in logs. Test passed."
             else
               echo "Expected message not found in logs. Test failed."

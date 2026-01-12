@@ -732,6 +732,19 @@ class ModelResponseIterator:
                     provider_specific_fields["web_search_results"] = (
                         self.web_search_results
                     )
+                elif (
+                    content_block_start["content_block"]["type"]
+                    == "web_fetch_tool_result"
+                ):
+                    # Capture web_fetch_tool_result for multi-turn reconstruction
+                    # The full content comes in content_block_start, not in deltas
+                    # Fixes: https://github.com/BerriAI/litellm/issues/18137
+                    self.web_search_results.append(
+                        content_block_start["content_block"]
+                    )
+                    provider_specific_fields["web_search_results"] = (
+                        self.web_search_results
+                    )
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
                 # check if tool call content block - only for tool_use and server_tool_use blocks
