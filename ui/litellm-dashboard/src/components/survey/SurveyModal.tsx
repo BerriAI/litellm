@@ -85,8 +85,27 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
 
   const handleSubmit = async () => {
     setIsSubmitting(true);
-    // Simulate API call
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    try {
+      await fetch("https://hooks.zapier.com/hooks/catch/16331268/ugms6w0/", {
+        method: "POST",
+        mode: "no-cors",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          usingAtCompany: data.usingAtCompany,
+          companyName: data.companyName || null,
+          startDate: data.startDate,
+          reasons: data.reasons,
+          otherReason: data.otherReason || null,
+          email: data.email || null,
+          submittedAt: new Date().toISOString(),
+        }),
+      });
+    } catch (error) {
+      // Silently fail - don't block the user experience
+      console.error("Failed to submit survey:", error);
+    }
     setIsSubmitting(false);
     onComplete();
   };
