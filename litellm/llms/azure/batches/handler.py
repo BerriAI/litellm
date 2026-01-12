@@ -66,9 +66,9 @@ class AzureBatchesAPI(BaseAzureLLM):
             )
 
         if _is_async is True:
-            if not isinstance(azure_client, AsyncAzureOpenAI):
+            if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
                 raise ValueError(
-                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                    "OpenAI client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
                 )
             return self.acreate_batch(  # type: ignore
                 create_batch_data=create_batch_data, azure_client=azure_client
@@ -112,9 +112,9 @@ class AzureBatchesAPI(BaseAzureLLM):
             )
 
         if _is_async is True:
-            if not isinstance(azure_client, AsyncAzureOpenAI):
+            if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
                 raise ValueError(
-                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                    "OpenAI client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
                 )
             return self.aretrieve_batch(  # type: ignore
                 retrieve_batch_data=retrieve_batch_data, client=azure_client
@@ -199,9 +199,9 @@ class AzureBatchesAPI(BaseAzureLLM):
             )
 
         if _is_async is True:
-            if not isinstance(azure_client, AsyncAzureOpenAI):
+            if not isinstance(azure_client, (AsyncAzureOpenAI, AsyncOpenAI)):
                 raise ValueError(
-                    "OpenAI client is not an instance of AsyncOpenAI. Make sure you passed an AsyncOpenAI client."
+                    "OpenAI client is not an instance of AsyncAzureOpenAI or AsyncOpenAI"
                 )
             return self.alist_batches(  # type: ignore
                 client=azure_client, after=after, limit=limit
