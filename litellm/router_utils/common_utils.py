@@ -32,9 +32,9 @@ def add_model_file_id_mappings(
     model_file_id_mapping = {}
     if isinstance(healthy_deployments, list):
         for deployment, response in zip(healthy_deployments, responses):
-            model_file_id_mapping[
-                deployment.get("model_info", {}).get("id")
-            ] = response.id
+            model_file_id_mapping[deployment.get("model_info", {}).get("id")] = (
+                response.id
+            )
     elif isinstance(healthy_deployments, dict):
         for model_id, file_id in healthy_deployments.items():
             model_file_id_mapping[model_id] = file_id
@@ -135,11 +135,15 @@ def filter_deployments_by_access_groups(
     request_kwargs: Optional[Dict] = None,
 ) -> Union[List[Dict], Dict]:
     """
-    Filter deployments to only include those matching the team's allowed access groups.
+    Filter deployments to only include those matching the user's allowed access groups.
 
-    If the request includes `user_api_key_allowed_access_groups` in metadata,
-    only return deployments where at least one of the deployment's access_groups
-    matches the allowed list.
+    Reads from TWO separate metadata fields (per maintainer feedback):
+    - `user_api_key_allowed_access_groups`: Access groups from the API Key's models.
+    - `user_api_key_team_allowed_access_groups`: Access groups from the Team's models.
+
+    A deployment is included if its access_groups overlap with EITHER the key's
+    or the team's allowed access groups. Deployments with no access_groups are
+    always included (not restricted).
 
     This prevents cross-team load balancing when multiple teams have models with
     the same name but in different access groups (GitHub issue #18333).
@@ -152,15 +156,31 @@ def filter_deployments_by_access_groups(
 
     metadata = request_kwargs.get("metadata") or {}
     litellm_metadata = request_kwargs.get("litellm_metadata") or {}
-    allowed_access_groups = metadata.get(
-        "user_api_key_allowed_access_groups"
-    ) or litellm_metadata.get("user_api_key_allowed_access_groups")
 
-    # If no access groups specified, return all deployments (backwards compatible)
-    if not allowed_access_groups:
+    # Gather key-level allowed access groups
+    key_allowed_access_groups = (
+        metadata.get("user_api_key_allowed_access_groups")
+        or litellm_metadata.get("user_api_key_allowed_access_groups")
+        or []
+    )
+
+    # Gather team-level allowed access groups
+    team_allowed_access_groups = (
+        metadata.get("user_api_key_team_allowed_access_groups")
+        or litellm_metadata.get("user_api_key_team_allowed_access_groups")
+        or []
+    )
+
+    # Combine both for the final allowed set
+    combined_allowed_access_groups = list(key_allowed_access_groups) + list(
+        team_allowed_access_groups
+    )
+
+    # If no access groups specified from either source, return all deployments (backwards compatible)
+    if not combined_allowed_access_groups:
         return healthy_deployments
 
-    allowed_set = set(allowed_access_groups)
+    allowed_set = set(combined_allowed_access_groups)
     filtered = []
     for deployment in healthy_deployments:
         model_info = deployment.get("model_info") or {}
@@ -177,7 +197,7 @@ def filter_deployments_by_access_groups(
 
     if len(healthy_deployments) > 0 and len(filtered) == 0:
         verbose_logger.warning(
-            f"No deployments match allowed access groups {allowed_access_groups}"
+            f"No deployments match allowed access groups {combined_allowed_access_groups}"
         )
 
     return filtered
