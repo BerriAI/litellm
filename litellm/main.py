@@ -189,7 +189,7 @@ from .llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from .llms.custom_llm import CustomLLM, custom_chat_llm_router
 from .llms.databricks.embed.handler import DatabricksEmbeddingHandler
 from .llms.deprecated_providers import aleph_alpha, palm
-from .llms.gemini.common_utils import get_api_key_from_env, get_vertex_api_key_from_env
+from .llms.gemini.common_utils import get_api_key_from_env
 from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
@@ -3230,12 +3230,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 or get_secret("VERTEXAI_CREDENTIALS")
             )
 
-            vertex_api_key = (
-                api_key
-                or get_vertex_api_key_from_env()
-                or litellm.api_key
-            )
-
             api_base = api_base or litellm.api_base or get_secret("VERTEXAI_API_BASE")
 
             new_params = safe_deep_copy(optional_params or {})
@@ -3277,7 +3271,7 @@ def completion(  # type: ignore # noqa: PLR0915
                     vertex_location=vertex_ai_location,
                     vertex_project=vertex_ai_project,
                     vertex_credentials=vertex_credentials,
-                    gemini_api_key=vertex_api_key,  # Support for Vertex AI API Key
+                    gemini_api_key=None,
                     logging_obj=logging,
                     acompletion=acompletion,
                     timeout=timeout,
@@ -4593,8 +4587,8 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("OPENAI_API_KEY")
             )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
             
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
@@ -4662,8 +4656,8 @@ def embedding(  # noqa: PLR0915
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
 
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
@@ -4687,9 +4681,9 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_key
             )
 
-            if extra_headers is not None and isinstance(extra_headers, dict):
-                headers = extra_headers
-            else:
+            # Use the merged headers variable (already merged at the top of the function)
+            # Don't overwrite it with just extra_headers
+            if headers is None:
                 headers = {}
 
             response = base_llm_http_handler.embedding(
@@ -5653,11 +5647,9 @@ def text_completion(  # noqa: PLR0915
         )
         and isinstance(prompt, list)
         and len(prompt) > 0
-        and isinstance(prompt[0], list)
+        and (isinstance(prompt[0], list) or isinstance(prompt[0], int))
     ):
-        verbose_logger.warning(
-            msg="List of lists being passed. If this is for tokens, then it might not work across all models."
-        )
+        # Support for token IDs as prompt (list of integers or list of lists of integers)
         messages = [{"role": "user", "content": prompt}]  # type: ignore
     else:
         raise Exception(

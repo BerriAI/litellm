@@ -1,3 +1,4 @@
+import uuid
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 
 import httpx
@@ -94,9 +95,11 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
         
         # Manus uses API_KEY header, not Authorization: Bearer
+        # Content-Type is required for all requests (including GET)
         headers.update(
             {
                 "API_KEY": api_key,
+                "Content-Type": "application/json",
             }
         )
         return headers
@@ -164,8 +167,9 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if extra_body:
             base_request.update(extra_body)
         
-        # Avoid logging potentially sensitive agent_profile value
-        verbose_logger.debug("Manus: Using task_mode=agent")
+        verbose_logger.debug(
+            f"Manus: Using agent_profile={agent_profile}, task_mode=agent"
+        )
         
         return base_request
 
@@ -223,6 +227,12 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 output_tokens=0,
                 total_tokens=0,
             )
+        
+        # Ensure id is present - failed responses may not include it
+        if "id" not in raw_response_json or raw_response_json.get("id") is None:
+            # Generate a placeholder id for failed responses
+            # This allows the response object to be created even when the API doesn't return an id
+            raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
         
         try:
             response = ResponsesAPIResponse(**raw_response_json)
@@ -292,6 +302,28 @@ class ManusResponsesAPIConfig(OpenAIResponsesAPIConfig):
         
         raw_response_headers = dict(raw_response.headers)
         processed_headers = process_response_headers(raw_response_headers)
+        
+        # Ensure reasoning, text, output, and usage are present with defaults
+        if "reasoning" not in raw_response_json or raw_response_json.get("reasoning") is None:
+            raw_response_json["reasoning"] = {}
+        
+        if "text" not in raw_response_json or raw_response_json.get("text") is None:
+            raw_response_json["text"] = {}
+        
+        if "output" not in raw_response_json or raw_response_json.get("output") is None:
+            raw_response_json["output"] = []
+        
+        if "usage" not in raw_response_json or raw_response_json.get("usage") is None:
+            raw_response_json["usage"] = ResponseAPIUsage(
+                input_tokens=0,
+                output_tokens=0,
+                total_tokens=0,
+            )
+        
+        # Ensure id is present - failed responses may not include it
+        if "id" not in raw_response_json or raw_response_json.get("id") is None:
+            # Generate a placeholder id for failed responses
+            raw_response_json["id"] = f"unknown-{uuid.uuid4().hex[:8]}"
         
         try:
             response = ResponsesAPIResponse(**raw_response_json)
