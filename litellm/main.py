@@ -1466,6 +1466,78 @@ def completion(  # type: ignore # noqa: PLR0915
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
+            # Pass through any extra/custom params from kwargs (fixes #18216)
+            # Filter out params already explicitly passed to avoid duplicate keyword argument errors
+            # This set contains all params that are either:
+            # 1. Passed via kwargs.get(...) above
+            # 2. Passed from function signature args
+            # 3. Known params in get_litellm_params function signature
+            **{
+                k: v
+                for k, v in kwargs.items()
+                if k
+                not in {
+                    # Function signature args passed explicitly
+                    "model",
+                    "messages",
+                    "metadata",
+                    "api_key",
+                    "api_base",
+                    "api_version",
+                    "timeout",
+                    "max_retries",
+                    "custom_llm_provider",
+                    # Kwargs accessed via kwargs.get(...) above
+                    "litellm_call_id",
+                    "text_completion",
+                    "azure_ad_token_provider",
+                    "user_continue_message",
+                    "litellm_trace_id",
+                    "litellm_session_id",
+                    "litellm_metadata",
+                    "drop_params",
+                    "merge_reasoning_content_in_choices",
+                    "use_litellm_proxy",
+                    "azure_ad_token",
+                    "tenant_id",
+                    "client_id",
+                    "client_secret",
+                    "azure_username",
+                    "azure_password",
+                    "azure_scope",
+                    "litellm_request_debug",
+                    # Other known get_litellm_params signature params
+                    "model_info",
+                    "force_timeout",
+                    "azure",
+                    "logger_fn",
+                    "verbose",
+                    "hugging_face",
+                    "replicate",
+                    "together_ai",
+                    "model_alias_map",
+                    "completion_call_id",
+                    "proxy_server_request",
+                    "acompletion",
+                    "aembedding",
+                    "preset_cache_key",
+                    "no_log",
+                    "input_cost_per_second",
+                    "input_cost_per_token",
+                    "output_cost_per_token",
+                    "output_cost_per_second",
+                    "cost_per_query",
+                    "cooldown_time",
+                    "base_model",
+                    "hf_model_name",
+                    "custom_prompt_dict",
+                    "disable_add_transform_inline_image_block",
+                    "prompt_id",
+                    "prompt_variables",
+                    "async_call",
+                    "ssl_verify",
+                }
+            },
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -2291,11 +2363,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 input=messages, api_key=api_key, original_response=response
             )
         elif custom_llm_provider == "minimax":
-            api_key = (
-                api_key
-                or get_secret_str("MINIMAX_API_KEY")
-                or litellm.api_key
-            )
+            api_key = api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
 
             api_base = (
                 api_base
@@ -2343,7 +2411,9 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
-            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
+            or JSONProviderRegistry.exists(
+                custom_llm_provider
+            )  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -4589,7 +4659,7 @@ def embedding(  # noqa: PLR0915
 
             if extra_headers is not None:
                 optional_params["extra_headers"] = extra_headers
-            
+
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
             else:
@@ -6626,9 +6696,7 @@ def speech(  # noqa: PLR0915
         if text_to_speech_provider_config is None:
             text_to_speech_provider_config = MinimaxTextToSpeechConfig()
 
-        minimax_config = cast(
-            MinimaxTextToSpeechConfig, text_to_speech_provider_config
-        )
+        minimax_config = cast(MinimaxTextToSpeechConfig, text_to_speech_provider_config)
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -6768,7 +6836,7 @@ async def ahealth_check(
         custom_llm_provider_from_params = model_params.get("custom_llm_provider", None)
         api_base_from_params = model_params.get("api_base", None)
         api_key_from_params = model_params.get("api_key", None)
-        
+
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider_from_params,
@@ -7142,6 +7210,7 @@ def __getattr__(name: str) -> Any:
         _encoding = tiktoken.get_encoding("cl100k_base")
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
+
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding
