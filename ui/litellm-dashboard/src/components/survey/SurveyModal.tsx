@@ -92,10 +92,14 @@ export function SurveyModal({ isOpen, onClose, onComplete }: SurveyModalProps) {
         ai_integration: "AI Integration (Langfuse, OTEL, S3, Azure Content Safety)",
         unified_api: "Unified API (OpenAI-compatible)",
         breadth_of_models: "Breadth of Models/Providers (/ocr, /batches, Bedrock, Azure OCR)",
-        other: "Other",
       };
 
-      const readableReasons = data.reasons.map((r) => reasonLabels[r] || r);
+      const readableReasons = data.reasons.map((r) => {
+        if (r === "other" && data.otherReason) {
+          return `Other: ${data.otherReason}`;
+        }
+        return reasonLabels[r] || r;
+      });
 
       await fetch("https://hooks.zapier.com/hooks/catch/16331268/ugms6w0/", {
         method: "POST",
