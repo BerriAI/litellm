@@ -47,8 +47,8 @@ from tiktoken import Encoding
 from tokenizers import Tokenizer
 
 import litellm
-
 import litellm.litellm_core_utils
+
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
 from litellm._lazy_imports import (
@@ -71,8 +71,6 @@ from litellm.constants import (
     OPENAI_EMBEDDING_PARAMS,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
-
-
 
 _CachingHandlerResponse = None
 _LLMCachingHandler = None
@@ -2900,6 +2898,7 @@ def get_optional_params_image_gen(
                     litellm.drop_params is True or drop_params is True
                 ) and k not in supported_params:  # drop the unsupported non-default values
                     non_default_params.pop(k, None)
+                    passed_params.pop(k, None)
                 elif k not in supported_params:
                     raise UnsupportedParamsError(
                         status_code=500,
@@ -7235,6 +7234,29 @@ def has_tool_call_blocks(messages: List[AllMessageValues]) -> bool:
     return False
 
 
+def any_assistant_message_has_thinking_blocks(
+    messages: List[AllMessageValues],
+) -> bool:
+    """
+    Returns true if ANY assistant message has thinking_blocks.
+
+    This is used to prevent dropping the thinking param when some messages
+    in the conversation already contain thinking blocks. Dropping thinking
+    when thinking blocks exist causes Anthropic error:
+    "When thinking is disabled, an assistant message cannot contain thinking"
+
+    Related issue: https://github.com/BerriAI/litellm/issues/18926
+    """
+    for message in messages:
+        if message.get("role") == "assistant":
+            thinking_blocks = message.get("thinking_blocks")
+            if thinking_blocks is not None and (
+                not hasattr(thinking_blocks, "__len__") or len(thinking_blocks) > 0
+            ):
+                return True
+    return False
+
+
 def last_assistant_with_tool_calls_has_no_thinking_blocks(
     messages: List[AllMessageValues],
 ) -> bool:
@@ -7246,6 +7268,10 @@ def last_assistant_with_tool_calls_has_no_thinking_blocks(
 
     When thinking is enabled, assistant messages with tool_calls must include thinking_blocks.
     If the client didn't preserve thinking_blocks, we need to drop the thinking param.
+
+    IMPORTANT: This should only be used in conjunction with
+    any_assistant_message_has_thinking_blocks() to ensure we don't drop thinking
+    when other messages in the conversation contain thinking blocks.
 
     Related issues: https://github.com/BerriAI/litellm/issues/14194, https://github.com/BerriAI/litellm/issues/9020
     """
@@ -7449,15 +7475,184 @@ def validate_chat_completion_tool_choice(
 
 
 class ProviderConfigManager:
+    # Dictionary mapping for O(1) provider lookup
+    # Stores tuples of (factory_function, needs_model_parameter)
+    # This is initialized lazily on first access to avoid circular imports
+    _PROVIDER_CONFIG_MAP: Optional[dict[LlmProviders, tuple[Callable, bool]]] = None
+
+    @staticmethod
+    def _build_provider_config_map() -> dict[LlmProviders, tuple[Callable, bool]]:
+        """Build the provider-to-config mapping dictionary.
+        
+        Returns a dict mapping provider to (factory_function, needs_model_parameter).
+        This avoids expensive inspect.signature() calls at runtime.
+        """
+        return {
+            # Most common providers first for readability
+            # Format: (factory_function, needs_model_parameter: bool)
+            LlmProviders.OPENAI: (lambda: litellm.OpenAIGPTConfig(), False),
+            LlmProviders.ANTHROPIC: (lambda: litellm.AnthropicConfig(), False),
+            LlmProviders.AZURE: (lambda model: ProviderConfigManager._get_azure_config(model), True),
+            LlmProviders.AZURE_AI: (lambda model: ProviderConfigManager._get_azure_ai_config(model), True),
+            LlmProviders.VERTEX_AI: (lambda model: ProviderConfigManager._get_vertex_ai_config(model), True),
+            LlmProviders.BEDROCK: (lambda model: ProviderConfigManager._get_bedrock_config(model), True),
+            LlmProviders.COHERE: (lambda model: ProviderConfigManager._get_cohere_config(model), True),
+            LlmProviders.COHERE_CHAT: (lambda model: ProviderConfigManager._get_cohere_config(model), True),
+            # Simple provider mappings (no model parameter needed)
+            LlmProviders.DEEPSEEK: (lambda: litellm.DeepSeekChatConfig(), False),
+            LlmProviders.GROQ: (lambda: litellm.GroqChatConfig(), False),
+            LlmProviders.BYTEZ: (lambda: litellm.BytezChatConfig(), False),
+            LlmProviders.DATABRICKS: (lambda: litellm.DatabricksConfig(), False),
+            LlmProviders.XAI: (lambda: litellm.XAIChatConfig(), False),
+            LlmProviders.ZAI: (lambda: litellm.ZAIChatConfig(), False),
+            LlmProviders.LAMBDA_AI: (lambda: litellm.LambdaAIChatConfig(), False),
+            LlmProviders.LLAMA: (lambda: litellm.LlamaAPIConfig(), False),
+            LlmProviders.TEXT_COMPLETION_OPENAI: (lambda: litellm.OpenAITextCompletionConfig(), False),
+            LlmProviders.SNOWFLAKE: (lambda: litellm.SnowflakeConfig(), False),
+            LlmProviders.CLARIFAI: (lambda: litellm.ClarifaiConfig(), False),
+            LlmProviders.ANTHROPIC_TEXT: (lambda: litellm.AnthropicTextConfig(), False),
+            LlmProviders.VERTEX_AI_BETA: (lambda: litellm.VertexGeminiConfig(), False),
+            LlmProviders.CLOUDFLARE: (lambda: litellm.CloudflareChatConfig(), False),
+            LlmProviders.SAGEMAKER_CHAT: (lambda: litellm.SagemakerChatConfig(), False),
+            LlmProviders.SAGEMAKER: (lambda: litellm.SagemakerConfig(), False),
+            LlmProviders.FIREWORKS_AI: (lambda: litellm.FireworksAIConfig(), False),
+            LlmProviders.FRIENDLIAI: (lambda: litellm.FriendliaiChatConfig(), False),
+            LlmProviders.WATSONX: (lambda: litellm.IBMWatsonXChatConfig(), False),
+            LlmProviders.WATSONX_TEXT: (lambda: litellm.IBMWatsonXAIConfig(), False),
+            LlmProviders.EMPOWER: (lambda: litellm.EmpowerChatConfig(), False),
+            LlmProviders.MINIMAX: (lambda: litellm.MinimaxChatConfig(), False),
+            LlmProviders.GITHUB: (lambda: litellm.GithubChatConfig(), False),
+            LlmProviders.COMPACTIFAI: (lambda: litellm.CompactifAIChatConfig(), False),
+            LlmProviders.GITHUB_COPILOT: (lambda: litellm.GithubCopilotConfig(), False),
+            LlmProviders.GIGACHAT: (lambda: litellm.GigaChatConfig(), False),
+            LlmProviders.RAGFLOW: (lambda: litellm.RAGFlowConfig(), False),
+            LlmProviders.CUSTOM: (lambda: litellm.OpenAILikeChatConfig(), False),
+            LlmProviders.CUSTOM_OPENAI: (lambda: litellm.OpenAILikeChatConfig(), False),
+            LlmProviders.OPENAI_LIKE: (lambda: litellm.OpenAILikeChatConfig(), False),
+            LlmProviders.AIOHTTP_OPENAI: (lambda: litellm.AiohttpOpenAIChatConfig(), False),
+            LlmProviders.HOSTED_VLLM: (lambda: litellm.HostedVLLMChatConfig(), False),
+            LlmProviders.LLAMAFILE: (lambda: litellm.LlamafileChatConfig(), False),
+            LlmProviders.LM_STUDIO: (lambda: litellm.LMStudioChatConfig(), False),
+            LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
+            LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
+            LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
+            LlmProviders.TOGETHER_AI: (lambda: litellm.TogetherAIConfig(), False),
+            LlmProviders.OPENROUTER: (lambda: litellm.OpenrouterConfig(), False),
+            LlmProviders.VERCEL_AI_GATEWAY: (lambda: litellm.VercelAIGatewayConfig(), False),
+            LlmProviders.COMETAPI: (lambda: litellm.CometAPIConfig(), False),
+            LlmProviders.DATAROBOT: (lambda: litellm.DataRobotConfig(), False),
+            LlmProviders.GEMINI: (lambda: litellm.GoogleAIStudioGeminiConfig(), False),
+            LlmProviders.AI21: (lambda: litellm.AI21ChatConfig(), False),
+            LlmProviders.AI21_CHAT: (lambda: litellm.AI21ChatConfig(), False),
+            LlmProviders.AZURE_TEXT: (lambda: litellm.AzureOpenAITextConfig(), False),
+            LlmProviders.NLP_CLOUD: (lambda: litellm.NLPCloudConfig(), False),
+            LlmProviders.OOBABOOGA: (lambda: litellm.OobaboogaConfig(), False),
+            LlmProviders.OLLAMA_CHAT: (lambda: litellm.OllamaChatConfig(), False),
+            LlmProviders.DEEPINFRA: (lambda: litellm.DeepInfraConfig(), False),
+            LlmProviders.PERPLEXITY: (lambda: litellm.PerplexityChatConfig(), False),
+            LlmProviders.MISTRAL: (lambda: litellm.MistralConfig(), False),
+            LlmProviders.CODESTRAL: (lambda: litellm.MistralConfig(), False),
+            LlmProviders.NVIDIA_NIM: (lambda: litellm.NvidiaNimConfig(), False),
+            LlmProviders.CEREBRAS: (lambda: litellm.CerebrasConfig(), False),
+            LlmProviders.BASETEN: (lambda: litellm.BasetenConfig(), False),
+            LlmProviders.VOLCENGINE: (lambda: litellm.VolcEngineConfig(), False),
+            LlmProviders.TEXT_COMPLETION_CODESTRAL: (lambda: litellm.CodestralTextCompletionConfig(), False),
+            LlmProviders.SAMBANOVA: (lambda: litellm.SambanovaConfig(), False),
+            LlmProviders.MARITALK: (lambda: litellm.MaritalkConfig(), False),
+            LlmProviders.VLLM: (lambda: litellm.VLLMConfig(), False),
+            LlmProviders.OLLAMA: (lambda: litellm.OllamaConfig(), False),
+            LlmProviders.PREDIBASE: (lambda: litellm.PredibaseConfig(), False),
+            LlmProviders.TRITON: (lambda: litellm.TritonConfig(), False),
+            LlmProviders.PETALS: (lambda: litellm.PetalsConfig(), False),
+            LlmProviders.SAP_GENERATIVE_AI_HUB: (lambda: litellm.GenAIHubOrchestrationConfig(), False),
+            LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
+            LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
+            LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
+            LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
+            LlmProviders.DASHSCOPE: (lambda: litellm.DashScopeChatConfig(), False),
+            LlmProviders.MOONSHOT: (lambda: litellm.MoonshotChatConfig(), False),
+            LlmProviders.DOCKER_MODEL_RUNNER: (lambda: litellm.DockerModelRunnerChatConfig(), False),
+            LlmProviders.V0: (lambda: litellm.V0ChatConfig(), False),
+            LlmProviders.MORPH: (lambda: litellm.MorphChatConfig(), False),
+            LlmProviders.LITELLM_PROXY: (lambda: litellm.LiteLLMProxyChatConfig(), False),
+            LlmProviders.GRADIENT_AI: (lambda: litellm.GradientAIConfig(), False),
+            LlmProviders.NSCALE: (lambda: litellm.NscaleConfig(), False),
+            LlmProviders.HEROKU: (lambda: litellm.HerokuChatConfig(), False),
+            LlmProviders.OCI: (lambda: litellm.OCIChatConfig(), False),
+            LlmProviders.HYPERBOLIC: (lambda: litellm.HyperbolicChatConfig(), False),
+            LlmProviders.OVHCLOUD: (lambda: litellm.OVHCloudChatConfig(), False),
+            LlmProviders.AMAZON_NOVA: (lambda: litellm.AmazonNovaChatConfig(), False),
+            LlmProviders.LANGGRAPH: (lambda: ProviderConfigManager._get_langgraph_config(), False),
+        }
+
+    @staticmethod
+    def _get_azure_config(model: str) -> BaseConfig:
+        """Get Azure config based on model type."""
+        if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
+            return litellm.AzureOpenAIO1Config()
+        if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
+            return litellm.AzureOpenAIGPT5Config()
+        return litellm.AzureOpenAIConfig()
+
+    @staticmethod
+    def _get_azure_ai_config(model: str) -> BaseConfig:
+        """Get Azure AI config based on model type."""
+        if "claude" in model.lower():
+            return litellm.AzureAnthropicConfig()
+        return litellm.AzureAIStudioConfig()
+
+    @staticmethod
+    def _get_vertex_ai_config(model: str) -> BaseConfig:
+        """Get Vertex AI config based on model type."""
+        if "gemini" in model:
+            return litellm.VertexGeminiConfig()
+        elif "claude" in model:
+            return litellm.VertexAIAnthropicConfig()
+        elif "gpt-oss" in model:
+            from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
+                VertexAIGPTOSSTransformation,
+            )
+            return VertexAIGPTOSSTransformation()
+        elif model in litellm.vertex_mistral_models:
+            if "codestral" in model:
+                return litellm.CodestralTextCompletionConfig()
+            return litellm.MistralConfig()
+        elif model in litellm.vertex_ai_ai21_models:
+            return litellm.VertexAIAi21Config()
+        else:
+            return litellm.VertexAILlama3Config()
+
+    @staticmethod
+    def _get_bedrock_config(model: str) -> BaseConfig:
+        """Get Bedrock config based on model."""
+        from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
+        return get_bedrock_chat_config(model=model)
+
+    @staticmethod
+    def _get_cohere_config(model: str) -> BaseConfig:
+        """Get Cohere config based on route."""
+        CohereModelInfo = getattr(sys.modules[__name__], 'CohereModelInfo')
+        route = CohereModelInfo.get_cohere_route(model)
+        if route == "v2":
+            return litellm.CohereV2ChatConfig()
+        return litellm.CohereChatConfig()
+
+    @staticmethod
+    def _get_langgraph_config() -> BaseConfig:
+        """Get LangGraph config."""
+        from litellm.llms.langgraph.chat.transformation import LangGraphConfig
+        return LangGraphConfig()
+
     @staticmethod
     def get_provider_chat_config(  # noqa: PLR0915
         model: str, provider: LlmProviders
     ) -> Optional[BaseConfig]:
         """
         Returns the provider config for a given provider.
+        
+        Uses O(1) dictionary lookup for fast provider resolution.
         """
-
-        # Check JSON providers FIRST
+        # Check JSON providers FIRST (these override standard mappings)
         from litellm.llms.openai_like.dynamic_config import create_config_class
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
@@ -7467,244 +7662,29 @@ class ProviderConfigManager:
                 raise ValueError(f"Provider {provider.value} not found")
             return create_config_class(provider_config)()
 
-        if (
-            provider == LlmProviders.OPENAI
-            and litellm.openaiOSeriesConfig.is_model_o_series_model(model=model)
-        ):
-            return litellm.openaiOSeriesConfig
-        elif (
-            provider == LlmProviders.OPENAI
-            and litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model)
-        ):
-            return litellm.OpenAIGPT5Config()
-        elif litellm.LlmProviders.DEEPSEEK == provider:
-            return litellm.DeepSeekChatConfig()
-        elif litellm.LlmProviders.GROQ == provider:
-            return litellm.GroqChatConfig()
-        elif litellm.LlmProviders.BYTEZ == provider:
-            return litellm.BytezChatConfig()
-        elif litellm.LlmProviders.DATABRICKS == provider:
-            return litellm.DatabricksConfig()
-        elif litellm.LlmProviders.XAI == provider:
-            return litellm.XAIChatConfig()
-        elif litellm.LlmProviders.ZAI == provider:
-            return litellm.ZAIChatConfig()
-        elif litellm.LlmProviders.LAMBDA_AI == provider:
-            return litellm.LambdaAIChatConfig()
-        elif litellm.LlmProviders.LLAMA == provider:
-            return litellm.LlamaAPIConfig()
-        elif litellm.LlmProviders.TEXT_COMPLETION_OPENAI == provider:
-            return litellm.OpenAITextCompletionConfig()
-        elif (
-            litellm.LlmProviders.COHERE_CHAT == provider
-            or litellm.LlmProviders.COHERE == provider
-        ):
-            CohereModelInfo = getattr(sys.modules[__name__], 'CohereModelInfo')
-            route = CohereModelInfo.get_cohere_route(model)
-            if route == "v2":
-                return litellm.CohereV2ChatConfig()
-            else:
+        # Handle OpenAI special cases (O-series and GPT-5 models)
+        if provider == LlmProviders.OPENAI:
+            if litellm.openaiOSeriesConfig.is_model_o_series_model(model=model):
+                return litellm.openaiOSeriesConfig
+            if litellm.OpenAIGPT5Config.is_model_gpt_5_model(model=model):
+                return litellm.OpenAIGPT5Config()
 
-                return litellm.CohereChatConfig()
-        elif litellm.LlmProviders.SNOWFLAKE == provider:
-            return litellm.SnowflakeConfig()
-        elif litellm.LlmProviders.CLARIFAI == provider:
-            return litellm.ClarifaiConfig()
-        elif litellm.LlmProviders.ANTHROPIC == provider:
-            return litellm.AnthropicConfig()
-        elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
-            return litellm.AnthropicTextConfig()
-        elif litellm.LlmProviders.VERTEX_AI_BETA == provider:
-            return litellm.VertexGeminiConfig()
-        elif litellm.LlmProviders.VERTEX_AI == provider:
-            if "gemini" in model:
-                return litellm.VertexGeminiConfig()
-            elif "claude" in model:
-                return litellm.VertexAIAnthropicConfig()
-            elif "gpt-oss" in model:
-                from litellm.llms.vertex_ai.vertex_ai_partner_models.gpt_oss.transformation import (
-                    VertexAIGPTOSSTransformation,
-                )
+        # Initialize provider config map lazily (avoids circular imports)
+        if ProviderConfigManager._PROVIDER_CONFIG_MAP is None:
+            ProviderConfigManager._PROVIDER_CONFIG_MAP = ProviderConfigManager._build_provider_config_map()
 
-                return VertexAIGPTOSSTransformation()
-            elif model in litellm.vertex_mistral_models:
-                if "codestral" in model:
-                    return litellm.CodestralTextCompletionConfig()
-                else:
-                    return litellm.MistralConfig()
-            elif model in litellm.vertex_ai_ai21_models:
-                return litellm.VertexAIAi21Config()
-            else:  # use generic openai-like param mapping
-                return litellm.VertexAILlama3Config()
-        elif litellm.LlmProviders.CLOUDFLARE == provider:
-            return litellm.CloudflareChatConfig()
-        elif litellm.LlmProviders.SAGEMAKER_CHAT == provider:
-            return litellm.SagemakerChatConfig()
-        elif litellm.LlmProviders.SAGEMAKER == provider:
-            return litellm.SagemakerConfig()
-        elif litellm.LlmProviders.FIREWORKS_AI == provider:
-            return litellm.FireworksAIConfig()
-        elif litellm.LlmProviders.FRIENDLIAI == provider:
-            return litellm.FriendliaiChatConfig()
-        elif litellm.LlmProviders.WATSONX == provider:
-            return litellm.IBMWatsonXChatConfig()
-        elif litellm.LlmProviders.WATSONX_TEXT == provider:
-            return litellm.IBMWatsonXAIConfig()
-        elif litellm.LlmProviders.EMPOWER == provider:
-            return litellm.EmpowerChatConfig()
-        elif litellm.LlmProviders.MINIMAX == provider:            
-            return litellm.MinimaxChatConfig()
-        elif litellm.LlmProviders.GITHUB == provider:
-            return litellm.GithubChatConfig()
-        elif litellm.LlmProviders.COMPACTIFAI == provider:
-            return litellm.CompactifAIChatConfig()
-        elif litellm.LlmProviders.GITHUB_COPILOT == provider:
-            return litellm.GithubCopilotConfig()
-        elif litellm.LlmProviders.GIGACHAT == provider:
-            return litellm.GigaChatConfig()
-        elif litellm.LlmProviders.RAGFLOW == provider:
-            return litellm.RAGFlowConfig()
-        elif (
-            litellm.LlmProviders.CUSTOM == provider
-            or litellm.LlmProviders.CUSTOM_OPENAI == provider
-            or litellm.LlmProviders.OPENAI_LIKE == provider
-        ):
-            return litellm.OpenAILikeChatConfig()
-        elif litellm.LlmProviders.AIOHTTP_OPENAI == provider:
-            return litellm.AiohttpOpenAIChatConfig()
-        elif litellm.LlmProviders.HOSTED_VLLM == provider:
-            return litellm.HostedVLLMChatConfig()
-        elif litellm.LlmProviders.LLAMAFILE == provider:
-            return litellm.LlamafileChatConfig()
-        elif litellm.LlmProviders.LM_STUDIO == provider:
-            return litellm.LMStudioChatConfig()
-        elif litellm.LlmProviders.GALADRIEL == provider:
-            return litellm.GaladrielChatConfig()
-        elif litellm.LlmProviders.REPLICATE == provider:
-            return litellm.ReplicateConfig()
-        elif litellm.LlmProviders.HUGGINGFACE == provider:
-            return litellm.HuggingFaceChatConfig()
-        elif litellm.LlmProviders.TOGETHER_AI == provider:
-            return litellm.TogetherAIConfig()
-        elif litellm.LlmProviders.OPENROUTER == provider:
-            return litellm.OpenrouterConfig()
-        elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
-            return litellm.VercelAIGatewayConfig()
-        elif litellm.LlmProviders.COMETAPI == provider:
-            return litellm.CometAPIConfig()
-        elif litellm.LlmProviders.DATAROBOT == provider:
-            return litellm.DataRobotConfig()
-        elif litellm.LlmProviders.GEMINI == provider:
-            return litellm.GoogleAIStudioGeminiConfig()
-        elif (
-            litellm.LlmProviders.AI21 == provider
-            or litellm.LlmProviders.AI21_CHAT == provider
-        ):
-            return litellm.AI21ChatConfig()
-        elif litellm.LlmProviders.AZURE == provider:
-            if litellm.AzureOpenAIO1Config().is_o_series_model(model=model):
-                return litellm.AzureOpenAIO1Config()
-            if litellm.AzureOpenAIGPT5Config.is_model_gpt_5_model(model=model):
-                return litellm.AzureOpenAIGPT5Config()
-            return litellm.AzureOpenAIConfig()
-        elif litellm.LlmProviders.AZURE_AI == provider:
-            if "claude" in model.lower():
-                return litellm.AzureAnthropicConfig()
-            return litellm.AzureAIStudioConfig()
-        elif litellm.LlmProviders.AZURE_TEXT == provider:
-            return litellm.AzureOpenAITextConfig()
-        elif litellm.LlmProviders.HOSTED_VLLM == provider:
-            return litellm.HostedVLLMChatConfig()
-        elif litellm.LlmProviders.NLP_CLOUD == provider:
-            return litellm.NLPCloudConfig()
-        elif litellm.LlmProviders.OOBABOOGA == provider:
-            return litellm.OobaboogaConfig()
-        elif litellm.LlmProviders.OLLAMA_CHAT == provider:
-            return litellm.OllamaChatConfig()
-        elif litellm.LlmProviders.DEEPINFRA == provider:
-            return litellm.DeepInfraConfig()
-        elif litellm.LlmProviders.PERPLEXITY == provider:
-            return litellm.PerplexityChatConfig()
-        elif (
-            litellm.LlmProviders.MISTRAL == provider
-            or litellm.LlmProviders.CODESTRAL == provider
-        ):
-            return litellm.MistralConfig()
-        elif litellm.LlmProviders.NVIDIA_NIM == provider:
-            return litellm.NvidiaNimConfig()
-        elif litellm.LlmProviders.CEREBRAS == provider:
-            return litellm.CerebrasConfig()
-        elif litellm.LlmProviders.BASETEN == provider:
-            return litellm.BasetenConfig()
-        elif litellm.LlmProviders.VOLCENGINE == provider:
-            return litellm.VolcEngineConfig()
-        elif litellm.LlmProviders.TEXT_COMPLETION_CODESTRAL == provider:
-            return litellm.CodestralTextCompletionConfig()
-        elif litellm.LlmProviders.SAMBANOVA == provider:
-            return litellm.SambanovaConfig()
-        elif litellm.LlmProviders.MARITALK == provider:
-            return litellm.MaritalkConfig()
-        elif litellm.LlmProviders.CLOUDFLARE == provider:
-            return litellm.CloudflareChatConfig()
-        elif litellm.LlmProviders.ANTHROPIC_TEXT == provider:
-            return litellm.AnthropicTextConfig()
-        elif litellm.LlmProviders.VLLM == provider:
-            return litellm.VLLMConfig()
-        elif litellm.LlmProviders.OLLAMA == provider:
-            return litellm.OllamaConfig()
-        elif litellm.LlmProviders.PREDIBASE == provider:
-            return litellm.PredibaseConfig()
-        elif litellm.LlmProviders.TRITON == provider:
-            return litellm.TritonConfig()
-        elif litellm.LlmProviders.PETALS == provider:
-            return litellm.PetalsConfig()
-        elif litellm.LlmProviders.SAP_GENERATIVE_AI_HUB == provider:
-            return litellm.GenAIHubOrchestrationConfig()
-        elif litellm.LlmProviders.FEATHERLESS_AI == provider:
-            return litellm.FeatherlessAIConfig()
-        elif litellm.LlmProviders.NOVITA == provider:
-            return litellm.NovitaConfig()
-        elif litellm.LlmProviders.NEBIUS == provider:
-            return litellm.NebiusConfig()
-        elif litellm.LlmProviders.WANDB == provider:
-            return litellm.WandbConfig()
-        elif litellm.LlmProviders.DASHSCOPE == provider:
-            return litellm.DashScopeChatConfig()
-        elif litellm.LlmProviders.MOONSHOT == provider:
-            return litellm.MoonshotChatConfig()
-        elif litellm.LlmProviders.DOCKER_MODEL_RUNNER == provider:
-            return litellm.DockerModelRunnerChatConfig()
-        elif litellm.LlmProviders.V0 == provider:
-            return litellm.V0ChatConfig()
-        elif litellm.LlmProviders.MORPH == provider:
-            return litellm.MorphChatConfig()
-        elif litellm.LlmProviders.BEDROCK == provider:
-            from litellm.llms.bedrock.common_utils import get_bedrock_chat_config
+        # O(1) dictionary lookup
+        config_entry = ProviderConfigManager._PROVIDER_CONFIG_MAP.get(provider)
+        if config_entry is None:
+            return None
 
-            return get_bedrock_chat_config(model=model)
-        elif litellm.LlmProviders.LITELLM_PROXY == provider:
-            return litellm.LiteLLMProxyChatConfig()
-        elif litellm.LlmProviders.OPENAI == provider:
-            return litellm.OpenAIGPTConfig()
-        elif litellm.LlmProviders.GRADIENT_AI == provider:
-            return litellm.GradientAIConfig()
-        elif litellm.LlmProviders.NSCALE == provider:
-            return litellm.NscaleConfig()
-        elif litellm.LlmProviders.HEROKU == provider:
-            return litellm.HerokuChatConfig()
-        elif litellm.LlmProviders.OCI == provider:
-            return litellm.OCIChatConfig()
-        elif litellm.LlmProviders.HYPERBOLIC == provider:
-            return litellm.HyperbolicChatConfig()
-        elif litellm.LlmProviders.OVHCLOUD == provider:
-            return litellm.OVHCloudChatConfig()
-        elif litellm.LlmProviders.AMAZON_NOVA == provider:
-            return litellm.AmazonNovaChatConfig()
-        elif litellm.LlmProviders.LANGGRAPH == provider:
-            from litellm.llms.langgraph.chat.transformation import LangGraphConfig
-
-            return LangGraphConfig()
-        return None
+        # Unpack factory function and whether it needs model parameter
+        # This avoids expensive inspect.signature() calls at runtime
+        config_factory, needs_model = config_entry
+        if needs_model:
+            return config_factory(model)  # type: ignore
+        else:
+            return config_factory()  # type: ignore
 
     @staticmethod
     def get_provider_embedding_config(
@@ -7757,6 +7737,11 @@ class ProviderConfigManager:
             return litellm.CometAPIEmbeddingConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotEmbeddingConfig()
+        elif litellm.LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.embedding.transformation import (
+                OpenrouterEmbeddingConfig,
+            )
+            return OpenrouterEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
@@ -7910,6 +7895,8 @@ class ProviderConfigManager:
             return litellm.GithubCopilotResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
+        elif litellm.LlmProviders.MANUS == provider:
+            return litellm.ManusResponsesAPIConfig()
         return None
 
     @staticmethod
@@ -7978,6 +7965,8 @@ class ProviderConfigManager:
             return litellm.LemonadeChatConfig()
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
+        elif LlmProviders.BEDROCK == provider:
+            return litellm.llms.bedrock.common_utils.BedrockModelInfo()
         return None
 
     @staticmethod
@@ -8035,6 +8024,10 @@ class ProviderConfigManager:
             from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
 
             return BedrockFilesConfig()
+        elif LlmProviders.MANUS == provider:
+            from litellm.llms.manus.files.transformation import ManusFilesConfig
+
+            return ManusFilesConfig()
         return None
 
     @staticmethod
