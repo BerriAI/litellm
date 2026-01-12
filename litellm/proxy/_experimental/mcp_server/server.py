@@ -715,9 +715,18 @@ if MCP_AVAILABLE:
         if server.extra_headers and raw_headers:
             if extra_headers is None:
                 extra_headers = {}
+
+            normalized_raw_headers = {
+                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
+            }
+
             for header in server.extra_headers:
-                if header in raw_headers:
-                    extra_headers[header] = raw_headers[header]
+                if not isinstance(header, str):
+                    continue
+                header_value = normalized_raw_headers.get(header.lower())
+                if header_value is None:
+                    continue
+                extra_headers[header] = header_value
 
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
