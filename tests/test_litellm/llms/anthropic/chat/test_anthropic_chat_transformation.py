@@ -185,7 +185,7 @@ def test_extract_response_content_with_citations():
         },
     }
 
-    _, citations, _, _, _, _ = config.extract_response_content(completion_response)
+    _, citations, _, _, _, _ , _= config.extract_response_content(completion_response)
     assert citations == [
         [
             {
@@ -342,7 +342,7 @@ def test_web_search_tool_result_extraction():
         }
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -474,7 +474,7 @@ def test_multiple_web_search_tool_results():
         ]
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -923,7 +923,7 @@ def test_server_tool_use_in_response():
         ]
     }
     
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -1051,7 +1051,7 @@ def test_tool_search_complete_response_parsing():
     }
     
     # Extract content
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -1171,7 +1171,7 @@ def test_caller_field_in_response():
         "usage": {"input_tokens": 100, "output_tokens": 50}
     }
     
-    text, citations, thinking, reasoning, tool_calls, web_search_results = config.extract_response_content(completion_response)
+    text, citations, thinking, reasoning, tool_calls, web_search_results, tool_results = config.extract_response_content(completion_response)
 
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "toolu_123"
@@ -1823,6 +1823,7 @@ def test_code_execution_tool_results_extraction():
     Related to: https://github.com/BerriAI/litellm/issues/xxxxx
     """
     import httpx
+
     from litellm.types.utils import ModelResponse
     
     config = AnthropicConfig()
@@ -1946,6 +1947,7 @@ def test_tool_search_tool_result_not_in_tool_results():
     since it's internal metadata, not actual tool execution results.
     """
     import httpx
+
     from litellm.types.utils import ModelResponse
     
     config = AnthropicConfig()
@@ -1999,6 +2001,7 @@ def test_web_search_tool_result_backwards_compatibility():
     for backwards compatibility, not in tool_results.
     """
     import httpx
+
     from litellm.types.utils import ModelResponse
     
     config = AnthropicConfig()
