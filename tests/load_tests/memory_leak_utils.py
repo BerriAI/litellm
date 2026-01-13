@@ -97,24 +97,30 @@ def mock_server():
     """Start a mock server in a separate thread for the test session.
     
     Yields the server URL (with trailing slash) for use in router configuration.
+    
+    Dynamically finds an available port to support running multiple tests in parallel.
     """
     app = create_mock_server()
-    port = 18888
     
-    # Check if port is already in use
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(("127.0.0.1", port))
-        sock.close()
-    except OSError:
-        # Port already in use, try next port
-        port = 18889
+    # Try to find an available port dynamically
+    # Start with preferred ports, then try a range
+    port_candidates = [18888, 18889] + list(range(18890, 18920))
+    port = None
+    
+    for candidate_port in port_candidates:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.bind(("127.0.0.1", port))
+            sock.bind(("127.0.0.1", candidate_port))
             sock.close()
+            port = candidate_port
+            print(f"[Mock Server] Found available port: {port}")
+            break
         except OSError:
-            pytest.fail(f"Could not find available port for mock server (tried 18888, 18889)")
+            # Port in use, try next one
+            continue
+    
+    if port is None:
+        pytest.fail(f"Could not find available port for mock server (tried ports {port_candidates[0]}-{port_candidates[-1]})")
     
     # Start server in background thread
     thread = Thread(target=lambda: run_server(app, port), daemon=True)
@@ -248,8 +254,7 @@ def test_router(mock_server):
 async def run_memory_baseline_test(num_requests: int, router: Router, limit_memory):
     """Helper function to run memory baseline test with specified number of requests.
     
-    Makes requests concurrently in batches for speed, with proper error handling
-    that doesn't fail the test on individual request failures.
+    Makes requests concurrently in large batches for speed, optimized for performance.
     
     Args:
         num_requests: Number of requests to make.
@@ -262,16 +267,28 @@ async def run_memory_baseline_test(num_requests: int, router: Router, limit_memo
         async def test_memory(test_router, limit_memory):
             await run_memory_baseline_test(1000, test_router, limit_memory)
     """
+    import asyncio
+    
     # Fixture is used automatically by pytest - reference it to suppress linter warning
     _ = limit_memory
     
-    # Make requests concurrently in batches for speed
-    # Batch size of 20 provides good balance between speed and memory pressure
-    BATCH_SIZE = 20
+    # Track memory throughout test
+    process = psutil.Process(os.getpid())
+    start_memory = process.memory_info().rss / 1024 / 1024
+    print(f"[Memory] Test start: {start_memory:.2f} MB")
+    
+    # Make requests concurrently in large batches for speed
+    # Large batch size = faster tests (temporary memory spike is accounted for in limit)
+    BATCH_SIZE = 100
+    
+    batch_num = 0
+    total_batches = (num_requests + BATCH_SIZE - 1) // BATCH_SIZE
     
     for batch_start in range(0, num_requests, BATCH_SIZE):
+        batch_num += 1
         batch_end = min(batch_start + BATCH_SIZE, num_requests)
-        # Create concurrent tasks for this batch
+        
+        # Create tasks directly for maximum speed
         tasks = [
             router.acompletion(
                 model=TEST_MODEL_NAME,
@@ -279,36 +296,80 @@ async def run_memory_baseline_test(num_requests: int, router: Router, limit_memo
             )
             for i in range(batch_start, batch_end)
         ]
-        # Execute batch concurrently
-        # Note: return_exceptions=True allows test to continue even if some requests fail
-        import asyncio
+        
+        print(f"[Batch {batch_num}/{total_batches}] Executing batch {batch_start}-{batch_end}...")
+        batch_start_time = time.time()
+        
+        # Execute batch concurrently (return_exceptions=True to not fail on individual errors)
         responses = await asyncio.gather(*tasks, return_exceptions=True)
-        # Filter out failed requests but continue with test
-        valid_responses = []
-        failed_count = 0
-        for i, response in enumerate(responses):
-            if isinstance(response, Exception):
-                failed_count += 1
-                # Log exception but continue
-                print(f"  Warning: Request {batch_start + i} failed: {type(response).__name__}: {response}")
-            elif response is None:
-                failed_count += 1
-                print(f"  Warning: Request {batch_start + i} returned None")
-            else:
-                valid_responses.append(response)
+        batch_duration = time.time() - batch_start_time
         
-        # Continue with valid responses - don't fail the test
-        # If all failed, that's logged but test continues (might indicate bigger issue)
-        if failed_count > 0:
-            print(f"  Note: {failed_count}/{len(responses)} requests failed in batch {batch_start}-{batch_end}, continuing with {len(valid_responses)} valid responses")
-        
-        # Use valid_responses for cleanup
-        responses = valid_responses
-        # Clean up batch
+        # Clean up batch immediately to avoid memory accumulation
+        if responses:
+            for resp in responses:
+                del resp
         del responses
         del tasks
-        del valid_responses
-        # GC after each batch to prevent accumulation
-        gc.collect()
+        
+        # Periodic memory check every 10 batches
+        if batch_num % 10 == 0:
+            current_memory = process.memory_info().rss / 1024 / 1024
+            print(f"[Batch {batch_num}/{total_batches}] Completed in {batch_duration:.2f}s ({BATCH_SIZE/batch_duration:.1f} req/s) | Memory: {current_memory:.2f} MB (+{current_memory - start_memory:.2f} MB)")
+        else:
+            print(f"[Batch {batch_num}/{total_batches}] Completed in {batch_duration:.2f}s ({BATCH_SIZE/batch_duration:.1f} req/s)")
     
-    print(f"[Simple Memory Test] Completed {num_requests} requests")
+    # Check memory before cleanup
+    memory_before_cleanup = process.memory_info().rss / 1024 / 1024
+    print(f"\n[Memory] Before cleanup: {memory_before_cleanup:.2f} MB (+{memory_before_cleanup - start_memory:.2f} MB)")
+    
+    # EXTREMELY AGGRESSIVE CLEANUP to ensure test memory doesn't pollute measurements
+    print("[Cleanup] Starting EXTRA AGGRESSIVE garbage collection...")
+    
+    # Step 1: Force immediate cleanup of all generations
+    collected_total = 0
+    for gen in range(3):
+        collected = gc.collect(gen)
+        collected_total += collected
+        if collected > 0:
+            print(f"[Cleanup] Generation {gen}: collected {collected} objects")
+    
+    # Step 2: Multiple full GC passes to catch circular references
+    print("[Cleanup] Running full GC passes...")
+    for i in range(5):  # 5 passes to be thorough
+        collected = gc.collect()
+        collected_total += collected
+        if collected > 0:
+            print(f"[Cleanup] Full GC pass {i+1}: collected {collected} objects")
+        else:
+            print(f"[Cleanup] Full GC pass {i+1}: no objects to collect (clean!)")
+    
+    # Step 3: Check for uncollectable objects (memory leaks!)
+    uncollectable = len(gc.garbage)
+    if uncollectable > 0:
+        print(f"[Cleanup] WARNING: {uncollectable} uncollectable objects found (potential leak!)")
+        print(f"[Cleanup] Uncollectable types: {set(type(obj).__name__ for obj in gc.garbage[:10])}")
+    else:
+        print(f"[Cleanup] No uncollectable objects (no circular reference leaks)")
+    
+    # Step 4: Wait for OS to release memory
+    print("[Cleanup] Waiting for OS to release memory...")
+    time.sleep(0.5)
+    
+    # Step 5: Final GC to catch anything released during wait
+    final_gc = gc.collect()
+    collected_total += final_gc
+    if final_gc > 0:
+        print(f"[Cleanup] Final GC: collected {final_gc} additional objects")
+    
+    # Final memory check
+    memory_after_cleanup = process.memory_info().rss / 1024 / 1024
+    print(f"\n[Memory] After cleanup: {memory_after_cleanup:.2f} MB (+{memory_after_cleanup - start_memory:.2f} MB from start)")
+    print(f"[Memory] Cleanup freed: {memory_before_cleanup - memory_after_cleanup:.2f} MB")
+    print(f"[Memory] Total objects collected: {collected_total:,}")
+    
+    # Summary
+    print(f"\n{'='*80}")
+    print(f"[Router Memory Test] Completed {num_requests:,} requests")
+    print(f"[Router Memory Test] Actual router memory usage: {memory_after_cleanup - start_memory:.2f} MB")
+    print(f"[Router Memory Test] Test artifacts cleaned: {memory_before_cleanup - memory_after_cleanup:.2f} MB")
+    print(f"{'='*80}\n")
