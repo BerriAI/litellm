@@ -1240,6 +1240,11 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
         )
+        if not allowed_mcp_servers:
+            raise HTTPException(
+                status_code=403,
+                detail="User not allowed to call this tool.",
+            )
 
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None

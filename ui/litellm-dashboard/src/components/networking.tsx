@@ -6128,12 +6128,17 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
-export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
+export const callMCPTool = async (
+  accessToken: string,
+  serverId: string,
+  toolName: string,
+  toolArguments: Record<string, any>,
+) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/call` : `/mcp-rest/tools/call`;
 
-    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments, "for server:", serverId);
 
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -6144,6 +6149,7 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
       method: "POST",
       headers,
       body: JSON.stringify({
+        server_id: serverId,
         name: toolName,
         arguments: toolArguments,
       }),
