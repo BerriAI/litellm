@@ -95,6 +95,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [showCustomerBanner, setShowCustomerBanner] = useState(true);
   const [usageView, setUsageView] = useState<UsageOption>("global");
   const [showAgentBanner, setShowAgentBanner] = useState(true);
+  const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const getAllTags = async () => {
     if (!accessToken) {
       return;
@@ -116,7 +117,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const totalSpend = userSpendData.metadata?.total_spend || 0;
 
   // Calculate top models from the breakdown data
-  const getTopModels = () => {
+  const getTopModels = (limit: number = 5) => {
     const modelSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.models || {}).forEach(([model, metrics]) => {
@@ -159,10 +160,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5);
+      .slice(0, limit);
   };
 
-  const getTopModelGroups = () => {
+  const getTopModelGroups = (limit: number = 5) => {
     const modelGroupSpend: { [key: string]: MetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.model_groups || {}).forEach(([modelGroup, metrics]) => {
@@ -206,7 +207,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         tokens: metrics.metrics.total_tokens,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5);
+      .slice(0, limit);
   };
 
   // Calculate provider spend from the breakdown data
@@ -254,7 +255,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   };
 
   // Calculate top API keys from the breakdown data
-  const getTopKeys = () => {
+  const getTopKeys = (limit: number = 5) => {
     const keySpend: { [key: string]: KeyMetricWithMetadata } = {};
     userSpendData.results.forEach((day) => {
       Object.entries(day.breakdown.api_keys || {}).forEach(([key, metrics]) => {
@@ -300,7 +301,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         spend: metrics.metrics.spend,
       }))
       .sort((a, b) => b.spend - a.spend)
-      .slice(0, 5);
+      .slice(0, limit);
   };
 
   const fetchUserSpendData = useCallback(async () => {
@@ -576,7 +577,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     <Col numColSpan={1}>
                       <Card className="h-full">
                         <Title>Top Virtual Keys</Title>
-                        <TopKeyView topKeys={getTopKeys()} teams={null} />
+                        <TopKeyView
+                          topKeys={getTopKeys(topKeysLimit)}
+                          teams={null}
+                          topKeysLimit={topKeysLimit}
+                          setTopKeysLimit={setTopKeysLimit}
+                        />
                       </Card>
                     </Col>
 
