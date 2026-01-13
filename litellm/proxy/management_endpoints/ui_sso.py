@@ -23,7 +23,14 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
-from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
+from litellm.constants import (
+    MAX_SPENDLOG_ROWS_TO_QUERY,
+    MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE,
+    MICROSOFT_USER_EMAIL_ATTRIBUTE,
+    MICROSOFT_USER_FIRST_NAME_ATTRIBUTE,
+    MICROSOFT_USER_ID_ATTRIBUTE,
+    MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
+)
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -2358,12 +2365,12 @@ class MicrosoftSSOHandler:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
         openid_response = CustomOpenID(
-            email=response.get("userPrincipalName") or response.get("mail"),
-            display_name=response.get("displayName"),
+            email=response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail"),
+            display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
             provider="microsoft",
-            id=response.get("id"),
-            first_name=response.get("givenName"),
-            last_name=response.get("surname"),
+            id=response.get(MICROSOFT_USER_ID_ATTRIBUTE),
+            first_name=response.get(MICROSOFT_USER_FIRST_NAME_ATTRIBUTE),
+            last_name=response.get(MICROSOFT_USER_LAST_NAME_ATTRIBUTE),
             team_ids=team_ids,
             user_role=user_role,
         )
