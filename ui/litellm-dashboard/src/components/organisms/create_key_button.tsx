@@ -7,6 +7,8 @@ import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tooltip }
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
+import { useQueryClient } from "@tanstack/react-query";
+import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
@@ -36,6 +38,7 @@ import {
 } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 
 const { Option } = Select;
 
@@ -136,6 +139,7 @@ export const fetchUserModels = async (
  */
 const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
@@ -391,6 +395,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       // Add the data to the state in the parent component
       // Also directly update the keys list in VirtualKeysTable without an API call
       addKey(response);
+
+      // Invalidate and refetch all keys list queries to update the table
+      // This will trigger a refetch of all key list queries regardless of pagination
+      queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
 
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
