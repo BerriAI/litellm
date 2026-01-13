@@ -18,6 +18,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy._types import LiteLLM_UserTable, NewTeamRequest, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
@@ -3386,3 +3387,126 @@ class TestSSOReadinessEndpoint:
                     )
         finally:
             app.dependency_overrides.clear()
+
+
+class TestCustomMicrosoftSSO:
+    """Tests for CustomMicrosoftSSO class."""
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_default_endpoints_when_no_env_vars(self):
+        """
+        Test that CustomMicrosoftSSO uses default Microsoft endpoints
+        when no custom environment variables are set.
+        """
+        # Ensure no custom endpoints are set
+        for key in [
+            "MICROSOFT_AUTHORIZATION_ENDPOINT",
+            "MICROSOFT_TOKEN_ENDPOINT",
+            "MICROSOFT_USERINFO_ENDPOINT",
+        ]:
+            os.environ.pop(key, None)
+
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        discovery = await sso.get_discovery_document()
+
+        assert discovery["authorization_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/authorize"
+        assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
+        assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_custom_endpoints_when_env_vars_set(self):
+        """
+        Test that CustomMicrosoftSSO uses custom endpoints
+        when environment variables are set.
+        """
+        custom_auth_endpoint = "https://custom.example.com/oauth2/v2.0/authorize"
+        custom_token_endpoint = "https://custom.example.com/oauth2/v2.0/token"
+        custom_userinfo_endpoint = "https://custom.example.com/v1.0/me"
+
+        with patch.dict(
+            os.environ,
+            {
+                "MICROSOFT_AUTHORIZATION_ENDPOINT": custom_auth_endpoint,
+                "MICROSOFT_TOKEN_ENDPOINT": custom_token_endpoint,
+                "MICROSOFT_USERINFO_ENDPOINT": custom_userinfo_endpoint,
+            },
+        ):
+            sso = CustomMicrosoftSSO(
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                tenant="test-tenant",
+                redirect_uri="http://localhost:4000/sso/callback",
+            )
+
+            discovery = await sso.get_discovery_document()
+
+            assert discovery["authorization_endpoint"] == custom_auth_endpoint
+            assert discovery["token_endpoint"] == custom_token_endpoint
+            assert discovery["userinfo_endpoint"] == custom_userinfo_endpoint
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_partial_custom_endpoints(self):
+        """
+        Test that CustomMicrosoftSSO uses custom endpoints for those set,
+        and defaults for others.
+        """
+        custom_auth_endpoint = "https://custom.example.com/oauth2/v2.0/authorize"
+
+        # Clear other env vars first
+        os.environ.pop("MICROSOFT_TOKEN_ENDPOINT", None)
+        os.environ.pop("MICROSOFT_USERINFO_ENDPOINT", None)
+
+        with patch.dict(
+            os.environ,
+            {
+                "MICROSOFT_AUTHORIZATION_ENDPOINT": custom_auth_endpoint,
+            },
+        ):
+            sso = CustomMicrosoftSSO(
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                tenant="test-tenant",
+                redirect_uri="http://localhost:4000/sso/callback",
+            )
+
+            discovery = await sso.get_discovery_document()
+
+            # Custom auth endpoint
+            assert discovery["authorization_endpoint"] == custom_auth_endpoint
+            # Default token and userinfo endpoints
+            assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
+            assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
+
+    def test_custom_microsoft_sso_uses_common_tenant_when_none(self):
+        """
+        Test that CustomMicrosoftSSO uses 'common' tenant when tenant is None.
+        """
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant=None,
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        assert sso.tenant == "common"
+
+    def test_custom_microsoft_sso_is_subclass_of_microsoft_sso(self):
+        """
+        Test that CustomMicrosoftSSO is a subclass of MicrosoftSSO.
+        """
+        from fastapi_sso.sso.microsoft import MicrosoftSSO
+
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        assert isinstance(sso, MicrosoftSSO)

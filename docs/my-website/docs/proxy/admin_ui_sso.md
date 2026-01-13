@@ -73,8 +73,21 @@ GOOGLE_CLIENT_SECRET=
 ```shell
 MICROSOFT_CLIENT_ID="84583a4d-"
 MICROSOFT_CLIENT_SECRET="nbk8Q~"
-MICROSOFT_TENANT="5a39737
+MICROSOFT_TENANT="5a39737"
 ```
+
+**Optional: Custom Microsoft SSO Endpoints**
+
+If you need to use custom Microsoft SSO endpoints (e.g., for a custom identity provider, sovereign cloud, or proxy), you can override the default endpoints:
+
+```shell
+MICROSOFT_AUTHORIZATION_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/token"
+MICROSOFT_USERINFO_ENDPOINT="https://your-custom-graph-api.com/v1.0/me"
+```
+
+If these are not set, the default Microsoft endpoints are used based on your tenant.
+
 - Set Redirect URI on your App Registration on https://portal.azure.com/
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
