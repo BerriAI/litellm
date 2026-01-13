@@ -1301,3 +1301,20 @@ COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
 ########################### RAG Text Splitter Constants ###########################
 DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+
+########################### Microsoft SSO Constants ###########################
+MICROSOFT_USER_EMAIL_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_EMAIL_ATTRIBUTE", "userPrincipalName")
+)
+MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "displayName")
+)
+MICROSOFT_USER_ID_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_ID_ATTRIBUTE", "id")
+)
+MICROSOFT_USER_FIRST_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "givenName")
+)
+MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "surname")
+)
