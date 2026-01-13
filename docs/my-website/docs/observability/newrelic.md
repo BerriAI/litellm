@@ -1,130 +1,79 @@
-# Overview
-This spec is not expected to be extremely detailed for the developer. The spec assumes the developer will take the 
-time when building their development plan to review how to implement each step correctly within LiteLLM. As the designer,
-you will look at the existing callback extensions and answer the specific details for where each piece of data is 
-available from the arguments provided to the callback methods.
+import Image from '@theme/IdealImage';
 
-The goal is to create an callback extension in order to send the AI data to New Relic.
-The extension should be created in `litellm/integrations/newrelic/`. There are several
-existing examples that can be reviewed and I would recommend the `litellm/integrations/opentelemetry.py`
-as an example.
+# What is New Relic?
 
-A user should be able to enabled the new callback with the following LiteLLM configuration:
+# New Relic Extension in LiteLLM
 
-```
-    litellm.callbacks = ["newrelic"]
-```
+## Enable New Relic Python Agent instrumentation
 
-In addition, the user would have to provide their New Relic license key and app name via environment variables. If these
-environment variables are not set, then the New Relic callback should return early (no-op) and not execute the rest of 
-the callback logic. Returning early should not raise an exception.
+The LiteLLM proxy has an optional configuration to enable instrumentation with the New Relic Python Agent. In order for the New Relic extension to work within the LiteLLM proxy, the New Relic Python Agent must instrument the process. This will result in the LiteLLM proxy reporting telemetry about the proxy to New Relic.
 
-```
-    export NEW_RELIC_LICENSE_KEY="your_license_key"
-    export NEW_RELIC_APP_NAME="your_app_name"
+In order to enable the New Relic Python Agent with the LiteLLM proxy, include the following environment variable when starting the proxy.
+
+```shell
+USE_NEWRELIC=true
 ```
 
-The New Relic callback will be implemented by extending the class `CustomLogger`. This class implements a number of methods,
-and the approach for each is defined below.
+## Enable New Relic LiteLLM Extension
 
-* `log_pre_api_call` - Unused, do nothing.
-* `log_post_api_call` - Unused, do nothing.
-* `log_success_event` - Implement as the main success path for non-streaming requests.
-* `log_failure_event` - Implement to log an error metric to New Relic
-* `async_log_success_event` - Implement as the main success path for async streaming requests.
-* `async_log_failure_event` - Implement to log an error metric to New Relic
+The New Relic LiteLLM extension is implemented as a callback. A common way to enable the callback is via the config.yaml definition. In order to enable the New Relic extension, add a callback configuration similar to the following in your config.yaml. The callbacks can include a number of different extensions. As long as ”newrelic” is included in the list, the New Relic LiteLLM extension will be invoked.
 
-## New Relic Configuration
-There are a number of configuration options available to New Relic. The important ones for our test are already defined
-in the `.env` file. Just use the CLI to set all of these as actual env vars such as `set -a; source .env; set +a`.
-
-If the `NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED` is not set or is not set to true, generate the events, but 
-do not store the `content` of the `LlmChatCompletionMessage` event. This is important for PII and data security. 
-The value of this environment variable can be either `true` or `'true'` (string). This configuration applies to *all*
-messages (e.g. context, user, assistant, tools, etc).
-
-## LLM sync vs async
-LiteLLM callbacks are defined by the CustomLogger class. The methods and definition are defined above and which methods
-we need actual implementations for. The `log_success_event` method is for synchronous LLM calls and the
-`async_log_success_event` method is for asynchronous LLM calls. Both methods should have the same logic for sending
-the New Relic events. In each case, when processing LLM messages, the entire message will already be provided by LiteLLM.
-
-## LiteLLM errors
-If LiteLLM invokes an error handling callback, do not send the New Relic AI events. Instead, generate a New Relic
-Metric named `LLM/LiteLLM/Error` with a count of 1. 
-
-## Dev Plan Notes
-In the dev plan, when referring to New Relic data, use the actual methods from the New Relic Python agent. Do NOT use the
-JSON examples that were included in the specification as JSON was used just as an illustration and easy to type.
-
-## Types of LLM data
-For now, assume that only text-based LLM conversations will be used. New Relic does not support images, audio, video, or
-any other type of media outside of text.
-
-# New Relic Python Agent
-The customer will need to install the New Relic Python agent with their application. This can be done with standard
-python tooling such as pip, poetry, or uv. The customer should install a minimum Python `newrelic` library of `11.0.1`.
-For this use case, I would recommend using the `newrelic-admin` 
-[installation method](https://docs.newrelic.com/docs/apm/agents/python-agent/installation/python-agent-admin-script-advanced-usage/) 
-to be able to have the New Relic agent wrap the application versus trying to install the agent into the application.
-
-# New Relic AI Event Model
-The following New Relic events should be created as part of the callback extension.
-
-## LlmChatCompletionSummary
-A single instance of this event should be created for each chat completion request. The event will be shown in
-JSON format with comments, but the actual event should be created as a New Relic custom event. A single summary even
-will be created for multiple message events.
-
-```json5
-{
-  "id": "lkajsdfl", // the unique id for the request. Use the completion ID from the LLM response via `kwargs`. If not found there, look in the `response_obj`. If neither are found, generate a UUID4 and log a warning.
-  "trace_id": "lkasdf-9adsf", // retrieve the current trace id from the New Relic agent via `newrelic.agent.current_trace_id()` or log an warning if not set and exit out of the processing
-  "span_id": "lkjasfdlkaj", // retrieve the current span id from the New Relic agent via `newrelic.agent.current_span_id()` or log an warning if not set and  exit out of the processing
-  "request.model": "gpt-4-", // the model used for the request
-  "response.model": "gpt-4o-2024-11-20", // the model used for the response
-  "response.choices.finish_reason": "stop", // the finish reason for the response. If not found, set to "unknown"
-  "response.number_of_messages": 3, // the total number of messages in the request
-  "vendor": "openai", // the vendor used for the request
-  "response.usage.prompt_tokens": 123, // the number of prompt tokens reported by the usage statistics from the LLM
-  "response.usage.completion_tokens": 3123, // the number of completion tokens reported by the usage statistics from the LLM
-  "response.usage.total_tokens": 3401 // the total number of tokens reported by the usage statistics from the LLM
-}
+```yaml
+litellm_settings:
+  callbacks: ["newrelic"]
 ```
 
-The finish_reason will need to be retrieved from the LLM response. Look at other extensions to see how they retrieve
-the finish reason from the callback context/object.
+## Required environment variables
 
-The `response.number_of_messages` is the total number of messages in the request. This includes assistant or tool messages.
-This number will be set after the conversation has completed and is the total number of messages sent and/or received.
+In order for the New Relic Python Agent to report telemetry to New Relic, there are a few environment variables that should be set.
 
-## LlmChatCompletionMessage
-Each message in a reqeust to the LLM will be a separate message. This is normally for messages such as context, user,
-and response but can include other types of messages such as assistant or tool messages. Each of the messages belong 
-to a LlmChatCompletionSummary event based on `LlmChatCompletionSummary.id`. Each message will look similar to the 
-following JSON format with comments, but the actual event should be created as a New Relic custom event.
+The NEW_RELIC_APP_NAME should have a value for the name that you wish the LiteLLM server to appear as in New Relic’s UI. The NEW_RELIC_LICENSE_KEY value is a license key for the New Relic account you want the telemetry to be reported to.
 
-Each message is the full message and will be provided by LiteLLM. Messages are available in the callback handler 
-through `kwargs.get("messages", [])`. If the response contains choices, include those as if they are messages.
+The USE_NEWRELIC is required in order to enable the New Relic Python Agent with the LiteLLM proxy. This must be sent in order for the New Relic Python Agent to report telemetry to New Relic.
 
-```json5
-{
-  "completion_id": "lkajsdfl", // comes from `LlmChatCompletionSummary.id`
-  "trace_id": "lkasdf-9adsf", // retrieve the current trace id from the New Relic agent via `newrelic.agent.current_trace_id()` or log an warning if not set and  exit out of the processing
-  "span_id": "lkjasfdlkaj", // retrieve the current span id from the New Relic agent via `newrelic.agent.current_span_id()` or log an warning if not set and  exit out of the processing
-  "content": "This is my content", // the content of the message
-  "role": "user", // the role of the message (user, system, assistant, tools, function, etc)
-  "sequence": 1, // the sequence number of the message in the request/response
-  "response.model": "gpt-4o-2024-11-20", // the model used for the response
-  "vendor": "openai" // the vendor used for the request
-}
+```shell
+NEW_RELIC_APP_NAME=<app name>
+NEW_RELIC_LICENSE_KEY=<license key>
+
+USE_NEWRELIC=true
 ```
 
-The `sequence` number should be ordered from 0-N based on the order of _ALL_ messages were sent and/or received to the LLM.
-As LiteLLM is server for OpenAI clients, the order that the messages are defined in the OpenAI request and response should
-be the order of the sequence number. All request messages will be the first message(s). Then the response messages(s)
-will follow. Any type of response messaage should be included as an event and have the correct sequence number based on
-where it appears in the request/response.
+## Optional Configuration
 
-Each message receives an incremental sequence number. As an example, if the request sends a context message (0), a user message (1), and the response
-is the assistant message (2), then the sequence numbers would be 0, 1, and 2 respectively.
+### Disable sending LLM messages to New Relic
+
+There are two options to disable sending LLM messages to New Relic. Using either of these options will disable sending LLM messages to New Relic; you do not need to set both.
+
+The config.yaml file can be used to set a flag that will disable sending LLM messages to New Relic. As you might want LLM messages to be sent elsewhere (logs) but not to New Relic, there is a New Relic specific configuration value that can be set. Adding the following to your config.yaml will prevent LLM messages from being sent to New Relic.
+
+```yaml
+litellm_settings:
+  callbacks: ["newrelic"]
+  newrelic_params:
+    turn_off_message_logging: true
+```
+
+The other option is to use an environment variable to disable sending LLM messages to New Relic. This can be achieved with the following environment variable.
+
+```shell
+NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED=false
+```
+
+### New Relic Agent Configuration
+
+The New Relic Python Agent has a (number of ways)[https://docs.newrelic.com/docs/apm/agents/python-agent/configuration/python-agent-configuration/] to accept configuration. As shown above, environment variables can be used to set various optional configuration within the agent.
+
+There is also an agent configuration file that could be used instead of environment variables. If you prefer to use the configuration file, you’ll need to ensure the configuration file is accessible. You should also set the following environment variable to point to your configuration file.
+
+```shell
+NEW_RELIC_CONFIG_FILE=</path/to/newrelic/configuration_file>
+```
+
+### Recommended configuration overrides
+
+The New Relic LiteLLM Extension will send telemetry to New Relic so that the messages appear as part of the New Relic AI Monitoring feature. When using this feature, there are some configurations that are recommended to be set. This configurations can be set via environment variables or in a configuration file. The following environment variables are recommended.
+
+```shell
+NEW_RELIC_CUSTOM_INSIGHTS_EVENTS_MAX_ATTRIBUTE_VALUE=4095
+NEW_RELIC_EVENT_HARVEST_CONFIG_HARVEST_LIMITS_CUSTOM_EVENT_DATA=100000
+```
