@@ -5010,6 +5010,55 @@ def _invalidate_model_cost_lowercase_map() -> None:
     _model_cost_lowercase_map = None
 
 
+def _rebuild_model_cost_lowercase_map() -> Dict[str, str]:
+    """Rebuild the case-insensitive lookup map from the current model_cost.
+    
+    Returns:
+        The rebuilt map (guaranteed to be not None).
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = {k.lower(): k for k in litellm.model_cost}
+    return _model_cost_lowercase_map
+
+
+def _handle_stale_map_entry_rebuild(
+    potential_key_lower: str,
+) -> Optional[str]:
+    """
+    Handle stale _model_cost_lowercase_map entry (key was popped).
+    
+    Rebuilds the map and retries the lookup.
+    
+    Returns:
+        The matched key if found after rebuild, None otherwise.
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+    matched_key = _model_cost_lowercase_map.get(potential_key_lower)
+    if matched_key is not None and matched_key in litellm.model_cost:
+        return matched_key
+    return None
+
+
+def _handle_new_key_with_scan(
+    potential_key_lower: str,
+) -> Optional[str]:
+    """
+    Handle new key added to model_cost without invalidating _model_cost_lowercase_map.
+    
+    Scans model_cost for case-insensitive match and rebuilds the map if found.
+    
+    Returns:
+        The matched key if found, None otherwise.
+    """
+    global _model_cost_lowercase_map
+    for key in litellm.model_cost:
+        if key.lower() == potential_key_lower:
+            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+            return key
+    return None
+
+
 def _get_model_cost_key(potential_key: str) -> Optional[str]:
     """
     Get the actual key from model_cost, with case-insensitive fallback.
@@ -5024,7 +5073,7 @@ def _get_model_cost_key(potential_key: str) -> Optional[str]:
 
     # Fallback to case-insensitive match using O(1) lookup map
     if _model_cost_lowercase_map is None:
-        _model_cost_lowercase_map = {k.lower(): k for k in litellm.model_cost}
+        _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
     
     potential_key_lower = potential_key.lower()
     matched_key = _model_cost_lowercase_map.get(potential_key_lower)
@@ -5032,6 +5081,19 @@ def _get_model_cost_key(potential_key: str) -> Optional[str]:
     # Verify the matched key still exists in model_cost (defense against stale cache)
     # This handles cases where model_cost is modified directly (e.g., model_cost.pop())
     if matched_key is not None and matched_key in litellm.model_cost:
+        return matched_key
+    
+    # If matched_key exists in _model_cost_lowercase_map but not in model_cost, the map is stale (key was popped)
+    # Rebuild _model_cost_lowercase_map to remove stale entries and keep it in sync
+    if matched_key is not None:
+        matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
+        if matched_key is not None:
+            return matched_key
+    
+    # Fallback: if _model_cost_lowercase_map lookup failed, check if a new key was added without invalidating the map
+    # This handles cases where litellm.model_cost[key] = value was done directly
+    matched_key = _handle_new_key_with_scan(potential_key_lower)
+    if matched_key is not None:
         return matched_key
     
     return None
