@@ -898,9 +898,15 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
-    def __init__(self, guardrail_name: Optional[str] = None, message: str = ""):
+    def __init__(
+        self,
+        guardrail_name: Optional[str] = None,
+        message: str = "",
+        should_wrap_with_default_message: bool = True,
+    ):
+        default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
-        self.message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
 
