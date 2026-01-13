@@ -57,7 +57,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import load_credentials_from_list
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    load_credentials_from_list,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -3822,6 +3825,8 @@ class ProxyConfig:
                 model_cost_map_url = litellm.model_cost_map_url
                 new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
                 litellm.model_cost = new_model_cost_map
+                # Invalidate case-insensitive lookup map since model_cost was replaced
+                _invalidate_model_cost_lowercase_map()
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -10074,6 +10079,8 @@ async def reload_model_cost_map(
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
         litellm.model_cost = new_model_cost_map
+        # Invalidate case-insensitive lookup map since model_cost was replaced
+        _invalidate_model_cost_lowercase_map()
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload
