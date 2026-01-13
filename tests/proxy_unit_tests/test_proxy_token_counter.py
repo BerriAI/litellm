@@ -31,8 +31,6 @@ from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockToken
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
 from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
-    _create_anthropic_error_response,
-    _extract_error_message,
     count_tokens as anthropic_count_tokens,
 )
 from litellm.proxy.proxy_server import token_counter
@@ -1108,68 +1106,6 @@ async def test_proxy_token_counter_error_falls_back_when_enabled():
         litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
 
 
-def test_create_anthropic_error_response_helper():
-    """
-    Test that _create_anthropic_error_response correctly formats errors.
-    """
-    # Test 400 -> invalid_request_error
-    response = _create_anthropic_error_response(400, "Invalid request")
-    assert response["type"] == "error"
-    assert response["error"]["type"] == "invalid_request_error"
-    assert response["error"]["message"] == "Invalid request"
-    assert "request_id" not in response
-
-    # Test 401 -> authentication_error
-    response = _create_anthropic_error_response(401, "Unauthorized")
-    assert response["error"]["type"] == "authentication_error"
-
-    # Test 403 -> permission_error
-    response = _create_anthropic_error_response(403, "Forbidden")
-    assert response["error"]["type"] == "permission_error"
-
-    # Test 429 -> rate_limit_error
-    response = _create_anthropic_error_response(429, "Rate limit exceeded")
-    assert response["error"]["type"] == "rate_limit_error"
-
-    # Test 500 -> api_error
-    response = _create_anthropic_error_response(500, "Internal error")
-    assert response["error"]["type"] == "api_error"
-
-    # Test with request_id
-    response = _create_anthropic_error_response(400, "Error", request_id="req_123")
-    assert response["request_id"] == "req_123"
-
-    # Test unknown status code defaults to api_error
-    response = _create_anthropic_error_response(418, "I'm a teapot")
-    assert response["error"]["type"] == "api_error"
-
-
-def test_extract_error_message_helper():
-    """
-    Test that _extract_error_message correctly extracts messages from various formats.
-    """
-    # Test Bedrock format: {"detail": {"message": "..."}}
-    bedrock_msg = '{"detail":{"message":"Input is too long for requested model."}}'
-    assert _extract_error_message(bedrock_msg) == "Input is too long for requested model."
-
-    # Test {"Message": "..."} format
-    msg = '{"Message":"Bearer Token has expired"}'
-    assert _extract_error_message(msg) == "Bearer Token has expired"
-
-    # Test {"message": "..."} format
-    msg = '{"message":"Some error occurred"}'
-    assert _extract_error_message(msg) == "Some error occurred"
-
-    # Test plain string
-    assert _extract_error_message("Plain error message") == "Plain error message"
-
-    # Test invalid JSON
-    assert _extract_error_message("Not JSON {invalid}") == "Not JSON {invalid}"
-
-    # Test empty dict
-    assert _extract_error_message("{}") == "{}"
-
-
 @pytest.mark.asyncio
 async def test_anthropic_endpoint_returns_anthropic_error_format():
     """
@@ -1321,3 +1257,5 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
+
+
