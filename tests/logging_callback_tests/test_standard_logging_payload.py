@@ -80,6 +80,53 @@ def test_get_usage(response_obj, expected_values):
     assert usage.total_tokens == expected_values[2]
 
 
+def test_get_usage_from_image_generation_response():
+    """
+    Test that image generation usage (with input_tokens/output_tokens format)
+    is correctly transformed to standard usage format with image_tokens preserved.
+
+    Note: get_usage_from_response_obj() is used by multiple endpoints including
+    /images/generations and Response API (/responses), both of which use the
+    input_tokens/output_tokens format instead of prompt_tokens/completion_tokens.
+
+    This tests the fix for the bug where image_tokens were being lost during
+    spend log creation for /images/generations endpoint.
+    """
+    # Simulating image generation response usage from OpenAI
+    response_obj = {
+        "usage": {
+            "input_tokens": 13,
+            "output_tokens": 372,
+            "total_tokens": 385,
+            "input_tokens_details": {
+                "image_tokens": 0,
+                "text_tokens": 13,
+            },
+            "output_tokens_details": {
+                "image_tokens": 272,
+                "text_tokens": 100,
+            },
+        }
+    }
+
+    usage = StandardLoggingPayloadSetup.get_usage_from_response_obj(response_obj)
+
+    # Check basic token counts are mapped correctly
+    assert usage.prompt_tokens == 13
+    assert usage.completion_tokens == 372
+    assert usage.total_tokens == 385
+
+    # Check that prompt_tokens_details contains image_tokens and text_tokens
+    assert usage.prompt_tokens_details is not None
+    assert usage.prompt_tokens_details.image_tokens == 0
+    assert usage.prompt_tokens_details.text_tokens == 13
+
+    # Check that completion_tokens_details contains image_tokens and text_tokens
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.image_tokens == 272
+    assert usage.completion_tokens_details.text_tokens == 100
+
+
 def test_get_additional_headers():
     additional_headers = {
         "x-ratelimit-limit-requests": "2000",
