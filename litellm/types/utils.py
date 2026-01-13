@@ -1252,7 +1252,11 @@ class Choices(OpenAIObject):
                 params["message"] = Message(**message)
             elif isinstance(message, BaseModel):
                 # Normalize provider/OpenAI SDK message models into LiteLLM's Message type.
-                dump = message.model_dump() if hasattr(message, "model_dump") else message.dict()
+                dump = (
+                    message.model_dump()
+                    if hasattr(message, "model_dump")
+                    else message.dict()
+                )
                 params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
@@ -1661,12 +1665,16 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
-        if (
-            "usage" in kwargs
-            and kwargs["usage"] is not None
-            and isinstance(kwargs["usage"], dict)
-        ):
-            kwargs["usage"] = Usage(**kwargs["usage"])
+        if "usage" in kwargs and kwargs["usage"] is not None:
+            if isinstance(kwargs["usage"], dict):
+                kwargs["usage"] = Usage(**kwargs["usage"])
+            elif isinstance(kwargs["usage"], BaseModel):
+                dump = (
+                    kwargs["usage"].model_dump()
+                    if hasattr(kwargs["usage"], "model_dump")
+                    else kwargs["usage"].dict()
+                )
+                kwargs["usage"] = Usage(**dump)
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1741,7 +1749,11 @@ class ModelResponse(ModelResponseBase):
                     elif isinstance(choice, dict):
                         _new_choice = Choices(**choice)  # type: ignore
                     elif isinstance(choice, BaseModel):
-                        dump = choice.model_dump() if hasattr(choice, "model_dump") else choice.dict()
+                        dump = (
+                            choice.model_dump()
+                            if hasattr(choice, "model_dump")
+                            else choice.dict()
+                        )
                         _new_choice = Choices(**dump)  # type: ignore
                     else:
                         _new_choice = choice
@@ -1761,6 +1773,11 @@ class ModelResponse(ModelResponseBase):
         if usage is not None:
             if isinstance(usage, dict):
                 usage = Usage(**usage)
+            elif isinstance(usage, BaseModel):
+                dump = (
+                    usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
+                )
+                usage = Usage(**dump)
             else:
                 usage = usage
         elif stream is None or stream is False:
@@ -3043,7 +3060,6 @@ class LlmProviders(str, Enum):
     POE = "poe"
     CHUTES = "chutes"
     XIAOMI_MIMO = "xiaomi_mimo"
-
 
 
 # Create a set of all provider values for quick lookup
