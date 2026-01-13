@@ -111,6 +111,42 @@ To set up app roles:
 4. Assign users to these roles in your Enterprise Application
 5. When users sign in via SSO, LiteLLM will automatically assign them the corresponding role
 
+**Advanced: Custom User Attribute Mapping**
+
+For certain Microsoft Entra ID configurations, you may need to override the default user attribute field names. This is useful when your organization uses custom claims or non-standard attribute names in the SSO response.
+
+**Step 1: Debug SSO Response**
+
+First, inspect the JWT fields returned by your Microsoft SSO provider using the [SSO Debug Route](#debugging-sso-jwt-fields).
+
+1. Add `/sso/debug/callback` as a redirect URL in your Azure App Registration
+2. Navigate to `https://<proxy_base_url>/sso/debug/login`
+3. Complete the SSO flow to see the returned user attributes
+
+**Step 2: Identify Field Attribute Names**
+
+From the debug response, identify the field names used for email, display name, user ID, first name, and last name.
+
+**Step 3: Set Environment Variables**
+
+Override the default attribute names by setting these environment variables:
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `MICROSOFT_USER_EMAIL_ATTRIBUTE` | Field name for user email | `userPrincipalName` |
+| `MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE` | Field name for display name | `displayName` |
+| `MICROSOFT_USER_ID_ATTRIBUTE` | Field name for user ID | `id` |
+| `MICROSOFT_USER_FIRST_NAME_ATTRIBUTE` | Field name for first name | `givenName` |
+| `MICROSOFT_USER_LAST_NAME_ATTRIBUTE` | Field name for last name | `surname` |
+
+**Step 4: Restart the Proxy**
+
+After setting the environment variables, restart the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
 </TabItem>
 
 <TabItem value="Generic" label="Generic SSO Provider">
