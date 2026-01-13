@@ -317,34 +317,6 @@ def test_openai_azure_embedding():
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
-def test_aaaaaa_openai_azure_embedding_with_oidc_and_cf():
-    # TODO: Switch to our own Azure account, currently using ai.moda's account
-    os.environ["AZURE_TENANT_ID"] = "17c0a27a-1246-4aa1-a3b6-d294e80e783c"
-    os.environ["AZURE_CLIENT_ID"] = "4faf5422-b2bd-45e8-a6d7-46543a38acd0"
-
-    old_key = os.environ["AZURE_API_KEY"]
-    os.environ.pop("AZURE_API_KEY", None)
-
-    try:
-        response = embedding(
-            model="azure/text-embedding-ada-002",
-            input=["Hello"],
-            azure_ad_token="oidc/circleci/",
-            api_base="https://eastus2-litellm.openai.azure.com/",
-            api_version="2024-06-01",
-        )
-        print(response)
-
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-    finally:
-        os.environ["AZURE_API_KEY"] = old_key
-
-
 from openai.types.embedding import Embedding
 
 
