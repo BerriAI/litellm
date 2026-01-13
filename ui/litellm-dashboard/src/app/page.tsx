@@ -120,13 +120,8 @@ export default function CreateKeyPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
 
-  // Survey state - show by default if not previously dismissed
-  const [showSurveyPrompt, setShowSurveyPrompt] = useState(() => {
-    if (typeof window !== "undefined") {
-      return !localStorage.getItem("litellm_survey_shown");
-    }
-    return false;
-  });
+  // Survey state - always show by default
+  const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
   const [showSurveyModal, setShowSurveyModal] = useState(false);
 
   const invitation_id = searchParams.get("invitation_id");
@@ -272,18 +267,26 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
+  // Auto-dismiss survey prompt after 15 seconds
+  useEffect(() => {
+    if (showSurveyPrompt && !showSurveyModal) {
+      const timer = setTimeout(() => {
+        setShowSurveyPrompt(false);
+      }, 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [showSurveyPrompt, showSurveyModal]);
+
   const handleOpenSurvey = () => {
     setShowSurveyPrompt(false);
     setShowSurveyModal(true);
   };
 
   const handleDismissSurveyPrompt = () => {
-    localStorage.setItem("litellm_survey_shown", "true");
     setShowSurveyPrompt(false);
   };
 
   const handleSurveyComplete = () => {
-    localStorage.setItem("litellm_survey_shown", "true");
     setShowSurveyModal(false);
   };
 
