@@ -3,7 +3,7 @@ import { ADMIN_STORAGE_PATH } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 
-test.describe.only("Create Key", () => {
+test.describe("Create Key", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("Able to create a key with all team models", async ({ page }) => {
