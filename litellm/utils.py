@@ -2639,6 +2639,10 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        
+        # Invalidate case-insensitive lookup map since model_cost was modified
+        _invalidate_model_cost_lowercase_map()
+        
         verbose_logger.debug(
             f"added/updated model={model_cost_key} in litellm.model_cost: {model_cost_key}"
         )
@@ -4993,23 +4997,38 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
         return model
 
 
+# Global case-insensitive lookup map for model_cost (built eagerly at module import)
+_model_cost_lowercase_map: Optional[Dict[str, str]] = None
+
+
+def _invalidate_model_cost_lowercase_map() -> None:
+    """Invalidate the case-insensitive lookup map for model_cost.
+    
+    Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = None
+
+
 def _get_model_cost_key(potential_key: str) -> Optional[str]:
     """
     Get the actual key from model_cost, with case-insensitive fallback.
 
     Returns the key if found (exact match preferred, then case-insensitive), or None if not found.
     """
+    global _model_cost_lowercase_map
+    
     # Try exact match first (most common case, O(1))
     if potential_key in litellm.model_cost:
         return potential_key
 
-    # Fallback to case-insensitive match
+    # Fallback to case-insensitive match using O(1) lookup map
+    if _model_cost_lowercase_map is None:
+        _model_cost_lowercase_map = {k.lower(): k for k in litellm.model_cost}
+    
     potential_key_lower = potential_key.lower()
-    for key in litellm.model_cost:
-        if key.lower() == potential_key_lower:
-            return key
+    return _model_cost_lowercase_map.get(potential_key_lower)
 
-    return None
 
 
 def _get_model_info_from_model_cost(key: str) -> dict:
