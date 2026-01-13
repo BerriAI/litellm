@@ -54,7 +54,7 @@ import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
 import CodeInterpreterOutput from "./CodeInterpreterOutput";
 import { useCodeInterpreter } from "./useCodeInterpreter";
 import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
-import { makeA2AStreamMessageRequest } from "../llm_calls/a2a_send_message";
+import { makeA2AStreamMessageRequest, makeA2ASendMessageRequest } from "../llm_calls/a2a_send_message";
 import A2AMetrics from "./A2AMetrics";
 import { A2ATaskMetadata } from "./types";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
@@ -1037,7 +1037,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
       // Handle A2A agent calls (separate from model-based calls) - use streaming
       if (endpointType === EndpointType.A2A_AGENTS && selectedAgent) {
-        await makeA2AStreamMessageRequest(
+        await makeA2ASendMessageRequest(
           selectedAgent,
           inputMessage,
           (chunk, model) => updateTextUI("assistant", chunk, model),
