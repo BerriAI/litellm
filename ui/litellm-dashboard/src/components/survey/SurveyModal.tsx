@@ -17,17 +17,17 @@ const REASONS_OPTIONS = [
   {
     id: "ai_integration",
     label: "AI Integration",
-    description: "Langfuse, OTEL, S3 logging, Azure Content Safety guardrails",
+    description: "LiteLLM had the logging/guardrail integration we needed - Langfuse, OTEL, S3 logging, Azure Content Safety guardrails",
   },
   {
     id: "unified_api",
     label: "Unified API",
-    description: "Best OpenAI-compatible API across providers",
+    description: "LiteLLM had the best OpenAI-compatible API across providers - OpenAI, Anthropic, Gemini, etc.",
   },
   {
     id: "breadth_of_models",
     label: "Breadth of Models/Providers",
-    description: "/ocr endpoint, /batches endpoint, Bedrock support, Azure OCR",
+    description: "LiteLLM had the provider + endpoint combinations we needed - /ocr endpoint with Mistral OCR, /batches endppint with Bedrock API, etc.",
   },
   {
     id: "other",
