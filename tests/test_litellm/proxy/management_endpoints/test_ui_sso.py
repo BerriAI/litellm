@@ -115,6 +115,47 @@ def test_microsoft_sso_handler_with_empty_response():
     assert result.team_ids == []
 
 
+def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
+    """
+    Test that MicrosoftSSOHandler.openid_from_response uses custom attribute names
+    from constants when environment variables are set.
+    """
+    # Arrange
+    mock_response = {
+        "custom_email_field": "custom@example.com",
+        "custom_display_name": "Custom Display Name",
+        "custom_id_field": "custom_user_123",
+        "custom_first_name": "CustomFirst",
+        "custom_last_name": "CustomLast",
+    }
+    expected_team_ids = ["team1"]
+
+    # Act
+    with patch("litellm.constants.MICROSOFT_USER_EMAIL_ATTRIBUTE", "custom_email_field"), \
+         patch("litellm.constants.MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "custom_display_name"), \
+         patch("litellm.constants.MICROSOFT_USER_ID_ATTRIBUTE", "custom_id_field"), \
+         patch("litellm.constants.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"), \
+         patch("litellm.constants.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_EMAIL_ATTRIBUTE", "custom_email_field"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "custom_display_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_ID_ATTRIBUTE", "custom_id_field"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"):
+        result = MicrosoftSSOHandler.openid_from_response(
+            response=mock_response, team_ids=expected_team_ids, user_role=None
+        )
+
+    # Assert
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "custom@example.com"
+    assert result.display_name == "Custom Display Name"
+    assert result.provider == "microsoft"
+    assert result.id == "custom_user_123"
+    assert result.first_name == "CustomFirst"
+    assert result.last_name == "CustomLast"
+    assert result.team_ids == expected_team_ids
+
+
 def test_get_microsoft_callback_response():
     # Arrange
     mock_request = MagicMock(spec=Request)
