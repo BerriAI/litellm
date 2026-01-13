@@ -5027,7 +5027,14 @@ def _get_model_cost_key(potential_key: str) -> Optional[str]:
         _model_cost_lowercase_map = {k.lower(): k for k in litellm.model_cost}
     
     potential_key_lower = potential_key.lower()
-    return _model_cost_lowercase_map.get(potential_key_lower)
+    matched_key = _model_cost_lowercase_map.get(potential_key_lower)
+    
+    # Verify the matched key still exists in model_cost (defense against stale cache)
+    # This handles cases where model_cost is modified directly (e.g., model_cost.pop())
+    if matched_key is not None and matched_key in litellm.model_cost:
+        return matched_key
+    
+    return None
 
 
 
