@@ -129,6 +129,11 @@ run_grype_scans() {
         "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
         "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
         "CVE-2025-60876" # BusyBox wget HTTP request splitting - no fix available in Chainguard Wolfi base image
+        "CVE-2010-4756" # glibc glob DoS - awaiting patched Wolfi glibc build
+        "CVE-2019-1010022" # glibc stack guard bypass - awaiting patched Wolfi glibc build
+        "CVE-2019-1010023" # glibc ldd remap issue - awaiting patched Wolfi glibc build
+        "CVE-2019-1010024" # glibc ASLR mitigation bypass - awaiting patched Wolfi glibc build
+        "CVE-2019-1010025" # glibc pthread heap address leak - awaiting patched Wolfi glibc build
     )
 
     # Build JSON array of allowlisted CVE IDs for jq
