@@ -365,3 +365,21 @@ def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
         pass
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_model_router():
+    litellm._turn_on_debug()
+    response = await litellm.acompletion(
+        model="azure_ai/azure-model-router",
+        messages=[{"role": "user", "content": "hi who is this"}],
+        api_base="https://ishaa-mh6uutut-swedencentral.cognitiveservices.azure.com/openai/v1/",
+        api_key=os.getenv("AZURE_MODEL_ROUTER_API_KEY"),
+    )
+    print("response: ", response)
+    
+
+    # Check response cost
+    tracked_cost = response._hidden_params["response_cost"]
+    assert tracked_cost > 0
+    print("Tracked cost: ", tracked_cost)
