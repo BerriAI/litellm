@@ -71,6 +71,10 @@ def test_get_model_name_from_gemini_spec_model():
 
 
 def test_vertex_ai_response_schema_dict():
+    """
+    Test that older Gemini models (1.5) use responseSchema (OpenAPI format).
+    responseSchema requires propertyOrdering and doesn't support additionalProperties.
+    """
     v = VertexGeminiConfig()
     non_default_params = {
         "messages": [{"role": "user", "content": "Hello, world!"}],
@@ -106,7 +110,7 @@ def test_vertex_ai_response_schema_dict():
     transformed_request = v.map_openai_params(
         non_default_params=non_default_params,
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema (OpenAPI format)
         drop_params=False,
     )
 
@@ -157,6 +161,9 @@ class Step(BaseModel):
 
 
 def test_vertex_ai_response_schema_defs():
+    """
+    Test that $defs are unpacked for older Gemini models using responseSchema.
+    """
     v = VertexGeminiConfig()
 
     schema = cast(dict, v.get_json_schema_from_pydantic_object(MathReasoning))
@@ -170,7 +177,7 @@ def test_vertex_ai_response_schema_defs():
             "response_format": schema,
         },
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema (OpenAPI format)
         drop_params=False,
     )
 
@@ -200,9 +207,9 @@ def test_vertex_ai_response_schema_defs():
     }
 
 
-def test_vertex_ai_response_json_schema_opt_in():
+def test_vertex_ai_response_json_schema_for_gemini_2():
     """
-    Test that use_json_schema=True uses responseJsonSchema for Gemini 2.0+ models.
+    Test that Gemini 2.0+ models automatically use responseJsonSchema.
 
     responseJsonSchema uses standard JSON Schema format:
     - lowercase types (string, object, etc.)
@@ -228,11 +235,10 @@ def test_vertex_ai_response_json_schema_opt_in():
                         "additionalProperties": False,
                     },
                 },
-                "use_json_schema": True,  # Opt-in to responseJsonSchema
             },
         },
         optional_params={},
-        model="gemini-2.0-flash",
+        model="gemini-2.0-flash",  # Gemini 2.0+ automatically uses responseJsonSchema
         drop_params=False,
     )
 
@@ -252,9 +258,9 @@ def test_vertex_ai_response_json_schema_opt_in():
     assert transformed_request["response_json_schema"].get("additionalProperties") == False
 
 
-def test_vertex_ai_response_json_schema_fallback_for_old_models():
+def test_vertex_ai_response_schema_for_old_models():
     """
-    Test that use_json_schema=True falls back to responseSchema for older models.
+    Test that older models (Gemini 1.5) automatically use responseSchema.
     """
     v = VertexGeminiConfig()
 
@@ -272,20 +278,22 @@ def test_vertex_ai_response_json_schema_fallback_for_old_models():
                         },
                     },
                 },
-                "use_json_schema": True,  # Opt-in, but model doesn't support it
             },
         },
         optional_params={},
-        model="gemini-1.5-flash",  # Old model, doesn't support responseJsonSchema
+        model="gemini-1.5-flash",  # Old model automatically uses responseSchema
         drop_params=False,
     )
 
-    # Should fall back to response_schema for older models
+    # Should use response_schema for older models
     assert "response_schema" in transformed_request
     assert "response_json_schema" not in transformed_request
 
 
 def test_vertex_ai_retain_property_ordering():
+    """
+    Test that existing propertyOrdering is preserved for older models using responseSchema.
+    """
     v = VertexGeminiConfig()
     transformed_request = v.map_openai_params(
         non_default_params={
@@ -306,7 +314,7 @@ def test_vertex_ai_retain_property_ordering():
             },
         },
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema which needs propertyOrdering
         drop_params=False,
     )
 

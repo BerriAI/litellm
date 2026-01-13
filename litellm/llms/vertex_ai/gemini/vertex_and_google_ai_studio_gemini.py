@@ -607,16 +607,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         # remove 'strict' from json schema (not supported by Gemini)
         new_value = _remove_strict_from_schema(new_value)
 
-        # Check if user explicitly opted-in to use responseJsonSchema
-        # This is opt-in to maintain backwards compatibility
-        use_json_schema = new_value.pop("use_json_schema", False)
-
-        # Only allow use_json_schema for models that support it (Gemini 2.0+)
-        if use_json_schema and not supports_response_json_schema(model):
-            verbose_logger.warning(
-                f"Model {model} does not support responseJsonSchema. Falling back to responseSchema."
-            )
-            use_json_schema = False
+        # Automatically use responseJsonSchema for Gemini 2.0+ models
+        # responseJsonSchema uses standard JSON Schema format and supports additionalProperties
+        # For older models (Gemini 1.5), fall back to responseSchema (OpenAPI format)
+        use_json_schema = supports_response_json_schema(model)
 
         if not use_json_schema:
             # For responseSchema, remove 'additionalProperties' (not supported)

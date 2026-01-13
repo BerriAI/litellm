@@ -343,11 +343,11 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
-## Gemini - Use Native JSON Schema Format (Gemini 2.0+)
+## Gemini - Native JSON Schema Format (Gemini 2.0+)
 
-Gemini 2.0+ models support a native `responseJsonSchema` parameter that uses standard JSON Schema format. This provides better compatibility with Pydantic schemas and supports `additionalProperties`.
+Gemini 2.0+ models automatically use the native `responseJsonSchema` parameter, which provides better compatibility with standard JSON Schema format.
 
-### Benefits of `use_json_schema: True`:
+### Benefits (Gemini 2.0+):
 - Standard JSON Schema format (lowercase types like `string`, `object`)
 - Supports `additionalProperties: false` for stricter validation
 - Better compatibility with Pydantic's `model_json_schema()`
@@ -380,10 +380,9 @@ response = completion(
                     "age": {"type": "integer"}
                 },
                 "required": ["name", "age"],
-                "additionalProperties": False  # Now works with use_json_schema!
+                "additionalProperties": False  # Supported on Gemini 2.0+
             }
-        },
-        "use_json_schema": True  # Opt-in to native JSON Schema format
+        }
     }
 )
 ```
@@ -413,8 +412,7 @@ curl http://0.0.0.0:4000/v1/chat/completions \
                 "required": ["name", "age"],
                 "additionalProperties": false
             }
-        },
-        "use_json_schema": true
+        }
     }
   }'
 ```
@@ -422,12 +420,11 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
-### Supported Models
+### Model Behavior
 
-`use_json_schema: True` is supported on Gemini 2.0+ models:
-- `gemini-2.0-flash`
-- `gemini-2.0-flash-lite`
-- `gemini-2.5-pro`
-- `gemini-2.5-flash`
+| Model | Format Used | `additionalProperties` Support |
+|-------|-------------|-------------------------------|
+| Gemini 2.0+ | `responseJsonSchema` (JSON Schema) | ✅ Yes |
+| Gemini 1.5 | `responseSchema` (OpenAPI) | ❌ No |
 
-For older models (e.g., `gemini-1.5-flash`), the parameter is ignored and falls back to the default `responseSchema` format.
+LiteLLM automatically selects the appropriate format based on the model version.
