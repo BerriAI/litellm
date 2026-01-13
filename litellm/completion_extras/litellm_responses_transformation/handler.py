@@ -8,6 +8,7 @@ from typing_extensions import TypedDict
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
+    from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
