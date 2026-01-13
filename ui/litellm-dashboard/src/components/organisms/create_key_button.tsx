@@ -1,14 +1,14 @@
 "use client";
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { InfoCircleOutlined } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
 import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
 import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tooltip } from "antd";
 import debounce from "lodash/debounce";
 import React, { useCallback, useEffect, useState } from "react";
 import { CopyToClipboard } from "react-copy-to-clipboard";
-import { useQueryClient } from "@tanstack/react-query";
-import { createQueryKeys } from "@/app/(dashboard)/hooks/common/queryKeysFactory";
 import { rolesWithWriteAccess } from "../../utils/roles";
 import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
@@ -38,7 +38,6 @@ import {
 } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 
 const { Option } = Select;
 
