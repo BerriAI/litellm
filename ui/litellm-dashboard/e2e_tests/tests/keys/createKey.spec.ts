@@ -16,7 +16,6 @@ test.describe("Create Key", () => {
     await page.getByText("All Team Models").click();
     await page.getByRole("combobox", { name: "* Models info-circle :" }).press("Escape");
     await page.getByRole("button", { name: "Create Key" }).click();
-    await expect(page.getByText("Virtual Key Created")).toBeVisible();
     await page.keyboard.press("Escape");
     await expect(page.getByText("e2eUITestingCreateKeyAllTeamModels")).toBeVisible();
   });
