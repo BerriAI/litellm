@@ -1,4 +1,5 @@
 import importlib
+from datetime import datetime
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -29,7 +30,9 @@ if MCP_AVAILABLE:
     )
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
+        MCPServer,
         call_mcp_tool,
+        execute_mcp_tool,
         filter_tools_by_allowed_tools,
     )
 
@@ -258,16 +261,29 @@ if MCP_AVAILABLE:
 
         try:
             data = await request.json()
-            # Server ID permission check (server_id is required)
+
+            # Validate required parameters early
             server_id = data.get("server_id")
-            # if not server_id:
-            #     raise HTTPException(
-            #         status_code=400,
-            #         detail={
-            #             "error": "missing_parameter",
-            #             "message": "server_id is required in request body",
-            #         },
-            #     )
+            if not server_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "missing_parameter",
+                        "message": "server_id is required in request body",
+                    },
+                )
+
+            tool_name = data.get("name")
+            if not tool_name:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "missing_parameter",
+                        "message": "name is required in request body",
+                    },
+                )
+
+            tool_arguments = data.get("arguments")
 
             data = await add_litellm_data_to_request(
                 data=data,
@@ -323,10 +339,26 @@ if MCP_AVAILABLE:
                     },
                 )
 
-            # Restrict to the specified server only
-            data["mcp_servers"] = [server_id]
+            # Build allowed_mcp_servers list (only include allowed servers)
+            allowed_mcp_servers: List[MCPServer] = []
+            for allowed_server_id in allowed_server_ids_set:
+                server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
+                if server is not None:
+                    allowed_mcp_servers.append(server)
 
-            result = await call_mcp_tool(**data)
+            # Call execute_mcp_tool directly (permission checks already done)
+            result = await execute_mcp_tool(
+                name=tool_name,
+                arguments=tool_arguments,
+                allowed_mcp_servers=allowed_mcp_servers,
+                start_time=datetime.now(),
+                user_api_key_auth=data.get("user_api_key_auth"),
+                mcp_auth_header=data.get("mcp_auth_header"),
+                mcp_server_auth_headers=data.get("mcp_server_auth_headers"),
+                oauth2_headers=data.get("oauth2_headers"),
+                raw_headers=data.get("raw_headers"),
+                litellm_logging_obj=data.get("litellm_logging_obj"),
+            )
             return result
         except BlockedPiiEntityError as e:
             verbose_logger.error(f"BlockedPiiEntityError in MCP tool call: {str(e)}")
