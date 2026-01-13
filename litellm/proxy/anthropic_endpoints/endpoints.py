@@ -2,6 +2,8 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
+import json
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
@@ -17,6 +19,75 @@ from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
 
 router = APIRouter()
+
+# Anthropic error type mapping based on HTTP status codes
+# https://docs.anthropic.com/en/api/errors
+ANTHROPIC_ERROR_TYPE_MAP = {
+    400: "invalid_request_error",
+    401: "authentication_error",
+    403: "permission_error",
+    404: "not_found_error",
+    413: "request_too_large",
+    429: "rate_limit_error",
+    500: "api_error",
+    529: "overloaded_error",
+}
+
+
+def _create_anthropic_error_response(
+    status_code: int,
+    message: str,
+    request_id: Optional[str] = None,
+) -> dict:
+    """
+    Create an Anthropic-formatted error response.
+
+    Anthropic error format:
+    {
+        "type": "error",
+        "error": {
+            "type": "invalid_request_error",
+            "message": "..."
+        },
+        "request_id": "req_..."
+    }
+    """
+    error_type = ANTHROPIC_ERROR_TYPE_MAP.get(status_code, "api_error")
+
+    response = {
+        "type": "error",
+        "error": {
+            "type": error_type,
+            "message": message,
+        },
+    }
+
+    if request_id:
+        response["request_id"] = request_id
+
+    return response
+
+
+def _extract_error_message(raw_message: str) -> str:
+    """
+    Extract the error message from provider response.
+
+    Handles various formats:
+    - Bedrock: {"detail":{"message":"Input is too long..."}}
+    - Other: {"Message": "..."} or {"message": "..."}
+    - Plain string
+    """
+    try:
+        parsed = json.loads(raw_message)
+        if isinstance(parsed, dict):
+            # Handle Bedrock format: {"detail": {"message": "..."}}
+            if "detail" in parsed and isinstance(parsed["detail"], dict):
+                return parsed["detail"].get("message", raw_message)
+            # Handle other formats: {"Message": "..."} or {"message": "..."}
+            return parsed.get("Message") or parsed.get("message") or raw_message
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return raw_message
 
 
 @router.post(
@@ -221,6 +292,17 @@ async def count_tokens(
 
     except HTTPException:
         raise
+    except ProxyException as e:
+        status_code = int(e.code) if e.code and e.code.isdigit() else 500
+        message = _extract_error_message(e.message)
+        detail = _create_anthropic_error_response(
+            status_code=status_code,
+            message=message,
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=detail,
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(
