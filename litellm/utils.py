@@ -5040,6 +5040,11 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
             custom_llm_provider == "litellm_proxy"
         ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
             return True
+        elif custom_llm_provider == "azure_ai" and model_info["litellm_provider"] in ("azure", "openai"):
+            # Azure AI also works with azure models 
+            # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost 
+            # tracking the cost is better than attributing 0 cost to it.
+            return True
         else:
             return False
 
