@@ -101,12 +101,12 @@ run_grype_scans() {
     # Build and scan Dockerfile.database
     echo "Building and scanning Dockerfile.database..."
     docker build --no-cache -t litellm-database:latest -f ./docker/Dockerfile.database .
-    grype litellm-database:latest --fail-on critical
+    grype litellm-database:latest --config ci_cd/.grype.yaml --fail-on critical
     
     # Build and scan main Dockerfile
     echo "Building and scanning main Dockerfile..."
     docker build --no-cache -t litellm:latest .
-    grype litellm:latest --fail-on critical
+    grype litellm:latest --config ci_cd/.grype.yaml --fail-on critical
     
     # Restore original .dockerignore
     echo "Restoring original .dockerignore..."
