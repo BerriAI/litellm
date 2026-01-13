@@ -127,7 +127,7 @@ class TestEncryptResponseId:
             "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
         ) as mock_encrypt:
             mock_encrypt.return_value = "encrypted_base64_value"
-            
+
             with patch.object(
                 responses_id_security, "_get_signing_key", return_value="test-key"
             ):
@@ -148,9 +148,10 @@ class TestEncryptResponseId:
         )
 
         with patch(
-            "litellm.proxy.common_utils.encrypt_decrypt_utils._get_salt_key",
-            return_value="test-salt-key"
-        ):
+            "litellm.proxy.hooks.responses_id_security.encrypt_value_helper"
+        ) as mock_encrypt:
+            mock_encrypt.return_value = "encrypted_value_456"
+
             with patch.object(
                 responses_id_security, "_get_signing_key", return_value="test-key"
             ):
@@ -158,9 +159,9 @@ class TestEncryptResponseId:
                     mock_response, mock_user_api_key_dict
                 )
 
+                assert result.id == "resp_encrypted_value_456"
                 assert result.id.startswith("resp_")
-                # The encrypted ID should be different from the original
-                assert result.id != "resp_456"
+                mock_encrypt.assert_called_once()
 
 
 class TestCheckUserAccessToResponseId:
