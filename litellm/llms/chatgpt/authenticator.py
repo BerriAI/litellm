@@ -356,6 +356,8 @@ class Authenticator:
         if not auth_data:
             return 0.0
         requested_at = auth_data.get("device_code_requested_at")
+        if not isinstance(requested_at, (int, float, str)):
+            return 0.0
         try:
             requested_at = float(requested_at)
         except (TypeError, ValueError):
