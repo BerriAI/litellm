@@ -1692,9 +1692,9 @@ Assistant:
 ```
 
 
-## Usage - PDF 
+## Usage - PDF
 
-Pass base64 encoded PDF files to Anthropic models using the `image_url` field.
+Pass base64 encoded PDF files to Anthropic models using the `file` content type with a `file_data` field.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

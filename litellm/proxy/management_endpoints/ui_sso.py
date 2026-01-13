@@ -23,7 +23,14 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.caching import DualCache
-from litellm.constants import MAX_SPENDLOG_ROWS_TO_QUERY
+from litellm.constants import (
+    MAX_SPENDLOG_ROWS_TO_QUERY,
+    MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE,
+    MICROSOFT_USER_EMAIL_ATTRIBUTE,
+    MICROSOFT_USER_FIRST_NAME_ATTRIBUTE,
+    MICROSOFT_USER_ID_ATTRIBUTE,
+    MICROSOFT_USER_LAST_NAME_ATTRIBUTE,
+)
 from litellm.litellm_core_utils.dot_notation_indexing import get_nested_value
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -57,6 +64,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.common_utils.html_forms.ui_login import html_form
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso_helper_utils import (
     check_is_admin_only_access,
     has_admin_ui_access,
@@ -341,7 +349,7 @@ def generic_response_convertor(
     if role_mappings is not None and role_mappings.provider.lower() in ["generic", "okta"]:
         # Use role_mappings to determine role from groups
         group_claim = role_mappings.group_claim
-        user_groups_raw = get_nested_value(response, group_claim)
+        user_groups_raw: Any = get_nested_value(response, group_claim)
         
         # Handle different formats: could be a list, string (comma-separated), or single value
         user_groups: List[str] = []
@@ -1450,8 +1458,6 @@ class SSOAuthenticationHandler:
                 return await google_sso.get_login_redirect(state=state)
         # Microsoft SSO Auth
         elif microsoft_client_id is not None:
-            from fastapi_sso.sso.microsoft import MicrosoftSSO
-
             microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
             microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
             if microsoft_client_secret is None:
@@ -1461,7 +1467,7 @@ class SSOAuthenticationHandler:
                     param="MICROSOFT_CLIENT_SECRET",
                     code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            microsoft_sso = MicrosoftSSO(
+            microsoft_sso = CustomMicrosoftSSO(
                 client_id=microsoft_client_id,
                 client_secret=microsoft_client_secret,
                 tenant=microsoft_tenant,
@@ -2277,8 +2283,6 @@ class MicrosoftSSOHandler:
         Args:
             return_raw_sso_response: If True, return the raw SSO response
         """
-        from fastapi_sso.sso.microsoft import MicrosoftSSO
-
         microsoft_client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", None)
         microsoft_tenant = os.getenv("MICROSOFT_TENANT", None)
         if microsoft_client_secret is None:
@@ -2295,7 +2299,7 @@ class MicrosoftSSOHandler:
                 param="MICROSOFT_TENANT",
                 code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
-        microsoft_sso = MicrosoftSSO(
+        microsoft_sso = CustomMicrosoftSSO(
             client_id=microsoft_client_id,
             client_secret=microsoft_client_secret,
             tenant=microsoft_tenant,
@@ -2361,12 +2365,12 @@ class MicrosoftSSOHandler:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
         openid_response = CustomOpenID(
-            email=response.get("userPrincipalName") or response.get("mail"),
-            display_name=response.get("displayName"),
+            email=response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail"),
+            display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
             provider="microsoft",
-            id=response.get("id"),
-            first_name=response.get("givenName"),
-            last_name=response.get("surname"),
+            id=response.get(MICROSOFT_USER_ID_ATTRIBUTE),
+            first_name=response.get(MICROSOFT_USER_FIRST_NAME_ATTRIBUTE),
+            last_name=response.get(MICROSOFT_USER_LAST_NAME_ATTRIBUTE),
             team_ids=team_ids,
             user_role=user_role,
         )

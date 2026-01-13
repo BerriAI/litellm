@@ -84,6 +84,158 @@ class MockGuardrail(CustomGuardrail):
         return result
 
 
+class TestOpenAIChatCompletionsHandlerToolsInput:
+    """Test input processing with tools (function definitions)"""
+
+    @pytest.mark.asyncio
+    async def test_tools_passed_to_guardrail(self):
+        """Test that tools (function definitions) are passed to the guardrail"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        # Create input data with tools (function definitions)
+        data = {
+            "messages": [
+                {"role": "user", "content": "What's the weather in Boston?"},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "description": "Get the current weather in a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {
+                                    "type": "string",
+                                    "description": "City name",
+                                },
+                                "unit": {
+                                    "type": "string",
+                                    "enum": ["celsius", "fahrenheit"],
+                                },
+                            },
+                            "required": ["location"],
+                        },
+                    },
+                }
+            ],
+        }
+
+        # Process the input
+        await handler.process_input_messages(data, guardrail)
+
+        # Verify tools were passed to guardrail
+        assert guardrail.last_inputs is not None
+        assert "tools" in guardrail.last_inputs
+        assert len(guardrail.last_inputs["tools"]) == 1
+
+        tool = guardrail.last_inputs["tools"][0]
+        assert tool["type"] == "function"
+        assert tool["function"]["name"] == "get_weather"
+        assert tool["function"]["description"] == "Get the current weather in a location"
+        assert "parameters" in tool["function"]
+
+    @pytest.mark.asyncio
+    async def test_multiple_tools_passed_to_guardrail(self):
+        """Test that multiple tools are passed to the guardrail"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        data = {
+            "messages": [
+                {"role": "user", "content": "What's the weather and time?"},
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_time",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                },
+            ],
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.last_inputs is not None
+        assert "tools" in guardrail.last_inputs
+        assert len(guardrail.last_inputs["tools"]) == 2
+        assert guardrail.last_inputs["tools"][0]["function"]["name"] == "get_weather"
+        assert guardrail.last_inputs["tools"][1]["function"]["name"] == "get_time"
+
+    @pytest.mark.asyncio
+    async def test_no_tools_in_request(self):
+        """Test that requests without tools work correctly"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        data = {
+            "messages": [
+                {"role": "user", "content": "Hello"},
+            ],
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.last_inputs is not None
+        # tools should not be in inputs if not provided
+        assert "tools" not in guardrail.last_inputs or guardrail.last_inputs.get("tools") is None
+
+    @pytest.mark.asyncio
+    async def test_tools_and_tool_calls_both_passed(self):
+        """Test that both tools (definitions) and tool_calls (invocations) are passed"""
+        handler = OpenAIChatCompletionsHandler()
+        guardrail = MockGuardrail()
+
+        data = {
+            "messages": [
+                {"role": "user", "content": "What's the weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"location": "Boston"}',
+                            },
+                        }
+                    ],
+                },
+            ],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {"location": {"type": "string"}}},
+                    },
+                }
+            ],
+        }
+
+        await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.last_inputs is not None
+        # Both should be present
+        assert "tools" in guardrail.last_inputs
+        assert "tool_calls" in guardrail.last_inputs
+        assert len(guardrail.last_inputs["tools"]) == 1
+        assert len(guardrail.last_inputs["tool_calls"]) == 1
+
+
 class TestOpenAIChatCompletionsHandlerToolCallsInput:
     """Test input processing with tool calls"""
 

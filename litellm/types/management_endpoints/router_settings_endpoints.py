@@ -184,6 +184,14 @@ ROUTER_SETTINGS_FIELDS: List[RouterSettingsField] = [
         field_default=False,
         ui_field_name="Enable Tag Filtering",
         link="https://docs.litellm.ai/docs/proxy/tag_routing",
+    ),    
+    RouterSettingsField(
+        field_name="tag_filtering_match_any",
+        field_type="Boolean",
+        field_value=None,
+        field_description="Match any tag instead of all tags for tag-based routing",
+        field_default=True,
+        ui_field_name="Tag Filtering Match Any",
     ),
     RouterSettingsField(
         field_name="disable_cooldowns",
