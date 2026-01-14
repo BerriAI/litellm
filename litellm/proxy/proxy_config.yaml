@@ -1,10 +1,10 @@
 model_list:
-  - model_name: anthropic/*
+  - model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
     litellm_params:
-      model: anthropic/*
-  - model_name: openai/*
-    litellm_params:
-      model: openai/*
+      model: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
+    model_info:
+      litellm_provider: bedrock_converse
+      mode: chat
 
 general_settings:
   store_prompts_in_spend_logs: true

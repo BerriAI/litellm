@@ -67,43 +67,35 @@ async def test_anthropic_messages_litellm_router_bedrock():
 
 
 @pytest.mark.asyncio
-async def test_should_not_fail_with_forwarded_headers_bedrock_invoke_messages():
+async def test_anthropic_messages_bedrock_converse_with_thinking():
     """
-    E2E test for Bedrock invoke messages with header forwarding enabled.
-
-    This calls the real Bedrock endpoint (no mocks) and should not raise
-    SigV4 signature mismatch errors when forwarded headers are present.
+    Test that bedrock/converse model works with thinking parameter.
+    Validates the request body from issue where budget_tokens was being lost.
     """
     router = Router(
         model_list=[
             {
-                "model_name": "claude-sonnet-4-5-20250929",
+                "model_name": "bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
                 "litellm_params": {
-                    "model": "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-                    "aws_region_name": os.getenv("AWS_REGION_NAME"),
+                    "model": "bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
                 },
-            }
+            },
         ]
     )
 
-    forwarded_headers = {
-        "x-forwarded-for": "10.11.232.194",
-        "x-forwarded-port": "443",
-        "x-forwarded-proto": "https",
-        "x-app": "cli",
-    }
+    messages = [{"role": "user", "content": "What is 2+2?"}]
 
     response = await router.aanthropic_messages(
-        messages=[{"role": "user", "content": "hi"}],
-        model="claude-sonnet-4-5-20250929",
-        max_tokens=5,
-        stream=False,
-        headers=forwarded_headers,  # simulates forward_client_headers_to_llm_api
-        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
-        aws_region_name=os.getenv("AWS_REGION_NAME"),
+        messages=messages,
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+        max_tokens=1026,
+        thinking={
+            "type": "enabled",
+            "budget_tokens": 1025
+        },
     )
-    print("INVOKE API RESPONSE: ", response)
+    print("bedrock response: ", response)
 
+    # Verify response
     INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST._validate_response(response)
 
