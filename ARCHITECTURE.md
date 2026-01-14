@@ -9,6 +9,7 @@ sequenceDiagram
     participant Client
     participant ProxyServer as proxy/proxy_server.py
     participant Auth as proxy/auth/user_api_key_auth.py
+    participant Hooks as proxy/hooks/
     participant Router as router.py
     participant Main as main.py
     participant Handler as llms/custom_httpx/llm_http_handler.py
@@ -17,6 +18,7 @@ sequenceDiagram
 
     Client->>ProxyServer: POST /v1/chat/completions
     ProxyServer->>Auth: user_api_key_auth()
+    ProxyServer->>Hooks: max_budget_limiter, parallel_request_limiter
     ProxyServer->>Router: route_request()
     Router->>Main: litellm.acompletion()
     Main->>Handler: BaseLLMHTTPHandler.completion()
@@ -24,14 +26,28 @@ sequenceDiagram
     Handler->>Provider: HTTP Request
     Provider-->>Handler: Response
     Handler->>Transform: ProviderConfig.transform_response()
+    Handler-->>Hooks: async_log_success_event()
     Handler-->>Client: ModelResponse
 ```
 
 **Key files:**
 - `proxy/proxy_server.py` - API endpoints
 - `proxy/auth/` - Authentication
+- `proxy/hooks/` - Proxy-level callbacks (see table below)
 - `router.py` - Load balancing, fallbacks
 - `router_strategy/` - Routing algorithms (`lowest_latency.py`, `simple_shuffle.py`, etc.)
+
+**Proxy Hooks** (`proxy/hooks/__init__.py`):
+
+| Hook | File | Purpose |
+|------|------|---------|
+| `max_budget_limiter` | `proxy/hooks/max_budget_limiter.py` | Enforce budget limits |
+| `parallel_request_limiter` | `proxy/hooks/parallel_request_limiter_v3.py` | Rate limiting per key/user |
+| `cache_control_check` | `proxy/hooks/cache_control_check.py` | Cache validation |
+| `responses_id_security` | `proxy/hooks/responses_id_security.py` | Response ID validation |
+| `litellm_skills` | `proxy/hooks/skills_injection.py` | Skills injection |
+
+To add a new proxy hook, implement `CustomLogger` and register in `PROXY_HOOKS`.
 
 ## 2. Translation Layer
 
