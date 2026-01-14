@@ -660,11 +660,11 @@ def add_object_type(schema):
         if "required" in schema and schema["required"] is None:
             schema.pop("required", None)
         # Gemini doesn't accept empty properties for object types
-        # If properties is empty, remove it and the type field
+        # If properties is empty, remove it but keep type as object
         if not properties:
             schema.pop("properties", None)
-            schema.pop("type", None)
             schema.pop("required", None)
+            schema["type"] = "object"
         else:
             schema["type"] = "object"
             for name, value in properties.items():
