@@ -3,11 +3,9 @@
  *
  */
 
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Button,
   Card,
-  Icon,
   Tab,
   TabGroup,
   Table,
@@ -24,6 +22,7 @@ import {
 import React, { useEffect, useState } from "react";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import NotificationsManager from "../molecules/notifications_manager";
 import { budgetDeleteCall, getBudgetList } from "../networking";
 import BudgetModal from "./budget_modal";
@@ -149,16 +148,14 @@ const BudgetPanel: React.FC<BudgetSettingsPageProps> = ({ accessToken }) => {
                   <TableCell>{value.max_budget ? value.max_budget : "n/a"}</TableCell>
                   <TableCell>{value.tpm_limit ? value.tpm_limit : "n/a"}</TableCell>
                   <TableCell>{value.rpm_limit ? value.rpm_limit : "n/a"}</TableCell>
-                  <Icon
-                    icon={PencilAltIcon}
-                    size="sm"
-                    className="cursor-pointer"
+                  <TableIconActionButton
+                    variant="Edit"
+                    tooltipText="Edit budget"
                     onClick={() => handleEditCall(value)}
                   />
-                  <Icon
-                    icon={TrashIcon}
-                    size="sm"
-                    className="cursor-pointer hover:text-red-500"
+                  <TableIconActionButton
+                    variant="Delete"
+                    tooltipText="Delete budget"
                     onClick={() => handleDeleteClick(value)}
                   />
                 </TableRow>

@@ -7,7 +7,7 @@ Covers Batches, Files
 
 | Feature | Supported | Notes | 
 |-------|-------|-------|
-| Supported Providers | OpenAI, Azure, Vertex, Bedrock | - |
+| Supported Providers | OpenAI, Azure, Vertex, Bedrock, vLLM | - |
 | ✨ Cost Tracking | ✅ | LiteLLM Enterprise only |
 | Logging | ✅ | Works across all logging integrations |
 
@@ -430,6 +430,7 @@ All batch and file endpoints support model-based routing:
 ### [OpenAI](#quick-start)
 ### [Vertex AI](./providers/vertex#batch-apis)
 ### [Bedrock](./providers/bedrock_batches)
+### [vLLM](./providers/vllm_batches)
 
 
 ## How Cost Tracking for Batches API Works

@@ -286,6 +286,9 @@ class TestVertexBase:
                 )
 
             assert mock_credentials_from_identity_pool.called
+            assert mock_credentials_from_identity_pool.call_args[1]["scopes"] == [
+                "https://www.googleapis.com/auth/cloud-platform"
+            ]
             assert token == "refreshed-token"
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
@@ -299,9 +302,7 @@ class TestVertexBase:
             "project_id": "test-project",
             "refresh_token": "fake-refresh-token",
             "type": "external_account",
-            "credential_source": {
-                "environment_id": "aws1"
-            }
+            "credential_source": {"environment_id": "aws1"},
         }
         mock_creds = MagicMock()
         mock_creds.token = "token-1"
@@ -309,7 +310,9 @@ class TestVertexBase:
         mock_creds.project_id = "test-project"
 
         with patch.object(
-            vertex_base, "_credentials_from_identity_pool_with_aws", return_value=mock_creds
+            vertex_base,
+            "_credentials_from_identity_pool_with_aws",
+            return_value=mock_creds,
         ) as mock_credentials_from_identity_pool_with_aws, patch.object(
             vertex_base, "refresh_auth"
         ) as mock_refresh:
@@ -333,6 +336,9 @@ class TestVertexBase:
                 )
 
             assert mock_credentials_from_identity_pool_with_aws.called
+            assert mock_credentials_from_identity_pool_with_aws.call_args[1][
+                "scopes"
+            ] == ["https://www.googleapis.com/auth/cloud-platform"]
             assert token == "refreshed-token"
 
     @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
@@ -447,7 +453,7 @@ class TestVertexBase:
             assert token == "token-1"
             assert project == "resolved-project"
 
-                        # Verify both cache entries exist
+            # Verify both cache entries exist
             original_cache_key = (json.dumps(credentials), None)
             resolved_cache_key = (json.dumps(credentials), "resolved-project")
 
@@ -455,8 +461,12 @@ class TestVertexBase:
             assert resolved_cache_key in vertex_base._credentials_project_mapping
 
             # Both should contain the same tuple
-            original_entry = vertex_base._credentials_project_mapping[original_cache_key]
-            resolved_entry = vertex_base._credentials_project_mapping[resolved_cache_key]
+            original_entry = vertex_base._credentials_project_mapping[
+                original_cache_key
+            ]
+            resolved_entry = vertex_base._credentials_project_mapping[
+                resolved_cache_key
+            ]
 
             assert isinstance(original_entry, tuple)
             assert isinstance(resolved_entry, tuple)
@@ -594,7 +604,9 @@ class TestVertexBase:
         credentials = {"type": "service_account"}
 
         with patch.object(
-            vertex_base, "load_auth", return_value=(mock_creds, "resolved-from-credentials")
+            vertex_base,
+            "load_auth",
+            return_value=(mock_creds, "resolved-from-credentials"),
         ) as mock_load_auth:
 
             # First call: User provides NO project_id, should resolve from credentials
@@ -624,8 +636,12 @@ class TestVertexBase:
             assert resolved_cache_key in vertex_base._credentials_project_mapping
 
             # Both should contain the tuple with resolved project_id
-            original_entry = vertex_base._credentials_project_mapping[original_cache_key]
-            resolved_entry = vertex_base._credentials_project_mapping[resolved_cache_key]
+            original_entry = vertex_base._credentials_project_mapping[
+                original_cache_key
+            ]
+            resolved_entry = vertex_base._credentials_project_mapping[
+                resolved_cache_key
+            ]
 
             assert isinstance(original_entry, tuple)
             assert isinstance(resolved_entry, tuple)
@@ -719,7 +735,7 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 {"x-goog-api-key": "test-api-key"},
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
             ),
             # Test case 2: Gemini with custom API base and streaming
             (
@@ -732,7 +748,7 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 {"x-goog-api-key": "test-api-key"},
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse",
             ),
             # Test case 3: Non-Gemini provider with custom API base
             (
@@ -745,7 +761,7 @@ class TestVertexBase:
                 "https://aiplatform.googleapis.com/v1/projects/test-project/locations/us-central1/publishers/google/models/gemini-pro:generateContent",
                 "gemini-pro",
                 "Bearer token123",
-                "https://custom-vertex-api.com:generateContent"
+                "https://custom-vertex-api.com:generateContent",
             ),
             # Test case 4: No API base provided (should return original values)
             (
@@ -758,7 +774,7 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 "Bearer token123",
-                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+                "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
             ),
             # Test case 5: Gemini without API key (should raise ValueError)
             (
@@ -771,26 +787,26 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 None,  # This should raise an exception
-                None
+                None,
             ),
         ],
     )
     def test_check_custom_proxy(
-        self, 
-        api_base, 
-        custom_llm_provider, 
-        gemini_api_key, 
-        endpoint, 
-        stream, 
-        auth_header, 
-        url, 
-        model, 
-        expected_auth_header, 
-        expected_url
+        self,
+        api_base,
+        custom_llm_provider,
+        gemini_api_key,
+        endpoint,
+        stream,
+        auth_header,
+        url,
+        model,
+        expected_auth_header,
+        expected_url,
     ):
         """Test the _check_custom_proxy method for handling custom API base URLs"""
         vertex_base = VertexBase()
-        
+
         if custom_llm_provider == "gemini" and api_base and gemini_api_key is None:
             # Test case 5: Should raise ValueError for Gemini without API key
             with pytest.raises(ValueError, match="Missing gemini_api_key"):
@@ -816,21 +832,37 @@ class TestVertexBase:
                 url=url,
                 model=model,
             )
-            
-            assert result_auth_header == expected_auth_header, f"Expected auth_header {expected_auth_header}, got {result_auth_header}"
-            assert result_url == expected_url, f"Expected URL {expected_url}, got {result_url}"
+
+            assert (
+                result_auth_header == expected_auth_header
+            ), f"Expected auth_header {expected_auth_header}, got {result_auth_header}"
+            assert (
+                result_url == expected_url
+            ), f"Expected URL {expected_url}, got {result_url}"
 
     def test_check_custom_proxy_gemini_url_construction(self):
         """Test that Gemini URLs are constructed correctly with custom API base"""
         vertex_base = VertexBase()
-        
+
         # Test various Gemini models with custom API base
         test_cases = [
-            ("gemini-2.5-flash-lite", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"),
-            ("gemini-2.5-pro", "generateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
-            ("gemini-1.5-flash", "streamGenerateContent", "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent"),
+            (
+                "gemini-2.5-flash-lite",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
+            ),
+            (
+                "gemini-2.5-pro",
+                "generateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+            ),
+            (
+                "gemini-1.5-flash",
+                "streamGenerateContent",
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent",
+            ),
         ]
-        
+
         for model, endpoint, expected_url in test_cases:
             _, result_url = vertex_base._check_custom_proxy(
                 api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
@@ -842,13 +874,15 @@ class TestVertexBase:
                 url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:{endpoint}",
                 model=model,
             )
-            
-            assert result_url == expected_url, f"Expected {expected_url}, got {result_url} for model {model}"
+
+            assert (
+                result_url == expected_url
+            ), f"Expected {expected_url}, got {result_url} for model {model}"
 
     def test_check_custom_proxy_streaming_parameter(self):
         """Test that streaming parameter correctly adds ?alt=sse to URLs"""
         vertex_base = VertexBase()
-        
+
         # Test with streaming enabled
         _, result_url_streaming = vertex_base._check_custom_proxy(
             api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
@@ -860,10 +894,12 @@ class TestVertexBase:
             url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
             model="gemini-2.5-flash-lite",
         )
-        
+
         expected_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
-        assert result_url_streaming == expected_streaming_url, f"Expected {expected_streaming_url}, got {result_url_streaming}"
-        
+        assert (
+            result_url_streaming == expected_streaming_url
+        ), f"Expected {expected_streaming_url}, got {result_url_streaming}"
+
         # Test with streaming disabled
         _, result_url_no_streaming = vertex_base._check_custom_proxy(
             api_base="https://proxy.example.com/generativelanguage.googleapis.com/v1beta",
@@ -875,9 +911,11 @@ class TestVertexBase:
             url="https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
             model="gemini-2.5-flash-lite",
         )
-        
+
         expected_no_streaming_url = "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
-        assert result_url_no_streaming == expected_no_streaming_url, f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
+        assert (
+            result_url_no_streaming == expected_no_streaming_url
+        ), f"Expected {expected_no_streaming_url}, got {result_url_no_streaming}"
 
     @pytest.mark.parametrize(
         "api_base, custom_llm_provider, gemini_api_key, endpoint, stream, auth_header, url, model, expected_auth_header, expected_url",
@@ -893,7 +931,7 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 {"x-goog-api-key": "test-api-key"},
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent"
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
             ),
             # Test case 2: Gemini with custom API base and streaming
             (
@@ -906,7 +944,7 @@ class TestVertexBase:
                 "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent",
                 "gemini-2.5-flash-lite",
                 {"x-goog-api-key": "test-api-key"},
-                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse"
+                "https://proxy.example.com/generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?alt=sse",
             ),
         ],
     )
@@ -937,3 +975,76 @@ class TestVertexBase:
         )
         assert result_auth_header == expected_auth_header
         assert result_url == expected_url
+
+    def test_credentials_from_identity_pool_implementation(self):
+        """Test the actual implementation of _credentials_from_identity_pool"""
+        vertex_base = VertexBase()
+        json_obj = {"type": "external_account", "audience": "test"}
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock the credentials object
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = True
+        mock_creds.with_scopes.return_value = "scoped_creds"
+
+        # Mock the identity_pool module
+        with patch("google.auth.identity_pool.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            # Call the method
+            result = vertex_base._credentials_from_identity_pool(json_obj, scopes)
+
+            # Verify calls
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == "scoped_creds"
+
+    def test_credentials_from_identity_pool_no_scopes_needed(self):
+        """Test _credentials_from_identity_pool when scopes are not needed"""
+        vertex_base = VertexBase()
+        json_obj = {"type": "external_account", "audience": "test"}
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock the credentials object
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = False  # Scopes not required
+
+        # Mock the identity_pool module
+        with patch("google.auth.identity_pool.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            # Call the method
+            result = vertex_base._credentials_from_identity_pool(json_obj, scopes)
+
+            # Verify calls
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_not_called()
+            assert result == mock_creds
+
+    def test_credentials_from_identity_pool_with_aws_implementation(self):
+        """Test the actual implementation of _credentials_from_identity_pool_with_aws"""
+        vertex_base = VertexBase()
+        json_obj = {
+            "type": "external_account",
+            "credential_source": {"environment_id": "aws1"},
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+
+        # Mock the credentials object
+        mock_creds = MagicMock()
+        mock_creds.requires_scopes = True
+        mock_creds.with_scopes.return_value = "scoped_creds"
+
+        # Mock the aws module
+        with patch("google.auth.aws.Credentials") as MockCredentials:
+            MockCredentials.from_info.return_value = mock_creds
+
+            # Call the method
+            result = vertex_base._credentials_from_identity_pool_with_aws(
+                json_obj, scopes
+            )
+
+            # Verify calls
+            MockCredentials.from_info.assert_called_once_with(json_obj)
+            mock_creds.with_scopes.assert_called_once_with(scopes)
+            assert result == "scoped_creds"

@@ -97,7 +97,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const [pageTitle, setPageTitle] = useState<string>("LiteLLM Gateway");
   const [customDocsDescription, setCustomDocsDescription] = useState<string | null>(null);
   const [litellmVersion, setLitellmVersion] = useState<string>("");
-  const [usefulLinks, setUsefulLinks] = useState<Record<string, string>>({});
+  const [usefulLinks, setUsefulLinks] = useState<Record<string, string | { url: string; index: number }>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [agentLoading, setAgentLoading] = useState<boolean>(true);
   const [mcpLoading, setMcpLoading] = useState<boolean>(true);
@@ -976,16 +976,24 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             <Card className="mb-10 p-8 bg-white border border-gray-200 rounded-lg shadow-sm">
               <Title className="text-2xl font-semibold mb-6 text-gray-900">Useful Links</Title>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {Object.entries(usefulLinks || {}).map(([title, url]) => (
-                  <button
-                    key={title}
-                    onClick={() => window.open(url, "_blank")}
-                    className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
-                  >
-                    <ExternalLinkIcon className="w-4 h-4" />
-                    <Text className="text-sm font-medium">{title}</Text>
-                  </button>
-                ))}
+                {Object.entries(usefulLinks || {})
+                  .map(([title, value]) => {
+                    // Handle both old format (string) and new format ({url, index})
+                    const url = typeof value === "string" ? value : value.url;
+                    const index = typeof value === "string" ? 0 : value.index ?? 0;
+                    return { title, url, index };
+                  })
+                  .sort((a, b) => a.index - b.index)
+                  .map(({ title, url }) => (
+                    <button
+                      key={title}
+                      onClick={() => window.open(url, "_blank")}
+                      className="flex items-center space-x-3 text-blue-600 hover:text-blue-800 transition-colors p-3 rounded-lg hover:bg-blue-50 border border-gray-200"
+                    >
+                      <ExternalLinkIcon className="w-4 h-4" />
+                      <Text className="text-sm font-medium">{title}</Text>
+                    </button>
+                  ))}
               </div>
             </Card>
           )}

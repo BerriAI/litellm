@@ -1,17 +1,17 @@
 import os
-from typing import TYPE_CHECKING, Any, Union
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm.integrations.arize import _utils
 from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.types.integrations.arize_phoenix import ArizePhoenixConfig
+from litellm.integrations.opentelemetry import OpenTelemetry
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
+    from litellm.integrations.opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
     from litellm.types.integrations.arize import Protocol as _Protocol
-
-    from .opentelemetry import OpenTelemetryConfig as _OpenTelemetryConfig
 
     Protocol = _Protocol
     OpenTelemetryConfig = _OpenTelemetryConfig
@@ -25,17 +25,27 @@ else:
 ARIZE_HOSTED_PHOENIX_ENDPOINT = "https://otlp.arize.com/v1/traces"
 
 
-class ArizePhoenixLogger:
+class ArizePhoenixLogger(OpenTelemetry):
+    def set_attributes(self, span: Span, kwargs, response_obj: Optional[Any]):
+        ArizePhoenixLogger.set_arize_phoenix_attributes(span, kwargs, response_obj)
+        return
+
     @staticmethod
     def set_arize_phoenix_attributes(span: Span, kwargs, response_obj):
         _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
+        
+        # Set project name on the span for all traces to go to custom Phoenix projects
+        config = ArizePhoenixLogger.get_arize_phoenix_config()
+        if config.project_name:
+            from litellm.integrations.opentelemetry_utils.base_otel_llm_obs_attributes import safe_set_attribute
+            safe_set_attribute(span, "openinference.project.name", config.project_name)
+        
         return
 
     @staticmethod
     def get_arize_phoenix_config() -> ArizePhoenixConfig:
         """
         Retrieves the Arize Phoenix configuration based on environment variables.
-
         Returns:
             ArizePhoenixConfig: A Pydantic model containing Arize Phoenix configuration.
         """
@@ -89,7 +99,7 @@ class ArizePhoenixLogger:
                 "PHOENIX_API_KEY must be set when using Phoenix Cloud (app.phoenix.arize.com)."
             )
 
-        project_name = os.environ.get("PHOENIX_PROJECT_NAME", "litellm-project")
+        project_name = os.environ.get("PHOENIX_PROJECT_NAME", "default")
 
         return ArizePhoenixConfig(
             otlp_auth_headers=otlp_auth_headers,
@@ -97,3 +107,20 @@ class ArizePhoenixLogger:
             endpoint=endpoint,
             project_name=project_name,
         )
+    
+    ## cannot suppress additional proxy server spans, removed previous methods.
+
+    async def async_health_check(self):
+
+        config = self.get_arize_phoenix_config()
+
+        if not config.otlp_auth_headers:
+            return {
+                "status": "unhealthy",
+                "error_message": "PHOENIX_API_KEY environment variable not set",
+            }
+
+        return {
+            "status": "healthy",
+            "message": "Arize-Phoenix credentials are configured properly",
+        }

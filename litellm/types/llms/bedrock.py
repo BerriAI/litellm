@@ -216,6 +216,10 @@ class PerformanceConfigBlock(TypedDict):
     latency: Literal["optimized", "throughput"]
 
 
+class ServiceTierBlock(TypedDict):
+    type: Literal["priority", "default", "flex"]
+
+
 class CommonRequestObject(
     TypedDict, total=False
 ):  # common request object across sync + async flows
@@ -226,6 +230,7 @@ class CommonRequestObject(
     toolConfig: ToolConfigBlock
     guardrailConfig: Optional[GuardrailConfigBlock]
     performanceConfig: Optional[PerformanceConfigBlock]
+    serviceTier: Optional[ServiceTierBlock]
     requestMetadata: Optional[Dict[str, str]]
 
 
@@ -425,6 +430,133 @@ class TwelveLabsAsyncInvokeStatusResponse(TypedDict):
     outputDataConfig: TwelveLabsOutputDataConfig
     clientRequestToken: Optional[str]
     failureMessage: Optional[str]
+
+
+# Amazon Nova Multimodal Embeddings types
+NOVA_EMBEDDING_PURPOSES = Literal[
+    "GENERIC_INDEX",
+    "GENERIC_RETRIEVAL",
+    "TEXT_RETRIEVAL",
+    "IMAGE_RETRIEVAL",
+    "VIDEO_RETRIEVAL",
+    "DOCUMENT_RETRIEVAL",
+    "AUDIO_RETRIEVAL",
+    "CLASSIFICATION",
+    "CLUSTERING",
+]
+
+NOVA_EMBEDDING_DIMENSIONS = Literal[256, 384, 1024, 3072]
+
+NOVA_TRUNCATION_MODES = Literal["START", "END", "NONE"]
+
+NOVA_DETAIL_LEVELS = Literal["STANDARD_IMAGE", "DOCUMENT_IMAGE"]
+
+NOVA_EMBEDDING_MODES = Literal["AUDIO_VIDEO_COMBINED", "AUDIO_VIDEO_SEPARATE"]
+
+NOVA_EMBEDDING_TYPES = Literal[
+    "TEXT", "IMAGE", "VIDEO", "AUDIO", "AUDIO_VIDEO_COMBINED"
+]
+
+
+class NovaSourceS3Location(TypedDict):
+    uri: str
+
+
+class NovaSourceObject(TypedDict, total=False):
+    bytes: str  # base64 encoded
+    s3Location: NovaSourceS3Location
+
+
+class NovaTextParams(TypedDict, total=False):
+    truncationMode: NOVA_TRUNCATION_MODES
+    value: str
+    source: NovaSourceObject
+
+
+class NovaImageParams(TypedDict, total=False):
+    format: str  # png, jpeg, gif, webp
+    source: Required[NovaSourceObject]
+    detailLevel: NOVA_DETAIL_LEVELS
+
+
+class NovaVideoParams(TypedDict, total=False):
+    format: str  # mp4, mov, mkv, webm, flv, mpeg, mpg, wmv, 3gp
+    source: Required[NovaSourceObject]
+    embeddingMode: Required[NOVA_EMBEDDING_MODES]
+
+
+class NovaAudioParams(TypedDict, total=False):
+    format: str  # mp3, wav, ogg
+    source: Required[NovaSourceObject]
+
+
+class NovaTextSegmentationConfig(TypedDict, total=False):
+    maxLengthChars: int  # 800-50,000, default 32,000
+
+
+class NovaMediaSegmentationConfig(TypedDict, total=False):
+    durationSeconds: int  # 1-30, default 5
+
+
+class NovaTextParamsWithSegmentation(NovaTextParams, total=False):
+    segmentationConfig: NovaTextSegmentationConfig
+
+
+class NovaVideoParamsWithSegmentation(NovaVideoParams, total=False):
+    segmentationConfig: NovaMediaSegmentationConfig
+
+
+class NovaAudioParamsWithSegmentation(NovaAudioParams, total=False):
+    segmentationConfig: NovaMediaSegmentationConfig
+
+
+class NovaSingleEmbeddingParams(TypedDict, total=False):
+    embeddingPurpose: Required[NOVA_EMBEDDING_PURPOSES]
+    embeddingDimension: NOVA_EMBEDDING_DIMENSIONS
+    text: NovaTextParams
+    image: NovaImageParams
+    video: NovaVideoParams
+    audio: NovaAudioParams
+
+
+class NovaSegmentedEmbeddingParams(TypedDict, total=False):
+    embeddingPurpose: Required[NOVA_EMBEDDING_PURPOSES]
+    embeddingDimension: NOVA_EMBEDDING_DIMENSIONS
+    text: NovaTextParamsWithSegmentation
+    image: NovaImageParams
+    video: NovaVideoParamsWithSegmentation
+    audio: NovaAudioParamsWithSegmentation
+
+
+class NovaEmbeddingRequest(TypedDict, total=False):
+    schemaVersion: str  # "nova-multimodal-embed-v1"
+    taskType: Literal["SINGLE_EMBEDDING", "SEGMENTED_EMBEDDING"]
+    singleEmbeddingParams: NovaSingleEmbeddingParams
+    segmentedEmbeddingParams: NovaSegmentedEmbeddingParams
+
+
+class NovaEmbeddingItem(TypedDict, total=False):
+    embeddingType: NOVA_EMBEDDING_TYPES
+    embedding: Required[List[float]]
+    truncatedCharLength: int  # Only for text
+
+
+class NovaEmbeddingResponse(TypedDict):
+    embeddings: List[NovaEmbeddingItem]
+
+
+class NovaS3OutputDataConfig(TypedDict):
+    s3Uri: str
+
+
+class NovaOutputDataConfig(TypedDict):
+    s3OutputDataConfig: NovaS3OutputDataConfig
+
+
+class NovaAsyncInvokeRequest(TypedDict):
+    modelId: str
+    modelInput: NovaEmbeddingRequest
+    outputDataConfig: NovaOutputDataConfig
 
 
 AmazonEmbeddingRequest = Union[

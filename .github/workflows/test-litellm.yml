@@ -27,6 +27,7 @@ jobs:
 
     - name: Install dependencies
       run: |
+        poetry lock
         poetry install --with dev,proxy-dev --extras "proxy semantic-router"
         poetry run pip install "pytest-retry==1.6.3"
         poetry run pip install pytest-xdist
@@ -37,7 +38,7 @@ jobs:
     - name: Setup litellm-enterprise as local package
       run: |
         cd enterprise
-        python -m pip install -e .
+        poetry run pip install -e .
         cd ..
     - name: Run tests
       run: |

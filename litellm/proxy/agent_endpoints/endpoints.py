@@ -8,7 +8,7 @@ Follows the A2A Spec.
 3. Get specific agent via GET `/v1/agents/{agent_id}`
 """
 
-from typing import Any, List
+from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
@@ -24,12 +24,17 @@ from litellm.types.agents import (
     PatchAgentRequest,
 )
 
+from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    SpendAnalyticsPaginatedResponse,
+)
+
 router = APIRouter()
 
 
 @router.get(
     "/v1/agents",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=List[AgentResponse],
 )
@@ -49,25 +54,35 @@ async def get_agents(
 
     """
     from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
 
     try:
         returned_agents: List[AgentResponse] = []
+        
+        # Admin users get all agents
         if (
             user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
             or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
         ):
             returned_agents = global_agent_registry.get_agent_list()
-        key_agents = user_api_key_dict.metadata.get("agents")
-        _team_metadata = user_api_key_dict.team_metadata or {}
-        team_agents = _team_metadata.get("agents")
-        if key_agents is not None:
-            returned_agents = global_agent_registry.get_agent_list(
-                agent_names=key_agents
+        else:
+            # Get allowed agents from object_permission (key/team level)
+            allowed_agent_ids = await AgentRequestHandler.get_allowed_agents(
+                user_api_key_auth=user_api_key_dict
             )
-        if team_agents is not None:
-            returned_agents = global_agent_registry.get_agent_list(
-                agent_names=team_agents
-            )
+            
+            # If no restrictions (empty list), return all agents
+            if len(allowed_agent_ids) == 0:
+                returned_agents = global_agent_registry.get_agent_list()
+            else:
+                # Filter agents by allowed IDs
+                all_agents = global_agent_registry.get_agent_list()
+                returned_agents = [
+                    agent for agent in all_agents
+                    if agent.agent_id in allowed_agent_ids
+                ]
 
         # add is_public field to each agent - we do it this way, to allow setting config agents as public
         for agent in returned_agents:
@@ -83,7 +98,7 @@ async def get_agents(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(
-            "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(
+            "litellm.proxy.agent_endpoints.get_agents(): Exception occurred - {}".format(
                 str(e)
             )
         )
@@ -101,7 +116,7 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 
 @router.post(
     "/v1/agents",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -196,7 +211,7 @@ async def create_agent(
 
 @router.get(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -239,7 +254,7 @@ async def get_agent_by_id(agent_id: str):
 
 @router.put(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -328,7 +343,7 @@ async def update_agent(
 
 @router.patch(
     "/v1/agents/{agent_id}",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentResponse,
 )
@@ -471,7 +486,7 @@ async def delete_agent(agent_id: str):
 
 @router.post(
     "/v1/agents/{agent_id}/make_public",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentMakePublicResponse,
 )
@@ -585,7 +600,7 @@ async def make_agent_public(
 
 @router.post(
     "/v1/agents/make_public",
-    tags=["[beta] Agents"],
+    tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
     response_model=AgentMakePublicResponse,
 )
@@ -693,3 +708,64 @@ async def make_agents_public(
     except Exception as e:
         verbose_proxy_logger.exception(f"Error making agent public: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get(
+    "/agent/daily/activity",
+    tags=["Agent Management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+async def get_agent_daily_activity(
+    agent_ids: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    model: Optional[str] = None,
+    api_key: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 10,
+    exclude_agent_ids: Optional[str] = None,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get daily activity for specific agents or all accessible agents.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    agent_ids_list = agent_ids.split(",") if agent_ids else None
+    exclude_agent_ids_list: Optional[List[str]] = None
+    if exclude_agent_ids:
+        exclude_agent_ids_list = (
+            exclude_agent_ids.split(",") if exclude_agent_ids else None
+        )
+
+    where_condition = {}
+    if agent_ids_list:
+        where_condition["agent_id"] = {"in": list(agent_ids_list)}
+
+    agent_records = await prisma_client.db.litellm_agentstable.find_many(
+        where=where_condition
+    )
+    agent_metadata = {
+        agent.agent_id: {"agent_name": agent.agent_name} for agent in agent_records
+    }
+
+    return await get_daily_activity(
+        prisma_client=prisma_client,
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=agent_ids_list,
+        entity_metadata_field=agent_metadata,
+        exclude_entity_ids=exclude_agent_ids_list,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        page=page,
+        page_size=page_size,
+    )

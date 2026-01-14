@@ -4,6 +4,8 @@ import { Button as AntButton } from "antd";
 import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
 import { AGENT_FORM_CONFIG, SKILL_FIELD_CONFIG } from "./agent_config";
 
+import CostConfigFields from "./cost_config_fields";
+
 const { Panel } = Collapse;
 
 interface AgentFormFieldsProps {
@@ -152,6 +154,11 @@ const AgentFormFields: React.FC<AgentFormFieldsProps> = ({ showAgentName = true 
               {field.type === 'switch' ? <Switch /> : <Input placeholder={field.placeholder} />}
             </Form.Item>
           ))}
+        </Panel>
+
+        {/* Cost Configuration */}
+        <Panel header={AGENT_FORM_CONFIG.cost.title} key={AGENT_FORM_CONFIG.cost.key}>
+          <CostConfigFields />
         </Panel>
 
         {/* LiteLLM Parameters */}

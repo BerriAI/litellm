@@ -309,6 +309,44 @@ class MyCustomLLM(CustomLLM):
 
         return model_response
 
+    def image_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout=None,
+        client: Optional[HTTPHandler] = None,
+    ) -> ImageResponse:
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/edited-image.png")],
+            response_ms=1000,
+        )
+
+    async def aimage_edit(
+        self,
+        model: str,
+        image: Any,
+        prompt: str,
+        model_response: ImageResponse,
+        api_key: Optional[str],
+        api_base: Optional[str],
+        optional_params: dict,
+        logging_obj: Any,
+        timeout=None,
+        client: Optional[AsyncHTTPHandler] = None,
+    ) -> ImageResponse:
+        return ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/edited-image.png")],
+            response_ms=1000,
+        )
+
 
 def test_get_llm_provider():
     """"""
@@ -449,6 +487,69 @@ async def test_image_generation_async_additional_params():
         mock_client.call_args.kwargs["optional_params"] == {
             "my_custom_param": "my-custom-param"
         }
+
+
+def test_simple_image_edit():
+    """Test sync image_edit with custom handler"""
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = litellm.image_edit(
+        model="custom_llm/my-fake-model",
+        image=b"fake_image_bytes",
+        prompt="Edit this image",
+    )
+
+    print(resp)
+    assert resp.data[0].url == "https://example.com/edited-image.png"
+
+
+@pytest.mark.asyncio
+async def test_simple_image_edit_async():
+    """Test async image_edit with custom handler"""
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+    resp = await litellm.aimage_edit(
+        model="custom_llm/my-fake-model",
+        image=b"fake_image_bytes",
+        prompt="Edit this image",
+    )
+
+    print(resp)
+    assert resp.data[0].url == "https://example.com/edited-image.png"
+
+
+@pytest.mark.asyncio
+async def test_image_edit_async_additional_params():
+    """Test that additional params are passed to custom handler"""
+    my_custom_llm = MyCustomLLM()
+    litellm.custom_provider_map = [
+        {"provider": "custom_llm", "custom_handler": my_custom_llm}
+    ]
+
+    with patch.object(
+        my_custom_llm, "aimage_edit", new=AsyncMock(return_value=ImageResponse(
+            created=int(time.time()),
+            data=[ImageObject(url="https://example.com/edited-image.png")],
+        ))
+    ) as mock_client:
+        resp = await litellm.aimage_edit(
+            model="custom_llm/my-fake-model",
+            image=b"fake_image_bytes",
+            prompt="Edit this image",
+            api_key="my-api-key",
+            api_base="my-api-base",
+            my_custom_param="my-custom-param",
+        )
+
+        print(resp)
+
+        mock_client.assert_awaited_once()
+        assert mock_client.call_args.kwargs["api_key"] == "my-api-key"
+        assert mock_client.call_args.kwargs["api_base"] == "my-api-base"
 
 
 def test_get_supported_openai_params():

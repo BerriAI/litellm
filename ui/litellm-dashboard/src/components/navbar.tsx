@@ -1,7 +1,7 @@
 import Link from "next/link";
 import React, { useState, useEffect } from "react";
 import type { MenuProps } from "antd";
-import { Dropdown, Tooltip, Switch } from "antd";
+import { Dropdown, Tooltip } from "antd";
 import { getProxyBaseUrl } from "@/components/networking";
 import {
   UserOutlined,
@@ -15,7 +15,6 @@ import {
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import { useTheme } from "@/contexts/ThemeContext";
-import useFeatureFlags from "@/hooks/useFeatureFlags";
 
 interface NavbarProps {
   userID: string | null;
@@ -44,11 +43,27 @@ const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
+  const [version, setVersion] = useState("");
   const { logoUrl } = useTheme();
-  const { refactoredUIFlag, setRefactoredUIFlag } = useFeatureFlags();
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
+
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        const response = await fetch(`${baseUrl}/health/readiness`);
+        const data = await response.json();
+        if (data.litellm_version) {
+          setVersion(data.litellm_version);
+        }
+      } catch (error) {
+        console.error("Failed to fetch version:", error);
+      }
+    };
+
+    fetchVersion();
+  }, [baseUrl]);
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -114,18 +129,6 @@ const Navbar: React.FC<NavbarProps> = ({
                 {userEmail || "Unknown"}
               </span>
             </div>
-
-            {/* NEW: Feature flag label + toggle below the email field */}
-            <div className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100">
-              <span className="text-gray-500 text-xs">Refactored UI</span>
-              <Switch
-                className="ml-auto"
-                size="small"
-                checked={refactoredUIFlag}
-                onChange={(checked) => setRefactoredUIFlag(checked)}
-                aria-label="Toggle refactored UI feature flag"
-              />
-            </div>
           </div>
         </div>
       ),
@@ -160,9 +163,30 @@ const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            <Link href="/" className="flex items-center">
-              <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
-            </Link>
+            <div className="flex items-center">
+              <Link href="/" className="flex items-center">
+                <div className="relative">
+                  <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
+                  <span 
+                    className="absolute -top-1 -right-2 text-lg animate-bounce"
+                    style={{ animationDuration: '2s' }}
+                    title="Happy Holidays!"
+                  >
+                    🎄
+                  </span>
+                </div>
+              </Link>
+              {version && (
+                <a
+                  href="https://docs.litellm.ai/release_notes"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-gray-500 border border-gray-200 rounded-lg px-2 py-0.5 bg-gray-50 font-medium -ml-2 hover:bg-gray-100 transition-colors cursor-pointer z-10"
+                >
+                  v{version}
+                </a>
+              )}
+            </div>
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">

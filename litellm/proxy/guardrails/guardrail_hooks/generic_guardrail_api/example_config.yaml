@@ -1,0 +1,52 @@
+# Example configuration for Generic Guardrail API
+
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  guardrails:
+    - guardrail_name: "my-generic-guardrail"
+      litellm_params:
+        guardrail: generic_guardrail_api
+        mode: pre_call  # Options: pre_call, post_call, during_call, [pre_call, post_call]
+        api_key: os.environ/GENERIC_GUARDRAIL_API_KEY  # Optional if using Bearer auth
+        api_base: http://localhost:8080  # Required. Endpoint /beta/litellm_basic_guardrail_api is automatically appended
+        default_on: false  # Set to true to apply to all requests by default
+        additional_provider_specific_params:
+          # Any additional parameters your guardrail API needs
+          api_version: "v1"
+          custom_param: "value"
+
+# Usage examples:
+
+# 1. Apply guardrail to a specific request:
+# curl --location 'http://localhost:4000/chat/completions' \
+#   --header 'Authorization: Bearer sk-1234' \
+#   --header 'Content-Type: application/json' \
+#   --data '{
+#     "model": "gpt-4",
+#     "messages": [{"role": "user", "content": "Test message"}],
+#     "guardrails": ["my-generic-guardrail"]
+#   }'
+
+# 2. Apply guardrail with dynamic parameters:
+# curl --location 'http://localhost:4000/chat/completions' \
+#   --header 'Authorization: Bearer sk-1234' \
+#   --header 'Content-Type: application/json' \
+#   --data '{
+#     "model": "gpt-4",
+#     "messages": [{"role": "user", "content": "Test message"}],
+#     "guardrails": [
+#       {
+#         "my-generic-guardrail": {
+#           "extra_body": {
+#             "custom_threshold": 0.8
+#           }
+#         }
+#       }
+#     ]
+#   }'
+

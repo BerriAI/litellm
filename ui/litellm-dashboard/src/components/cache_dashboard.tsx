@@ -293,7 +293,11 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           <Card>
             <Grid numItems={3} className="gap-4 mt-4">
               <Col>
-                <MultiSelect placeholder="Select API Keys" value={selectedApiKeys} onValueChange={setSelectedApiKeys}>
+                <MultiSelect
+                  placeholder="Select Virtual Keys"
+                  value={selectedApiKeys}
+                  onValueChange={setSelectedApiKeys}
+                >
                   {uniqueApiKeys.map((key) => (
                     <MultiSelectItem key={key} value={key}>
                       {key}
@@ -388,11 +392,7 @@ const CacheDashboard: React.FC<CachePageProps> = ({ accessToken, token, userRole
           />
         </TabPanel>
         <TabPanel>
-          <CacheSettings
-            accessToken={accessToken}
-            userRole={userRole}
-            userID={userID}
-          />
+          <CacheSettings accessToken={accessToken} userRole={userRole} userID={userID} />
         </TabPanel>
       </TabPanels>
     </TabGroup>

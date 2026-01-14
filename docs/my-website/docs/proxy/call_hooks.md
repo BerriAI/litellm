@@ -10,6 +10,15 @@ import Image from '@theme/IdealImage';
 **Understanding Callback Hooks?** Check out our [Callback Management Guide](../observability/callback_management.md) to understand the differences between proxy-specific hooks like `async_pre_call_hook` and general logging hooks like `async_log_success_event`.
 :::
 
+## Which Hook Should I Use?
+
+| Hook | Use Case | When It Runs |
+|------|----------|--------------|
+| `async_pre_call_hook` | Modify incoming request before it's sent to model | Before the LLM API call is made |
+| `async_moderation_hook` | Run checks on input in parallel to LLM API call | In parallel with the LLM API call |
+| `async_post_call_success_hook` | Modify outgoing response (non-streaming) | After successful LLM API call, for non-streaming responses |
+| `async_post_call_streaming_hook` | Modify outgoing response (streaming) | After successful LLM API call, for streaming responses |
+
 See a complete example with our [parallel request rate limiter](https://github.com/BerriAI/litellm/blob/main/litellm/proxy/hooks/parallel_request_limiter.py)
 
 ## Quick Start

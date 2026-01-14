@@ -24,13 +24,26 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
     def __init__(self) -> None:
         super().__init__()
 
+    @staticmethod
+    def _prepare_create_file_data(create_file_data: CreateFileRequest) -> dict[str, Any]:
+        """
+        Prepare create_file_data for OpenAI SDK.
+        
+        Removes expires_after if None to match SDK's Omit pattern.
+        SDK expects file_create_params.ExpiresAfter | Omit, but FileExpiresAfter works at runtime.
+        """
+        data = dict(create_file_data)
+        if data.get("expires_after") is None:
+            data.pop("expires_after", None)
+        return data
+
     async def acreate_file(
         self,
         create_file_data: CreateFileRequest,
         openai_client: AsyncAzureOpenAI,
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
-        response = await openai_client.files.create(**create_file_data)
+        response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))  # type: ignore[arg-type]
         verbose_logger.debug("create_file_response=%s", response)
         return OpenAIFileObject(**response.model_dump())
 
@@ -69,7 +82,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
             return self.acreate_file(
                 create_file_data=create_file_data, openai_client=openai_client
             )
-        response = cast(AzureOpenAI, openai_client).files.create(**create_file_data)
+        response = cast(AzureOpenAI, openai_client).files.create(**self._prepare_create_file_data(create_file_data))  # type: ignore[arg-type]
         return OpenAIFileObject(**response.model_dump())
 
     async def afile_content(

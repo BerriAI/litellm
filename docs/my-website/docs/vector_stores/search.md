@@ -12,7 +12,7 @@ Search a vector store for relevant chunks based on a query and file attributes f
 | Cost Tracking | ✅ | Tracked per search operation |
 | Logging | ✅ | Works across all integrations |
 | End-user Tracking | ✅ | |
-| Support LLM Providers | **OpenAI, Azure OpenAI, Bedrock, Vertex RAG Engine, Azure AI, Milvus** | Full vector stores API support across providers |
+| Support LLM Providers | **OpenAI, Azure OpenAI, Bedrock, Vertex RAG Engine, Azure AI, Milvus, Gemini** | Full vector stores API support across providers |
 
 ## Usage
 
@@ -163,6 +163,41 @@ print(response)
 ```
 
 [See full Milvus vector store documentation](../providers/milvus_vector_stores.md)
+
+</TabItem>
+
+<TabItem value="gemini-provider" label="Gemini Provider">
+
+#### Using Gemini File Search
+```python showLineNumbers title="Search Vector Store - Gemini Provider"
+import litellm
+import os
+
+# Set credentials
+os.environ["GEMINI_API_KEY"] = "your-gemini-api-key"
+
+response = await litellm.vector_stores.asearch(
+    vector_store_id="fileSearchStores/your-store-id",
+    query="What is the capital of France?",
+    custom_llm_provider="gemini",
+    max_num_results=5
+)
+print(response)
+```
+
+**With Metadata Filter:**
+```python showLineNumbers title="Search with Metadata Filter"
+response = await litellm.vector_stores.asearch(
+    vector_store_id="fileSearchStores/your-store-id",
+    query="What is LiteLLM?",
+    custom_llm_provider="gemini",
+    filters={"author": "John Doe", "category": "documentation"},
+    max_num_results=5
+)
+print(response)
+```
+
+[See full Gemini File Search documentation](../providers/gemini_file_search.md)
 
 </TabItem>
 </Tabs>

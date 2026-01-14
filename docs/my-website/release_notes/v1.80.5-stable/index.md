@@ -1,5 +1,5 @@
 ---
-title: "v1.80.5-stable"
+title: "v1.80.5-stable - Gemini 3.0 Support"
 slug: "v1-80-5"
 date: 2025-11-22T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.5-stable
+docker.litellm.ai/berriai/litellm:v1.80.5-stable
 ```
 
 </TabItem>
@@ -45,14 +45,111 @@ pip install litellm==1.80.5
 
 ## Key Highlights
 
-- **Prompt Management** - Full prompt versioning support with UI for editing, testing, and version history
-- **MCP Hub** - Publish and discover MCP servers within your organization
-- **Model Compare UI** - Side-by-side model comparison interface for testing
-- **Gemini 3w** - Day-0 support with thought signatures in Responses API
-- **Azure GPT-5.1 Models** - Complete Azure GPT-5.1 family support with EU region pricing
-- **Performance Improvements** - Realtime endpoint optimizations and SSL context caching
+- **Gemini 3** - [Day-0 support for Gemini 3 models with thought signatures](../../blog/gemini_3)
+- **Prompt Management** - [Full prompt versioning support with UI for editing, testing, and version history](../../docs/proxy/litellm_prompt_management)
+- **MCP Hub** - [Publish and discover MCP servers within your organization](../../docs/proxy/ai_hub#mcp-servers)
+- **Model Compare UI** - [Side-by-side model comparison interface for testing](../../docs/proxy/model_compare_ui)
+- **Batch API Spend Tracking** - [Granular spend tracking with custom metadata for batch and file creation requests](../../docs/proxy/cost_tracking#-custom-spend-log-metadata)
+- **AWS IAM Secret Manager** - [IAM role authentication support for AWS Secret Manager](../../docs/secret_managers/aws_secret_manager#iam-role-assumption)
+- **Logging Callback Controls** - [Admin-level controls to prevent callers from disabling logging callbacks in compliance environments](../../docs/proxy/dynamic_logging#disabling-dynamic-callback-management-enterprise)
+- **Proxy CLI JWT Authentication** - [Enable developers to authenticate to LiteLLM AI Gateway using the Proxy CLI](../../docs/proxy/cli_sso)
+- **Batch API Routing** - [Route batch operations to different provider accounts using model-specific credentials from your config.yaml](../../docs/batches#multi-account--model-based-routing)
 
 ---
+
+### Prompt Management
+
+<Image 
+  img={require('../../img/prompt_history.png')}
+  style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+<br/>
+<br/>
+
+This release introduces **LiteLLM Prompt Studio** - a comprehensive prompt management solution built directly into the LiteLLM UI. Create, test, and version your prompts without leaving your browser.
+
+You can now do the following on LiteLLM Prompt Studio:
+
+- **Create & Test Prompts**: Build prompts with developer messages (system instructions) and test them in real-time with an interactive chat interface
+- **Dynamic Variables**: Use `{{variable_name}}` syntax to create reusable prompt templates with automatic variable detection
+- **Version Control**: Automatic versioning for every prompt update with complete version history tracking and rollback capabilities
+- **Prompt Studio**: Edit prompts in a dedicated studio environment with live testing and preview
+
+**API Integration:**
+
+Use your prompts in any application with simple API calls:
+
+```python
+response = client.chat.completions.create(
+    model="gpt-4",
+    extra_body={
+        "prompt_id": "your-prompt-id",
+        "prompt_version": 2,  # Optional: specify version
+        "prompt_variables": {"name": "value"}  # Optional: pass variables
+    }
+)
+```
+
+Get started here: [LiteLLM Prompt Management Documentation](../../docs/proxy/litellm_prompt_management)
+
+---
+
+### Performance – `/realtime` 182× Lower p99 Latency
+
+This update reduces `/realtime` latency by removing redundant encodings on the hot path, reusing shared SSL contexts, and caching formatting strings that were being regenerated twice per request despite rarely changing.
+
+#### Results
+
+| Metric          | Before    | After     | Improvement                |
+| --------------- | --------- | --------- | -------------------------- |
+| Median latency  | 2,200 ms  | **59 ms** | **−97% (~37× faster)**     |
+| p95 latency     | 8,500 ms  | **67 ms** | **−99% (~127× faster)**    |
+| p99 latency     | 18,000 ms | **99 ms** | **−99% (~182× faster)**    |
+| Average latency | 3,214 ms  | **63 ms** | **−98% (~51× faster)**     |
+| RPS             | 165       | **1,207** | **+631% (~7.3× increase)** |
+
+
+#### Test Setup
+
+| Category | Specification |
+|----------|---------------|
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
+| **Configuration** | [config.yaml](https://gist.github.com/AlexsanderHamir/420fb44c31c00b4f17a99588637f01ec) |
+| **Load Script** | [no_cache_hits.py](https://gist.github.com/AlexsanderHamir/73b83ada21d9b84d4fe09665cf1745f5) |
+
+---
+
+### Model Compare UI
+
+New interactive playground UI enables side-by-side comparison of multiple LLM models, making it easy to evaluate and compare model responses.
+
+**Features:**
+- Compare responses from multiple models in real-time
+- Side-by-side view with synchronized scrolling
+- Support for all LiteLLM-supported models
+- Cost tracking per model
+- Response time comparison
+- Pre-configured prompts for quick and easy testing
+
+**Details:**
+
+- **Parameterization**: Configure API keys, endpoints, models, and model parameters, as well as interaction types (chat completions, embeddings, etc.)
+
+- **Model Comparison**: Compare up to 3 different models simultaneously with side-by-side response views
+
+- **Comparison Metrics**: View detailed comparison information including:
+
+  - Time To First Token
+  - Input / Output / Reasoning Tokens
+  - Total Latency
+  - Cost (if enabled in config)
+
+- **Safety Filters**: Configure and test guardrails (safety filters) directly in the playground interface
+
+[Get Started with Model Compare](../../docs/proxy/model_compare_ui)
 
 ## New Providers and Endpoints
 
@@ -228,9 +325,7 @@ pip install litellm==1.80.5
     - Edit add callbacks route to use data from backend - [PR #16699](https://github.com/BerriAI/litellm/pull/16699)
 
 - **Usage & Analytics**
-    - Organization Usage in Usage Tab - [PR #16614](https://github.com/BerriAI/litellm/pull/16614)
     - Allow partial matches for user ID in User Table - [PR #16952](https://github.com/BerriAI/litellm/pull/16952)
-    - Docs for Model Compare UI and Org Usage - [PR #16928](https://github.com/BerriAI/litellm/pull/16928)
 
 - **General UI**
     - Allow setting base_url in API reference docs - [PR #16674](https://github.com/BerriAI/litellm/pull/16674)
@@ -325,12 +420,6 @@ pip install litellm==1.80.5
 - **MCP Server IDs** - Add mcp server ids - [PR #16904](https://github.com/BerriAI/litellm/pull/16904)
 - **MCP URL Format** - Fix mcp url format - [PR #16940](https://github.com/BerriAI/litellm/pull/16940)
 
----
-
-## Agents
-
-- **[AI Hub](../../docs/agents)**
-    - Make agents discoverable on model hub page for internal discovery - [PR #16678](https://github.com/BerriAI/litellm/pull/16678)
 
 ---
 
@@ -387,21 +476,6 @@ pip install litellm==1.80.5
 
 ---
 
-## Model Compare UI
-
-New side-by-side model comparison interface for testing multiple models simultaneously.
-
-**Features:**
-- Compare responses from multiple models in real-time
-- Side-by-side view with synchronized scrolling
-- Support for all LiteLLM-supported models
-- Cost tracking per model
-- Response time comparison
-
-[Get Started with Model Compare](../../docs/proxy/model_compare_ui) - [PR #16855](https://github.com/BerriAI/litellm/pull/16855)
-
----
-
 ## New Contributors
 
 * @mattmorgis made their first contribution in [PR #16371](https://github.com/BerriAI/litellm/pull/16371)
@@ -426,6 +500,11 @@ New side-by-side model comparison interface for testing multiple models simultan
 
 ---
 
+## Known Issues
+* `/audit` and `/user/available_users` routes return 404. Fixed in [PR #17337](https://github.com/BerriAI/litellm/pull/17337)
+
+---
+
 ## Full Changelog
 
-**[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.0-nightly...v1.80.5.rc.1)**
+**[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.0-nightly...v1.80.5.rc.2)**

@@ -273,7 +273,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
   const handleRegenerateKey = async () => {
     if (!premiumUser) {
       NotificationManager.warning({
-        description: "Regenerate API Key is an Enterprise feature. Please upgrade to use this feature.",
+        description: "Regenerate Virtual Key is an Enterprise feature. Please upgrade to use this feature.",
       });
       return;
     }
@@ -298,10 +298,10 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
       setRegenerateDialogVisible(false);
       regenerateForm.resetFields();
-      NotificationManager.success({ description: "API Key regenerated successfully" });
+      NotificationManager.success({ description: "Virtual Key regenerated successfully" });
     } catch (error) {
       console.error("Error regenerating key:", error);
-      NotificationManager.error({ description: "Failed to regenerate API Key" });
+      NotificationManager.error({ description: "Failed to regenerate Virtual Key" });
     }
   };
 
@@ -366,7 +366,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                       </div>
                       <div>
                         <p className="text-base font-medium text-red-600">
-                          Warning: You are about to delete this API key.
+                          Warning: You are about to delete this Virtual Key.
                         </p>
                         <p className="text-base text-red-600 mt-2">
                           This action is irreversible and will immediately revoke access for any applications using this
@@ -374,7 +374,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                         </p>
                       </div>
                     </div>
-                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this API key?</p>
+                    <p className="text-base text-gray-600 mb-5">Are you sure you want to delete this Virtual Key?</p>
                     <div className="mb-5">
                       <label className="block text-base font-medium text-gray-700 mb-2">
                         {`Type `}
@@ -407,7 +407,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                     disabled={!isValid}
                     className={`px-5 py-3 rounded-md text-base font-medium text-white focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 ${isValid ? "bg-red-600 hover:bg-red-700" : "bg-red-300 cursor-not-allowed"}`}
                   >
-                    Delete Key
+                    Delete Virtual Key
                   </button>
                 </div>
               </div>
@@ -417,7 +417,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
 
       {/* Regenerate Key Form Modal */}
       <Modal
-        title="Regenerate API Key"
+        title="Regenerate Virtual Key"
         visible={regenerateDialogVisible}
         onCancel={() => {
           setRegenerateDialogVisible(false);
@@ -516,7 +516,7 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
                   {selectedToken?.key_alias || "No alias set"}
                 </pre>
               </div>
-              <Text className="mt-3">New API Key:</Text>
+              <Text className="mt-3">New Virtual Key:</Text>
               <div
                 style={{
                   background: "#f8f8f8",
@@ -529,9 +529,9 @@ const ViewKeyTable: React.FC<ViewKeyTableProps> = ({
               </div>
               <CopyToClipboard
                 text={regeneratedKey}
-                onCopy={() => NotificationManager.success({ description: "API Key copied to clipboard" })}
+                onCopy={() => NotificationManager.success({ description: "Virtual Key copied to clipboard" })}
               >
-                <Button className="mt-3">Copy API Key</Button>
+                <Button className="mt-3">Copy Virtual Key</Button>
               </CopyToClipboard>
             </Col>
           </Grid>

@@ -72,7 +72,7 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
         api_key=None,
         custom_llm_provider="github_copilot",
     )
-    assert api_base == "https://api.githubcopilot.com/"
+    assert api_base == "https://api.githubcopilot.com"
 
     # Test with authentication failure
     config.authenticator.get_api_key.side_effect = GetAPIKeyError(

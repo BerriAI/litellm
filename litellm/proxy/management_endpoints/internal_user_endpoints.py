@@ -101,35 +101,75 @@ def _update_internal_new_user_params(data_json: dict, data: NewUserRequest) -> d
     return data_json
 
 
+async def _check_duplicate_user_field(
+    field_name: str,
+    field_value: Optional[str],
+    prisma_client: Any,
+    *,
+    case_insensitive: bool = False,
+    label: Optional[str] = None,
+) -> None:
+    """
+    Helper function to check if a field already exists in the user table.
+
+    Args:
+        field_name (str): Database field name to check.
+        field_value (Optional[str]): Value to check for duplicates.
+        prisma_client (Any): Database client instance.
+        case_insensitive (bool): Whether to use case-insensitive comparison.
+        label (Optional[str]): Human readable label for error messages.
+
+    Raises:
+        Exception: If database is not connected.
+        HTTPException: If a user with the given field value already exists.
+    """
+    if field_value:
+        if prisma_client is None:
+            raise Exception("Database not connected")
+
+        value = field_value.strip()
+        where_clause = {field_name: {"equals": value}}
+        if case_insensitive:
+            where_clause[field_name]["mode"] = "insensitive"
+
+        existing_user = await prisma_client.db.litellm_usertable.find_first(
+            where=where_clause
+        )
+
+        if existing_user is not None:
+            existing_value = getattr(existing_user, field_name, value)
+            error_label = label or field_name
+            raise HTTPException(
+                status_code=409,
+                detail={"error": f"User with {error_label} {existing_value} already exists"},
+            )
+
+
 async def _check_duplicate_user_email(
     user_email: Optional[str], prisma_client: Any
 ) -> None:
     """
     Helper function to check if a user email already exists in the database.
-
-    Args:
-        user_email (Optional[str]): Email to check
-        prisma_client (Any): Database client instance
-
-    Raises:
-        Exception: If database is not connected
-        HTTPException: If user with email already exists
     """
-    if user_email:
-        if prisma_client is None:
-            raise Exception("Database not connected")
+    await _check_duplicate_user_field(
+        field_name="user_email",
+        field_value=user_email,
+        prisma_client=prisma_client,
+        case_insensitive=True,
+        label="email",
+    )
 
-        existing_user = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": {"equals": user_email.strip(), "mode": "insensitive"}}
-        )
 
-        if existing_user is not None:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": f"User with email {existing_user.user_email} already exists"
-                },
-            )
+async def _check_duplicate_user_id(user_id: Optional[str], prisma_client: Any) -> None:
+    """
+    Helper function to check if a user id already exists in the database.
+    """
+    await _check_duplicate_user_field(
+        field_name="user_id",
+        field_value=user_id,
+        prisma_client=prisma_client,
+        label="id",
+    )
 
 
 async def _add_user_to_organizations(
@@ -361,7 +401,8 @@ async def new_user(
                 status_code=500,
                 detail=CommonProxyErrors.db_not_connected_error.value,
             )
-        # Check for duplicate email
+        # Check for duplicate user_id or email
+        await _check_duplicate_user_id(data.user_id, prisma_client)
         await _check_duplicate_user_email(data.user_email, prisma_client)
 
         # Check if license is over limit
@@ -563,10 +604,15 @@ async def user_info(
             user_id = user_api_key_dict.user_id
         ## GET USER ROW ##
 
+        user_info = None
         if user_id is not None:
             user_info = await prisma_client.get_data(user_id=user_id)
-        else:
-            user_info = None
+        
+        if user_info is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"User {user_id} not found",
+            )
 
         ## GET ALL TEAMS ##
         team_list = []

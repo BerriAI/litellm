@@ -27,6 +27,25 @@ class BedrockError(BaseLLMException):
     pass
 
 
+# Lazy import cache to avoid circular imports and performance impact
+_get_model_info = None
+
+
+def get_cached_model_info():
+    """
+    Lazy import and cache get_model_info to avoid circular imports.
+    
+    This function is used by bedrock transformation classes that need get_model_info
+    but cannot import it at module level due to circular import issues.
+    The function is cached after first use to avoid performance impact.
+    """
+    global _get_model_info
+    if _get_model_info is None:
+        from litellm import get_model_info
+        _get_model_info = get_model_info
+    return _get_model_info
+
+
 class AmazonBedrockGlobalConfig:
     def __init__(self):
         pass
@@ -403,6 +422,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if model.startswith("invoke/"):
             model = model.split("/", 1)[1]
 
+        if model.startswith("openai/"):
+            model = model.split("/", 1)[1]
+
         return model
 
     @staticmethod
@@ -446,12 +468,12 @@ class BedrockModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_bedrock_route(
         model: str,
-    ) -> Literal["converse", "invoke", "converse_like", "agent", "agentcore", "async_invoke"]:
+    ) -> Literal["converse", "invoke", "converse_like", "agent", "agentcore", "async_invoke", "openai"]:
         """
         Get the bedrock route for the given model.
         """
         route_mappings: Dict[
-            str, Literal["invoke", "converse_like", "converse", "agent", "agentcore", "async_invoke"]
+            str, Literal["invoke", "converse_like", "converse", "agent", "agentcore", "async_invoke", "openai"]
         ] = {
             "invoke/": "invoke",
             "converse_like/": "converse_like",
@@ -459,6 +481,7 @@ class BedrockModelInfo(BaseLLMModelInfo):
             "agent/": "agent",
             "agentcore/": "agentcore",
             "async_invoke/": "async_invoke",
+            "openai/": "openai",
         }
 
         # Check explicit routes first
@@ -518,6 +541,14 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return "async_invoke/" in model
 
     @staticmethod
+    def _explicit_openai_route(model: str) -> bool:
+        """
+        Check if the model is an explicit openai route.
+        Used for Bedrock imported models that use OpenAI Chat Completions format.
+        """
+        return "openai/" in model
+
+    @staticmethod
     def get_bedrock_provider_config_for_messages_api(
         model: str,
     ) -> Optional[BaseAnthropicMessagesConfig]:
@@ -566,6 +597,8 @@ def get_bedrock_chat_config(model: str):
     # Handle explicit routes first
     if bedrock_route == "converse" or bedrock_route == "converse_like":
         return litellm.AmazonConverseConfig()
+    elif bedrock_route == "openai":
+        return litellm.AmazonBedrockOpenAIConfig()
     elif bedrock_route == "agent":
         from litellm.llms.bedrock.chat.invoke_agent.transformation import (
             AmazonInvokeAgentConfig,
@@ -602,6 +635,10 @@ def get_bedrock_chat_config(model: str):
         return litellm.AmazonInvokeNovaConfig()
     elif bedrock_invoke_provider == "qwen3":
         return litellm.AmazonQwen3Config()
+    elif bedrock_invoke_provider == "qwen2":
+        return litellm.AmazonQwen2Config()
+    elif bedrock_invoke_provider == "twelvelabs":
+        return litellm.AmazonTwelveLabsPegasusConfig()
     else:
         return litellm.AmazonInvokeConfig()
 

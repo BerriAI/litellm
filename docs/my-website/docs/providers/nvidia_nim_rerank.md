@@ -141,6 +141,111 @@ curl -X POST http://0.0.0.0:4000/rerank \
   }'
 ```
 
+## `/v1/ranking` Models (llama-3.2-nv-rerankqa-1b-v2)
+
+Some Nvidia NIM rerank models use the `/v1/ranking` endpoint instead of the default `/v1/retrieval/{model}/reranking` endpoint.
+
+Use the `ranking/` prefix to force requests to the `/v1/ranking` endpoint:
+
+### LiteLLM Python SDK
+
+```python showLineNumbers title="Force /v1/ranking endpoint with ranking/ prefix"
+import litellm
+import os
+
+os.environ['NVIDIA_NIM_API_KEY'] = "nvapi-..."
+
+# Use "ranking/" prefix to force /v1/ranking endpoint
+response = litellm.rerank(
+    model="nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2",
+    query="which way did the traveler go?",
+    documents=[
+        "two roads diverged in a yellow wood...",
+        "then took the other, as just as fair...",
+        "i shall be telling this with a sigh somewhere ages and ages hence..."
+    ],
+    top_n=3,
+    truncate="END",  # Optional: truncate long text from the end
+)
+
+print(response)
+```
+
+### LiteLLM Proxy
+
+```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: nvidia-ranking
+    litellm_params:
+      model: nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2
+      api_key: os.environ/NVIDIA_NIM_API_KEY
+```
+
+```bash title="Request to LiteLLM Proxy"
+curl -X POST http://0.0.0.0:4000/rerank \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "nvidia-ranking",
+    "query": "which way did the traveler go?",
+    "documents": [
+      "two roads diverged in a yellow wood...",
+      "then took the other, as just as fair..."
+    ],
+    "top_n": 2
+  }'
+```
+
+### Understanding Model Resolution
+
+**Ranking Endpoint (`/v1/ranking`):**
+
+```
+model: nvidia_nim/ranking/nvidia/llama-3.2-nv-rerankqa-1b-v2
+       └────┬────┘ └──┬──┘ └─────────────┬──────────────────┘
+            │        │                   │
+            │        │                   └────▶ Model name sent to provider
+            │        │
+            │        └────────────────────────▶ Tells LiteLLM the request/response and url should be sent to Nvidia NIM /v1/ranking endpoint
+            │
+            └─────────────────────────────────▶ Provider prefix
+
+API URL: https://ai.api.nvidia.com/v1/ranking
+```
+
+**Visual Flow:**
+
+```
+Client Request                LiteLLM                              Provider API
+──────────────              ────────────                         ─────────────
+
+# Default reranking endpoint
+model: "nvidia_nim/nvidia/model-name"
+                            1. Extracts model: nvidia/model-name
+                            2. Routes to default endpoint ──────▶ POST /v1/retrieval/nvidia/model-name/reranking
+
+
+# Forced ranking endpoint  
+model: "nvidia_nim/ranking/nvidia/model-name"
+                            1. Detects "ranking/" prefix
+                            2. Extracts model: nvidia/model-name
+                            3. Routes to ranking endpoint ──────▶ POST /v1/ranking
+                                                                  Body: {"model": "nvidia/model-name", ...}
+```
+
+**When to use each endpoint:**
+
+| Endpoint | Model Prefix | Use Case |
+|----------|--------------|----------|
+| `/v1/retrieval/{model}/reranking` | `nvidia_nim/<model>` | Default for most rerank models |
+| `/v1/ranking` | `nvidia_nim/ranking/<model>` | For models like `nvidia/llama-3.2-nv-rerankqa-1b-v2` that require this endpoint |
+
+:::tip
+
+Check the [Nvidia NIM model deployment page](https://build.nvidia.com/nvidia/llama-3_2-nv-rerankqa-1b-v2/deploy) to see which endpoint your model requires.
+
+:::
+
 ## API Parameters
 
 ### Required Parameters
@@ -203,16 +308,7 @@ response = litellm.rerank(
 </TabItem>
 </Tabs>
 
-## API Endpoint
-
-The rerank endpoint uses a different base URL than chat/embeddings:
-
-- **Chat/Embeddings:** `https://integrate.api.nvidia.com/v1/`
-- **Rerank:** `https://ai.api.nvidia.com/v1/`
-
-LiteLLM automatically uses the correct endpoint for rerank requests.
-
-### Custom API Base URL
+## Custom API Base URL
 
 You can override the default base URL in several ways:
 
@@ -258,4 +354,3 @@ Get your Nvidia NIM API key from [Nvidia's website](https://developer.nvidia.com
 - [Nvidia NIM Chat Completions](./nvidia_nim#sample-usage)
 - [LiteLLM Rerank Endpoint](../rerank)
 - [Nvidia NIM Official Docs ↗](https://docs.api.nvidia.com/nim/reference/)
-

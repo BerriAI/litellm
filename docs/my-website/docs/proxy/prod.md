@@ -81,6 +81,13 @@ CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers"
 export MAX_REQUESTS_BEFORE_RESTART=10000
 ```
 
+> **Tip:** When using `--max_requests_before_restart`, the `--run_gunicorn` flag is more stable and mature as it uses Gunicorn's battle-tested worker recycling mechanism instead of Uvicorn's implementation.
+
+```shell
+# Use Gunicorn for more stable worker recycling
+CMD ["--port", "4000", "--config", "./proxy_server_config.yaml", "--num_workers", "$(nproc)", "--run_gunicorn", "--max_requests_before_restart", "10000"]
+```
+
 
 ## 4. Use Redis 'port','host', 'password'. NOT 'redis_url'
 

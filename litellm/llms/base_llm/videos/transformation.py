@@ -66,6 +66,7 @@ class BaseVideoConfig(ABC):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         return {}
 

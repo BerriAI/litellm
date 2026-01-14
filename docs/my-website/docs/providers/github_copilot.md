@@ -15,7 +15,7 @@ https://docs.github.com/en/copilot
 |-------|-------|
 | Description | GitHub Copilot Chat API provides access to GitHub's AI-powered coding assistant. |
 | Provider Route on LiteLLM | `github_copilot/` |
-| Supported Endpoints | `/chat/completions` |
+| Supported Endpoints | `/chat/completions`, `/embeddings` |
 | API Reference | [GitHub Copilot docs](https://docs.github.com/en/copilot) |
 
 ## Authentication
@@ -62,6 +62,34 @@ for chunk in stream:
         print(chunk.choices[0].delta.content, end="")
 ```
 
+### Responses
+
+For GPT Codex models, only responses API is supported.
+
+```python showLineNumbers title="GitHub Copilot Responses"
+import litellm
+
+response = await litellm.aresponses(
+    model="github_copilot/gpt-5.1-codex",
+    input="Write a Python hello world",
+    max_output_tokens=500
+)
+
+print(response)
+```
+
+### Embedding
+
+```python showLineNumbers title="GitHub Copilot Embedding"
+import litellm
+
+response = litellm.embedding(
+    model="github_copilot/text-embedding-3-small",
+    input=["good morning from litellm"]
+)
+print(response)
+```
+
 ## Usage - LiteLLM Proxy
 
 Add the following to your LiteLLM Proxy configuration file:
@@ -71,6 +99,16 @@ model_list:
   - model_name: github_copilot/gpt-4
     litellm_params:
       model: github_copilot/gpt-4
+  - model_name: github_copilot/gpt-5.1-codex
+    model_info:
+      mode: responses
+    litellm_params:
+      model: github_copilot/gpt-5.1-codex
+  - model_name: github_copilot/text-embedding-ada-002
+    model_info:
+      mode: embedding
+    litellm_params:
+      model: github_copilot/text-embedding-ada-002
 ```
 
 Start your LiteLLM Proxy server:
@@ -180,7 +218,7 @@ extra_headers = {
     "editor-version": "vscode/1.85.1",           # Editor version
     "editor-plugin-version": "copilot/1.155.0",  # Plugin version
     "Copilot-Integration-Id": "vscode-chat",     # Integration ID
-    "user-agent": "GithubCopilot/1.155.0"       # User agent
+    "user-agent": "GithubCopilot/1.155.0"        # User agent
 }
 ```
 

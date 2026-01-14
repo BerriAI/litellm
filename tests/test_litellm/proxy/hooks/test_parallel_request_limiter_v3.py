@@ -22,6 +22,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.utils import ModelResponse, Usage
 
+
 class TimeController:
     def __init__(self):
         self._current = datetime.utcnow()
@@ -461,10 +462,11 @@ async def test_token_rate_limit_type_respected_v3(monkeypatch, token_rate_limit_
     )
 
     # Create mock kwargs for the success event
+    # Use standard_logging_object which is the canonical source for metadata
     mock_kwargs = {
-        "litellm_params": {
+        "standard_logging_object": {
             "metadata": {
-                "user_api_key": _api_key,
+                "user_api_key_hash": _api_key,
                 "user_api_key_user_id": None,
                 "user_api_key_team_id": None,
                 "user_api_key_end_user_id": None,
@@ -532,8 +534,8 @@ async def test_async_log_failure_event_v3():
         internal_usage_cache=InternalUsageCache(local_cache)
     )
 
-    # Mock kwargs with user_api_key
-    mock_kwargs = {"litellm_params": {"metadata": {"user_api_key": _api_key}}}
+    # Mock kwargs with user_api_key via standard_logging_object
+    mock_kwargs = {"standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}}}
 
     # Capture pipeline operations
     captured_ops = []
@@ -1579,6 +1581,231 @@ async def test_missing_descriptor_fallback():
     assert "Rate limit exceeded for nonexistent_key: unknown" in exc_info.value.detail
     assert "requests" in exc_info.value.detail
     assert "Current limit: 2" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_get_rate_limit_type_default_is_total(monkeypatch):
+    """
+    Test that get_rate_limit_type returns 'total' as the default when no setting is specified.
+
+    This verifies the change from 'output' to 'total' as the default value.
+    """
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock general_settings to return empty dict (no token_rate_limit_type set)
+    import litellm.proxy.proxy_server as proxy_server
+    original_settings = getattr(proxy_server, 'general_settings', {})
+    monkeypatch.setattr(proxy_server, 'general_settings', {})
+
+    try:
+        result = parallel_request_handler.get_rate_limit_type()
+        assert result == "total", f"Default rate limit type should be 'total', got '{result}'"
+    finally:
+        monkeypatch.setattr(proxy_server, 'general_settings', original_settings)
+
+
+@pytest.mark.asyncio
+async def test_get_rate_limit_type_invalid_falls_back_to_total(monkeypatch):
+    """
+    Test that get_rate_limit_type falls back to 'total' when an invalid value is specified.
+    """
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock general_settings to return an invalid token_rate_limit_type
+    import litellm.proxy.proxy_server as proxy_server
+    original_settings = getattr(proxy_server, 'general_settings', {})
+    monkeypatch.setattr(proxy_server, 'general_settings', {'token_rate_limit_type': 'invalid_type'})
+
+    try:
+        result = parallel_request_handler.get_rate_limit_type()
+        assert result == "total", f"Invalid rate limit type should fall back to 'total', got '{result}'"
+    finally:
+        monkeypatch.setattr(proxy_server, 'general_settings', original_settings)
+
+
+@pytest.mark.parametrize(
+    "token_rate_limit_type,expected_field",
+    [
+        ("input", "prompt_tokens"),
+        ("output", "completion_tokens"),
+        ("total", "total_tokens"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_log_success_event_with_dict_usage(monkeypatch, token_rate_limit_type, expected_field):
+    """
+    Test that async_log_success_event correctly handles usage as a dict (Responses API format).
+
+    The Responses API returns usage as a dict in ResponsesAPIResponse instead of a Usage object.
+    This test verifies that token counting works correctly with dict-based usage.
+    """
+    from unittest.mock import MagicMock
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock the get_rate_limit_type method
+    def mock_get_rate_limit_type():
+        return token_rate_limit_type
+
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", mock_get_rate_limit_type
+    )
+
+    # Create a mock response object with usage as a dict (Responses API format)
+    from litellm.types.utils import BaseLiteLLMOpenAIResponseObject
+    
+    # Use spec to make isinstance checks work correctly with MagicMock
+    mock_response = MagicMock(spec=BaseLiteLLMOpenAIResponseObject)
+    mock_response.usage = {
+        "prompt_tokens": 25,
+        "completion_tokens": 35,
+        "total_tokens": 60
+    }
+
+    # Create mock kwargs for the success event
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+            }
+        },
+        "model": "gpt-3.5-turbo",
+    }
+
+    # Mock the pipeline increment method to capture the operations
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    # Call the success event handler
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    # Find the TPM increment operation
+    tpm_operation = None
+    for op in captured_operations:
+        if op["key"].endswith(":tokens"):
+            tpm_operation = op
+            break
+
+    assert tpm_operation is not None, "Should have a TPM increment operation"
+
+    # Check that the correct token count was used based on the rate limit type
+    expected_tokens = {
+        "input": 25,  # prompt_tokens
+        "output": 35,  # completion_tokens
+        "total": 60,  # total_tokens
+    }
+
+    assert (
+        tpm_operation["increment_value"] == expected_tokens[token_rate_limit_type]
+    ), f"Expected {expected_tokens[token_rate_limit_type]} tokens for type '{token_rate_limit_type}', got {tpm_operation['increment_value']}"
+
+
+@pytest.mark.asyncio
+async def test_async_log_success_event_with_dict_usage_missing_fields(monkeypatch):
+    """
+    Test that async_log_success_event handles dict usage with missing fields gracefully.
+
+    When usage dict is missing expected fields, it should default to 0.
+    """
+    from unittest.mock import MagicMock
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock the get_rate_limit_type method
+    def mock_get_rate_limit_type():
+        return "output"
+
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", mock_get_rate_limit_type
+    )
+
+    # Create a mock response object with usage as a dict missing some fields
+    mock_response = MagicMock()
+    mock_response.usage = {
+        "prompt_tokens": 25,
+        # completion_tokens is missing
+        # total_tokens is missing
+    }
+    from litellm.types.utils import BaseLiteLLMOpenAIResponseObject
+    mock_response.__class__ = type('MockResponse', (BaseLiteLLMOpenAIResponseObject,), {})
+
+    # Create mock kwargs for the success event
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+            }
+        },
+        "model": "gpt-3.5-turbo",
+    }
+
+    # Mock the pipeline increment method to capture the operations
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    # Call the success event handler - should not raise exception
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    # Find the TPM increment operation
+    tpm_operation = None
+    for op in captured_operations:
+        if op["key"].endswith(":tokens"):
+            tpm_operation = op
+            break
+
+    assert tpm_operation is not None, "Should have a TPM increment operation"
+    # Should default to 0 when field is missing
+    assert tpm_operation["increment_value"] == 0, "Should default to 0 when completion_tokens is missing"
 
 
 @pytest.mark.asyncio

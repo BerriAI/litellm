@@ -21,6 +21,10 @@ vi.mock("@tremor/react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@tremor/react")>();
   return {
     ...actual,
+    Button: React.forwardRef<HTMLButtonElement, any>(({ children, ...props }, ref) =>
+      // Render as a native button to avoid Tremor-specific behaviors in tests
+      React.createElement("button", { ...props, ref }, children),
+    ),
     Tooltip: ({ children, ..._props }: { children?: React.ReactNode; [key: string]: unknown }) => {
       // Return children directly without tooltip functionality to prevent flaky tests
       // This avoids issues with hover states, positioning, and DOM queries in tests

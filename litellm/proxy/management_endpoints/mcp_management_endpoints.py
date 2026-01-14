@@ -14,13 +14,24 @@ Endpoints here:
 """
 
 import importlib
-from datetime import datetime
-from typing import Iterable, List, Optional
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any, Dict, Iterable, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    Form,
+    Header,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
 from fastapi.responses import JSONResponse
 
 import litellm
+from litellm._uuid import uuid
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
@@ -29,6 +40,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
 MCP_AVAILABLE: bool = True
+TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
 try:
     importlib.import_module("mcp")
 except ImportError as e:
@@ -43,9 +55,18 @@ if MCP_AVAILABLE:
         get_mcp_server,
         update_mcp_server,
     )
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        authorize_with_server,
+        exchange_token_with_server,
+        register_client_with_server,
+    )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+        build_effective_auth_contexts,
+    )
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
@@ -58,6 +79,47 @@ if MCP_AVAILABLE:
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+    from litellm.types.mcp import MCPCredentials
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    @dataclass
+    class _TemporaryMCPServerEntry:
+        server: MCPServer
+        expires_at: datetime
+
+    _temporary_mcp_servers: Dict[str, _TemporaryMCPServerEntry] = {}
+
+    def _prune_expired_temporary_mcp_servers() -> None:
+        if not _temporary_mcp_servers:
+            return
+
+        now = datetime.utcnow()
+        expired_ids = [
+            server_id
+            for server_id, entry in _temporary_mcp_servers.items()
+            if entry.expires_at <= now
+        ]
+        for server_id in expired_ids:
+            _temporary_mcp_servers.pop(server_id, None)
+
+    def _cache_temporary_mcp_server(server: MCPServer, ttl_seconds: int) -> MCPServer:
+        ttl_seconds = max(1, ttl_seconds)
+        _prune_expired_temporary_mcp_servers()
+        expires_at = datetime.utcnow() + timedelta(seconds=ttl_seconds)
+        _temporary_mcp_servers[server.server_id] = _TemporaryMCPServerEntry(
+            server=server,
+            expires_at=expires_at,
+        )
+        return server
+
+    def get_cached_temporary_mcp_server(
+        server_id: str,
+    ) -> Optional[MCPServer]:
+        _prune_expired_temporary_mcp_servers()
+        entry = _temporary_mcp_servers.get(server_id)
+        if entry is None:
+            return None
+        return entry.server
 
     def _redact_mcp_credentials(
         mcp_server: LiteLLM_MCPServerTable,
@@ -78,6 +140,75 @@ if MCP_AVAILABLE:
         mcp_servers: Iterable[LiteLLM_MCPServerTable],
     ) -> List[LiteLLM_MCPServerTable]:
         return [_redact_mcp_credentials(server) for server in mcp_servers]
+
+    def _inherit_credentials_from_existing_server(
+        payload: NewMCPServerRequest,
+    ) -> NewMCPServerRequest:
+        if not payload.server_id or payload.credentials:
+            return payload
+
+        existing_server = global_mcp_server_manager.get_mcp_server_by_id(
+            payload.server_id
+        )
+        if existing_server is None:
+            return payload
+
+        inherited_credentials: MCPCredentials = {}
+        if existing_server.authentication_token:
+            inherited_credentials["auth_value"] = existing_server.authentication_token
+        if existing_server.client_id:
+            inherited_credentials["client_id"] = existing_server.client_id
+        if existing_server.client_secret:
+            inherited_credentials["client_secret"] = existing_server.client_secret
+        if existing_server.scopes:
+            inherited_credentials["scopes"] = existing_server.scopes
+
+        if not inherited_credentials:
+            return payload
+
+        try:
+            return payload.model_copy(update={"credentials": inherited_credentials})
+        except AttributeError:
+            pass
+
+        payload_dict: Dict[str, Any]
+        try:
+            payload_dict = payload.model_dump()  # type: ignore[attr-defined]
+        except AttributeError:
+            payload_dict = payload.dict()  # type: ignore[attr-defined]
+        payload_dict["credentials"] = inherited_credentials
+        return NewMCPServerRequest(**payload_dict)
+
+    def _build_temporary_mcp_server_record(
+        payload: NewMCPServerRequest,
+        created_by: Optional[str],
+    ) -> LiteLLM_MCPServerTable:
+        now = datetime.utcnow()
+        server_id = payload.server_id or str(uuid.uuid4())
+        server_name = payload.server_name or payload.alias or server_id
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            server_name=server_name,
+            alias=payload.alias,
+            description=payload.description,
+            url=payload.url,
+            transport=payload.transport,
+            auth_type=payload.auth_type,
+            credentials=payload.credentials,
+            created_at=now,
+            updated_at=now,
+            created_by=created_by,
+            updated_by=created_by,
+            teams=[],
+            mcp_access_groups=payload.mcp_access_groups,
+            allowed_tools=payload.allowed_tools or [],
+            extra_headers=payload.extra_headers or [],
+            mcp_info=payload.mcp_info,
+            static_headers=payload.static_headers,
+            command=payload.command,
+            args=payload.args,
+            env=payload.env,
+        )
 
     def get_prisma_client_or_throw(message: str):
         from litellm.proxy.proxy_server import prisma_client
@@ -294,13 +425,18 @@ if MCP_AVAILABLE:
         ```
         """
 
-        # Use server manager to get all servers with health and team data
-        mcp_servers = (
-            await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
-                user_api_key_auth=user_api_key_dict
+        auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
+
+        aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
+        for auth_context in auth_contexts:
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
+                user_api_key_auth=auth_context
             )
-        )
-        redacted_mcp_servers = _redact_mcp_credentials_list(mcp_servers)
+            for server in servers:
+                if server.server_id not in aggregated_servers:
+                    aggregated_servers[server.server_id] = server
+
+        redacted_mcp_servers = _redact_mcp_credentials_list(aggregated_servers.values())
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -376,7 +512,7 @@ if MCP_AVAILABLE:
         exists = does_mcp_server_exist(mcp_server_records, server_id)
 
         if exists:
-            global_mcp_server_manager.add_update_server(mcp_server)
+            await global_mcp_server_manager.add_update_server(mcp_server)
             return _redact_mcp_credentials(mcp_server)
         else:
             raise HTTPException(
@@ -450,7 +586,7 @@ if MCP_AVAILABLE:
                 payload,
                 touched_by=user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
             )
-            global_mcp_server_manager.add_update_server(new_mcp_server)
+            await global_mcp_server_manager.add_update_server(new_mcp_server)
 
             # Ensure registry is up to date by reloading from database
             await global_mcp_server_manager.reload_servers_from_database()
@@ -461,6 +597,151 @@ if MCP_AVAILABLE:
                 detail={"error": f"Error creating mcp server: {str(e)}"},
             )
         return _redact_mcp_credentials(new_mcp_server)
+
+    @router.post(
+        "/server/oauth/session",
+        description="Temporarily cache an MCP server in memory without writing to the database",
+        dependencies=[Depends(user_api_key_auth)],
+        status_code=status.HTTP_200_OK,
+    )
+    @management_endpoint_wrapper
+    async def add_session_mcp_server(
+        payload: NewMCPServerRequest,
+        user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        litellm_changed_by: Optional[str] = Header(
+            None,
+            description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+        ),
+    ):
+        """
+        Cache MCP server info in memory for a short duration (~5 minutes).
+
+        This endpoint does not write to the database. If the same server_id is provided
+        again while the cache entry is active, it will refresh the cached data + TTL.
+        """
+
+        # Validate and normalize payload fields (alias/server name rules)
+        validate_and_normalize_mcp_server_payload(payload)
+
+        # Restrict to proxy admins similar to the persistent create endpoint
+        if LitellmUserRoles.PROXY_ADMIN != user_api_key_dict.user_role:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "User does not have permission to create temporary mcp servers. You can only create temporary mcp servers if you are a PROXY_ADMIN."
+                },
+            )
+
+        created_by = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
+        payload_with_credentials = _inherit_credentials_from_existing_server(payload)
+        temp_record = _build_temporary_mcp_server_record(
+            payload_with_credentials,
+            created_by,
+        )
+
+        try:
+            temporary_server = (
+                await global_mcp_server_manager.build_mcp_server_from_table(
+                    temp_record,
+                    credentials_are_encrypted=False,
+                )
+            )
+            _cache_temporary_mcp_server(
+                temporary_server,
+                ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error caching temporary mcp server: {str(e)}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": f"Error caching temporary mcp server: {str(e)}"},
+            )
+
+        return _redact_mcp_credentials(temp_record)
+
+    def _get_cached_temporary_mcp_server_or_404(server_id: str) -> MCPServer:
+        server = get_cached_temporary_mcp_server(server_id)
+        if server is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={"error": f"Temporary MCP server {server_id} not found"},
+            )
+        return server
+
+    @router.get(
+        "/server/oauth/{server_id}/authorize",
+        include_in_schema=False,
+    )
+    async def mcp_authorize(
+        request: Request,
+        server_id: str,
+        client_id: str,
+        redirect_uri: str,
+        state: str = "",
+        code_challenge: Optional[str] = None,
+        code_challenge_method: Optional[str] = None,
+        response_type: Optional[str] = None,
+        scope: Optional[str] = None,
+    ):
+        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        return await authorize_with_server(
+            request=request,
+            mcp_server=mcp_server,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            state=state,
+            code_challenge=code_challenge,
+            code_challenge_method=code_challenge_method,
+            response_type=response_type,
+            scope=scope,
+        )
+
+    @router.post(
+        "/server/oauth/{server_id}/token",
+        include_in_schema=False,
+    )
+    async def mcp_token(
+        request: Request,
+        server_id: str,
+        grant_type: str = Form(...),
+        code: Optional[str] = Form(None),
+        redirect_uri: Optional[str] = Form(None),
+        client_id: str = Form(...),
+        client_secret: Optional[str] = Form(None),
+        code_verifier: Optional[str] = Form(None),
+    ):
+        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        return await exchange_token_with_server(
+            request=request,
+            mcp_server=mcp_server,
+            grant_type=grant_type,
+            code=code,
+            redirect_uri=redirect_uri,
+            client_id=client_id,
+            client_secret=client_secret,
+            code_verifier=code_verifier,
+        )
+
+    @router.post(
+        "/server/oauth/{server_id}/register",
+        include_in_schema=False,
+    )
+    async def mcp_register(request: Request, server_id: str):
+        mcp_server = _get_cached_temporary_mcp_server_or_404(server_id)
+        request_data = await _read_request_body(request=request)
+        data: dict = {**request_data}
+
+        return await register_client_with_server(
+            request=request,
+            mcp_server=mcp_server,
+            client_name=data.get("client_name", ""),
+            grant_types=data.get("grant_types", []),
+            response_types=data.get("response_types", []),
+            token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
+            fallback_client_id=server_id,
+        )
 
     @router.delete(
         "/server/{server_id}",
@@ -586,7 +867,7 @@ if MCP_AVAILABLE:
                     "error": f"MCP Server not found, passed server_id={payload.server_id}"
                 },
             )
-        global_mcp_server_manager.add_update_server(mcp_server_record_updated)
+        await global_mcp_server_manager.add_update_server(mcp_server_record_updated)
 
         # Ensure registry is up to date by reloading from database
         await global_mcp_server_manager.reload_servers_from_database()

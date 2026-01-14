@@ -45,6 +45,20 @@ guardrails:
           description: "Score between 0-1 indicating content toxicity level"
         - name: "pii_detection"
           type: "boolean"
+
+# Example Presidio guardrail config with entity actions + confidence score thresholds
+  - guardrail_name: "presidio-pii"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_language: "en"
+      pii_entities_config:
+        CREDIT_CARD: "MASK"
+        EMAIL_ADDRESS: "MASK"
+        US_SSN: "MASK"
+      presidio_score_thresholds:  # minimum confidence scores for keeping detections
+        CREDIT_CARD: 0.8
+        EMAIL_ADDRESS: 0.6
 ```
 
 
@@ -54,6 +68,13 @@ guardrails:
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
 - A list of the above values to run multiple modes, e.g. `mode: [pre_call, post_call]`
+
+### Load Balancing Guardrails
+
+Need to distribute guardrail requests across multiple accounts or regions? See [Guardrail Load Balancing](./guardrail_load_balancing.md) for details on:
+- Load balancing across multiple AWS Bedrock accounts (useful for rate limit management)
+- Weighted distribution across guardrail instances
+- Multi-region guardrail deployments
 
 
 ## 2. Start LiteLLM Gateway 

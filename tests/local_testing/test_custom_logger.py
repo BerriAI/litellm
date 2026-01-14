@@ -103,6 +103,24 @@ class TmpFunction:
         )
 
 
+def test_get_callback_env_vars():
+    env_vars = CustomLogger.get_callback_env_vars("langfuse")
+    assert env_vars == [
+        "LANGFUSE_PUBLIC_KEY",
+        "LANGFUSE_SECRET_KEY",
+        "LANGFUSE_HOST",
+    ]
+
+    alias_env_vars = CustomLogger.get_callback_env_vars("langfuse_otel")
+    assert alias_env_vars == env_vars
+
+    missing_env_vars = CustomLogger.get_callback_env_vars("does_not_exist")
+    assert missing_env_vars == []
+
+    none_env_vars = CustomLogger.get_callback_env_vars(None)
+    assert none_env_vars == []
+
+
 @pytest.mark.asyncio
 async def test_async_chat_openai_stream():
     try:

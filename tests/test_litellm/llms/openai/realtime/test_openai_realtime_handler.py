@@ -195,10 +195,10 @@ async def test_async_realtime_url_contains_model():
         
         # Verify proper headers were set
         called_kwargs = mock_ws_connect.call_args[1]
-        assert "extra_headers" in called_kwargs
-        extra_headers = called_kwargs["extra_headers"]
-        assert extra_headers["Authorization"] == f"Bearer {api_key}"
-        assert extra_headers["OpenAI-Beta"] == "realtime=v1"
+        assert "additional_headers" in called_kwargs
+        additional_headers = called_kwargs["additional_headers"]
+        assert additional_headers["Authorization"] == f"Bearer {api_key}"
+        assert additional_headers["OpenAI-Beta"] == "realtime=v1"
         assert called_kwargs["ssl"] is shared_context
         
         mock_realtime_streaming.assert_called_once()

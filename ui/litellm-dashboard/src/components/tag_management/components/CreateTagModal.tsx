@@ -1,9 +1,9 @@
-import React from "react";
-import { Button, TextInput, Accordion, AccordionHeader, AccordionBody, Title } from "@tremor/react";
-import { Modal, Form, Select as Select2, Tooltip, Input } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import NumericalInput from "../../shared/numerical_input";
+import { Accordion, AccordionBody, AccordionHeader, Button, TextInput, Title } from "@tremor/react";
+import { Form, Input, Modal, Select as Select2, Tooltip } from "antd";
+import React from "react";
 import BudgetDurationDropdown from "../../common_components/budget_duration_dropdown";
+import NumericalInput from "../../shared/numerical_input";
 
 interface ModelInfo {
   model_name: string;
@@ -22,12 +22,7 @@ interface CreateTagModalProps {
   availableModels: ModelInfo[];
 }
 
-const CreateTagModal: React.FC<CreateTagModalProps> = ({
-  visible,
-  onCancel,
-  onSubmit,
-  availableModels,
-}) => {
+const CreateTagModal: React.FC<CreateTagModalProps> = ({ visible, onCancel, onSubmit, availableModels }) => {
   const [form] = Form.useForm();
 
   const handleFinish = (values: any) => {
@@ -41,25 +36,9 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({
   };
 
   return (
-    <Modal
-      title="Create New Tag"
-      visible={visible}
-      width={800}
-      footer={null}
-      onCancel={handleCancel}
-    >
-      <Form
-        form={form}
-        onFinish={handleFinish}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-      >
-        <Form.Item
-          label="Tag Name"
-          name="tag_name"
-          rules={[{ required: true, message: "Please input a tag name" }]}
-        >
+    <Modal title="Create New Tag" visible={visible} width={800} footer={null} onCancel={handleCancel}>
+      <Form form={form} onFinish={handleFinish} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
+        <Form.Item label="Tag Name" name="tag_name" rules={[{ required: true, message: "Please input a tag name" }]}>
           <TextInput />
         </Form.Item>
 
@@ -70,15 +49,15 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({
         <Form.Item
           label={
             <span>
-              Allowed Models{" "}
-              <Tooltip title="Select which LLMs are allowed to process requests from this tag">
+              Allowed Models
+              <Tooltip title="Select which models are allowed to process requests from this tag">
                 <InfoCircleOutlined style={{ marginLeft: "4px" }} />
               </Tooltip>
             </span>
           }
           name="allowed_llms"
         >
-          <Select2 mode="multiple" placeholder="Select LLMs">
+          <Select2 mode="multiple" placeholder="Select Models">
             {availableModels.map((model) => (
               <Select2.Option key={model.model_info.id} value={model.model_info.id}>
                 <div>
@@ -150,4 +129,3 @@ const CreateTagModal: React.FC<CreateTagModalProps> = ({
 };
 
 export default CreateTagModal;
-

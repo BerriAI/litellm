@@ -500,3 +500,70 @@ async def cloudzero_export(
             status_code=500,
             detail={"error": f"Failed to perform CloudZero export: {str(e)}"},
         )
+
+
+@router.delete(
+    "/cloudzero/delete",
+    tags=["CloudZero"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CloudZeroInitResponse,
+)
+async def delete_cloudzero_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete CloudZero settings from the database.
+
+    This endpoint removes the CloudZero configuration (API key, connection ID, timezone)
+    from the proxy database. Only the CloudZero settings entry will be deleted;
+    other configuration values in the database will remain unchanged.
+
+    Only admin users can delete CloudZero settings.
+    """
+    # Validation
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        # Check if CloudZero settings exist
+        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+            where={"param_name": "cloudzero_settings"}
+        )
+
+        if cloudzero_config is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "CloudZero settings not found"},
+            )
+
+        # Delete only the CloudZero settings entry
+        # This uses a specific where clause to target only the cloudzero_settings row
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": "cloudzero_settings"}
+        )
+
+        verbose_proxy_logger.info("CloudZero settings deleted successfully")
+
+        return CloudZeroInitResponse(
+            message="CloudZero settings deleted successfully", status="success"
+        )
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error deleting CloudZero settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to delete CloudZero settings: {str(e)}"},
+        )

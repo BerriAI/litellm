@@ -160,11 +160,16 @@ class GeminiVideoConfig(BaseVideoConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
         """
         Validate environment and add Gemini API key to headers.
         Gemini uses x-goog-api-key header for authentication.
         """
+        # Use api_key from litellm_params if available, otherwise fall back to other sources
+        if litellm_params and litellm_params.api_key:
+            api_key = api_key or litellm_params.api_key
+        
         api_key = (
             api_key
             or litellm.api_key

@@ -128,7 +128,7 @@ async def test_ssl_verification_with_aiohttp_transport():
         assert isinstance(transport_connector, TCPConnector)
 
         aiohttp_session = aiohttp.ClientSession(
-            connector=aiohttp.TCPConnector(verify_ssl=False)
+            connector=aiohttp.TCPConnector(ssl=False)
         )
         aiohttp_connector = aiohttp_session.connector
         assert isinstance(aiohttp_connector, aiohttp.TCPConnector)

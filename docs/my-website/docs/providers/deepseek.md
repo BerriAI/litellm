@@ -58,9 +58,56 @@ We support ALL Deepseek models, just set `deepseek/` as a prefix when sending co
 ## Reasoning Models
 | Model Name               | Function Call                                                                                                                                                      |
 |--------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| deepseek-reasoner | `completion(model="deepseek/deepseek-reasoner", messages)` | 
+| deepseek-reasoner | `completion(model="deepseek/deepseek-reasoner", messages)` |
 
+### Thinking / Reasoning Mode
 
+Enable thinking mode for DeepSeek reasoner models using `thinking` or `reasoning_effort` parameters:
+
+<Tabs>
+<TabItem value="thinking" label="thinking param">
+
+```python
+from litellm import completion
+import os
+
+os.environ['DEEPSEEK_API_KEY'] = ""
+
+resp = completion(
+    model="deepseek/deepseek-reasoner",
+    messages=[{"role": "user", "content": "What is 2+2?"}],
+    thinking={"type": "enabled"},
+)
+print(resp.choices[0].message.reasoning_content)  # Model's reasoning
+print(resp.choices[0].message.content)  # Final answer
+```
+
+</TabItem>
+<TabItem value="reasoning_effort" label="reasoning_effort param">
+
+```python
+from litellm import completion
+import os
+
+os.environ['DEEPSEEK_API_KEY'] = ""
+
+resp = completion(
+    model="deepseek/deepseek-reasoner",
+    messages=[{"role": "user", "content": "What is 2+2?"}],
+    reasoning_effort="medium",  # low, medium, high all map to thinking enabled
+)
+print(resp.choices[0].message.reasoning_content)  # Model's reasoning
+print(resp.choices[0].message.content)  # Final answer
+```
+
+</TabItem>
+</Tabs>
+
+:::note
+DeepSeek only supports `{"type": "enabled"}` - unlike Anthropic, it doesn't support `budget_tokens`. Any `reasoning_effort` value other than `"none"` enables thinking mode.
+:::
+
+### Basic Usage
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

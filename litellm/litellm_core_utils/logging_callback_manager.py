@@ -1,15 +1,18 @@
-from typing import TYPE_CHECKING, Callable, List, Optional, Set, Type, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Set, Type, Union
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.additional_logging_utils import AdditionalLoggingUtils
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 from litellm.types.utils import CallbacksByType
 
 if TYPE_CHECKING:
     from litellm import _custom_logger_compatible_callbacks_literal
 else:
     _custom_logger_compatible_callbacks_literal = str
+
+_generic_api_logger_cache: Dict[str, GenericAPILogger] = {}
 
 
 class LoggingCallbackManager:
@@ -138,6 +141,75 @@ class LoggingCallbackManager:
             return False
         return True
 
+    @staticmethod
+    def _add_custom_callback_generic_api_str(
+        callback: str,
+    ) -> Union[GenericAPILogger, str]:
+        """
+        litellm_settings:
+            success_callback: ["custom_callback_name"]
+
+        callback_settings:
+            custom_callback_name:
+                callback_type: generic_api
+                endpoint: https://webhook-test.com/30343bc33591bc5e6dc44217ceae3e0a
+                headers:
+                Authorization: Bearer sk-1234
+        """
+        callback_config = litellm.callback_settings.get(callback)
+
+        # Check if callback is in callback_settings with callback_type: generic_api
+        if (
+            isinstance(callback_config, dict)
+            and callback_config.get("callback_type") == "generic_api"
+        ):
+            endpoint = callback_config.get("endpoint")
+            headers = callback_config.get("headers")
+            event_types = callback_config.get("event_types")
+
+            if endpoint is None or headers is None:
+                verbose_logger.warning(
+                    "generic_api callback '%s' is missing endpoint or headers, skipping.",
+                    callback,
+                )
+                return callback
+
+            cached_logger = _generic_api_logger_cache.get(callback)
+            if (
+                isinstance(cached_logger, GenericAPILogger)
+                and cached_logger.endpoint == endpoint
+                and cached_logger.headers == headers
+                and cached_logger.event_types == event_types
+            ):
+                return cached_logger
+
+            new_logger = GenericAPILogger(
+                endpoint=endpoint,
+                headers=headers,
+                event_types=event_types,
+            )
+            _generic_api_logger_cache[callback] = new_logger
+            return new_logger
+
+        # Check if callback is in generic_api_compatible_callbacks.json
+        from litellm.integrations.generic_api.generic_api_callback import (
+            is_callback_compatible,
+        )
+
+        if is_callback_compatible(callback):
+            # Check if we already have a cached logger for this callback
+            cached_logger = _generic_api_logger_cache.get(callback)
+            if isinstance(cached_logger, GenericAPILogger):
+                return cached_logger
+
+            # Create new GenericAPILogger with callback_name parameter
+            # This will load config from generic_api_compatible_callbacks.json
+            new_logger = GenericAPILogger(callback_name=callback)
+            _generic_api_logger_cache[callback] = new_logger
+            return new_logger
+
+        return callback
+
     def _safe_add_callback_to_list(
         self,
         callback: Union[CustomLogger, Callable, str],
@@ -152,6 +224,13 @@ class LoggingCallbackManager:
         if not self._check_callback_list_size(parent_list):
             return
 
+        # Check if the callback is a custom callback
+
+        if isinstance(callback, str):
+            callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
+                callback
+            )
+
         if isinstance(callback, str):
             self._add_string_callback_to_list(
                 callback=callback, parent_list=parent_list
@@ -161,6 +240,7 @@ class LoggingCallbackManager:
                 custom_logger=callback,
                 parent_list=parent_list,
             )
+
         elif callable(callback):
             self._add_callback_function_to_list(
                 callback=callback, parent_list=parent_list
@@ -348,7 +428,6 @@ class LoggingCallbackManager:
         elif callable(callback):
             return getattr(callback, "__name__", str(callback))
         return str(callback)
-    
 
     def get_active_custom_logger_for_callback_name(
         self,
@@ -362,12 +441,16 @@ class LoggingCallbackManager:
         )
 
         # get the custom logger class type
-        custom_logger_class_type = CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
+        custom_logger_class_type = (
+            CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name)
+        )
 
         # get the active custom logger
         custom_logger = self.get_custom_loggers_for_type(custom_logger_class_type)
 
         if len(custom_logger) == 0:
-            raise ValueError(f"No active custom logger found for callback name: {callback_name}")
+            raise ValueError(
+                f"No active custom logger found for callback name: {callback_name}"
+            )
 
         return custom_logger[0]

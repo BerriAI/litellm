@@ -31,7 +31,6 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     get_original_file_id,
     prepare_data_with_credentials,
 )
-
 from litellm.proxy.utils import handle_exception_on_proxy, is_known_model
 from litellm.types.llms.openai import LiteLLMBatchCreateRequest
 
@@ -112,7 +111,10 @@ async def create_batch(  # noqa: PLR0915
             is_router_model = is_known_model(model=router_model, llm_router=llm_router)
 
         custom_llm_provider = (
-            provider or data.pop("custom_llm_provider", None) or "openai"
+            provider
+            or data.pop("custom_llm_provider", None)
+            or get_custom_llm_provider_from_request_headers(request=request)
+            or "openai"
         )
         _create_batch_data = LiteLLMBatchCreateRequest(**data)
         input_file_id = _create_batch_data.get("input_file_id", None)
@@ -571,6 +573,7 @@ async def list_batches(
             if target_model_names is None:
                 raise ValueError("target_model_names is required for this routing scenario")
             model = target_model_names.split(",")[0]
+            data.pop("model", None)
             response = await llm_router.alist_batches(
                 model=model,
                 after=after,

@@ -1,13 +1,21 @@
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Literal, Optional
 
 import litellm
 from litellm import get_secret
 from litellm._logging import verbose_proxy_logger
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.types_utils.utils import get_instance_fn
+from litellm.types.utils import (
+    StandardLoggingGuardrailInformation,
+    StandardLoggingPayload,
+)
 
 blue_color_code = "\033[94m"
 reset_color_code = "\033[0m"
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 
 
 def initialize_callbacks_on_proxy(  # noqa: PLR0915
@@ -17,6 +25,10 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     litellm_settings: dict,
     callback_specific_params: dict = {},
 ):
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        LoggingCallbackManager,
+    )
     from litellm.proxy.proxy_server import prisma_client
 
     verbose_proxy_logger.debug(
@@ -25,6 +37,11 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
     if isinstance(value, list):
         imported_list: List[Any] = []
         for callback in value:  # ["presidio", <my-custom-callback>]
+            # check if callback is a custom logger compatible callback
+            if isinstance(callback, str):
+                callback = LoggingCallbackManager._add_custom_callback_generic_api_str(
+                    callback
+                )
             if (
                 isinstance(callback, str)
                 and callback in litellm._known_custom_logger_compatible_callbacks
@@ -252,6 +269,8 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
+            elif isinstance(callback, CustomLogger):
+                imported_list.append(callback)
             else:
                 verbose_proxy_logger.debug(
                     f"{blue_color_code} attempting to import custom calback={callback} {reset_color_code}"
@@ -340,7 +359,11 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
 
 
 def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
-    _metadata = request_data.get("metadata", None) or {}
+    _metadata = request_data.get("metadata", None)
+    if not _metadata:
+        _metadata = request_data.get("litellm_metadata", None)
+    if not isinstance(_metadata, dict):
+        _metadata = {}
     headers = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(
@@ -349,6 +372,12 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
 
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
+
+    pillar_headers = _metadata.get("pillar_response_headers")
+    if isinstance(pillar_headers, dict):
+        headers.update(pillar_headers)
+    elif "pillar_flagged" in _metadata:
+        headers["x-pillar-flagged"] = str(_metadata["pillar_flagged"]).lower()
 
     return headers
 
@@ -363,6 +392,28 @@ def add_guardrail_to_applied_guardrails_header(
         _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+    # Ensure metadata is set back to request_data (important when metadata didn't exist)
+    request_data["metadata"] = _metadata
+
+
+def add_guardrail_response_to_standard_logging_object(
+    litellm_logging_obj: Optional["LiteLLMLogging"],
+    guardrail_response: StandardLoggingGuardrailInformation,
+):
+    if litellm_logging_obj is None:
+        return
+    standard_logging_object: Optional[StandardLoggingPayload] = (
+        litellm_logging_obj.model_call_details.get("standard_logging_object")
+    )
+    if standard_logging_object is None:
+        return
+    guardrail_information = standard_logging_object.get("guardrail_information", [])
+    if guardrail_information is None:
+        guardrail_information = []
+    guardrail_information.append(guardrail_response)
+    standard_logging_object["guardrail_information"] = guardrail_information
+
+    return standard_logging_object
 
 
 def get_metadata_variable_name_from_kwargs(
@@ -382,6 +433,23 @@ def get_metadata_variable_name_from_kwargs(
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
 
 
+def process_callback(_callback: str, callback_type: str, environment_variables: dict) -> dict:
+    """Process a single callback and return its data with environment variables"""
+    env_vars = CustomLogger.get_callback_env_vars(_callback)
+
+    env_vars_dict: dict[str, str | None] = {}
+    for _var in env_vars:
+        env_variable = environment_variables.get(_var, None)
+        if env_variable is None:
+            env_vars_dict[_var] = None
+        else:
+            env_vars_dict[_var] = env_variable
+
+    return {
+        "name": _callback,
+        "variables": env_vars_dict,
+        "type": callback_type
+    }
 def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []

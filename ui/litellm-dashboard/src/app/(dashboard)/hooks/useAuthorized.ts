@@ -4,6 +4,7 @@ import { useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { jwtDecode } from "jwt-decode";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
+import { getProxyBaseUrl } from "@/components/networking";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -42,7 +43,7 @@ const useAuthorized = () => {
   // Redirect after mount if missing/invalid token
   useEffect(() => {
     if (!token) {
-      router.replace("/sso/key/generate");
+      router.replace(`${getProxyBaseUrl()}/ui/login`);
     }
   }, [token, router]);
 
@@ -54,7 +55,7 @@ const useAuthorized = () => {
     } catch {
       // Bad token in cookie — clear and bounce
       clearTokenCookies();
-      router.replace("/sso/key/generate");
+      router.replace(`${getProxyBaseUrl()}/ui/login`);
       return null;
     }
   }, [token, router]);
@@ -67,7 +68,7 @@ const useAuthorized = () => {
     userRole: formatUserRole(decoded?.user_role ?? null),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
-    showSSOBanner: decoded?.login_method === "username_password" ?? false,
+    showSSOBanner: decoded?.login_method === "username_password",
   };
 };
 

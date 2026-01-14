@@ -28,6 +28,9 @@ from fastapi import HTTPException
 import litellm
 from litellm import DualCache, ModelResponse
 from litellm._logging import verbose_proxy_logger
+from litellm.completion_extras.litellm_responses_transformation.transformation import (
+    LiteLLMResponsesTransformationHandler,
+)
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.base_llm.base_model_iterator import MockResponseIterator
 from litellm.llms.custom_httpx.http_handler import (
@@ -111,6 +114,7 @@ class NomaGuardrail(CustomGuardrail):
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
         )
+        self._responses_transform_handler = LiteLLMResponsesTransformationHandler()
         self.api_key = api_key or os.environ.get("NOMA_API_KEY")
         self.api_base = api_base or os.environ.get(
             "NOMA_API_BASE", NomaGuardrail._DEFAULT_API_BASE
@@ -164,13 +168,28 @@ class NomaGuardrail(CustomGuardrail):
         start_time = datetime.now()
         extra_data = self.get_guardrail_dynamic_request_body_params(request_data)
 
-        user_message = await self._extract_user_message(request_data)
-        if not user_message:
+        messages = request_data.get("messages") or []
+        if not messages:
             return None
 
-        payload = {
-            "input": [{"type": "message", "role": "user", "content": user_message}]
-        }
+        input_items, instructions = self._responses_transform_handler.convert_chat_completion_messages_to_responses_api(  # type: ignore[arg-type]
+            messages
+        )
+
+        if instructions:
+            system_message = {
+                "type": "message",
+                "role": "system",
+                "content": [
+                    {"type": "input_text", "text": instructions},
+                ],
+            }
+            input_items.insert(0, system_message)
+
+        if not input_items:
+            return None
+
+        payload = {"input": input_items}
         response_json = await self._call_noma_api(
             payload=payload,
             llm_request_id=None,
@@ -198,9 +217,9 @@ class NomaGuardrail(CustomGuardrail):
 
         if self.monitor_mode:
             await self._handle_verdict_background(
-                USER_ROLE, json.dumps(user_message), response_json
+                USER_ROLE, json.dumps(input_items), response_json
             )
-            return json.dumps(user_message)
+            return json.dumps(input_items)
 
         # Check if we should anonymize content
         if self._should_anonymize(response_json, USER_ROLE):
@@ -215,8 +234,8 @@ class NomaGuardrail(CustomGuardrail):
                 )
                 return anonymized_content
 
-        await self._check_verdict(USER_ROLE, json.dumps(user_message), response_json)
-        return json.dumps(user_message)
+        await self._check_verdict(USER_ROLE, json.dumps(input_items), response_json)
+        return json.dumps(input_items)
 
     async def _process_llm_response_check(
         self,
@@ -731,47 +750,6 @@ class NomaGuardrail(CustomGuardrail):
             return response
 
         return response
-
-    async def _extract_user_message(self, data: dict) -> Optional[List[dict]]:
-        """Extract the last user message from request data"""
-        messages = data.get("messages", [])
-        if not messages:
-            return None
-
-        # Get the last user message
-        user_messages = [msg for msg in messages if msg.get("role") == USER_ROLE]
-        if not user_messages:
-            return None
-
-        last_user_message = user_messages[-1].get("content", "")
-        if isinstance(last_user_message, str):
-            return [{"type": "input_text", "text": last_user_message}]
-        elif isinstance(last_user_message, list):
-            converted_messages = []
-            for message in last_user_message:
-                converted_message = self._convert_single_user_message_to_payload(
-                    message
-                )
-                if converted_message is not None:
-                    converted_messages.append(converted_message)
-            return converted_messages
-        else:
-            return None
-
-    def _convert_single_user_message_to_payload(
-        self, user_message: Any
-    ) -> Optional[dict]:
-        if isinstance(user_message, str):
-            return {"type": "input_text", "text": user_message}
-        elif user_message.get("type", "") == "image_url":
-            return {
-                "type": "input_image",
-                "image_url": user_message.get("image_url", {}).get("url", ""),
-            }
-        elif user_message.get("type", "") == "text":
-            return {"type": "input_text", "text": user_message.get("text", "")}
-        else:
-            return None
 
     async def _call_noma_api(
         self,

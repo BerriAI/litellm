@@ -1,0 +1,41 @@
+{
+  "endpoints": [
+    {
+      "name": "list_container_files",
+      "async_name": "alist_container_files", 
+      "path": "/containers/{container_id}/files",
+      "method": "GET",
+      "path_params": ["container_id"],
+      "query_params": ["after", "limit", "order"],
+      "response_type": "ContainerFileListResponse"
+    },
+    {
+      "name": "retrieve_container_file",
+      "async_name": "aretrieve_container_file",
+      "path": "/containers/{container_id}/files/{file_id}",
+      "method": "GET", 
+      "path_params": ["container_id", "file_id"],
+      "query_params": [],
+      "response_type": "ContainerFileObject"
+    },
+    {
+      "name": "delete_container_file",
+      "async_name": "adelete_container_file",
+      "path": "/containers/{container_id}/files/{file_id}",
+      "method": "DELETE",
+      "path_params": ["container_id", "file_id"],
+      "query_params": [],
+      "response_type": "DeleteContainerFileResponse"
+    },
+    {
+      "name": "retrieve_container_file_content",
+      "async_name": "aretrieve_container_file_content",
+      "path": "/containers/{container_id}/files/{file_id}/content",
+      "method": "GET",
+      "path_params": ["container_id", "file_id"],
+      "query_params": [],
+      "response_type": "raw",
+      "returns_binary": true
+    }
+  ]
+}

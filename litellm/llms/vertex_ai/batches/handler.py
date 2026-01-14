@@ -61,6 +61,10 @@ class VertexAIBatchPrediction(VertexLLM):
             stream=None,
             auth_header=None,
             url=default_api_base,
+            model=None,
+            vertex_project=vertex_project or project_id,
+            vertex_location=vertex_location or "us-central1",
+            vertex_api_version="v1",
         )
 
         headers = {
@@ -166,6 +170,10 @@ class VertexAIBatchPrediction(VertexLLM):
             stream=None,
             auth_header=None,
             url=default_api_base,
+            model=None,
+            vertex_project=vertex_project or project_id,
+            vertex_location=vertex_location or "us-central1",
+            vertex_api_version="v1",
         )
 
         headers = {
@@ -210,6 +218,102 @@ class VertexAIBatchPrediction(VertexLLM):
 
         _json_response = response.json()
         vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_response_to_openai_batch_response(
+            response=_json_response
+        )
+        return vertex_batch_response
+
+    def list_batches(
+        self,
+        _is_async: bool,
+        after: Optional[str],
+        limit: Optional[int],
+        api_base: Optional[str],
+        vertex_credentials: Optional[VERTEX_CREDENTIALS_TYPES],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        timeout: Union[float, httpx.Timeout],
+        max_retries: Optional[int],
+    ):
+        sync_handler = _get_httpx_client()
+
+        access_token, project_id = self._ensure_access_token(
+            credentials=vertex_credentials,
+            project_id=vertex_project,
+            custom_llm_provider="vertex_ai",
+        )
+
+        default_api_base = self.create_vertex_batch_url(
+            vertex_location=vertex_location or "us-central1",
+            vertex_project=vertex_project or project_id,
+        )
+
+        if len(default_api_base.split(":")) > 1:
+            endpoint = default_api_base.split(":")[-1]
+        else:
+            endpoint = ""
+
+        _, api_base = self._check_custom_proxy(
+            api_base=api_base,
+            custom_llm_provider="vertex_ai",
+            gemini_api_key=None,
+            endpoint=endpoint,
+            stream=None,
+            auth_header=None,
+            url=default_api_base,
+        )
+
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Authorization": f"Bearer {access_token}",
+        }
+
+        params: Dict[str, Any] = {}
+        if limit is not None:
+            params["pageSize"] = str(limit)
+        if after is not None:
+            params["pageToken"] = after
+
+        if _is_async is True:
+            return self._async_list_batches(
+                api_base=api_base,
+                headers=headers,
+                params=params,
+            )
+
+        response = sync_handler.get(
+            url=api_base,
+            headers=headers,
+            params=params,
+        )
+
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+
+        _json_response = response.json()
+        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
+            response=_json_response
+        )
+        return vertex_batch_response
+
+    async def _async_list_batches(
+        self,
+        api_base: str,
+        headers: Dict[str, str],
+        params: Dict[str, Any],
+    ):
+        client = get_async_httpx_client(
+            llm_provider=litellm.LlmProviders.VERTEX_AI,
+        )
+        response = await client.get(
+            url=api_base,
+            headers=headers,
+            params=params,
+        )
+        if response.status_code != 200:
+            raise Exception(f"Error: {response.status_code} {response.text}")
+
+        _json_response = response.json()
+        vertex_batch_response = VertexAIBatchTransformation.transform_vertex_ai_batch_list_response_to_openai_list_response(
             response=_json_response
         )
         return vertex_batch_response

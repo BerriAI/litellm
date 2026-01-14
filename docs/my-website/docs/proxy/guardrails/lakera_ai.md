@@ -29,6 +29,13 @@ guardrails:
       mode: "pre_call"
       api_key: os.environ/LAKERA_API_KEY
       api_base: os.environ/LAKERA_API_BASE
+  - guardrail_name: "lakera-monitor"
+    litellm_params:
+      guardrail: lakera_v2
+      mode: "pre_call"
+      on_flagged: "monitor"  # Log violations but don't block
+      api_key: os.environ/LAKERA_API_KEY
+      api_base: os.environ/LAKERA_API_BASE
   
 ```
 
@@ -144,6 +151,7 @@ guardrails:
       # breakdown: Optional[bool] = True,
       # metadata: Optional[Dict] = None,
       # dev_info: Optional[bool] = True,
+      # on_flagged: Optional[str] = "block",  # "block" or "monitor"
 ```
 
 - `api_base`: (Optional[str]) The base of the Lakera integration. Defaults to `https://api.lakera.ai` 
@@ -153,3 +161,6 @@ guardrails:
 - `breakdown`: (Optional[bool]) When true the response will return a breakdown list of the detectors that were run, as defined in the policy, and whether each of them detected something or not.
 - `metadata`: (Optional[Dict]) Metadata tags can be attached to screening requests as an object that can contain any arbitrary key-value pairs. 
 - `dev_info`: (Optional[bool]) When true the response will return an object with developer information about the build of Lakera Guard.
+- `on_flagged`: (Optional[str]) Action to take when content is flagged. Defaults to `"block"`. 
+  - `"block"`: Raises an HTTP 400 exception when violations are detected (default behavior)
+  - `"monitor"`: Logs violations but allows the request to proceed. Useful for tuning security policies without blocking legitimate requests.

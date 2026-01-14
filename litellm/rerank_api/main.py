@@ -29,7 +29,7 @@ async def arerank(
     model: str,
     query: str,
     documents: List[Union[str, Dict[str, Any]]],
-    custom_llm_provider: Optional[Literal["cohere", "together_ai", "deepinfra"]] = None,
+    custom_llm_provider: Optional[Literal["cohere", "together_ai", "deepinfra", "fireworks_ai", "voyage"]] = None,
     top_n: Optional[int] = None,
     rank_fields: Optional[List[str]] = None,
     return_documents: Optional[bool] = None,
@@ -83,6 +83,8 @@ def rerank(  # noqa: PLR0915
             "litellm_proxy",
             "hosted_vllm",
             "deepinfra",
+            "fireworks_ai",
+            "voyage",
         ]
     ] = None,
     top_n: Optional[int] = None,
@@ -345,6 +347,12 @@ def rerank(  # noqa: PLR0915
                 or get_secret("BEDROCK_API_BASE")  # type: ignore
             )
 
+            # Merge headers and extra_headers if both are provided
+            merged_headers = headers or litellm.headers or {}
+            extra_headers_from_kwargs = kwargs.get("extra_headers")
+            if extra_headers_from_kwargs:
+                merged_headers = {**merged_headers, **extra_headers_from_kwargs}
+
             response = bedrock_rerank.rerank(
                 model=model,
                 query=query,
@@ -356,6 +364,7 @@ def rerank(  # noqa: PLR0915
                 _is_async=_is_async,
                 optional_params=optional_params.model_dump(exclude_unset=True),
                 api_base=api_base,
+                extra_headers=merged_headers,
                 logging_obj=litellm_logging_obj,
                 client=client,
             )
@@ -410,6 +419,64 @@ def rerank(  # noqa: PLR0915
                 raise ValueError(
                     "api_base must be provided for Deepinfra rerank. Set in call or via DEEPINFRA_API_BASE env var."
                 )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
+        elif _custom_llm_provider == litellm.LlmProviders.FIREWORKS_AI:
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or get_secret_str("FIREWORKS_API_KEY")
+                or get_secret_str("FIREWORKS_AI_API_KEY")
+                or get_secret_str("FIREWORKSAI_API_KEY")
+                or get_secret_str("FIREWORKS_AI_TOKEN")
+            )
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or get_secret_str("FIREWORKS_AI_API_BASE")
+            )
+
+            response = base_llm_http_handler.rerank(
+                model=model,
+                custom_llm_provider=_custom_llm_provider,
+                provider_config=rerank_provider_config,
+                optional_rerank_params=optional_rerank_params,
+                logging_obj=litellm_logging_obj,
+                timeout=optional_params.timeout,
+                api_key=api_key,
+                api_base=api_base,
+                _is_async=_is_async,
+                headers=headers or litellm.headers or {},
+                client=client,
+                model_response=model_response,
+            )
+        elif _custom_llm_provider == litellm.LlmProviders.VOYAGE:
+            api_key = (
+                dynamic_api_key
+                or optional_params.api_key
+                or get_secret_str("VOYAGE_API_KEY")
+                or get_secret_str("VOYAGE_AI_API_KEY")
+            )
+
+            api_base = (
+                dynamic_api_base
+                or optional_params.api_base
+                or get_secret_str("VOYAGE_API_BASE")
+            )
 
             response = base_llm_http_handler.rerank(
                 model=model,

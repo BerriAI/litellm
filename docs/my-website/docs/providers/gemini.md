@@ -74,6 +74,10 @@ Note: Reasoning cannot be turned off on Gemini 2.5 Pro models.
 For **Gemini 3+ models** (e.g., `gemini-3-pro-preview`), LiteLLM automatically maps `reasoning_effort` to the new `thinking_level` parameter instead of `thinking_budget`. The `thinking_level` parameter uses `"low"` or `"high"` values for better control over reasoning depth.
 :::
 
+:::warning Image Models
+**Gemini image models** (e.g., `gemini-3-pro-image-preview`, `gemini-2.0-flash-exp-image-generation`) do **not** support the `thinking_level` parameter. LiteLLM automatically excludes image models from receiving thinking configuration to prevent API errors.
+:::
+
 **Mapping for Gemini 2.5 and earlier models**
 
 | reasoning_effort | thinking | Notes |
@@ -1015,7 +1019,169 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 </Tabs>
 
 
+### Computer Use Tool
 
+<Tabs>
+<TabItem value="sdk" label="LiteLLM Python SDK">
+
+```python
+from litellm import completion
+import os
+
+os.environ["GEMINI_API_KEY"] = "your-api-key"
+
+# Computer Use tool with browser environment
+tools = [
+    {
+        "type": "computer_use",
+        "environment": "browser",  # optional: "browser" or "unspecified"
+        "excluded_predefined_functions": ["drag_and_drop"]  # optional
+    }
+]
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Navigate to google.com and search for 'LiteLLM'"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,..."  # screenshot of current browser state
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="gemini/gemini-2.5-computer-use-preview-10-2025",
+    messages=messages,
+    tools=tools,
+)
+
+print(response)
+
+# Handling tool responses with screenshots
+# When the model makes a tool call, send the response back with a screenshot:
+if response.choices[0].message.tool_calls:
+    tool_call = response.choices[0].message.tool_calls[0]
+    
+    # Add assistant message with tool call
+    messages.append(response.choices[0].message.model_dump())
+    
+    # Add tool response with screenshot
+    messages.append({
+        "role": "tool",
+        "tool_call_id": tool_call.id,
+        "content": [
+            {
+                "type": "text",
+                "text": '{"url": "https://example.com", "status": "completed"}'
+            },
+            {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,..."  # New screenshot after action (Can send an image url as well, litellm handles the conversion)
+            }
+        ]
+    })
+    
+    # Continue conversation with updated screenshot
+    response = completion(
+        model="gemini/gemini-2.5-computer-use-preview-10-2025",
+        messages=messages,
+        tools=tools,
+    )
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy Server">
+
+1. Add model to config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-computer-use
+    litellm_params:
+      model: gemini/gemini-2.5-computer-use-preview-10-2025
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "gemini-computer-use",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {
+            "type": "text",
+            "text": "Click on the search button"
+          },
+          {
+            "type": "image_url",
+            "image_url": {
+              "url": "data:image/png;base64,..."
+            }
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "type": "computer_use",
+        "environment": "browser"
+      }
+    ]
+  }'
+```
+
+**Tool Response Format:**
+
+When responding to Computer Use tool calls, include the URL and screenshot:
+
+```json
+{
+  "role": "tool",
+  "tool_call_id": "call_abc123",
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"url\": \"https://example.com\", \"status\": \"completed\"}"
+    },
+    {
+      "type": "input_image",
+      "image_url": "data:image/png;base64,..."
+    }
+  ]
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Environment Mapping
+
+| LiteLLM Input | Gemini API Value |
+|--------------|------------------|
+| `"browser"` | `ENVIRONMENT_BROWSER` |
+| `"unspecified"` | `ENVIRONMENT_UNSPECIFIED` |
+| `ENVIRONMENT_BROWSER` | `ENVIRONMENT_BROWSER` (passed through) |
+| `ENVIRONMENT_UNSPECIFIED` | `ENVIRONMENT_UNSPECIFIED` (passed through) |
 
 
 
@@ -2001,4 +2167,35 @@ curl -L -X POST 'http://localhost:4000/v1/chat/completions' \
 
 </TabItem>
 </Tabs>
+
+### Image Generation Pricing
+
+Gemini image generation models (like `gemini-3-pro-image-preview`) return `image_tokens` in the response usage. These tokens are priced differently from text tokens:
+
+| Token Type | Price per 1M tokens | Price per token |
+|------------|---------------------|-----------------|
+| Text output | $12 | $0.000012 |
+| Image output | $120 | $0.00012 |
+
+The number of image tokens depends on the output resolution:
+
+| Resolution | Tokens per image | Cost per image |
+|------------|------------------|----------------|
+| 1K-2K (1024x1024 to 2048x2048) | 1,120 | $0.134 |
+| 4K (4096x4096) | 2,000 | $0.24 |
+
+LiteLLM automatically calculates costs using `output_cost_per_image_token` from the model pricing configuration.
+
+**Example response usage:**
+```json
+{
+    "completion_tokens_details": {
+        "reasoning_tokens": 225,
+        "text_tokens": 0,
+        "image_tokens": 1120
+    }
+}
+```
+
+For more details, see [Google's Gemini pricing documentation](https://ai.google.dev/gemini-api/docs/pricing).
 

@@ -354,6 +354,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
+        UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
     ]
 
     litellm_deployment_successful_fallbacks = [

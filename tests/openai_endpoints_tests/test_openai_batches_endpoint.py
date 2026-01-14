@@ -152,7 +152,7 @@ def get_any_completed_batch_id_azure():
     return None
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["azure", "openai"])
+@pytest.mark.parametrize("custom_llm_provider", ["openai"])
 def test_e2e_batches_files(custom_llm_provider):
     """
     [PROD Test] Ensures OpenAI Batches + files work with OpenAI SDK

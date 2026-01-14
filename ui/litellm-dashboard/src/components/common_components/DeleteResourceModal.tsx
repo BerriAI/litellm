@@ -57,10 +57,6 @@ export default function DeleteResourceModal({
     >
       <div className="space-y-4">
         {alertMessage && <Alert message={alertMessage} type="warning" />}
-        <div>
-          <Text>{message}</Text>
-        </div>
-
         <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
           <Title level={5} className="mb-3 text-gray-900">
             {resourceInformationTitle}
@@ -74,18 +70,23 @@ export default function DeleteResourceModal({
               ))}
           </Descriptions>
         </div>
+        <div>
+          <Text>{message}</Text>
+        </div>
         {requiredConfirmation && (
-          <div className="mb-5">
+          <div className="mb-6 mt-4 pt-4 border-t border-gray-200">
             <Text className="block text-base font-medium text-gray-700 mb-2">
-              {`Type `}
-              <span className="underline">{requiredConfirmation}</span>
-              {` to confirm deletion:`}
+              <Text>Type </Text>
+              <Text strong type="danger">
+                {requiredConfirmation}
+              </Text>
+              <Text> to confirm deletion:</Text>
             </Text>
             <Input
               value={requiredConfirmationInput}
               onChange={(e) => setRequiredConfirmationInput(e.target.value)}
               placeholder={requiredConfirmation}
-              className="rounded-md"
+              className="rounded-md text-base border-gray-200"
               autoFocus
             />
           </div>

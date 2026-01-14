@@ -5,7 +5,7 @@ This module provides guardrail translation support for OpenAI's audio transcript
 The handler processes the output transcribed text (input is audio, so no text to guardrail).
 """
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
@@ -30,6 +30,7 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         self,
         data: dict,
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
     ) -> Any:
         """
         Process input - not applicable for audio transcription.
@@ -54,6 +55,8 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         self,
         response: "TranscriptionResponse",
         guardrail_to_apply: "CustomGuardrail",
+        litellm_logging_obj: Optional[Any] = None,
+        user_api_key_dict: Optional[Any] = None,
     ) -> Any:
         """
         Process output transcription by applying guardrails to transcribed text.
@@ -61,6 +64,8 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
         Args:
             response: Transcription response object containing transcribed text
             guardrail_to_apply: The guardrail instance to apply
+            litellm_logging_obj: Optional logging object
+            user_api_key_dict: User API key metadata to pass to guardrails
 
         Returns:
             Modified response with guardrails applied to transcribed text
@@ -73,16 +78,30 @@ class OpenAIAudioTranscriptionHandler(BaseTranslation):
 
         if isinstance(response.text, str):
             original_text = response.text
-            guardrailed_text = await guardrail_to_apply.apply_guardrail(
-                text=original_text
+            # Create a request_data dict with response info and user API key metadata
+            request_data: dict = {"response": response}
+
+            # Add user API key metadata with prefixed keys
+            user_metadata = self.transform_user_api_key_dict_to_metadata(
+                user_api_key_dict
             )
-            response.text = guardrailed_text
+            if user_metadata:
+                request_data["litellm_metadata"] = user_metadata
+
+            guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                inputs={"texts": [original_text]},
+                request_data=request_data,
+                input_type="response",
+                logging_obj=litellm_logging_obj,
+            )
+            guardrailed_texts = guardrailed_inputs.get("texts", [])
+            response.text = guardrailed_texts[0] if guardrailed_texts else original_text
 
             verbose_proxy_logger.debug(
                 "OpenAI Audio Transcription: Applied guardrail to transcribed text. "
                 "Original length: %d, New length: %d",
                 len(original_text),
-                len(guardrailed_text),
+                len(response.text),
             )
         else:
             verbose_proxy_logger.debug(

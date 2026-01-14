@@ -12,7 +12,14 @@ from litellm.types.llms.openai import (
     ChatCompletionResponseMessage,
     ChatCompletionToolMessage,
 )
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import (
+    Choices,
+    CompletionTokensDetailsWrapper,
+    Message,
+    ModelResponse,
+    PromptTokensDetailsWrapper,
+    Usage,
+)
 
 
 class TestLiteLLMCompletionResponsesConfig:
@@ -676,3 +683,672 @@ class TestFunctionCallTransformation:
         
         tool_call = tool_calls[0]
         assert tool_call.get("id") == "fallback_id"
+
+
+class TestToolChoiceTransformation:
+    """Test the tool_choice transformation fix for Cursor IDE bug"""
+
+    def test_transform_tool_choice_cursor_bug_fix(self):
+        """
+        Test that {"type": "tool"} is transformed to "required".
+        This fixes the Anthropic error: "tool_choice.tool.name: Field required"
+        """
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice({"type": "tool"})
+        assert result == "required"
+
+    def test_transform_tool_choice_preserves_function_with_name(self):
+        """Test that valid OpenAI format with function name passes through unchanged"""
+        tool_choice = {"type": "function", "function": {"name": "my_tool"}}
+        result = LiteLLMCompletionResponsesConfig._transform_tool_choice(tool_choice)
+        assert result == tool_choice
+
+
+class TestContentTypeTransformation:
+    """Test content type transformation from Responses API to Chat Completion format"""
+
+    def test_tool_result_content_type_transformed_to_text(self):
+        """
+        Test that 'tool_result' content type is transformed to 'text'.
+        This fixes: Invalid user message - content type 'tool_result' not valid.
+        """
+        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("tool_result")
+        assert result == "text"
+
+    def test_input_text_content_type_transformed_to_text(self):
+        """Test that 'input_text' content type is transformed to 'text'"""
+        result = LiteLLMCompletionResponsesConfig._get_chat_completion_request_content_type("input_text")
+        assert result == "text"
+
+    def test_none_text_blocks_filtered_out(self):
+        """
+        Test that content blocks with None text are filtered out.
+        This fixes: TypeError: object of type 'NoneType' has no len()
+        in Anthropic transformation when text is None.
+        """
+        content = [
+            {"type": "text", "text": "valid text"},
+            {"type": "text", "text": None},  # Should be filtered out
+            {"type": "text", "text": "another valid"},
+        ]
+        result = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(content)
+        assert len(result) == 2
+        assert result[0]["text"] == "valid text"
+        assert result[1]["text"] == "another valid"
+
+
+class TestToolTransformation:
+    """Test cases for tool transformation from Responses API to Chat Completion format"""
+
+    def test_transform_vertex_ai_tools(self):
+        """Test that Vertex AI tools are passed through as-is"""
+        from litellm.types.llms.vertex_ai import VertexToolName
+
+        # Create a Vertex AI tool using the enum value
+        vertex_tool = {VertexToolName.CODE_EXECUTION.value: {}}
+        
+        tools = [vertex_tool]
+        
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0] == vertex_tool
+        assert web_search_options is None
+
+    def test_transform_mcp_tools(self):
+        """Test that MCP tools are passed through as-is"""
+        mcp_tool = {
+            "type": "mcp",
+            "server_label": "zapier",
+            "server_url": "https://mcp.zapier.com/api/mcp/mcp",
+            "headers": {
+                "Authorization": "Bearer token123"
+            },
+        }
+        
+        tools = [mcp_tool]
+        
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0] == mcp_tool
+        assert result_tools[0]["type"] == "mcp"
+        assert web_search_options is None
+
+    def test_transform_computer_use_tools(self):
+        """Test that computer_use tools are passed through as-is"""
+        computer_use_tool = {
+            "type": "computer_use",
+            "display_width_px": 1024,
+            "display_height_px": 768
+        }
+        
+        tools = [computer_use_tool]
+        
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0] == computer_use_tool
+        assert result_tools[0]["type"] == "computer_use"
+        assert web_search_options is None
+
+    def test_transform_web_search_tools_to_web_search_options(self):
+        """Test that web_search tools are converted to web_search_options"""
+        web_search_tool = {
+            "type": "web_search_preview",
+            "search_context_size": "medium",
+            "user_location": {"country": "US"}
+        }
+        
+        tools = [web_search_tool]
+        
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 0  # Web search is not added to tools
+        assert web_search_options is not None
+        assert web_search_options.get("search_context_size") == "medium"
+        assert web_search_options.get("user_location") == {"country": "US"}
+
+    def test_transform_function_tools_with_anthropic_specific_fields(self):
+        """Test that Anthropic-specific fields are preserved in function tools"""
+        function_tool = {
+            "type": "function",
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            },
+            "cache_control": {"type": "ephemeral"},
+            "defer_loading": True,
+            "allowed_callers": ["user"],
+            "input_examples": [{"location": "San Francisco"}]
+        }
+        
+        tools = [function_tool]
+        
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "get_weather"
+        assert result_tool["function"]["description"] == "Get weather for a location"
+        assert result_tool["cache_control"] == {"type": "ephemeral"}
+        assert result_tool["defer_loading"] is True
+        assert result_tool["allowed_callers"] == ["user"]
+        assert result_tool["input_examples"] == [{"location": "San Francisco"}]
+        assert web_search_options is None
+
+    def test_transform_function_tools_with_cache_control_only(self):
+        """Test that cache_control field is preserved when present"""
+        function_tool = {
+            "type": "function",
+            "name": "search",
+            "description": "Search function",
+            "parameters": {"type": "object"},
+            "cache_control": {"type": "ephemeral"}
+        }
+        
+        tools = [function_tool]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert "cache_control" in result_tool
+        assert result_tool["cache_control"]["type"] == "ephemeral"
+
+    def test_transform_function_tools_without_anthropic_fields(self):
+        """Test that function tools work when anthropic-specific fields are not present"""
+        function_tool = {
+            "type": "function",
+            "name": "simple_function",
+            "description": "A simple function",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "param": {"type": "string"}
+                }
+            }
+        }
+        
+        tools = [function_tool]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["type"] == "function"
+        assert result_tool["function"]["name"] == "simple_function"
+        # Anthropic-specific fields should not be present
+        assert "cache_control" not in result_tool
+        assert "defer_loading" not in result_tool
+        assert "allowed_callers" not in result_tool
+        assert "input_examples" not in result_tool
+
+    def test_transform_code_execution_tools(self):
+        """Test that code_execution tools are passed through as-is"""
+        code_execution_tool = {
+            "type": "code_execution_20250825",
+            "name": "python_code_execution"
+        }
+        
+        tools = [code_execution_tool]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "code_execution_20250825"
+
+    def test_transform_tool_search_tools(self):
+        """Test that tool_search tools are passed through as-is"""
+        tool_search_regex = {
+            "name": "tool_search_tool_regex",
+            "description": "Search tools using regex"
+        }
+        
+        tool_search_bm25 = {
+            "name": "tool_search_tool_bm25",
+            "description": "Search tools using BM25"
+        }
+        
+        tools = [tool_search_regex, tool_search_bm25]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 2
+        assert result_tools[0]["name"] == "tool_search_tool_regex"
+        assert result_tools[1]["name"] == "tool_search_tool_bm25"
+
+    def test_transform_mixed_tools_list(self):
+        """Test transforming a mixed list of different tool types"""
+        from litellm.types.llms.vertex_ai import VertexToolName
+        
+        tools = [
+            # Regular function tool with anthropic fields
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object"},
+                "cache_control": {"type": "ephemeral"}
+            },
+            # MCP tool
+            {
+                "type": "mcp",
+                "server_label": "zapier"
+            },
+            # Web search tool
+            {
+                "type": "web_search_preview",
+                "search_context_size": "high"
+            },
+            # Vertex AI tool
+            {VertexToolName.CODE_EXECUTION.value: {}}
+        ]
+        
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 3  # function, mcp, vertex (web_search becomes options)
+        assert web_search_options is not None
+        
+        # Check function tool
+        func_tools = [t for t in result_tools if t.get("type") == "function"]
+        assert len(func_tools) == 1
+        assert func_tools[0]["cache_control"]["type"] == "ephemeral"
+        
+        # Check MCP tool
+        mcp_tools = [t for t in result_tools if t.get("type") == "mcp"]
+        assert len(mcp_tools) == 1
+        
+        # Check web search was converted to options
+        assert web_search_options.get("search_context_size") == "high"
+
+    def test_transform_function_tools_parameters_with_missing_type(self):
+        """Test that parameters get 'type': 'object' added if missing"""
+        function_tool = {
+            "type": "function",
+            "name": "test_function",
+            "description": "Test function",
+            "parameters": {
+                "properties": {
+                    "arg": {"type": "string"}
+                }
+            }
+        }
+        
+        tools = [function_tool]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["function"]["parameters"]["type"] == "object"
+        assert "properties" in result_tool["function"]["parameters"]
+
+    def test_transform_function_tools_empty_parameters(self):
+        """Test that empty parameters get 'type': 'object' added"""
+        function_tool = {
+            "type": "function",
+            "name": "test_function",
+            "description": "Test function",
+            "parameters": {}
+        }
+        
+        tools = [function_tool]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["function"]["parameters"]["type"] == "object"
+
+    def test_transform_function_tools_missing_parameters(self):
+        """Test that missing parameters get default 'type': 'object' added"""
+        function_tool = {
+            "type": "function",
+            "name": "test_function",
+            "description": "Test function"
+        }
+        
+        tools = [function_tool]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["function"]["parameters"]["type"] == "object"
+
+    def test_transform_function_tools_preserves_existing_type(self):
+        """Test that existing 'type': 'object' in parameters is preserved"""
+        function_tool = {
+            "type": "function",
+            "name": "test_function",
+            "description": "Test function",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "arg": {"type": "string"}
+                }
+            }
+        }
+        
+        tools = [function_tool]
+        
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+        
+        # Assert
+        assert len(result_tools) == 1
+        result_tool = result_tools[0]
+        assert result_tool["function"]["parameters"]["type"] == "object"
+        assert "properties" in result_tool["function"]["parameters"]
+        assert result_tool["function"]["parameters"]["properties"]["arg"]["type"] == "string"
+
+
+class TestUsageTransformation:
+    """Test cases for usage transformation from Chat Completion to Responses API format"""
+
+    def test_transform_usage_with_cached_tokens_anthropic(self):
+        """Test that cached_tokens from Anthropic are properly transformed to input_tokens_details"""
+        # Setup: Simulate Anthropic usage with cache_read_input_tokens
+        usage = Usage(
+            prompt_tokens=13,
+            completion_tokens=27,
+            total_tokens=40,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=5,  # From Anthropic cache_read_input_tokens
+                text_tokens=8,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.input_tokens == 13
+        assert response_usage.output_tokens == 27
+        assert response_usage.total_tokens == 40
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 5
+        assert response_usage.input_tokens_details.text_tokens == 8
+
+    def test_transform_usage_with_cached_tokens_gemini(self):
+        """Test that cached_tokens from Gemini are properly transformed to input_tokens_details"""
+        # Setup: Simulate Gemini usage with cachedContentTokenCount
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=27,
+            total_tokens=36,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=3,  # From Gemini cachedContentTokenCount
+                text_tokens=6,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.input_tokens == 9
+        assert response_usage.output_tokens == 27
+        assert response_usage.total_tokens == 36
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 3
+        assert response_usage.input_tokens_details.text_tokens == 6
+
+    def test_transform_usage_with_reasoning_tokens_gemini(self):
+        """Test that reasoning_tokens from Gemini are properly transformed to output_tokens_details"""
+        # Setup: Simulate Gemini usage with thoughtsTokenCount
+        usage = Usage(
+            prompt_tokens=10,
+            completion_tokens=100,
+            total_tokens=110,
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=50,  # From Gemini thoughtsTokenCount
+                text_tokens=50,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gemini-2.0-flash",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.output_tokens == 100
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 50
+        assert response_usage.output_tokens_details.text_tokens == 50
+
+    def test_transform_usage_with_cached_and_reasoning_tokens(self):
+        """Test transformation with both cached tokens (input) and reasoning tokens (output)"""
+        # Setup: Combined Anthropic cached tokens and Gemini reasoning tokens
+        usage = Usage(
+            prompt_tokens=13,
+            completion_tokens=100,
+            total_tokens=113,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=5,  # Anthropic cache_read_input_tokens
+                text_tokens=8,
+            ),
+            completion_tokens_details=CompletionTokensDetailsWrapper(
+                reasoning_tokens=50,  # Gemini thoughtsTokenCount
+                text_tokens=50,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert
+        assert response_usage.input_tokens == 13
+        assert response_usage.output_tokens == 100
+        assert response_usage.total_tokens == 113
+        
+        # Verify input_tokens_details
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 5
+        assert response_usage.input_tokens_details.text_tokens == 8
+        
+        # Verify output_tokens_details
+        assert response_usage.output_tokens_details is not None
+        assert response_usage.output_tokens_details.reasoning_tokens == 50
+        assert response_usage.output_tokens_details.text_tokens == 50
+
+    def test_transform_usage_with_zero_cached_tokens(self):
+        """Test that cached_tokens=0 is properly handled (no cached tokens used)"""
+        # Setup: Usage with cached_tokens=0 (no cache hit)
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=27,
+            total_tokens=36,
+            prompt_tokens_details=PromptTokensDetailsWrapper(
+                cached_tokens=0,  # No cache hit
+                text_tokens=9,
+            ),
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="claude-sonnet-4",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert: Should still include cached_tokens=0 in input_tokens_details
+        assert response_usage.input_tokens_details is not None
+        assert response_usage.input_tokens_details.cached_tokens == 0
+        assert response_usage.input_tokens_details.text_tokens == 9
+
+    def test_transform_usage_without_details(self):
+        """Test transformation when prompt_tokens_details and completion_tokens_details are None"""
+        # Setup: Usage without details (basic usage only)
+        usage = Usage(
+            prompt_tokens=9,
+            completion_tokens=27,
+            total_tokens=36,
+        )
+
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="gpt-4o",
+            object="chat.completion",
+            usage=usage,
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Hello!", role="assistant"),
+                )
+            ],
+        )
+
+        # Execute
+        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+            chat_completion_response=chat_completion_response
+        )
+
+        # Assert: Basic usage should still be transformed, but details should be None
+        assert response_usage.input_tokens == 9
+        assert response_usage.output_tokens == 27
+        assert response_usage.total_tokens == 36
+        assert response_usage.input_tokens_details is None
+        assert response_usage.output_tokens_details is None

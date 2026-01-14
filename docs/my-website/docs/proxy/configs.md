@@ -576,7 +576,7 @@ custom_tokenizer:
 
 ```yaml
 general_settings: 
-  database_connection_pool_limit: 100 # sets connection pool for prisma client to postgres db at 100
+  database_connection_pool_limit: 10 # sets connection pool for prisma client to postgres db (default: 10, recommended: 10-20)
   database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
 ```
 
@@ -655,7 +655,7 @@ docker run --name litellm-proxy \
    -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
    -e LITELLM_CONFIG_BUCKET_TYPE="gcs" \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest --detailed_debug
+   docker.litellm.ai/berriai/litellm-database:main-latest --detailed_debug
 ```
 
 </TabItem>
@@ -676,7 +676,7 @@ docker run --name litellm-proxy \
    -e LITELLM_CONFIG_BUCKET_NAME=<bucket_name> \
    -e LITELLM_CONFIG_BUCKET_OBJECT_KEY="<object_key>> \
    -p 4000:4000 \
-   ghcr.io/berriai/litellm-database:main-latest
+   docker.litellm.ai/berriai/litellm-database:main-latest
 ```
 </TabItem>
 </Tabs>

@@ -117,7 +117,7 @@ class AimGuardrail(CustomGuardrail):
             self._handle_block_action(res["analysis_result"], required_action)
         elif action_type == "anonymize_action":
             return self._anonymize_request(
-                res["analysis_result"], required_action, data
+                res, data
             )
         else:
             verbose_proxy_logger.error(f"Aim: {action_type} action")
@@ -133,27 +133,18 @@ class AimGuardrail(CustomGuardrail):
         raise HTTPException(status_code=400, detail=detection_message)
 
     def _anonymize_request(
-        self, analysis_result: Any, required_action: Any, data: dict
+        self, res: Any, data: dict
     ) -> dict:
         verbose_proxy_logger.info("Aim: anonymize action")
-        redaction_result = required_action and required_action.get(
-            "chat_redaction_result"
-        )
-        if not redaction_result:
+        redacted_chat = res.get("redacted_chat")
+        if not redacted_chat:
             return data
-        if analysis_result and analysis_result.get("session_entities"):
-            self._set_dlp_entities(analysis_result.get("session_entities"))
         data["messages"] = [
-            {
-                "role": redaction_result["redacted_new_message"]["role"],
-                "content": redaction_result["redacted_new_message"]["content"],
-            }
-        ] + [
             {
                 "role": message["role"],
                 "content": message["content"],
             }
-            for message in redaction_result["all_redacted_messages"]
+            for message in redacted_chat["all_redacted_messages"]
         ]
         return data
 
@@ -185,7 +176,11 @@ class AimGuardrail(CustomGuardrail):
             return self._handle_block_action_on_output(
                 res["analysis_result"], required_action
             )
-        return self._deanonymize_output(output)
+        redacted_chat = res.get("redacted_chat", None)
+
+        if action_type and action_type == "anonymize_action" and redacted_chat:
+            return {"redacted_output": redacted_chat["all_redacted_messages"][-1]["content"]}
+        return {"redacted_output": output}
 
     def _handle_block_action_on_output(
         self, analysis_result: Any, required_action: Any
@@ -198,15 +193,6 @@ class AimGuardrail(CustomGuardrail):
             ),
         )
         return {"detection_message": detection_message}
-
-    def _deanonymize_output(self, output: str) -> dict | None:
-        try:
-            for entity in self.dlp_entities:
-                output = output.replace(f"[{entity['name']}]", entity["content"])
-            return {"redacted_output": output}
-        except Exception as e:
-            verbose_proxy_logger.error(f"Aim: Error while redacting output: {e}")
-            return None
 
     def _build_aim_headers(
         self,
@@ -322,9 +308,6 @@ class AimGuardrail(CustomGuardrail):
                 chunk = json.dumps(chunk)
             await websocket.send(chunk)
         await websocket.send(json.dumps({"done": True}))
-
-    def _set_dlp_entities(self, entities: list[dict]) -> None:
-        self.dlp_entities = entities[: self._max_dlp_entities]
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:

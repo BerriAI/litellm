@@ -301,3 +301,72 @@ class TestGithubCopilotResponsesAPITransformation:
 
         for param in expected_params:
             assert param in supported, f"{param} should be in supported params"
+
+    def test_handle_reasoning_item_preserves_encrypted_content(self):
+        """Test that _handle_reasoning_item preserves encrypted_content for GitHub Copilot.
+
+        GitHub Copilot uses encrypted_content in reasoning items to maintain
+        conversation state across turns. This field must be preserved for
+        multi-turn conversations to work.
+        """
+        config = GithubCopilotResponsesAPIConfig()
+
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "reasoning-123",
+            "summary": ["Step 1", "Step 2"],
+            "encrypted_content": "encrypted-blob-abc123",
+            "status": None,  # Should be filtered out
+            "content": None,  # Should be filtered out
+        }
+
+        result = config._handle_reasoning_item(reasoning_item)
+
+        # encrypted_content should be preserved
+        assert result.get("encrypted_content") == "encrypted-blob-abc123", (
+            "encrypted_content must be preserved for GitHub Copilot multi-turn conversations"
+        )
+        # status=None should be filtered out
+        assert "status" not in result, "status=None should be filtered out"
+        # content=None should be filtered out
+        assert "content" not in result, "content=None should be filtered out"
+        # Other fields should be preserved
+        assert result.get("type") == "reasoning"
+        assert result.get("id") == "reasoning-123"
+        assert result.get("summary") == ["Step 1", "Step 2"]
+
+    def test_handle_reasoning_item_without_encrypted_content(self):
+        """Test _handle_reasoning_item when encrypted_content is not present"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        reasoning_item = {
+            "type": "reasoning",
+            "id": "reasoning-456",
+            "summary": ["Thinking..."],
+            "status": None,
+        }
+
+        result = config._handle_reasoning_item(reasoning_item)
+
+        # Should not have encrypted_content key at all
+        assert "encrypted_content" not in result
+        # status=None should be filtered out
+        assert "status" not in result
+        # Other fields preserved
+        assert result.get("type") == "reasoning"
+        assert result.get("id") == "reasoning-456"
+
+    def test_handle_reasoning_item_non_reasoning_passthrough(self):
+        """Test _handle_reasoning_item passes through non-reasoning items unchanged"""
+        config = GithubCopilotResponsesAPIConfig()
+
+        message_item = {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hello"}],
+        }
+
+        result = config._handle_reasoning_item(message_item)
+
+        # Non-reasoning items should pass through unchanged
+        assert result == message_item

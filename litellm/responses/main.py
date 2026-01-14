@@ -22,6 +22,9 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import request_timeout
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.common_utils import (
+    update_responses_input_with_model_file_ids,
+)
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
@@ -37,9 +40,6 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
     ToolChoice,
     ToolParam,
-)
-from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    update_responses_input_with_model_file_ids,
 )
 
 # Handle ResponseText import with fallback
@@ -168,7 +168,8 @@ async def aresponses_api_with_mcp(
     ) = LiteLLM_Proxy_MCP_Handler._parse_mcp_tools(tools)
 
     # Process MCP tools through the complete pipeline (fetch + filter + deduplicate + transform)
-    user_api_key_auth = kwargs.get("user_api_key_auth")
+    # Extract user_api_key_auth from litellm_metadata (where it's added by add_user_api_key_auth_to_request_metadata)
+    user_api_key_auth = kwargs.get("user_api_key_auth") or kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
@@ -279,10 +280,27 @@ async def aresponses_api_with_mcp(
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get(
                 "user_api_key_auth"
             )
+            
+            # Extract MCP auth headers from the request to pass to MCP server
+            secret_fields: Optional[Dict[str, Any]] = kwargs.get("secret_fields")
+            (
+                mcp_auth_header,
+                mcp_server_auth_headers,
+                oauth2_headers,
+                raw_headers_from_request,
+            ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(
+                secret_fields=secret_fields,
+                tools=tools,
+            )
+            
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
                 tool_server_map=tool_server_map,
                 tool_calls=tool_calls,
                 user_api_key_auth=user_api_key_auth,
+                mcp_auth_header=mcp_auth_header,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                oauth2_headers=oauth2_headers,
+                raw_headers=raw_headers_from_request,
             )
 
             if tool_results:
@@ -523,7 +541,7 @@ def responses(
     )
 
     try:
-        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
         litellm_call_id: Optional[str] = kwargs.get("litellm_call_id", None)
         _is_async = kwargs.pop("aresponses", False) is True
 

@@ -430,6 +430,18 @@ def convert_to_model_response_object(  # noqa: PLR0915
 
     if hidden_params is None:
         hidden_params = {}
+    
+    # Preserve existing additional_headers if they contain important provider headers
+    # For responses API, additional_headers may already be set with LLM provider headers
+    existing_additional_headers = hidden_params.get("additional_headers", {})
+    if existing_additional_headers and _response_headers is None:
+        # Keep existing headers when _response_headers is None (responses API case)
+        additional_headers = existing_additional_headers
+    else:
+        # Merge new headers with existing ones
+        if existing_additional_headers:
+            additional_headers.update(existing_additional_headers)
+    
     hidden_params["additional_headers"] = additional_headers
 
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary

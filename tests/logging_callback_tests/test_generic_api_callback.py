@@ -28,8 +28,7 @@ from litellm.types.utils import (
 )
 
 verbose_logger.setLevel(logging.DEBUG)
-from litellm_enterprise.enterprise_callbacks.generic_api_callback import GenericAPILogger
-
+from litellm.integrations.generic_api.generic_api_callback import GenericAPILogger
 
 
 @pytest.mark.asyncio
@@ -52,9 +51,7 @@ async def test_generic_api_callback():
 
     # Initialize the GenericAPILogger and set the mock
     generic_logger = GenericAPILogger(
-        endpoint=test_endpoint,
-        headers=test_headers,
-        flush_interval=1
+        endpoint=test_endpoint, headers=test_headers, flush_interval=1
     )
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
@@ -76,12 +73,21 @@ async def test_generic_api_callback():
     # Get the actual request body from the mock
     actual_url = mock_post.call_args[1]["url"]
     print("##########\n")
-    print("logs were flushed to URL", actual_url, "with the following headers", mock_post.call_args[1]["headers"])
-    assert actual_url == test_endpoint, f"Expected URL {test_endpoint}, got {actual_url}"
+    print(
+        "logs were flushed to URL",
+        actual_url,
+        "with the following headers",
+        mock_post.call_args[1]["headers"],
+    )
+    assert (
+        actual_url == test_endpoint
+    ), f"Expected URL {test_endpoint}, got {actual_url}"
 
     # Validate headers
-    assert mock_post.call_args[1]["headers"]["Content-Type"] == "application/json", "Content-Type should be application/json"
-    
+    assert (
+        mock_post.call_args[1]["headers"]["Content-Type"] == "application/json"
+    ), "Content-Type should be application/json"
+
     # For the GenericAPILogger, it sends the payload directly as JSON in the data field
     json_data = mock_post.call_args[1]["data"]
     # Parse the JSON string
@@ -89,27 +95,30 @@ async def test_generic_api_callback():
     print("##########\n")
     print("json_data", json_data)
     actual_request = json.loads(json_data)
-    
+
     # The payload is a list of StandardLoggingPayload objects in the log queue
     assert isinstance(actual_request, list), "Request body should be a list"
     assert len(actual_request) > 0, "Request body list should not be empty"
-    
+
     # Validate the first payload item
     payload_item: StandardLoggingPayload = StandardLoggingPayload(**actual_request[0])
     print("##########\n")
     print(json.dumps(payload_item, indent=4))
     print("##########\n")
 
-
     # Basic assertions for standard logging payload
     assert payload_item["response_cost"] > 0, "Response cost should be greater than 0"
     assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
-    assert payload_item["model_parameters"]["user"] == "test_user", "User should be test_user"
+    assert (
+        payload_item["model_parameters"]["user"] == "test_user"
+    ), "User should be test_user"
     assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
-    assert payload_item["messages"] == [{"role": "user", "content": "Hello, world!"}], "Messages should be the same"
-    assert payload_item["response"]["choices"][0]["message"]["content"] == "hi", "Response should be hi"
-    
-    
+    assert payload_item["messages"] == [
+        {"role": "user", "content": "Hello, world!"}
+    ], "Messages should be the same"
+    assert (
+        payload_item["response"]["choices"][0]["message"]["content"] == "hi"
+    ), "Response should be hi"
 
 
 @pytest.mark.asyncio
@@ -129,9 +138,7 @@ async def test_generic_api_callback_multiple_logs():
 
     # Initialize the GenericAPILogger and set the mock
     generic_logger = GenericAPILogger(
-        endpoint=test_endpoint,
-        headers=test_headers,
-        flush_interval=5
+        endpoint=test_endpoint, headers=test_headers, flush_interval=5
     )
     generic_logger.async_httpx_client.post = mock_post
     litellm.callbacks = [generic_logger]
@@ -154,9 +161,16 @@ async def test_generic_api_callback_multiple_logs():
     # Get the actual request body from the mock
     actual_url = mock_post.call_args[1]["url"]
     print("##########\n")
-    print("logs were flushed to URL", actual_url, "with the following headers", mock_post.call_args[1]["headers"])
-    assert actual_url == test_endpoint, f"Expected URL {test_endpoint}, got {actual_url}"
-    
+    print(
+        "logs were flushed to URL",
+        actual_url,
+        "with the following headers",
+        mock_post.call_args[1]["headers"],
+    )
+    assert (
+        actual_url == test_endpoint
+    ), f"Expected URL {test_endpoint}, got {actual_url}"
+
     # For the GenericAPILogger, it sends the payload directly as JSON in the data field
     json_data = mock_post.call_args[1]["data"]
     # Parse the JSON string
@@ -164,12 +178,14 @@ async def test_generic_api_callback_multiple_logs():
     print("##########\n")
     print("json_data", json_data)
     actual_request = json.loads(json_data)
-    
+
     # The payload is a list of StandardLoggingPayload objects in the log queue
     assert isinstance(actual_request, list), "Request body should be a list"
     assert len(actual_request) > 0, "Request body list should not be empty"
-    assert len(actual_request) == 10, "Request body list should be 10 items, since we made 10 calls"
-    
+    assert (
+        len(actual_request) == 10
+    ), "Request body list should be 10 items, since we made 10 calls"
+
     # Validate all payload items
     for payload_item in actual_request:
         payload_item: StandardLoggingPayload = StandardLoggingPayload(**payload_item)
@@ -177,10 +193,17 @@ async def test_generic_api_callback_multiple_logs():
         print(json.dumps(payload_item, indent=4))
         print("##########\n")
 
-        assert payload_item["response_cost"] > 0, "Response cost should be greater than 0"
+        assert (
+            payload_item["response_cost"] > 0
+        ), "Response cost should be greater than 0"
         assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
-        assert payload_item["model_parameters"]["user"] == "test_user", "User should be test_user"
+        assert (
+            payload_item["model_parameters"]["user"] == "test_user"
+        ), "User should be test_user"
         assert payload_item["model"] == "gpt-4o", "Model should be gpt-4o"
-        assert payload_item["messages"] == [{"role": "user", "content": "Hello, world!"}], "Messages should be the same"
-        assert payload_item["response"]["choices"][0]["message"]["content"] == "hi", "Response should be hi"
-
+        assert payload_item["messages"] == [
+            {"role": "user", "content": "Hello, world!"}
+        ], "Messages should be the same"
+        assert (
+            payload_item["response"]["choices"][0]["message"]["content"] == "hi"
+        ), "Response should be hi"

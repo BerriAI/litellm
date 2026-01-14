@@ -76,7 +76,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
       const publicServerIds = mcpHubData
         .filter((server) => server.mcp_info?.is_public === true)
         .map((server) => server.server_id);
-      
+
       // Preselect servers that are already public
       setSelectedServers(new Set(publicServerIds));
     }
@@ -91,7 +91,7 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
     setLoading(true);
     try {
       const serverIdsToMakePublic = Array.from(selectedServers);
-      
+
       // Make batch API call for all servers
       await makeMCPPublicCall(accessToken, serverIdsToMakePublic);
 
@@ -128,8 +128,8 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
         </div>
 
         <Text className="text-sm text-gray-600">
-          Select the MCP servers you want to be visible on the public model hub. Users will still require a valid API key to
-          use these servers.
+          Select the MCP servers you want to be visible on the public model hub. Users will still require a valid
+          Virtual Key to use these servers.
         </Text>
 
         <div className="max-h-96 overflow-y-auto border rounded-lg p-4">
@@ -161,22 +161,20 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                         <Badge color="blue" size="sm">
                           {server.transport}
                         </Badge>
-                        <Badge 
+                        <Badge
                           color={
-                            server.status === "active" || server.status === "healthy" 
-                              ? "green" 
+                            server.status === "active" || server.status === "healthy"
+                              ? "green"
                               : server.status === "inactive" || server.status === "unhealthy"
-                              ? "red"
-                              : "gray"
-                          } 
+                                ? "red"
+                                : "gray"
+                          }
                           size="sm"
                         >
                           {server.status || "unknown"}
                         </Badge>
                       </div>
-                      <Text className="text-xs text-gray-600 mt-1">
-                        {server.description || server.url}
-                      </Text>
+                      <Text className="text-xs text-gray-600 mt-1">{server.description || server.url}</Text>
                       {server.allowed_tools && server.allowed_tools.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {server.allowed_tools.slice(0, 3).map((tool, idx) => (
@@ -236,14 +234,14 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                             <Badge color="blue" size="xs">
                               {server.transport}
                             </Badge>
-                            <Badge 
+                            <Badge
                               color={
-                                server.status === "active" || server.status === "healthy" 
-                                  ? "green" 
+                                server.status === "active" || server.status === "healthy"
+                                  ? "green"
                                   : server.status === "inactive" || server.status === "unhealthy"
-                                  ? "red"
-                                  : "gray"
-                              } 
+                                    ? "red"
+                                    : "gray"
+                              }
                               size="xs"
                             >
                               {server.status || "unknown"}
@@ -251,12 +249,8 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
                           </>
                         )}
                       </div>
-                      {server?.description && (
-                        <Text className="text-xs text-gray-600 mt-1">{server.description}</Text>
-                      )}
-                      {server?.url && (
-                        <Text className="text-xs text-gray-500 mt-1">{server.url}</Text>
-                      )}
+                      {server?.description && <Text className="text-xs text-gray-600 mt-1">{server.description}</Text>}
+                      {server?.url && <Text className="text-xs text-gray-500 mt-1">{server.url}</Text>}
                     </div>
                   </div>
                 );
@@ -267,8 +261,8 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
           <Text className="text-sm text-blue-800">
-            Total: <strong>{selectedServers.size}</strong> MCP server{selectedServers.size !== 1 ? "s" : ""} will be made
-            public
+            Total: <strong>{selectedServers.size}</strong> MCP server{selectedServers.size !== 1 ? "s" : ""} will be
+            made public
           </Text>
         </div>
       </div>
@@ -333,4 +327,3 @@ const MakeMCPPublicForm: React.FC<MakeMCPPublicFormProps> = ({
 };
 
 export default MakeMCPPublicForm;
-

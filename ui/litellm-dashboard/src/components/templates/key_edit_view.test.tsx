@@ -20,8 +20,8 @@ Object.defineProperty(window, "matchMedia", {
 
 describe("KeyEditView", () => {
   const MOCK_KEY_DATA: KeyResponse = {
-    token: "40b7608ea43423400d5b82bb5ee11042bfb2ed4655f05b5992b5abbc2f294931",
-    token_id: "40b7608ea43423400d5b82bb5ee11042bfb2ed4655f05b5992b5abbc2f294931",
+    token: "test-token-123",
+    token_id: "test-token-123",
     key_name: "sk-...TUuw",
     key_alias: "asdasdas",
     spend: 0,

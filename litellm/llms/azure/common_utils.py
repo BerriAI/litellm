@@ -294,20 +294,18 @@ def get_azure_ad_token(
         Azure AD token as string if successful, None otherwise
     """
     # Extract parameters
+    # Use `or` instead of default parameter to handle cases where key exists but value is None
     azure_ad_token_provider = litellm_params.get("azure_ad_token_provider")
-    azure_ad_token = litellm_params.get("azure_ad_token", None) or get_secret_str(
+    azure_ad_token = litellm_params.get("azure_ad_token") or get_secret_str(
         "AZURE_AD_TOKEN"
     )
-    tenant_id = litellm_params.get("tenant_id", os.getenv("AZURE_TENANT_ID"))
-    client_id = litellm_params.get("client_id", os.getenv("AZURE_CLIENT_ID"))
-    client_secret = litellm_params.get(
-        "client_secret", os.getenv("AZURE_CLIENT_SECRET")
-    )
-    azure_username = litellm_params.get("azure_username", os.getenv("AZURE_USERNAME"))
-    azure_password = litellm_params.get("azure_password", os.getenv("AZURE_PASSWORD"))
-    scope = litellm_params.get(
-        "azure_scope",
-        os.getenv("AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"),
+    tenant_id = litellm_params.get("tenant_id") or os.getenv("AZURE_TENANT_ID")
+    client_id = litellm_params.get("client_id") or os.getenv("AZURE_CLIENT_ID")
+    client_secret = litellm_params.get("client_secret") or os.getenv("AZURE_CLIENT_SECRET")
+    azure_username = litellm_params.get("azure_username") or os.getenv("AZURE_USERNAME")
+    azure_password = litellm_params.get("azure_password") or os.getenv("AZURE_PASSWORD")
+    scope = litellm_params.get("azure_scope") or os.getenv(
+        "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"
     )
     if scope is None:
         scope = "https://cognitiveservices.azure.com/.default"

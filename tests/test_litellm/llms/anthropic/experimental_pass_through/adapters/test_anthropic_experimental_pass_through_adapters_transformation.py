@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Any, cast
 
 import pytest
 
@@ -20,7 +21,9 @@ from litellm.types.utils import (
     Delta,
     Function,
     Message,
+    ModelResponse,
     StreamingChoices,
+    Usage,
 )
 
 
@@ -339,6 +342,81 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert result[0].id == "call_empty_args"
     assert result[0].name == "test_function"
     assert result[0].input == {}, "Empty function arguments should result in empty dict"
+
+
+def test_translate_openai_content_to_anthropic_text_and_tool_calls():
+    """Ensure content blocks contain both the assistant text + tool call data."""
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="Calling get_weather now.",
+                tool_calls=[
+                    ChatCompletionAssistantToolCall(
+                        id="call_weather",
+                        type="function",
+                        function=Function(
+                            name="get_weather",
+                            arguments='{"location": "Boston"}',
+                        ),
+                    )
+                ],
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 2
+    assert result[0].type == "text"
+    assert result[0].text == "Calling get_weather now."
+    assert result[1].type == "tool_use"
+    assert result[1].id == "call_weather"
+    assert result[1].name == "get_weather"
+    assert result[1].input == {"location": "Boston"}
+
+
+def test_translate_openai_response_to_anthropic_text_and_tool_calls():
+    """`translate_openai_response_to_anthropic` should surface assistant text even when tools fire."""
+    openai_response = ModelResponse(
+        id="resp_text_tool",
+        model="gpt-4o-mini",
+        choices=[
+            Choices(
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content="Let me grab the current weather.",
+                    tool_calls=[
+                        ChatCompletionAssistantToolCall(
+                            id="call_tool_combo",
+                            type="function",
+                            function=Function(
+                                name="get_weather", arguments='{"location": "Paris"}'
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=5, completion_tokens=2),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 2
+    assert cast(Any, anthropic_content[0]).type == "text"
+    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
+    assert cast(Any, anthropic_content[1]).type == "tool_use"
+    assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
+    assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
+    assert anthropic_response.get("stop_reason") == "tool_use"
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():
@@ -794,9 +872,9 @@ def test_translate_anthropic_messages_to_openai_mixed_content_with_image():
 
 def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     """Test that thought signatures from tool_use blocks are correctly extracted and placed in provider_specific_fields."""
-    
+
     test_signature = "EpYECpMEAdHtim9iBECdK1l5uVIIXoZZmq+PUBH9nz3Q6EMeIdEqWwVb5GlxSNtxuSkFoseFco5U4zxN/lacJxD2WUjFvEyL2GOkbPgXFeCcgNBMEYVRg7UAr45KGeWJJmJMoheLHezKawI1L94vi2PsB9TDpWv4vyAx1vKG2PByiVmWWtd0rondsdbENNp2Rrz3ol1zha+XhOtyhTCdSWce8GVD/zElklL3C0h9HrsTQrnNyouaZa9KlXZJ72XDCIkIlV0m6EtxbzdMwbH4sLFOpifRlRn+AmzXjxvLovRtn2bXh/X3bUgPxqypaST57Dlpddlk1Mt0oJmGFtwB/FH1JmK21cIC06uXtlUc8lm/9cTQLd5hcEUX+XRrmTdzqxDgRttN8CRfVUAGE7Er+prN4yCIdNtEQdZm8zymEpHTkYplJ/hK7SMf9Iu1k+eCDFYCzvQuzLcJtNpRaGS1BbVA3va5JKrEu96G7a3Wl3DyzmrH8N3+RA+UIHvP6P5v93tI/eTyfMY54rKpLGkfFeeSMAr5aSoUZVYkvFI8xGEcIrqLWPDF91MclLZa7USSVql0wYu1G9KD10IkopeKkTIAl81WfoY5+Kw1o4CHo7bEQ6tfTuTB4IEywf1XKMBYHmsfAe5B9ferkLYtnAzzt1hoiK1m/2CjX8yQAknRLsnAuyeXfJZRZidVKYOKaSDftddbXJpIlJApC"
-    
+
     anthropic_messages = [
         AnthropicMessagesUserMessageParam(
             role="user",
@@ -825,10 +903,155 @@ def test_translate_anthropic_messages_to_openai_tool_use_with_signature():
     assert result[1]["role"] == "assistant"
     assert "tool_calls" in result[1]
     assert len(result[1]["tool_calls"]) == 1
-    
+
     # Verify thought signature is extracted and placed in provider_specific_fields
     tool_call = result[1]["tool_calls"][0]
     assert tool_call["id"] == "call_386f67af31f9415781bc35071405"
     assert "function" in tool_call
     assert "provider_specific_fields" in tool_call["function"]
-    assert tool_call["function"]["provider_specific_fields"]["thought_signature"] == test_signature
+    assert (
+        tool_call["function"]["provider_specific_fields"]["thought_signature"]
+        == test_signature
+    )
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_with_multiple_content_items():
+    """
+    Test that tool_result with multiple content items creates a single tool message
+    (not multiple messages with the same tool_call_id).
+
+    This is a regression test for the bug:
+    "each tool_use must have a single result. Found multiple `tool_result` blocks with id"
+
+    When a tool_result has a list of content items (e.g., text + image), we should create
+    ONE tool message with combined content, not multiple tool messages with the same ID.
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Take a screenshot and describe it"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_016hYHBkTf4JDF3p22UoYk5C",
+                    "name": "screenshot_tool",
+                    "input": {},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_016hYHBkTf4JDF3p22UoYk5C",
+                    "content": [
+                        {"type": "text", "text": "Here is the screenshot:"},
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/png",
+                                "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                            },
+                        },
+                        {"type": "text", "text": "Screenshot captured successfully."},
+                    ],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    # Count how many tool messages have the same tool_call_id
+    tool_messages = [
+        msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"
+    ]
+    tool_call_ids = [msg.get("tool_call_id") for msg in tool_messages]
+
+    # The critical assertion: each tool_call_id should appear only ONCE
+    assert len(tool_call_ids) == len(set(tool_call_ids)), (
+        f"Bug: Found duplicate tool_call_ids! "
+        f"Each tool_use must have exactly one tool_result. "
+        f"tool_call_ids: {tool_call_ids}"
+    )
+
+    # There should be exactly one tool message
+    assert len(tool_messages) == 1, f"Expected 1 tool message, got {len(tool_messages)}"
+
+    # The content should be a list with all items combined
+    tool_message = tool_messages[0]
+    assert tool_message["tool_call_id"] == "toolu_016hYHBkTf4JDF3p22UoYk5C"
+    assert isinstance(
+        tool_message["content"], list
+    ), "Multiple content items should be combined into a list"
+    assert (
+        len(tool_message["content"]) == 3
+    ), f"Expected 3 content items, got {len(tool_message['content'])}"
+
+    # Verify content types
+    assert tool_message["content"][0]["type"] == "text"
+    assert tool_message["content"][0]["text"] == "Here is the screenshot:"
+    assert tool_message["content"][1]["type"] == "image_url"
+    assert tool_message["content"][2]["type"] == "text"
+    assert tool_message["content"][2]["text"] == "Screenshot captured successfully."
+
+
+def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward_compat():
+    """
+    Test that tool_result with a single content item maintains backward compatibility
+    by returning a string content (not a list).
+    """
+
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[{"type": "text", "text": "Get the weather"}],
+        ),
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_single_item",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                }
+            ],
+        ),
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_single_item",
+                    "content": [
+                        {"type": "text", "text": "72°F and sunny"},
+                    ],
+                }
+            ],
+        ),
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(messages=anthropic_messages)
+
+    tool_messages = [
+        msg for msg in result if isinstance(msg, dict) and msg.get("role") == "tool"
+    ]
+
+    assert len(tool_messages) == 1
+    tool_message = tool_messages[0]
+
+    # Single item should be a string for backward compatibility
+    assert isinstance(tool_message["content"], str), (
+        f"Single content item should be a string for backward compatibility, "
+        f"got {type(tool_message['content'])}"
+    )
+    assert tool_message["content"] == "72°F and sunny"

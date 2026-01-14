@@ -1,0 +1,4 @@
+Test document abc123 for RAG ingestion.
+This is a sample document to test the RAG ingest API.
+LiteLLM provides a unified interface for vector stores.
+

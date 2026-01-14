@@ -182,4 +182,40 @@ describe("ChatUI", () => {
       expect(screen.queryByText("ResponsesModel")).toBeNull();
     });
   });
+
+  /**
+   * Tests that the 'Enter custom model' option is available in the model selector dropdown.
+   * This ensures users can manually enter a model name if it's not in the list.
+   */
+  it("should show 'Enter custom model' option in model selector", async () => {
+    const { getByText } = render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+      />,
+    );
+
+    // Wait for the component to render
+    await waitFor(() => {
+      expect(getByText("Test Key")).toBeInTheDocument();
+    });
+
+    // Open the "Select Model" dropdown
+    const selectModelLabel = getByText("Select Model");
+    const modelSelectContainer = selectModelLabel.closest("div");
+    const modelSelect = modelSelectContainer?.querySelector(".ant-select-selector");
+
+    fireEvent.mouseDown(modelSelect!);
+
+    await waitFor(() => {
+      // Get all options in the dropdown (Ant Design renders these in a portal)
+      const options = document.querySelectorAll(".ant-select-item-option-content");
+      expect(options.length).toBeGreaterThan(0);
+      // Check if the first option is 'Enter custom model'
+      expect(options[0]).toHaveTextContent("Enter custom model");
+    });
+  });
 });

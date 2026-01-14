@@ -14,7 +14,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
-    "@docusaurus/theme-mermaid": "^3.8.1",
+    "@docusaurus/theme-mermaid": "^3.9.0",
     "@headlessui/react": "^1.7.18",
     "@headlessui/tailwindcss": "^0.2.0",
     "@heroicons/react": "^1.0.6",
@@ -78,7 +78,8 @@
     "webpack-dev-server": ">=5.2.1",
     "mermaid": ">=11.10.0",
     "js-yaml": ">=4.1.1",
-    "glob": ">=11.1.0"
+    "glob": ">=11.1.0",
+    "node-forge": ">=1.3.2"
   },
   "engines": {
     "node": ">=18.17.0",

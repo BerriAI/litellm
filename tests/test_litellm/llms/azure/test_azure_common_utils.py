@@ -569,12 +569,16 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         or call_type == CallTypes.aretrieve_container
         or call_type == CallTypes.acreate_container
         or call_type == CallTypes.adelete_container
+        or call_type == CallTypes.alist_container_files
     ):
         # Skip container call types as they're not supported for Azure (only OpenAI)
         pytest.skip(f"Skipping {call_type.value} because Azure doesn't support container operations")
     elif call_type == CallTypes.avector_store_file_create or call_type == CallTypes.avector_store_file_list or call_type == CallTypes.avector_store_file_retrieve or call_type == CallTypes.avector_store_file_content or call_type == CallTypes.avector_store_file_update or call_type == CallTypes.avector_store_file_delete:
         # Skip vector store file call types as they're not supported for Azure (only OpenAI)
         pytest.skip(f"Skipping {call_type.value} because Azure doesn't support vector store file operations")
+    elif call_type == CallTypes.aocr or call_type == CallTypes.ocr:
+        # Skip OCR call types as they don't use Azure SDK client initialization
+        pytest.skip(f"Skipping {call_type.value} because OCR calls don't use initialize_azure_sdk_client")
     # Mock the initialize_azure_sdk_client function
     with patch(patch_target) as mock_init_azure:
         # Also mock async_function_with_fallbacks to prevent actual API calls

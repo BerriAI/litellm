@@ -1,18 +1,18 @@
+import json
+import os
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm.proxy._types import CommonProxyErrors
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.public_endpoints.provider_create_metadata import (
-    get_provider_create_metadata,
-)
 from litellm.types.agents import AgentCard
 from litellm.types.mcp import MCPPublicServer
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
 from litellm.types.proxy.public_endpoints.public_endpoints import (
+    AgentCreateInfo,
     ProviderCreateInfo,
     PublicModelHubInfo,
 )
@@ -136,4 +136,84 @@ async def get_provider_fields() -> List[ProviderCreateInfo]:
     Return provider metadata required by the dashboard create-model flow.
     """
 
-    return get_provider_create_metadata()
+    provider_create_fields_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "proxy",
+        "public_endpoints",
+        "provider_create_fields.json"
+    )
+
+    with open(provider_create_fields_path, "r") as f:
+        provider_create_fields = json.load(f)
+
+    return provider_create_fields
+
+
+@router.get(
+    "/public/litellm_model_cost_map",
+    tags=["public", "model management"],
+)
+async def get_litellm_model_cost_map():
+    """
+    Public endpoint to get the LiteLLM model cost map.
+    Returns pricing information for all supported models.
+    """
+    import litellm
+
+    try:
+        _model_cost_map = litellm.model_cost
+        return _model_cost_map
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal Server Error ({str(e)})",
+        )
+
+
+@router.get(
+    "/public/agents/fields",
+    tags=["public", "[beta] Agents"],
+    response_model=List[AgentCreateInfo],
+)
+async def get_agent_fields() -> List[AgentCreateInfo]:
+    """
+    Return agent type metadata required by the dashboard create-agent flow.
+    
+    If an agent has `inherit_credentials_from_provider`, the provider's credential
+    fields are automatically appended to the agent's credential_fields.
+    """
+    base_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+        "proxy",
+        "public_endpoints",
+    )
+    
+    agent_create_fields_path = os.path.join(base_path, "agent_create_fields.json")
+    provider_create_fields_path = os.path.join(base_path, "provider_create_fields.json")
+
+    with open(agent_create_fields_path, "r") as f:
+        agent_create_fields = json.load(f)
+    
+    with open(provider_create_fields_path, "r") as f:
+        provider_create_fields = json.load(f)
+    
+    # Build a lookup map for providers by name
+    provider_map = {p["provider"]: p for p in provider_create_fields}
+    
+    # Merge inherited credential fields
+    for agent in agent_create_fields:
+        inherit_from = agent.get("inherit_credentials_from_provider")
+        if inherit_from and inherit_from in provider_map:
+            provider = provider_map[inherit_from]
+            # Copy provider fields and mark them for inclusion in litellm_params
+            inherited_fields = []
+            for field in provider.get("credential_fields", []):
+                field_copy = field.copy()
+                field_copy["include_in_litellm_params"] = True
+                inherited_fields.append(field_copy)
+            # Append provider credential fields after agent's own fields
+            agent["credential_fields"] = agent.get("credential_fields", []) + inherited_fields
+        # Remove the inherit field from response (not needed by frontend)
+        agent.pop("inherit_credentials_from_provider", None)
+
+    return agent_create_fields

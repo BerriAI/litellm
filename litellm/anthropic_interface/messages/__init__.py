@@ -37,6 +37,7 @@ async def acreate(
     tools: Optional[List[Dict]] = None,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
+    container: Optional[Dict] = None,
     **kwargs
 ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
@@ -56,6 +57,7 @@ async def acreate(
         tools (List[Dict], optional): List of tool definitions
         top_k (int, optional): Top K sampling parameter
         top_p (float, optional): Nucleus sampling parameter
+        container (Dict, optional): Container config with skills for code execution
         **kwargs: Additional arguments
 
     Returns:
@@ -75,6 +77,7 @@ async def acreate(
         tools=tools,
         top_k=top_k,
         top_p=top_p,
+        container=container,
         **kwargs,
     )
 
@@ -93,6 +96,7 @@ def create(
     tools: Optional[List[Dict]] = None,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
+    container: Optional[Dict] = None,
     **kwargs
 ) -> Union[
     AnthropicMessagesResponse,
@@ -135,5 +139,6 @@ def create(
         tools=tools,
         top_k=top_k,
         top_p=top_p,
+        container=container,
         **kwargs,
     )

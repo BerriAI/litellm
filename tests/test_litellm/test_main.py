@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 
+from litellm import main as litellm_main
+
 
 @pytest.fixture(autouse=True)
 def add_api_keys_to_env(monkeypatch):
@@ -291,6 +293,30 @@ def test_bedrock_latency_optimized_inference():
         mock_post.assert_called_once()
         json_data = json.loads(mock_post.call_args.kwargs["data"])
         assert json_data["performanceConfig"]["latency"] == "optimized"
+
+
+def test_strip_input_examples_for_non_anthropic_providers():
+    tools = [
+        {
+            "type": "function",
+            "name": "example_tool",
+            "input_examples": [{"foo": "bar"}],
+            "function": {
+                "name": "example_tool",
+                "input_examples": [{"foo": "bar"}],
+            },
+        }
+    ]
+
+    assert not litellm_main._should_allow_input_examples(
+        custom_llm_provider="openai", model="gpt-4o-mini"
+    )
+
+    cleaned = litellm_main._drop_input_examples_from_tools(tools=tools)
+
+    assert isinstance(cleaned, list)
+    assert "input_examples" not in cleaned[0]
+    assert "input_examples" not in cleaned[0]["function"]
 
 
 def test_custom_provider_with_extra_headers():
@@ -1435,3 +1461,43 @@ async def test_async_mock_completion_stream_with_model_response():
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is an async test response" in accumulated_content or len(chunks) > 0
+
+
+class TestCallTypesOCR:
+    """Test that OCR call types are properly defined in CallTypes enum.
+
+    Fixes https://github.com/BerriAI/litellm/issues/17381
+    """
+
+    def test_ocr_call_type_exists(self):
+        """Test that CallTypes.ocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "ocr")
+        assert CallTypes.ocr.value == "ocr"
+
+    def test_aocr_call_type_exists(self):
+        """Test that CallTypes.aocr exists and has correct value."""
+        from litellm.types.utils import CallTypes
+
+        assert hasattr(CallTypes, "aocr")
+        assert CallTypes.aocr.value == "aocr"
+
+    def test_ocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'ocr' string."""
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("ocr")
+        assert call_type == CallTypes.ocr
+
+    def test_aocr_call_type_from_string(self):
+        """Test that CallTypes can be constructed from 'aocr' string.
+
+        This is the actual use case that was failing - the OCR endpoint
+        uses route_type='aocr' and guardrails try to instantiate
+        CallTypes('aocr').
+        """
+        from litellm.types.utils import CallTypes
+
+        call_type = CallTypes("aocr")
+        assert call_type == CallTypes.aocr

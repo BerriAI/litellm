@@ -10,6 +10,7 @@ from enum import Enum
 from typing import Any, AsyncIterator, Iterator, List, Optional, Tuple, Union, cast
 
 import httpx
+import litellm
 
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -28,6 +29,20 @@ class CacheControlSupportedModels(str, Enum):
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
+    def get_supported_openai_params(self, model: str) -> list:
+        """
+        Allow reasoning parameters for models flagged as reasoning-capable.
+        """
+        supported_params = super().get_supported_openai_params(model=model)
+        try:
+            if litellm.supports_reasoning(
+                model=model, custom_llm_provider="openrouter"
+            ) or litellm.supports_reasoning(model=model):
+                supported_params.append("reasoning_effort")
+        except Exception:
+            pass
+        return list(dict.fromkeys(supported_params))
+
     def map_openai_params(
         self,
         non_default_params: dict,

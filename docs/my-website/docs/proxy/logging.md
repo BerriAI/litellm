@@ -16,6 +16,7 @@ Log Proxy input, output, and exceptions using:
 - Custom Callbacks - Custom code and API endpoints
 - Langsmith
 - DataDog
+- Azure Sentinel
 - DynamoDB
 - etc.
 
@@ -1573,6 +1574,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 ## [Datadog](../observability/datadog)
 
 👉 Go here for using [Datadog LLM Observability](../observability/datadog) with LiteLLM Proxy
+
+## [Azure Sentinel](../observability/azure_sentinel)
+
+👉 Go here for using [Azure Sentinel](../observability/azure_sentinel) with LiteLLM Proxy
 
 
 ## Lunary

@@ -6,7 +6,7 @@ Why separate file? Make it easy to see how transformation works
 
 from typing import List
 
-from litellm import EmbeddingResponse
+from litellm.types.utils import EmbeddingResponse
 from litellm.types.llms.openai import EmbeddingInput
 from litellm.types.llms.vertex_ai import (
     ContentType,

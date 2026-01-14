@@ -24,8 +24,9 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 ### 1. Setup Your Local Development Environment
 
 ```bash
-# Clone the repository
-git clone https://github.com/BerriAI/litellm.git
+# Fork the repository on GitHub (click the Fork button at https://github.com/BerriAI/litellm)
+# Then clone your fork locally
+git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
 # Create a new branch for your feature

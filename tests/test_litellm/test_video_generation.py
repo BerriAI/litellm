@@ -1,8 +1,8 @@
+import asyncio
 import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
-import asyncio
 
 import pytest
 
@@ -11,14 +11,19 @@ sys.path.insert(
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.types.videos.main import VideoObject, VideoResponse
-from litellm.videos.main import video_generation, avideo_generation, video_status, avideo_status
-from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
-from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
-from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.cost_calculator import default_video_cost_calculator
-from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
+from litellm.llms.openai.videos.transformation import OpenAIVideoConfig
+from litellm.types.videos.main import VideoObject, VideoResponse
+from litellm.videos.main import (
+    avideo_generation,
+    avideo_status,
+    video_generation,
+    video_status,
+)
 
 
 class TestVideoGeneration:
@@ -200,9 +205,25 @@ class TestVideoGeneration:
 
     def test_video_generation_cost_calculation(self):
         """Test video generation cost calculation."""
-        # Load the local model cost map instead of online
         import json
-        with open("model_prices_and_context_window.json", "r") as f:
+        import os
+        
+        # Try to load the local model cost map, skip if not found
+        cost_map_path = "model_prices_and_context_window.json"
+        if not os.path.exists(cost_map_path):
+            # Try alternative paths
+            alt_paths = [
+                os.path.join(os.path.dirname(__file__), "..", "..", cost_map_path),
+                os.path.join(os.path.dirname(__file__), "..", "..", "..", cost_map_path),
+            ]
+            for path in alt_paths:
+                if os.path.exists(path):
+                    cost_map_path = path
+                    break
+            else:
+                pytest.skip("model_prices_and_context_window.json not found")
+        
+        with open(cost_map_path, "r") as f:
             litellm.model_cost = json.load(f)
         
         # Test with sora-2 model
@@ -346,7 +367,7 @@ class TestVideoGeneration:
     def test_video_generation_unsupported_parameters(self):
         """Test video generation with provider-specific parameters via extra_body."""
         from litellm.videos.utils import VideoGenerationRequestUtils
-        
+
         # Test that provider-specific parameters can be passed via extra_body
         # This allows support for Vertex AI and Gemini specific parameters
         result = VideoGenerationRequestUtils.get_optional_params_video_generation(
@@ -779,6 +800,8 @@ def test_openai_transform_video_content_request_empty_params():
 
 def test_video_content_handler_uses_get_for_openai():
     """HTTP handler must use GET (not POST) for OpenAI content download."""
+    from litellm.types.router import GenericLiteLLMParams
+    
     handler = BaseLLMHTTPHandler()
     config = OpenAIVideoConfig()
 
@@ -795,7 +818,7 @@ def test_video_content_handler_uses_get_for_openai():
             video_id="video_abc",
             video_content_provider_config=config,
             custom_llm_provider="openai",
-            litellm_params={"api_base": "https://api.openai.com/v1"},
+            litellm_params=GenericLiteLLMParams(api_base="https://api.openai.com/v1"),
             logging_obj=MagicMock(),
             timeout=5.0,
             api_key="sk-test",
@@ -809,6 +832,37 @@ def test_video_content_handler_uses_get_for_openai():
     assert called_url == "https://api.openai.com/v1/videos/video_abc/content"
 
 
+def test_video_content_respects_api_base_and_api_key_from_kwargs():
+    """Test that video_content respects api_base and api_key from kwargs (simulating database entry)."""
+    from litellm.videos.main import video_content
+    
+    # Mock the handler to capture litellm_params
+    captured_litellm_params = None
+    
+    def capture_litellm_params(*args, **kwargs):
+        nonlocal captured_litellm_params
+        captured_litellm_params = kwargs.get("litellm_params")
+        return b"mp4-bytes"
+    
+    with patch('litellm.videos.main.base_llm_http_handler') as mock_handler:
+        mock_handler.video_content_handler = capture_litellm_params
+        
+        # Call video_content with api_base and api_key in kwargs (simulating database entry)
+        # This simulates how the router passes model config from database via **kwargs
+        result = video_content(
+            video_id="video_test_123",
+            custom_llm_provider="azure",
+            api_base="https://test-resource.openai.azure.com/",  # Passed via kwargs by router
+            api_key="test-api-key-from-db",  # Passed via kwargs by router
+        )
+    
+    # Verify that api_base and api_key from kwargs were included in litellm_params
+    assert captured_litellm_params is not None
+    assert captured_litellm_params.get("api_base") == "https://test-resource.openai.azure.com/"
+    assert captured_litellm_params.get("api_key") == "test-api-key-from-db"
+    assert result == b"mp4-bytes"
+
+
 def test_openai_video_config_has_async_transform():
     """Ensure OpenAIVideoConfig exposes async_transform_video_content_response at runtime."""
     cfg = OpenAIVideoConfig()
@@ -819,6 +873,297 @@ def test_gemini_video_config_has_async_transform():
     """Ensure GeminiVideoConfig exposes async_transform_video_content_response at runtime."""
     cfg = GeminiVideoConfig()
     assert callable(getattr(cfg, "async_transform_video_content_response", None))
+
+
+def test_encode_video_id_with_provider_handles_azure_video_prefix():
+    """
+    Test that encode_video_id_with_provider correctly encodes Azure/OpenAI video IDs
+    that start with 'video_' prefix.
+    
+    This test verifies the fix for the issue where Azure returns video IDs like
+    'video_69323201cf6081909263f751f89991e6', which were previously skipped
+    from encoding, causing video status retrieval to default to 'openai' provider.
+    """
+    from litellm.types.videos.utils import (
+        decode_video_id_with_provider,
+        encode_video_id_with_provider,
+    )
+
+    # Test case: Azure returns a video ID starting with 'video_'
+    raw_azure_video_id = "video_69323201cf6081909263f751f89991e6"
+    provider = "azure"
+    model_id = "azure/sora-2"
+    
+    # Encode the video ID with provider information
+    encoded_id = encode_video_id_with_provider(
+        video_id=raw_azure_video_id,
+        provider=provider,
+        model_id=model_id
+    )
+    
+    # Verify the ID was encoded (should be different from the original)
+    assert encoded_id != raw_azure_video_id
+    assert encoded_id.startswith("video_")
+    
+    # Decode the encoded ID to verify provider information is preserved
+    decoded = decode_video_id_with_provider(encoded_id)
+    assert decoded.get("custom_llm_provider") == provider
+    assert decoded.get("model_id") == model_id
+    assert decoded.get("video_id") == raw_azure_video_id
+    
+    # Verify that encoding an already-encoded ID doesn't double-encode it
+    encoded_twice = encode_video_id_with_provider(
+        video_id=encoded_id,
+        provider=provider,
+        model_id=model_id
+    )
+    assert encoded_twice == encoded_id  # Should return the same encoded ID
+    
+class TestVideoEndpointsProxyLitellmParams:
+    """Test that video proxy endpoints (status, content, remix) respect litellm_params from proxy config."""
+
+    @pytest.fixture
+    def client_with_vertex_config(self, monkeypatch):
+        """Create a test client with a proxy config that includes Vertex AI model with litellm_params."""
+        import asyncio
+        import tempfile
+        import yaml
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from litellm.proxy.proxy_server import cleanup_router_config_variables, router, initialize
+        from litellm.proxy.video_endpoints.endpoints import router as video_router
+
+        # Clean up any existing router config
+        cleanup_router_config_variables()
+
+        # Create inline config
+        config = {
+            "model_list": [
+                {
+                    "model_name": "vertex-ai-sora-2",
+                    "litellm_params": {
+                        "model": "vertex_ai/veo-2.0-generate-001",
+                        "vertex_project": "test-project-123",
+                        "vertex_location": "global",
+                        "vertex_credentials": "/path/to/test-credentials.json",
+                    }
+                }
+            ]
+        }
+        
+        # Write config to temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+            yaml.dump(config, f)
+            config_fp = f.name
+        
+        try:
+            # Initialize the proxy with the test config
+            app = FastAPI()
+            asyncio.run(initialize(config=config_fp, debug=True))
+            app.include_router(router)
+            app.include_router(video_router)
+
+            return TestClient(app)
+        finally:
+            # Clean up temporary file
+            import os
+            if os.path.exists(config_fp):
+                os.unlink(config_fp)
+
+    @pytest.fixture
+    def mock_video_generation_response(self):
+        """Mock video generation response with encoded video_id."""
+        from litellm.types.videos.utils import encode_video_id_with_provider
+
+        # Create an encoded video_id that includes provider and model_id
+        original_video_id = "projects/test-project-123/locations/global/publishers/google/models/veo-2.0-generate-001/operations/test-operation-123"
+        encoded_video_id = encode_video_id_with_provider(
+            video_id=original_video_id,
+            provider="vertex_ai",
+            model_id="veo-2.0-generate-001",
+        )
+
+        return VideoObject(
+            id=encoded_video_id,
+            object="video",
+            status="processing",
+            created_at=1712697600,
+            model="vertex_ai/veo-2.0-generate-001",
+        )
+
+    @pytest.fixture
+    def mock_video_status_response(self):
+        """Mock video status response."""
+        return VideoObject(
+            id="video_test_123",
+            object="video",
+            status="completed",
+            created_at=1712697600,
+            completed_at=1712697660,
+            model="vertex_ai/veo-2.0-generate-001",
+            progress=100,
+        )
+
+    @pytest.fixture
+    def mock_video_content_response(self):
+        """Mock video content response (raw bytes)."""
+        return b"fake_video_content_bytes"
+
+    @pytest.mark.asyncio
+    async def test_video_status_respects_litellm_params(
+        self, client_with_vertex_config, mock_video_generation_response, mock_video_status_response
+    ):
+        """Test that video_status endpoint uses litellm_params from proxy config."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create an encoded video_id
+        encoded_video_id = mock_video_generation_response.id
+
+        # Mock the router instance
+        mock_router_instance = MagicMock()
+        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.model_names = {"vertex-ai-sora-2"}
+        mock_router_instance.has_model_id.return_value = False
+
+        # Mock route_request to capture the data being passed
+        # route_request should return a coroutine (not await it), so we return a coroutine
+        async def mock_route_request_func(*args, **kwargs):
+            return mock_video_status_response
+        
+        # Create a coroutine that will be added to tasks
+        def create_mock_coroutine(*args, **kwargs):
+            return mock_route_request_func(*args, **kwargs)
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router_instance):
+            with patch("litellm.proxy.common_request_processing.route_request", side_effect=create_mock_coroutine) as mock_route_request:
+                # Make request to video_status endpoint
+                response = client_with_vertex_config.get(
+                    f"/v1/videos/{encoded_video_id}",
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+
+                # Verify the endpoint was called
+                assert response.status_code == 200, f"Response: {response.text}"
+
+                # Verify that route_request was called
+                assert mock_route_request.called
+                call_args = mock_route_request.call_args
+                # route_request is called with data as a keyword argument
+                data_passed = call_args.kwargs.get("data", {}) if call_args.kwargs else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+
+                # Verify that model was resolved and added to data
+                assert data_passed.get("model") == "vertex-ai-sora-2", (
+                    f"Expected model to be 'vertex-ai-sora-2', got '{data_passed.get('model')}'. "
+                    f"Full data: {data_passed}, call_args: {call_args}"
+                )
+                # Verify that custom_llm_provider is set from decoded video_id
+                assert data_passed.get("custom_llm_provider") == "vertex_ai", (
+                    f"Expected custom_llm_provider to be 'vertex_ai', got '{data_passed.get('custom_llm_provider')}'. "
+                    f"Full data: {data_passed}"
+                )
+
+    @pytest.mark.asyncio
+    async def test_video_content_respects_litellm_params(
+        self, client_with_vertex_config, mock_video_generation_response, mock_video_content_response
+    ):
+        """Test that video_content endpoint uses litellm_params from proxy config."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create an encoded video_id
+        encoded_video_id = mock_video_generation_response.id
+
+        # Mock the router instance
+        mock_router_instance = MagicMock()
+        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.model_names = {"vertex-ai-sora-2"}
+        mock_router_instance.has_model_id.return_value = False
+
+        # Mock route_request to capture the data being passed
+        # route_request should return a coroutine (not await it), so we return a coroutine
+        async def mock_route_request_func(*args, **kwargs):
+            return mock_video_content_response
+        
+        # Create a coroutine that will be added to tasks
+        def create_mock_coroutine(*args, **kwargs):
+            return mock_route_request_func(*args, **kwargs)
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router_instance):
+            with patch("litellm.proxy.common_request_processing.route_request", side_effect=create_mock_coroutine) as mock_route_request:
+                # Make request to video_content endpoint
+                response = client_with_vertex_config.get(
+                    f"/v1/videos/{encoded_video_id}/content",
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+
+                # Verify the endpoint was called
+                assert response.status_code == 200, f"Response: {response.text}"
+
+                # Verify that route_request was called
+                assert mock_route_request.called
+                call_args = mock_route_request.call_args
+                # route_request is called with data as a keyword argument
+                data_passed = call_args.kwargs.get("data", {}) if call_args.kwargs else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+
+                # Verify that model was resolved and added to data
+                assert data_passed.get("model") == "vertex-ai-sora-2", (
+                    f"Expected model to be 'vertex-ai-sora-2', got '{data_passed.get('model')}'. "
+                    f"Full data: {data_passed}, call_args: {call_args}"
+                )
+                # Verify that custom_llm_provider is correctly set from decoded video_id (not "openai")
+                assert data_passed.get("custom_llm_provider") == "vertex_ai", (
+                    f"Expected custom_llm_provider to be 'vertex_ai', got '{data_passed.get('custom_llm_provider')}'. "
+                    f"Full data: {data_passed}"
+                )
+
+    @pytest.mark.asyncio
+    async def test_video_content_preserves_custom_llm_provider_from_decoded_id(
+        self, client_with_vertex_config, mock_video_generation_response, mock_video_content_response
+    ):
+        """Test that video_content preserves custom_llm_provider from decoded video_id."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        # Create an encoded video_id
+        encoded_video_id = mock_video_generation_response.id
+
+        # Mock the router instance
+        mock_router_instance = MagicMock()
+        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.model_names = {"vertex-ai-sora-2"}
+        mock_router_instance.has_model_id.return_value = False
+
+        # Mock route_request to capture the data being passed
+        # route_request should return a coroutine (not await it), so we return a coroutine
+        async def mock_route_request_func(*args, **kwargs):
+            return mock_video_content_response
+        
+        # Create a coroutine that will be added to tasks
+        def create_mock_coroutine(*args, **kwargs):
+            return mock_route_request_func(*args, **kwargs)
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router_instance):
+            with patch("litellm.proxy.common_request_processing.route_request", side_effect=create_mock_coroutine) as mock_route_request:
+                # Make request to video_content endpoint
+                response = client_with_vertex_config.get(
+                    f"/v1/videos/{encoded_video_id}/content",
+                    headers={"Authorization": "Bearer sk-1234"},
+                )
+
+                # Verify the endpoint was called
+                assert response.status_code == 200, f"Response: {response.text}"
+
+                # Verify that route_request was called
+                assert mock_route_request.called
+                call_args = mock_route_request.call_args
+                # route_request is called with data as a keyword argument
+                data_passed = call_args.kwargs.get("data", {}) if call_args.kwargs else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+
+                # Most importantly: verify that custom_llm_provider is "vertex_ai" not "openai"
+                # This was the bug we fixed - it was defaulting to "openai" before
+                assert data_passed.get("custom_llm_provider") == "vertex_ai", (
+                    f"Expected custom_llm_provider to be 'vertex_ai', "
+                    f"but got '{data_passed.get('custom_llm_provider')}'. "
+                    f"Full data: {data_passed}, call_args: {call_args}"
+                )
 
 
 if __name__ == "__main__":

@@ -18,7 +18,7 @@ LiteLLM supports PANW Prisma AIRS (AI Runtime Security) guardrails via the [Pris
 - ✅ **Configurable security profiles**
 - ✅ **Streaming support** - Real-time masking for streaming responses
 - ✅ **Multi-turn conversation tracking** - Automatic session grouping in Prisma AIRS SCM logs
-- ✅ **Fail-closed security** - Blocks requests if PANW API is unavailable (maximum security)
+- ✅ **Configurable fail-open/fail-closed** - Choose between maximum security (block on API errors) or high availability (allow on transient errors)
 
 ## Quick Start
 
@@ -202,8 +202,39 @@ Expected successful response:
 | `api_key` | Yes | Your PANW Prisma AIRS API key from Strata Cloud Manager | - |
 | `profile_name` | No | Security profile name configured in Strata Cloud Manager. Optional if API key has linked profile | - |
 | `app_name` | No | Application identifier for tracking in Prisma AIRS analytics (will be prefixed with "LiteLLM-") | `LiteLLM` |
-| `api_base` | No | Custom API base URL (without /v1/scan/sync/request path) | `https://service.api.aisecurity.paloaltonetworks.com` |
+| `api_base` | No | Regional API endpoint (see [Regional Endpoints](#regional-endpoints) below) | `https://service.api.aisecurity.paloaltonetworks.com` (US) |
 | `mode` | No | When to run the guardrail | `pre_call` |
+| `fallback_on_error` | No | Action when PANW API is unavailable: `"block"` (fail-closed, default) or `"allow"` (fail-open). Config errors always block. | `block` |
+| `timeout` | No | PANW API call timeout in seconds (1-60) | `10.0` |
+
+### Regional Endpoints
+
+PANW Prisma AIRS supports multiple regional endpoints based on your deployment profile region:
+
+| Region | API Base URL |
+|--------|--------------|
+| **US** (default) | `https://service.api.aisecurity.paloaltonetworks.com` |
+| **EU (Germany)** | `https://service-de.api.aisecurity.paloaltonetworks.com` |
+| **India** | `https://service-in.api.aisecurity.paloaltonetworks.com` |
+
+**Example configuration for EU region:**
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-eu"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      api_base: "https://service-de.api.aisecurity.paloaltonetworks.com"
+      profile_name: "production"
+```
+
+:::tip Region Selection
+Use the regional endpoint that matches your Prisma AIRS deployment profile region configured in Strata Cloud Manager. Using the correct region ensures:
+- Lower latency (requests stay in-region)
+- Compliance with data residency requirements
+- Optimal performance
+:::
 
 ## Per-Request Metadata Overrides
 
@@ -230,6 +261,7 @@ You can override guardrail settings on a per-request basis using the `metadata` 
 | `profile_id` | PANW AI security profile ID (takes precedence over profile_name) | Per-request only |
 | `user_ip` | User IP address for tracking in Prisma AIRS | Per-request only |
 | `app_name` | Application identifier (prefixed with "LiteLLM-") | Per-request > config > "LiteLLM" |
+| `app_user` | Custom user identifier for tracking in Prisma AIRS | `app_user` > `user` > "litellm_user" |
 
 :::info Profile Resolution
 - If both `profile_id` and `profile_name` are provided, PANW API uses `profile_id` (it takes precedence)
@@ -392,7 +424,7 @@ guardrails:
   - guardrail_name: "panw-with-masking"
     litellm_params:
       guardrail: panw_prisma_airs
-      mode: "post_call"                      # Scan both input and output
+      mode: "post_call"                      # Scan response output
       api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
       profile_name: "default"
       mask_request_content: true             # Mask sensitive data in prompts
@@ -416,6 +448,66 @@ LiteLLM does not alter or configure your PANW security profile. To change what c
 :::info Security Posture
 The guardrail is **fail-closed** by default - if the PANW API is unavailable, requests are blocked to ensure no unscanned content reaches your LLM. This provides maximum security.
 :::
+
+### Fail-Open Configuration
+
+By default, the PANW guardrail operates in **fail-closed** mode for maximum security. If the PANW API is unavailable (timeout, rate limit, network error), requests are blocked. You can configure **fail-open** mode for high-availability scenarios where service continuity is critical.
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-high-availability"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      profile_name: "production"
+      fallback_on_error: "allow"  # Enable fail-open mode
+      timeout: 5.0                 # Shorter timeout for fail-open
+```
+
+**Configuration Options:**
+
+| Parameter | Value | Behavior |
+|-----------|-------|----------|
+| `fallback_on_error` | `"block"` (default) | **Fail-closed**: Block requests when API unavailable (maximum security) |
+| `fallback_on_error` | `"allow"` | **Fail-open**: Allow requests when API unavailable (high availability) |
+| `timeout` | `1.0` - `60.0` | API call timeout in seconds (default: `10.0`) |
+
+**Error Handling Matrix:**
+
+| Error Type | `fallback_on_error="block"` | `fallback_on_error="allow"` |
+|------------|----------------------------|----------------------------|
+| 401 Unauthorized | Block (500) | Block (500) ⚠️ |
+| 403 Forbidden | Block (500) | Block (500) ⚠️ |
+| Profile Error | Block (500) | Block (500) ⚠️ |
+| 429 Rate Limit | Block (500) | Allow (`:unscanned`) |
+| Timeout | Block (500) | Allow (`:unscanned`) |
+| Network Error | Block (500) | Allow (`:unscanned`) |
+| 5xx Server Error | Block (500) | Allow (`:unscanned`) |
+| Content Blocked | Block (400) | Block (400) |
+
+⚠️ = Always blocks regardless of fail-open setting 
+
+:::warning Security Trade-Off
+Enabling `fallback_on_error="allow"` reduces security in exchange for availability. Requests may proceed **without scanning** when the PANW API is unavailable. Use only when:
+- Service availability is more critical than security scanning
+- You have other security controls in place
+- You monitor the `:unscanned` header for audit trails
+
+**Authentication and configuration errors (401, 403, invalid profile) always block** - only transient errors (429, timeout, network) trigger fail-open behavior.
+:::
+
+**Observability:**
+
+When fail-open is triggered, the response includes a special header for tracking:
+
+```
+X-LiteLLM-Applied-Guardrails: panw-airs:unscanned
+```
+
+This allows you to:
+- Track which requests bypassed scanning
+- Alert on unscanned request volumes
+- Audit compliance requirements
 
 #### Example: Masking Credit Card Numbers
 

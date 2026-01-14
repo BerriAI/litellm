@@ -1,5 +1,6 @@
 import copy
 import os
+from typing import cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -14,6 +15,7 @@ from litellm.proxy.guardrails.guardrail_hooks.noma import (
 )
 from litellm.proxy.guardrails.guardrail_hooks.noma.noma import NomaBlockedMessage
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message
 
 
@@ -413,7 +415,7 @@ class TestNomaGuardrailHooks:
 
             # Verify API call details
             call_args = mock_post.call_args
-            # Verify the URL endpoint  
+            # Verify the URL endpoint
             assert call_args.args[0].endswith("/ai-dr/v2/prompt/scan")
             # Verify headers and JSON payload
             if "headers" in call_args.kwargs:
@@ -425,6 +427,130 @@ class TestNomaGuardrailHooks:
                 json_payload = call_args.kwargs["json"]
                 assert "x-noma-context" in json_payload
                 assert json_payload["x-noma-context"]["applicationId"] == "test-app"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_with_system_prompt(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
+        """Test pre-call hook includes system prompt in Noma API request"""
+        request_data = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant"},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "litellm_call_id": "test-call-id",
+            "metadata": {"requester_ip_address": "192.168.1.1"},
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "aggregatedScanResult": False,  # False means safe
+            "scanResult": [
+                {
+                    "role": "system",
+                    "type": "message",
+                    "results": {}
+                },
+                {
+                    "role": "user",
+                    "type": "message",
+                    "results": {}
+                }
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await noma_guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=MagicMock(),
+                data=request_data,
+                call_type="completion",
+            )
+
+            assert result == request_data
+            mock_post.assert_called_once()
+
+            # Verify the payload includes both system and user messages
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert "input" in json_payload
+            messages = json_payload["input"]
+
+            # Should have 2 messages: system and user
+            assert len(messages) == 2
+
+            # First message should be system
+            assert messages[0]["type"] == "message"
+            assert messages[0]["role"] == "system"
+            assert messages[0]["content"][0]["type"] == "input_text"
+            assert messages[0]["content"][0]["text"] == "You are a helpful assistant"
+
+            # Second message should be user
+            assert messages[1]["type"] == "message"
+            assert messages[1]["role"] == "user"
+            assert messages[1]["content"][0]["type"] == "input_text"
+            assert messages[1]["content"][0]["text"] == "Hello, how are you?"
+
+    @pytest.mark.asyncio
+    async def test_pre_call_hook_with_multiple_system_prompts(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
+        """Test pre-call hook combines multiple system prompts into single message"""
+        request_data = {
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant"},
+                {"role": "system", "content": "You should be polite and respectful"},
+                {"role": "user", "content": "Hello, how are you?"},
+            ],
+            "litellm_call_id": "test-call-id",
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "aggregatedScanResult": False,
+            "scanResult": [
+                {"role": "system", "type": "message", "results": {}},
+                {"role": "user", "type": "message", "results": {}}
+            ]
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            noma_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await noma_guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key_dict,
+                cache=MagicMock(),
+                data=request_data,
+                call_type="completion",
+            )
+
+            assert result == request_data
+            mock_post.assert_called_once()
+
+            # Verify the payload combines system prompts into single message
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            messages = json_payload["input"]
+
+            # Should have 2 messages: 1 combined system and 1 user
+            assert len(messages) == 2
+
+            # First message should be system with combined content
+            assert messages[0]["role"] == "system"
+            assert messages[0]["content"][0]["type"] == "input_text"
+            assert (
+                messages[0]["content"][0]["text"]
+                == "You are a helpful assistant You should be polite and respectful"
+            )
+
+            # Second message should be user
+            assert messages[1]["role"] == "user"
+            assert messages[1]["content"][0]["type"] == "input_text"
+            assert messages[1]["content"][0]["text"] == "Hello, how are you?"
 
     @pytest.mark.asyncio
     async def test_pre_call_hook_blocked(
@@ -643,34 +769,6 @@ class TestNomaGuardrailHooks:
             )
 
             assert result == mock_request_data
-
-    def test_extract_user_message(self, noma_guardrail):
-        data = {
-            "messages": [
-                {"role": "system", "content": "System prompt"},
-                {"role": "user", "content": "First user message"},
-                {"role": "assistant", "content": "Assistant response"},
-                {"role": "user", "content": "Second user message"},
-            ]
-        }
-
-        import asyncio
-
-        message = asyncio.run(noma_guardrail._extract_user_message(data))
-        assert message == [{"type": "input_text", "text": "Second user message"}]
-
-        data = {"messages": [{"role": "system", "content": "System prompt"}]}
-        message = asyncio.run(noma_guardrail._extract_user_message(data))
-        assert message is None
-
-        data = {"messages": []}
-        message = asyncio.run(noma_guardrail._extract_user_message(data))
-        assert message is None
-
-        data = {}
-        message = asyncio.run(noma_guardrail._extract_user_message(data))
-        assert message is None
-
 
 class TestBackgroundProcessing:
     """Test the new background processing functionality"""
@@ -1025,57 +1123,66 @@ class TestNomaImageProcessing:
             metadata={},
         )
 
-    def test_extract_user_message_with_image_url(self, noma_guardrail):
-        """Test extracting user message with image_url content"""
-        import asyncio
-        
-        data = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image.jpg"
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
+    def test_extract_user_message_with_image_url(self):
+        """User message with only image_url becomes a single input_image content item."""
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
 
-        message = asyncio.run(noma_guardrail._extract_user_message(data))
+        handler = LiteLLMResponsesTransformationHandler()
+        messages: list[AllMessageValues] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/image.jpg"
+                        }
+                    }
+                ]
+            }
+        ]
+
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+        assert len(input_items) == 1
+        message = input_items[0]["content"]
         assert message is not None
         assert len(message) == 1
         assert message[0]["type"] == "input_image"
         assert message[0]["image_url"] == "https://example.com/image.jpg"
 
-    def test_extract_user_message_with_mixed_content(self, noma_guardrail):
-        """Test extracting user message with mixed text and image content"""
-        import asyncio
-        
-        data = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "What's in this image?"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image.jpg"
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
+    def test_extract_user_message_with_mixed_content(self):
+        """User message with text + image becomes input_text then input_image in content list."""
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
 
-        message = asyncio.run(noma_guardrail._extract_user_message(data))
+        handler = LiteLLMResponsesTransformationHandler()
+        messages: list[AllMessageValues] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "What's in this image?",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/image.jpg"
+                        }
+                    }
+                ]
+            }
+        ]
+
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+        # Match the original assertions: `message` is the content list
+        assert len(input_items) == 1
+        message = input_items[0]["content"]
         assert message is not None
         assert len(message) == 2
         # First item should be text
@@ -1085,37 +1192,43 @@ class TestNomaImageProcessing:
         assert message[1]["type"] == "input_image"
         assert message[1]["image_url"] == "https://example.com/image.jpg"
 
-    def test_extract_user_message_with_multiple_images(self, noma_guardrail):
-        """Test extracting user message with multiple images"""
-        import asyncio
-        
-        data = {
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": "Compare these images"
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image1.jpg"
-                            }
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": "https://example.com/image2.jpg"
-                            }
-                        }
-                    ]
-                }
-            ]
-        }
+    def test_extract_user_message_with_multiple_images(self):
+        """User message with multiple images becomes multiple input_image items."""
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
 
-        message = asyncio.run(noma_guardrail._extract_user_message(data))
+        handler = LiteLLMResponsesTransformationHandler()
+
+        messages: list[AllMessageValues] = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Compare these images",
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/image1.jpg"
+                        }
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "https://example.com/image2.jpg"
+                        }    
+                    }
+                ]
+            }
+        ]
+
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+        # Match the original assertions
+        assert len(input_items) == 1
+        message = input_items[0]["content"]
         assert message is not None
         assert len(message) == 3
         assert message[0]["type"] == "input_text"
@@ -1301,8 +1414,14 @@ class TestNomaImageProcessing:
             assert exc_info.value.status_code == 400
 
     @pytest.mark.asyncio
-    async def test_image_with_base64_data(self, noma_guardrail):
+    async def test_image_with_base64_data(
+        self, noma_guardrail, mock_user_api_key_dict
+    ):
         """Test extracting image with base64 data URL"""
+        from litellm.completion_extras.litellm_responses_transformation.transformation import (
+            LiteLLMResponsesTransformationHandler,
+        )
+
         data = {
             "messages": [
                 {
@@ -1319,7 +1438,13 @@ class TestNomaImageProcessing:
             ]
         }
 
-        message = await noma_guardrail._extract_user_message(data)
+        handler = LiteLLMResponsesTransformationHandler()
+        messages = cast(list[AllMessageValues], data["messages"])
+
+        input_items, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+        assert len(input_items) == 1
+        message = input_items[0]["content"]
         assert message is not None
         assert len(message) == 1
         assert message[0]["type"] == "input_image"

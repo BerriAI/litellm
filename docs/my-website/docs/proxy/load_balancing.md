@@ -29,6 +29,10 @@ LiteLLM automatically distributes requests across multiple deployments of the sa
 | **latency-based-routing** | Routes to fastest responding deployment | Latency-critical applications |
 | **cost-based-routing** | Routes to deployment with lowest cost | Cost-sensitive applications |
 
+:::tip Deployment Priority
+Use the `order` parameter to prioritize specific deployments. [See Deployment Ordering](#deployment-ordering-priority) for details.
+:::
+
 
 ## Quick Start - Load Balancing
 #### Step 1 - Set deployments on config
@@ -242,6 +246,27 @@ class RouterModelGroupAliasItem(TypedDict):
     model: str
     hidden: bool  # if 'True', don't return on `/v1/models`, `/v1/model/info`, `/v1/model_group/info`
 ```
+
+## Deployment Ordering (Priority)
+
+Set `order` in `litellm_params` to prioritize deployments. Lower values = higher priority. When multiple deployments share the same `order`, the routing strategy picks among them.
+
+```yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-primary
+      api_key: os.environ/AZURE_API_KEY
+      order: 1  # 👈 Highest priority - always tried first
+
+  - model_name: gpt-4
+    litellm_params:
+      model: azure/gpt-4-fallback
+      api_key: os.environ/AZURE_API_KEY_2
+      order: 2  # 👈 Used when order=1 is unavailable
+```
+
+If `order=1` deployment is unavailable (e.g., rate-limited), the router falls back to `order=2` deployments.
 
 ### When You'll See Load Balancing in Action
 

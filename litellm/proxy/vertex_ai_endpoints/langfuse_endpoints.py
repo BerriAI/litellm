@@ -128,12 +128,12 @@ async def langfuse_proxy_route(
         endpoint=endpoint,
         target=str(updated_url),
         custom_headers={"Authorization": langfuse_combined_key},
+        query_params=dict(request.query_params),  # type: ignore
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
         fastapi_response,
         user_api_key_dict,
-        query_params=dict(request.query_params),  # type: ignore
     )
 
     return received_value

@@ -220,11 +220,28 @@ When connecting Litellm to Langfuse, you can see the guardrail information on th
   style={{width: '60%', display: 'block', margin: '0'}}
 />
 
-## Entity Type Configuration
+## Entity Types, Detection Confidence Score Threshold, and Scope Configuration
 
-You can configure specific entity types for PII detection and decide how to handle each entity type (mask or block).
+- **Entity Types**
+  - You can configure specific entity types for PII detection and decide how to handle each entity type (mask or block).
+- **Detection Confidence Score Threshold**
+  - You can also provide an optional confidence score threshold at which detections will be passed to the anonymizer. Entities without an entry in `presidio_score_thresholds` keep all detections (no minimum score).
+- **Scope**
+  - Use the optional `presidio_filter_scope` to choose where checks run:
 
-### Configure Entity Types in config.yaml
+      - `input`: only user → model content is scanned
+      - `output`: only model → user content is scanned
+      - `both` (default): scan both directions
+
+    **What about `output_parse_pii`?**  
+    This flag only un-masks tokens back to the originals after the model call; it does not run Presidio detection on outputs. Use `presidio_filter_scope: output` (or `both`) when you want Presidio to actively scan and mask the model’s response before it reaches the user.
+
+    **When to pick input vs output:**
+    - `input`: Protect upstream providers; strip PII before it leaves your boundary.
+    - `output`: Catch PII the model might generate or leak back to users.
+    - `both`: End-to-end protection in both directions.
+
+### Configure Entity Types, Detection Confidence Score Threshold, and Scope in `config.yaml`
 
 Define your guardrails with specific entity type configuration:
 
@@ -240,6 +257,11 @@ guardrails:
     litellm_params:
       guardrail: presidio
       mode: "pre_mcp_call"  # Use this mode for MCP requests
+      presidio_filter_scope: both  # input | output | both, optional
+      presidio_score_thresholds: # Optional
+        ALL: 0.7            # Default confidence threshold applied to all entities
+        CREDIT_CARD: 0.8    # Override for credit cards
+        EMAIL_ADDRESS: 0.6  # Override for emails
       pii_entities_config:
         CREDIT_CARD: "MASK"  # Will mask credit card numbers
         EMAIL_ADDRESS: "MASK"  # Will mask email addresses
@@ -248,9 +270,18 @@ guardrails:
     litellm_params:
       guardrail: presidio
       mode: "pre_call"  # Use this mode for regular LLM requests
+      presidio_filter_scope: both  # input | output | both, optional
+      presidio_score_thresholds: # Optional
+        CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+
       pii_entities_config:
         CREDIT_CARD: "BLOCK"  # Will block requests containing credit card numbers
 ```
+
+#### Confidence threshold behavior:
+- No `presidio_score_thresholds`: keep all detections (no thresholds applied)
+- `presidio_score_thresholds.ALL`: apply this confidence threshold to every detection
+- `presidio_score_thresholds.<ENTITY>`: apply only to that entity
+- If both `ALL` and an entity override exist, `ALL` applies globally and the entity override takes precedence for that entity
 
 ### Supported Entity Types
 
@@ -357,6 +388,10 @@ guardrails:
     litellm_params:
       guardrail: presidio
       mode: "pre_mcp_call"
+      presidio_filter_scope: both  # input | output | both
+      presidio_score_thresholds:
+        CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+
+        EMAIL_ADDRESS: 0.6  # Only keep email detections scoring 0.6+
       pii_entities_config:
         CREDIT_CARD: "MASK"  # Will mask credit card numbers
         EMAIL_ADDRESS: "BLOCK"  # Will block email addresses
@@ -674,5 +709,3 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 ```text title="Logged Response with Masked PII" showLineNumbers
 Hi, my name is <PERSON>!
 ```
-
-

@@ -100,7 +100,7 @@ export function ModelDataTable<TData, TValue>({
                       key={header.id}
                       className={`py-1 h-8 relative ${
                         header.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] z-20 w-[120px] ml-8"
+                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
                           : ""
                       } ${header.column.columnDef.meta?.className || ""}`}
                       style={{
@@ -160,7 +160,7 @@ export function ModelDataTable<TData, TValue>({
                         key={cell.id}
                         className={`py-0.5 ${
                           cell.column.id === "actions"
-                            ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] z-20 w-[120px] ml-8"
+                            ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
                             : ""
                         } ${cell.column.columnDef.meta?.className || ""}`}
                         style={{

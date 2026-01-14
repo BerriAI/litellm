@@ -1,6 +1,7 @@
 import React from "react";
 import { notification } from "antd";
 import { parseErrorMessage } from "../shared/errorUtils";
+import { ArgsProps } from "antd/es/notification";
 
 type Placement = "top" | "topLeft" | "topRight" | "bottom" | "bottomLeft" | "bottomRight";
 
@@ -234,6 +235,11 @@ function extractDescription(input: any): string {
   return parseErrorMessage(backendMsg);
 }
 
+export const COMMON_NOTIFICATION_PROPS: Partial<ArgsProps> = {
+  showProgress: true,
+  pauseOnHover: true,
+};
+
 function looksErrorPayload(input: any, status?: number): boolean {
   if (status !== undefined) return true;
   if (input instanceof Error) return true;
@@ -246,6 +252,7 @@ const NotificationManager = {
   error(input: string | NotificationConfig) {
     const cfg = normalize(input, "Error");
     notification.error({
+      ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
       duration: cfg.duration ?? 6,
@@ -255,6 +262,7 @@ const NotificationManager = {
   warning(input: string | NotificationConfig) {
     const cfg = normalize(input, "Warning");
     notification.warning({
+      ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
       duration: cfg.duration ?? 5,
@@ -264,6 +272,7 @@ const NotificationManager = {
   info(input: string | NotificationConfig) {
     const cfg = normalize(input, "Info");
     notification.info({
+      ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
       duration: cfg.duration ?? 4,
@@ -273,6 +282,7 @@ const NotificationManager = {
   success(input: string | React.ReactNode | NotificationConfig) {
     if (React.isValidElement(input)) {
       notification.success({
+        ...COMMON_NOTIFICATION_PROPS,
         message: "Success",
         description: input,
         placement: defaultPlacement(),
@@ -282,6 +292,7 @@ const NotificationManager = {
     }
     const cfg = normalize(input as string | NotificationConfig, "Success");
     notification.success({
+      ...COMMON_NOTIFICATION_PROPS,
       ...cfg,
       placement: cfg.placement ?? defaultPlacement(),
       duration: cfg.duration ?? 3.5,
@@ -305,11 +316,11 @@ const NotificationManager = {
         title === "Content Blocked" ||
         title === "Integration Error"
       ) {
-        notification.warning({ ...payload, duration: extra?.duration ?? 7 });
+        notification.warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 7 });
         return;
       }
       if (title === "Server Error") {
-        notification.error({ ...payload, duration: extra?.duration ?? 8 });
+        notification.error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 8 });
         return;
       }
       if (
@@ -320,10 +331,10 @@ const NotificationManager = {
         title === "Error" ||
         title === "Already Exists"
       ) {
-        notification.error({ ...payload, duration: extra?.duration ?? 6 });
+        notification.error({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
         return;
       }
-      notification.info({ ...payload, duration: extra?.duration ?? 4 });
+      notification.info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
       return;
     }
 
@@ -332,14 +343,14 @@ const NotificationManager = {
     const payload = { ...base, message: cls?.title ?? "Info" };
 
     if (cls?.kind === "success") {
-      notification.success({ ...payload, duration: extra?.duration ?? 3.5 });
+      notification.success({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 3.5 });
       return;
     }
     if (cls?.kind === "warning") {
-      notification.warning({ ...payload, duration: extra?.duration ?? 6 });
+      notification.warning({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 6 });
       return;
     }
-    notification.info({ ...payload, duration: extra?.duration ?? 4 });
+    notification.info({ ...COMMON_NOTIFICATION_PROPS, ...payload, duration: extra?.duration ?? 4 });
   },
 
   clear() {

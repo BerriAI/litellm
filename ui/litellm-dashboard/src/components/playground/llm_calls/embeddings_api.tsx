@@ -9,7 +9,7 @@ export async function makeOpenAIEmbeddingsRequest(
   tags?: string[],
 ) {
   if (!accessToken) {
-    throw new Error("API key is required");
+    throw new Error("Virtual Key is required");
   }
 
   // Base URL should be the current base_url

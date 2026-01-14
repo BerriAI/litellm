@@ -25,10 +25,6 @@ async def test_health_and_chat_completion():
             readiness_response = await response.json()
             assert readiness_response["status"] == "connected"
 
-<<<<<<< HEAD
-
-=======
->>>>>>> parent of d89990e0c5 (Add license metadata to health/readiness endpoint. (#15997))
         # Test liveness endpoint
         async with session.get("http://0.0.0.0:4000/health/liveness") as response:
             assert response.status == 200

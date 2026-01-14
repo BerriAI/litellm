@@ -99,13 +99,13 @@ class ArizeLogger(OpenTelemetry):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
         pass
 
-    def create_litellm_proxy_request_started_span(
-        self,
-        start_time: datetime,
-        headers: dict,
-    ):
-        """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
-        pass
+    # def create_litellm_proxy_request_started_span(
+    #     self,
+    #     start_time: datetime,
+    #     headers: dict,
+    # ):
+    #     """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
+    #     pass
 
     async def async_health_check(self):
         """
@@ -117,14 +117,10 @@ class ArizeLogger(OpenTelemetry):
         try:
             config = self.get_arize_config()
 
-            # Prefer ARIZE_SPACE_KEY, but fall back to ARIZE_SPACE_ID for backwards compatibility
-            effective_space_key = config.space_key or config.space_id
-
-            if not effective_space_key:
+            if not config.space_id and not config.space_key:
                 return {
                     "status": "unhealthy",
-                    # Tests (and users) expect the error message to reference ARIZE_SPACE_KEY
-                    "error_message": "ARIZE_SPACE_KEY environment variable not set",
+                    "error_message": "ARIZE_SPACE_ID or ARIZE_SPACE_KEY environment variable not set",
                 }
 
             if not config.api_key:

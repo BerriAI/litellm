@@ -18,6 +18,10 @@ const EndpointSelector: React.FC<EndpointSelectorProps> = ({ endpointType, onEnd
         onChange={onEndpointChange}
         options={ENDPOINT_OPTIONS}
         className="rounded-md"
+        filterOption={(input, option) =>
+          (option?.label ?? "").toLowerCase().includes(input.toLowerCase()) ||
+          (option?.value ?? "").toLowerCase().includes(input.toLowerCase())
+        }
       />
     </div>
   );

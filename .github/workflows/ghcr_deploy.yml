@@ -338,7 +338,9 @@ jobs:
           if [ -z "${CHART_LIST}" ]; then
             echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
           else
-            printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
+            # Extract version and strip any prerelease suffix (e.g., 0.1.827-latest -> 0.1.827)
+            VERSION=$(printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print $2}' | tr -d " " | cut -d'-' -f1)
+            echo "current-version=${VERSION}" | tee -a $GITHUB_OUTPUT
           fi
         env:
           HELM_EXPERIMENTAL_OCI: '1'
@@ -351,11 +353,24 @@ jobs:
           current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
           version-fragment: 'bug'
 
+      # Add suffix for non-stable releases (semantic versioning)
+      - name: Calculate chart version with prerelease suffix
+        id: chart_version
+        shell: bash
+        run: |
+          BASE_VERSION="${{ steps.bump_version.outputs.next-version || '0.1.0' }}"
+          RELEASE_TYPE="${{ github.event.inputs.release_type }}"
+          if [ "$RELEASE_TYPE" = "stable" ]; then
+            echo "version=${BASE_VERSION}" | tee -a $GITHUB_OUTPUT
+          else
+            echo "version=${BASE_VERSION}-${RELEASE_TYPE}" | tee -a $GITHUB_OUTPUT
+          fi
+
       - uses: ./.github/actions/helm-oci-chart-releaser
         with:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
-          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
+          tag: ${{ github.event.inputs.chartVersion || steps.chart_version.outputs.version || '0.1.0' }}
           app_version: ${{ steps.current_app_tag.outputs.latest_tag }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}

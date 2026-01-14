@@ -329,6 +329,97 @@ class TestProxyBaseLLMRequestProcessing:
         assert original_cost is None
         assert discount_amount is None
 
+    def test_get_custom_headers_key_spend_includes_response_cost(self):
+        """
+        Test that x-litellm-key-spend header includes the current request's response_cost.
+        
+        This ensures that the spend header reflects the updated spend including the current
+        request, even though spend tracking updates happen asynchronously after the response.
+        """
+        # Create mock user API key dict with initial spend
+        mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key_dict.tpm_limit = None
+        mock_user_api_key_dict.rpm_limit = None
+        mock_user_api_key_dict.max_budget = None
+        mock_user_api_key_dict.spend = 0.001  # Initial spend: $0.001
+
+        # Test case 1: response_cost is provided as float
+        response_cost_1 = 0.0005  # Current request cost: $0.0005
+        headers_1 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-1",
+            response_cost=response_cost_1,
+        )
+        
+        assert "x-litellm-key-spend" in headers_1
+        expected_spend_1 = 0.001 + 0.0005  # Initial spend + current request cost
+        assert float(headers_1["x-litellm-key-spend"]) == pytest.approx(expected_spend_1, abs=1e-10)
+        assert float(headers_1["x-litellm-response-cost"]) == response_cost_1
+
+        # Test case 2: response_cost is provided as string
+        response_cost_2 = "0.0003"  # Current request cost as string
+        headers_2 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-2",
+            response_cost=response_cost_2,
+        )
+        
+        assert "x-litellm-key-spend" in headers_2
+        expected_spend_2 = 0.001 + 0.0003  # Initial spend + current request cost
+        assert float(headers_2["x-litellm-key-spend"]) == pytest.approx(expected_spend_2, abs=1e-10)
+
+        # Test case 3: response_cost is None (should use original spend)
+        headers_3 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-3",
+            response_cost=None,
+        )
+        
+        assert "x-litellm-key-spend" in headers_3
+        assert float(headers_3["x-litellm-key-spend"]) == 0.001  # Should use original spend
+
+        # Test case 4: response_cost is 0 (should not change spend)
+        headers_4 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-4",
+            response_cost=0.0,
+        )
+        
+        assert "x-litellm-key-spend" in headers_4
+        assert float(headers_4["x-litellm-key-spend"]) == 0.001  # Should remain unchanged for 0 cost
+
+        # Test case 5: user_api_key_dict.spend is None (should default to 0.0)
+        mock_user_api_key_dict.spend = None
+        headers_5 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-5",
+            response_cost=0.0002,
+        )
+        
+        assert "x-litellm-key-spend" in headers_5
+        assert float(headers_5["x-litellm-key-spend"]) == 0.0002  # 0.0 + 0.0002
+
+        # Test case 6: response_cost is negative (should not be added, use original spend)
+        mock_user_api_key_dict.spend = 0.001
+        headers_6 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-6",
+            response_cost=-0.0001,  # Negative cost (should not be added)
+        )
+        
+        assert "x-litellm-key-spend" in headers_6
+        assert float(headers_6["x-litellm-key-spend"]) == 0.001  # Should use original spend
+
+        # Test case 7: response_cost is invalid string (should fallback to original spend)
+        headers_7 = ProxyBaseLLMRequestProcessing.get_custom_headers(
+            user_api_key_dict=mock_user_api_key_dict,
+            call_id="test-call-id-7",
+            response_cost="invalid",  # Invalid string
+        )
+        
+        assert "x-litellm-key-spend" in headers_7
+        assert float(headers_7["x-litellm-key-spend"]) == 0.001  # Should use original spend on error
+
 
 @pytest.mark.asyncio
 class TestCommonRequestProcessingHelpers:

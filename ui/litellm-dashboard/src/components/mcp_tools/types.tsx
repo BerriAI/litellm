@@ -10,6 +10,7 @@ export const AUTH_TYPE = {
   API_KEY: "api_key",
   BEARER_TOKEN: "bearer_token",
   BASIC: "basic",
+  OAUTH2: "oauth2",
 };
 
 export const TRANSPORT = {
@@ -42,6 +43,7 @@ export interface InputSchemaProperty {
   required?: string[]; // For required fields in nested objects
   enum?: string[]; // For enum values
   default?: any; // For default values
+  items?: InputSchemaProperty | InputSchemaProperty[]; // For array item schemas
 }
 
 // Define the structure for the input schema of a tool
@@ -109,7 +111,12 @@ export interface MCPEmbeddedResource {
 export type MCPContent = MCPTextContent | MCPImageContent | MCPEmbeddedResource;
 
 // Define the response structure for the callMCPTool endpoint
-export type CallMCPToolResponse = MCPContent[];
+export type CallMCPToolResponse = {
+  content: MCPContent[];
+  _meta: any;
+  isError: boolean;
+  structuredContent: any;
+};
 
 // Props for the main component
 export interface MCPToolsViewerProps {

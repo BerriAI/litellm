@@ -21,11 +21,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS = (
-    "2.0-flash-preview-image",
-    "2.0-flash-preview-image-generation",
-    "2.5-flash-image-preview",
-)
 class GoogleImageGenConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     
@@ -75,7 +70,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             "1792x1024": "16:9", 
             "1024x1792": "9:16",
             "1280x896": "4:3",
-            "896x1280": "3:4"
+            "896x1280": "3:4",
         }
         return aspect_ratio_map.get(size, "1:1")
 
@@ -103,7 +98,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         complete_url = complete_url.rstrip("/")
 
         # Gemini Flash Image Preview models use generateContent endpoint
-        if any(identifier in model for identifier in FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS):
+        if "gemini" in model:
             complete_url = f"{complete_url}/models/{model}:generateContent"
         else:
             # All other Imagen models use predict endpoint
@@ -158,7 +153,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         }
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
-        if any(identifier in model for identifier in FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS):
+        if "gemini" in model:
             request_body: dict = {
                 "contents": [
                     {
@@ -217,7 +212,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         # Handle different response formats based on model
-        if any(identifier in model for identifier in FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS):
+        if "gemini" in model:
             # Gemini Flash Image Preview models return in candidates format
             candidates = response_data.get("candidates", [])
             for candidate in candidates:

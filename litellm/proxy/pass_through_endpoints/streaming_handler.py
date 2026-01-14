@@ -4,10 +4,12 @@ from typing import List, Optional
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.proxy._types import PassThroughEndpointLoggingResultValues
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import StandardPassThroughResponseObject
 
@@ -37,11 +39,35 @@ class PassThroughStreamingHandler:
         """
         - Yields chunks from the response
         - Collect non-empty chunks for post-processing (logging)
+        - Inject cost into chunks if include_cost_in_streaming_usage is enabled
         """
         try:
             raw_bytes: List[bytes] = []
+            # Extract model name for cost injection
+            model_name = PassThroughStreamingHandler._extract_model_for_cost_injection(
+                request_body=request_body,
+                url_route=url_route,
+                endpoint_type=endpoint_type,
+                litellm_logging_obj=litellm_logging_obj,
+            )
+
             async for chunk in response.aiter_bytes():
                 raw_bytes.append(chunk)
+                if (
+                    getattr(litellm, "include_cost_in_streaming_usage", False)
+                    and model_name
+                ):
+                    if endpoint_type == EndpointType.VERTEX_AI:
+                        # Only handle streamRawPredict (uses Anthropic format)
+                        if "streamRawPredict" in url_route or "rawPredict" in url_route:
+                            modified_chunk = (
+                                ProxyBaseLLMRequestProcessing._process_chunk_with_cost_injection(
+                                    chunk, model_name
+                                )
+                            )
+                            if modified_chunk is not None:
+                                chunk = modified_chunk
+
                 yield chunk
 
             # After all chunks are processed, handle post-processing
@@ -163,6 +189,36 @@ class PassThroughStreamingHandler:
             start_time=start_time,
             **kwargs,
         )
+
+    @staticmethod
+    def _extract_model_for_cost_injection(
+        request_body: Optional[dict],
+        url_route: str,
+        endpoint_type: EndpointType,
+        litellm_logging_obj: LiteLLMLoggingObj,
+    ) -> Optional[str]:
+        """
+        Extract model name for cost injection from various sources.
+        """
+        # Try to get model from request body
+        if request_body:
+            model = request_body.get("model")
+            if model:
+                return model
+
+        # Try to get model from logging object
+        if hasattr(litellm_logging_obj, "model_call_details"):
+            model = litellm_logging_obj.model_call_details.get("model")
+            if model:
+                return model
+
+        # For Vertex AI, try to extract from URL
+        if endpoint_type == EndpointType.VERTEX_AI:
+            model = VertexPassthroughLoggingHandler.extract_model_from_url(url_route)
+            if model and model != "unknown":
+                return model
+
+        return None
 
     @staticmethod
     def _convert_raw_bytes_to_str_lines(raw_bytes: List[bytes]) -> List[str]:
