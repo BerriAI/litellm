@@ -18099,6 +18099,39 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "gpt-5.2-codex": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "input_cost_per_token": 1.75e-06,
+        "input_cost_per_token_priority": 3.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1.4e-05,
+        "output_cost_per_token_priority": 2.8e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "gpt-5-mini": {
         "cache_read_input_token_cost": 2.5e-08,
         "cache_read_input_token_cost_flex": 1.25e-08,
@@ -23256,6 +23289,25 @@
         "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 1e-05,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "openrouter/openai/gpt-5.2-codex": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
         "supported_modalities": [
             "text",
             "image"
