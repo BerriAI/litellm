@@ -6,12 +6,12 @@ This document helps contributors understand where to make changes in LiteLLM.
 
 ## How It Works
 
-The AI Gateway (Proxy) uses the LiteLLM SDK internally for all LLM calls:
+The LiteLLM AI Gateway (Proxy) uses the LiteLLM SDK internally for all LLM calls:
 
 ```
-OpenAI SDK (client)    ──▶  AI Gateway (proxy/)  ──▶  LiteLLM SDK (litellm/)  ──▶  LLM API
-Anthropic SDK (client) ──▶  AI Gateway (proxy/)  ──▶  LiteLLM SDK (litellm/)  ──▶  LLM API
-Any HTTP client        ──▶  AI Gateway (proxy/)  ──▶  LiteLLM SDK (litellm/)  ──▶  LLM API
+OpenAI SDK (client)    ──▶  LiteLLM AI Gateway (proxy/)  ──▶  LiteLLM SDK (litellm/)  ──▶  LLM API
+Anthropic SDK (client) ──▶  LiteLLMAI Gateway (proxy/)  ──▶  LiteLLM SDK (litellm/)  ──▶  LLM API
+Any HTTP client        ──▶  LiteLLMAI Gateway (proxy/)  ──▶  LiteLLM SDK (litellm/)  ──▶  LLM API
 ```
 
 The **AI Gateway** adds authentication, rate limiting, budgets, and routing on top of the SDK.
