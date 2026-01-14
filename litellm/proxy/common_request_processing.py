@@ -649,9 +649,7 @@ class ProxyBaseLLMRequestProcessing:
             proxy_logging_obj.during_call_hook(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
-                call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
-                    route_type=route_type  # type: ignore
-                ),
+                call_type=route_type,  # type: ignore
             )
         )
 
@@ -1003,19 +1001,6 @@ class ProxyBaseLLMRequestProcessing:
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
-
-    @staticmethod
-    def _get_pre_call_type(
-        route_type: Literal["acompletion", "aembedding", "aresponses", "allm_passthrough_route"],
-    ) -> Literal["completion", "embedding", "responses", "allm_passthrough_route"]:
-        if route_type == "acompletion":
-            return "completion"
-        elif route_type == "aembedding":
-            return "embedding"
-        elif route_type == "aresponses":
-            return "responses"
-        elif route_type == "allm_passthrough_route":
-            return "allm_passthrough_route"
 
     #########################################################
     # Proxy Level Streaming Data Generator

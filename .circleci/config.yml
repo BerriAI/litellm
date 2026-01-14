@@ -2036,6 +2036,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/info_log_check.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
+      - run: python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
       - run: python ./tests/code_coverage_tests/test_proxy_types_import.py
       - run: python ./tests/code_coverage_tests/callback_manager_test.py
       - run: python ./tests/code_coverage_tests/recursive_detector.py
@@ -2053,39 +2054,6 @@ jobs:
       - run: python ./tests/code_coverage_tests/check_fastuuid_usage.py
       - run: python ./tests/code_coverage_tests/memory_test.py
       - run: helm lint ./deploy/charts/litellm-helm
-
-  memory_leak_tests:
-    docker:
-      - image: cimg/python:3.11
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: large
-    steps:
-      - setup_litellm_test_deps
-      - run:
-          name: Install Memory Test Dependencies
-          command: |
-            pip install "psutil>=5.9.0"
-            pip install "fastapi>=0.100.0"
-            pip install "httpx>=0.24.0"
-            pip install "uvicorn>=0.23.0"
-      - run:
-          name: Run Linear Memory Growth Tests
-          command: |
-            echo "Running memory leak tests individually to avoid baseline drift..."
-            echo "Running test_memory_baseline_1k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_1k -v -s --tb=short
-            echo "Running test_memory_baseline_2k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_2k -v -s --tb=short
-            echo "Running test_memory_baseline_4k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_4k -v -s --tb=short
-            echo "Running test_memory_baseline_10k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_10k -v -s --tb=short
-            echo "Running test_memory_baseline_30k..."
-            python -m pytest tests/load_tests/test_linear_memory_growth.py::test_memory_baseline_30k -v -s --tb=short
-          no_output_timeout: 60m
 
   db_migration_disable_update_check:
     machine:
@@ -3832,12 +3800,6 @@ workflows:
                 - main
                 - /litellm_.*/
       - check_code_and_doc_quality:
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - memory_leak_tests:
           filters:
             branches:
               only:

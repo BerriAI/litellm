@@ -2639,6 +2639,10 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
         ## override / add new keys to the existing model cost dictionary
         updated_dictionary = _update_dictionary(existing_model, value)
         litellm.model_cost.setdefault(model_cost_key, {}).update(updated_dictionary)
+        
+        # Invalidate case-insensitive lookup map since model_cost was modified
+        _invalidate_model_cost_lowercase_map()
+        
         verbose_logger.debug(
             f"added/updated model={model_cost_key} in litellm.model_cost: {model_cost_key}"
         )
@@ -4993,6 +4997,109 @@ def _strip_model_name(model: str, custom_llm_provider: Optional[str]) -> str:
         return model
 
 
+# Global case-insensitive lookup map for model_cost (built eagerly at module import)
+_model_cost_lowercase_map: Optional[Dict[str, str]] = None
+
+
+def _invalidate_model_cost_lowercase_map() -> None:
+    """Invalidate the case-insensitive lookup map for model_cost.
+    
+    Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = None
+
+
+def _rebuild_model_cost_lowercase_map() -> Dict[str, str]:
+    """Rebuild the case-insensitive lookup map from the current model_cost.
+    
+    Returns:
+        The rebuilt map (guaranteed to be not None).
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = {k.lower(): k for k in litellm.model_cost}
+    return _model_cost_lowercase_map
+
+
+def _handle_stale_map_entry_rebuild(
+    potential_key_lower: str,
+) -> Optional[str]:
+    """
+    Handle stale _model_cost_lowercase_map entry (key was popped).
+    
+    Rebuilds the map and retries the lookup.
+    
+    Returns:
+        The matched key if found after rebuild, None otherwise.
+    """
+    global _model_cost_lowercase_map
+    _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+    matched_key = _model_cost_lowercase_map.get(potential_key_lower)
+    if matched_key is not None and matched_key in litellm.model_cost:
+        return matched_key
+    return None
+
+
+def _handle_new_key_with_scan(
+    potential_key_lower: str,
+) -> Optional[str]:
+    """
+    Handle new key added to model_cost without invalidating _model_cost_lowercase_map.
+    
+    Scans model_cost for case-insensitive match and rebuilds the map if found.
+    
+    Returns:
+        The matched key if found, None otherwise.
+    """
+    global _model_cost_lowercase_map
+    for key in litellm.model_cost:
+        if key.lower() == potential_key_lower:
+            _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+            return key
+    return None
+
+
+def _get_model_cost_key(potential_key: str) -> Optional[str]:
+    """
+    Get the actual key from model_cost, with case-insensitive fallback.
+    
+    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
+    CPU overhead. This function is called frequently during router operations.
+    
+    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
+    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
+    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
+    
+    If you need to add a new helper function with O(n) operations that is conditionally
+    called and confirmed not to cause performance issues, add it to the allowed_helpers
+    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
+    """
+    global _model_cost_lowercase_map
+    
+    # Exact match (O(1))
+    if potential_key in litellm.model_cost:
+        return potential_key
+
+    # Case-insensitive lookup via map (O(1))
+    if _model_cost_lowercase_map is None:
+        _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
+    
+    potential_key_lower = potential_key.lower()
+    matched_key = _model_cost_lowercase_map.get(potential_key_lower)
+    
+    # Verify key exists (O(1) - handles model_cost.pop() case)
+    if matched_key is not None and matched_key in litellm.model_cost:
+        return matched_key
+    
+    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
+    if matched_key is not None:
+        matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
+        if matched_key is not None:
+            return matched_key
+    
+    return None
+
+
 def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
@@ -5020,6 +5127,11 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
         elif (
             custom_llm_provider == "litellm_proxy"
         ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
+            return True
+        elif custom_llm_provider == "azure_ai" and model_info["litellm_provider"] in ("azure", "openai"):
+            # Azure AI also works with azure models 
+            # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost 
+            # tracking the cost is better than attributing 0 cost to it.
             return True
         else:
             return False
@@ -5142,10 +5254,10 @@ def _is_potential_model_name_in_model_cost(
     potential_model_names: PotentialModelNamesAndCustomLLMProvider,
 ) -> bool:
     """
-    Check if the potential model name is in the model cost.
+    Check if the potential model name is in the model cost (case-insensitive).
     """
     return any(
-        potential_model_name in litellm.model_cost
+        _get_model_cost_key(str(potential_model_name)) is not None
         for potential_model_name in potential_model_names.values()
     )
 
@@ -5223,44 +5335,51 @@ def _get_model_info_helper(  # noqa: PLR0915
             _model_info: Optional[Dict[str, Any]] = None
             key: Optional[str] = None
 
-            if combined_model_name in litellm.model_cost:
-                key = combined_model_name
+            # Use case-insensitive lookup for all model name checks
+            _matched_key = _get_model_cost_key(combined_model_name)
+            if _matched_key is not None:
+                key = _matched_key
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
                     model_info=_model_info, custom_llm_provider=custom_llm_provider
                 ):
                     _model_info = None
-            if _model_info is None and model in litellm.model_cost:
-                key = model
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if (
-                _model_info is None
-                and combined_stripped_model_name in litellm.model_cost
-            ):
-                key = combined_stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and stripped_model_name in litellm.model_cost:
-                key = stripped_model_name
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
-            if _model_info is None and split_model in litellm.model_cost:
-                key = split_model
-                _model_info = _get_model_info_from_model_cost(key=cast(str, key))
-                if not _check_provider_match(
-                    model_info=_model_info, custom_llm_provider=custom_llm_provider
-                ):
-                    _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(combined_stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(split_model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info, custom_llm_provider=custom_llm_provider
+                    ):
+                        _model_info = None
 
             if _model_info is None or key is None:
                 raise ValueError(
