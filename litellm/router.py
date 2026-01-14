@@ -1380,6 +1380,11 @@ class Router:
 
         Catches errors for fallbacks using the router's fallback system
         """
+        if initial_kwargs.get("disable_fallbacks", False):
+            verbose_router_logger.info("Mid stream fallback disabled by user, re-raising original error")
+            if e.original_exception is not None:
+                raise e.original_exception
+            raise e
         from litellm.exceptions import MidStreamFallbackError
 
         class FallbackStreamWrapper(CustomStreamWrapper):
