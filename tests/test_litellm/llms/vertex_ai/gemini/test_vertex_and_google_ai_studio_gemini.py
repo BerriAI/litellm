@@ -2587,3 +2587,69 @@ def test_gemini_token_usage_standard_response():
     assert result.completion_tokens == 50
     assert result.completion_tokens_details.text_tokens == 40
     assert result.completion_tokens_details.image_tokens == 10
+
+
+def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
+    """
+    Test that image generation models correctly separate prompt and completion token details.
+    
+    This is a regression test for the bug where prompt_tokens_details.image_tokens
+    was incorrectly set to the completion's image token count instead of 0.
+    
+    Scenario: Text-only prompt generates an image response
+    - Input: Text prompt (no images)
+    - Output: Generated image + text description
+    
+    Expected behavior:
+    - prompt_tokens_details.image_tokens should be 0 (text-only input)
+    - completion_tokens_details.image_tokens should be 1290 (generated image)
+    
+    Bug behavior (before fix):
+    - prompt_tokens_details.image_tokens was 1290 (incorrect!)
+    - completion_tokens_details.image_tokens was 1290 (correct)
+    
+    The bug was caused by reusing the same variables (image_tokens, audio_tokens, text_tokens)
+    for both prompt and completion token details.
+    """
+    v = VertexGeminiConfig()
+    
+    # Simulate Gemini image generation model response metadata
+    # User sends text-only prompt, model generates image + text
+    usage_metadata_dict = {
+        "promptTokenCount": 101,
+        "candidatesTokenCount": 1290,
+        "totalTokenCount": 1391,
+        # Prompt is text-only (no image tokens in input)
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 101}
+        ],
+        # Response contains generated image + text
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1290}
+        ],
+    }
+    
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+    
+    # Verify basic token counts
+    assert result.prompt_tokens == 101
+    assert result.completion_tokens == 1290
+    assert result.total_tokens == 1391
+    
+    # CRITICAL: Prompt tokens details should show NO image tokens (text-only input)
+    assert result.prompt_tokens_details.text_tokens == 101, \
+        "Prompt text tokens should be 101"
+    assert result.prompt_tokens_details.image_tokens is None, \
+        "Prompt image tokens should be None (text-only input, no images in prompt)"
+    assert result.prompt_tokens_details.audio_tokens is None, \
+        "Prompt audio tokens should be None"
+    
+    # Completion tokens details should show the generated image tokens
+    assert result.completion_tokens_details.image_tokens == 1290, \
+        "Completion image tokens should be 1290 (generated image)"
+    
+    # Verify text_tokens is auto-calculated for completion
+    # candidatesTokenCount (1290) - image_tokens (1290) = 0
+    assert result.completion_tokens_details.text_tokens == 0, \
+        "Completion text tokens should be 0 (image-only response)"
