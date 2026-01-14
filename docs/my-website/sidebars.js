@@ -976,6 +976,7 @@ const sidebars = {
       label: "Issue Reporting",
       items: [
         "troubleshoot/cpu_issues",
+        "troubleshoot/memory_issues",
       ],
     },
   ],
