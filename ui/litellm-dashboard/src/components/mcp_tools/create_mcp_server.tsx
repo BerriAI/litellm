@@ -663,7 +663,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </Form.Item>
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
                   <p className="text-sm text-gray-600">
-                    Complete the OAuth authorization flow to fetch an access token and store it as the authentication value.
+                    Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.
                   </p>
                   <Button
                     variant="secondary"
