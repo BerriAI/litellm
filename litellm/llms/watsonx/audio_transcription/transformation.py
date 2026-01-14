@@ -102,7 +102,7 @@ class IBMWatsonXAudioTranscriptionConfig(
             "watsonx_project"
         )
         space_id = optional_params.get("space_id")
-        api_params = _get_api_params(params=optional_params, model=model)
+        # api_params = _get_api_params(params=optional_params, model=model)
 
         # Initialize form data with required fields
         form_data: WatsonXAudioTranscriptionRequestBody = {"model": model}
