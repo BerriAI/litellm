@@ -15,6 +15,7 @@ from ..exceptions import (
     AuthenticationError,
     BadGatewayError,
     BadRequestError,
+    ConflictError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
     InternalServerError,
@@ -939,6 +940,156 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             litellm_debug_info=extra_information,
                             exception_status_code=original_exception.status_code,
                         )
+            elif custom_llm_provider in (
+                "oci", "oci_generative_ai", "oracle", "oracle_cloud"
+            ):
+                # Try to parse an OCI-style JSON error body
+                oci_err = None
+                try:
+                    oci_err = json.loads(error_str)
+                except Exception:
+                    # If not pure JSON, try looser extraction
+                    oci_err = {}
+                # Extract fields commonly present in OCI error payloads
+                oci_status = (
+                    getattr(original_exception, "status_code", None)
+                    or oci_err.get("status")
+                    or oci_err.get("code")
+                )
+                # Normalize status to int if possible
+                try:
+                    oci_status = int(oci_status)
+                except Exception:
+                    oci_status = None
+
+                oci_message = (
+                    getattr(original_exception, "message", None)
+                    or oci_err.get("message")
+                    or error_str
+                )
+                opc_request_id = oci_err.get("opc-request-id") or (
+                    getattr(getattr(original_exception, "response", None), "headers", {}) or {}
+                ).get("opc-request-id")
+
+                # Build a canonical message
+                exception_mapping_worked = True
+                exception_provider = "OciException"
+                _response = getattr(original_exception, "response", None)
+                if _response is None and oci_status:
+                    # Create a Response so the raised error carries the correct status
+                    _response = httpx.Response(
+                        status_code=oci_status,
+                        request=httpx.Request(
+                            method="POST", 
+                            url="https://inference.generativeai.oci.oraclecloud.com"
+                        ),
+                        content=str(error_str).encode("utf-8"),
+                    )
+
+                # Heuristic fallback when status is missing but throttling is obvious
+                if not oci_status and ("throttled" in error_str.lower() or "request limit" in error_str.lower()):
+                    oci_status = 429
+
+                # Map OCI status to LiteLLM exceptions (consistent with other providers) 
+                # <source_id data="1" title="exception_mapping_utils.py" />
+                bad_oci_request_statuses = (400, 406, 413, 415, 422, 424)
+                if oci_status in bad_oci_request_statuses:
+                    raise BadRequestError(
+                        message=f"{exception_provider} - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 401 or oci_status == 403:
+                    raise AuthenticationError(
+                        message=f"{exception_provider}: Authentication/Authorization Error - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 404:
+                    # if NotFoundError exists in your litellm version; 
+                    # otherwise use BadRequestError
+                    raise NotFoundError(  
+                        message=f"{exception_provider}: Not Found - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 409:
+                    # if ConflictError not available, fall back to BadRequestError
+                    raise ConflictError(
+                        message=f"{exception_provider}: Conflict - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 429:
+                    # Critical for throttling scenarios
+                    raise RateLimitError(
+                        message=f"{exception_provider} - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 500:
+                    raise litellm.InternalServerError(
+                        message=f"{exception_provider} - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 502:
+                    raise BadGatewayError(
+                        message=f"{exception_provider} BadGatewayError - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                    )
+                elif oci_status == 503:
+                    raise ServiceUnavailableError(
+                        message=f"{exception_provider} - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                elif oci_status == 504:
+                    raise Timeout(
+                        message=f"{exception_provider} - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        litellm_debug_info=extra_information,
+                        exception_status_code=oci_status,
+                    )
+                elif oci_status:
+                    # Preserve real status when known
+                    raise APIError(
+                        status_code=oci_status,
+                        message=f"{exception_provider} - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        response=_response,
+                        litellm_debug_info=extra_information,
+                    )
+                else:
+                    # No reliable status found; still avoid masking as 500 if possible
+                    raise APIConnectionError(
+                        message=f"APIConnectionError: {exception_provider} - {oci_message}",
+                        llm_provider=custom_llm_provider,
+                        model=model,
+                        litellm_debug_info=extra_information,
+                        request=httpx.Request(
+                            method="POST", 
+                            url="https://inference.generativeai.oci.oraclecloud.com"
+                        ),
+                    )
             elif custom_llm_provider == "bedrock":
                 if (
                     "too many tokens" in error_str
