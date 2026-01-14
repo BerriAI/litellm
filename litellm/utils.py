@@ -5062,39 +5062,32 @@ def _handle_new_key_with_scan(
 def _get_model_cost_key(potential_key: str) -> Optional[str]:
     """
     Get the actual key from model_cost, with case-insensitive fallback.
-
-    Returns the key if found (exact match preferred, then case-insensitive), or None if not found.
+    
+    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
+    CPU overhead. This function is called frequently during router operations.
     """
     global _model_cost_lowercase_map
     
-    # Try exact match first (most common case, O(1))
+    # Exact match (O(1))
     if potential_key in litellm.model_cost:
         return potential_key
 
-    # Fallback to case-insensitive match using O(1) lookup map
+    # Case-insensitive lookup via map (O(1))
     if _model_cost_lowercase_map is None:
         _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
     
     potential_key_lower = potential_key.lower()
     matched_key = _model_cost_lowercase_map.get(potential_key_lower)
     
-    # Verify the matched key still exists in model_cost (defense against stale cache)
-    # This handles cases where model_cost is modified directly (e.g., model_cost.pop())
+    # Verify key exists (O(1) - handles model_cost.pop() case)
     if matched_key is not None and matched_key in litellm.model_cost:
         return matched_key
     
-    # If matched_key exists in _model_cost_lowercase_map but not in model_cost, the map is stale (key was popped)
-    # Rebuild _model_cost_lowercase_map to remove stale entries and keep it in sync
+    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
     if matched_key is not None:
         matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
         if matched_key is not None:
             return matched_key
-    
-    # Fallback: if _model_cost_lowercase_map lookup failed, check if a new key was added without invalidating the map
-    # This handles cases where litellm.model_cost[key] = value was done directly
-    matched_key = _handle_new_key_with_scan(potential_key_lower)
-    if matched_key is not None:
-        return matched_key
     
     return None
 
