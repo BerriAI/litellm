@@ -3240,20 +3240,22 @@ class ProxyConfig:
     ) -> Optional[dict]:
         """
         Get router_settings in priority order: Key > Team > Global
-        
+
         Returns:
             dict: Combined router_settings, or None if no settings found
         """
         if prisma_client is None:
             return None
-        
+
         import json
         import yaml
-        
+
         # 1. Try key-level router_settings
         if user_api_key_dict is not None:
             # Check if router_settings is available on the key object
-            key_router_settings_value = getattr(user_api_key_dict, "router_settings", None)
+            key_router_settings_value = getattr(
+                user_api_key_dict, "router_settings", None
+            )
             if key_router_settings_value is not None:
                 key_router_settings = None
                 if isinstance(key_router_settings_value, str):
@@ -3266,11 +3268,15 @@ class ProxyConfig:
                             pass
                 elif isinstance(key_router_settings_value, dict):
                     key_router_settings = key_router_settings_value
-                
+
                 # If key has router_settings (non-empty dict), use it
-                if key_router_settings is not None and isinstance(key_router_settings, dict) and key_router_settings:
+                if (
+                    key_router_settings is not None
+                    and isinstance(key_router_settings, dict)
+                    and key_router_settings
+                ):
                     return key_router_settings
-        
+
         # 2. Try team-level router_settings
         if user_api_key_dict is not None and user_api_key_dict.team_id is not None:
             try:
@@ -3278,37 +3284,51 @@ class ProxyConfig:
                     where={"team_id": user_api_key_dict.team_id}
                 )
                 if team_obj is not None:
-                    team_router_settings_value = getattr(team_obj, "router_settings", None)
+                    team_router_settings_value = getattr(
+                        team_obj, "router_settings", None
+                    )
                     if team_router_settings_value is not None:
                         team_router_settings = None
                         if isinstance(team_router_settings_value, str):
                             try:
-                                team_router_settings = yaml.safe_load(team_router_settings_value)
+                                team_router_settings = yaml.safe_load(
+                                    team_router_settings_value
+                                )
                             except (yaml.YAMLError, json.JSONDecodeError):
                                 try:
-                                    team_router_settings = json.loads(team_router_settings_value)
+                                    team_router_settings = json.loads(
+                                        team_router_settings_value
+                                    )
                                 except json.JSONDecodeError:
                                     pass
                         elif isinstance(team_router_settings_value, dict):
                             team_router_settings = team_router_settings_value
-                        
+
                         # If team has router_settings (non-empty dict), use it
-                        if team_router_settings is not None and isinstance(team_router_settings, dict) and team_router_settings:
+                        if (
+                            team_router_settings is not None
+                            and isinstance(team_router_settings, dict)
+                            and team_router_settings
+                        ):
                             return team_router_settings
             except Exception:
                 # If team lookup fails, continue to global settings
                 pass
-        
+
         # 3. Try global router_settings
         try:
             db_router_settings = await prisma_client.db.litellm_config.find_first(
                 where={"param_name": "router_settings"}
             )
-            if db_router_settings is not None and isinstance(db_router_settings.param_value, dict) and db_router_settings.param_value:
+            if (
+                db_router_settings is not None
+                and isinstance(db_router_settings.param_value, dict)
+                and db_router_settings.param_value
+            ):
                 return db_router_settings.param_value
         except Exception:
             pass
-        
+
         return None
 
     async def _add_router_settings_from_db_config(
@@ -4675,27 +4695,48 @@ class ProxyStartupEvent:
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
             spend_log_cleanup = SpendLogCleanup()
-            # Get the interval from config or default to 1 day
-            retention_interval = general_settings.get(
-                "maximum_spend_logs_retention_interval", "1d"
-            )
-            try:
-                interval_seconds = duration_in_seconds(retention_interval)
-                scheduler.add_job(
-                    spend_log_cleanup.cleanup_old_spend_logs,
-                    "interval",
-                    seconds=interval_seconds
-                    + random.randint(0, 60),  # Add small random offset
-                    # REMOVED jitter parameter - major cause of memory leak
-                    args=[prisma_client],
-                    id="spend_log_cleanup_job",
-                    replace_existing=True,
-                    misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            cleanup_cron = general_settings.get("maximum_spend_logs_cleanup_cron")
+
+            if cleanup_cron:
+                from apscheduler.triggers.cron import CronTrigger
+
+                try:
+                    cron_trigger = CronTrigger.from_crontab(cleanup_cron)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        cron_trigger,
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup scheduled with cron: {cleanup_cron}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        f"Invalid maximum_spend_logs_cleanup_cron value: {cleanup_cron}"
+                    )
+            else:
+                # Interval-based scheduling (existing behavior)
+                retention_interval = general_settings.get(
+                    "maximum_spend_logs_retention_interval", "1d"
                 )
-            except ValueError:
-                verbose_proxy_logger.error(
-                    "Invalid maximum_spend_logs_retention_interval value"
-                )
+                try:
+                    interval_seconds = duration_in_seconds(retention_interval)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        "interval",
+                        seconds=interval_seconds + random.randint(0, 60),
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value"
+                    )
         ### CHECK BATCH COST ###
         if llm_router is not None:
             try:
@@ -9885,7 +9926,9 @@ async def get_config():  # noqa: PLR0915
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)
-        _success_and_failure_callbacks = normalize_callback(_success_and_failure_callbacks)
+        _success_and_failure_callbacks = normalize_callback(
+            _success_and_failure_callbacks
+        )
 
         _data_to_return = []
         """
