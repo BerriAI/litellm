@@ -5,7 +5,9 @@ from typing import Dict, List, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from litellm._logging import verbose_logger
-from litellm.proxy._experimental.mcp_server.ui_session_utils import build_effective_auth_contexts
+from litellm.proxy._experimental.mcp_server.ui_session_utils import (
+    build_effective_auth_contexts,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
@@ -31,7 +33,6 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.server import (
         ListMCPToolsRestAPIResponseObject,
         MCPServer,
-        call_mcp_tool,
         execute_mcp_tool,
         filter_tools_by_allowed_tools,
     )
@@ -200,7 +201,9 @@ if MCP_AVAILABLE:
                 # Query all servers the user has access to
                 errors = []
                 for allowed_server_id in allowed_server_ids:
-                    server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
+                    server = global_mcp_server_manager.get_mcp_server_by_id(
+                        allowed_server_id
+                    )
                     if server is None:
                         continue
 
@@ -342,7 +345,9 @@ if MCP_AVAILABLE:
             # Build allowed_mcp_servers list (only include allowed servers)
             allowed_mcp_servers: List[MCPServer] = []
             for allowed_server_id in allowed_server_ids_set:
-                server = global_mcp_server_manager.get_mcp_server_by_id(allowed_server_id)
+                server = global_mcp_server_manager.get_mcp_server_by_id(
+                    allowed_server_id
+                )
                 if server is not None:
                     allowed_mcp_servers.append(server)
 
@@ -401,7 +406,6 @@ if MCP_AVAILABLE:
     # /health/tools/list -> List tools from MCP server
     # For these routes users will dynamically pass the MCP connection params, they don't need to be on the MCP registry
     ########################################################
-    from litellm.proxy._experimental.mcp_server.server import MCPServer
     from litellm.proxy.management_endpoints.mcp_management_endpoints import (
         NewMCPServerRequest,
     )
