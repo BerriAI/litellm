@@ -5092,7 +5092,6 @@ def _get_model_cost_key(potential_key: str) -> Optional[str]:
     return None
 
 
-
 def _get_model_info_from_model_cost(key: str) -> dict:
     return litellm.model_cost[key]
 
