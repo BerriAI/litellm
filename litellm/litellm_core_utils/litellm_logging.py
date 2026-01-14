@@ -4493,7 +4493,7 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_usage_from_response_obj(
-        response_obj: Optional[dict], combined_usage_object: Optional[Usage] = None
+        response_obj: Optional[Union[dict, BaseModel]], combined_usage_object: Optional[Usage] = None
     ) -> Usage:
         ## BASE CASE ##
         if combined_usage_object is not None:
@@ -4505,7 +4505,10 @@ class StandardLoggingPayloadSetup:
                 total_tokens=0,
             )
 
-        usage = response_obj.get("usage", None) or {}
+        if isinstance(response_obj, dict):
+            usage = response_obj.get("usage", None) or {}
+        else:
+            usage = getattr(response_obj, "usage", None) or {}
         if usage is None or (
             not isinstance(usage, dict) and not isinstance(usage, Usage)
         ):
@@ -4566,13 +4569,16 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_final_response_obj(
-        response_obj: dict, init_response_obj: Union[Any, BaseModel, dict], kwargs: dict
+        response_obj: Union[dict, BaseModel], init_response_obj: Union[Any, BaseModel, dict], kwargs: dict
     ) -> Optional[Union[dict, str, list]]:
         """
         Get final response object after redacting the message input/output from logging
         """
         if response_obj:
-            final_response_obj: Optional[Union[dict, str, list]] = response_obj
+            if isinstance(response_obj, BaseModel):
+                final_response_obj: Optional[Union[dict, str, list]] = response_obj.model_dump()
+            else:
+                final_response_obj = response_obj
         elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
             final_response_obj = init_response_obj
         else:
@@ -4906,13 +4912,14 @@ def _get_status_fields(
 def _extract_response_obj_and_hidden_params(
     init_response_obj: Union[Any, BaseModel, dict],
     original_exception: Optional[Exception],
-) -> Tuple[dict, Optional[dict]]:
+) -> Tuple[Union[dict, BaseModel], Optional[dict]]:
+
     """Extract response_obj and hidden_params from init_response_obj."""
     hidden_params: Optional[dict] = None
     if init_response_obj is None:
-        response_obj = {}
+        response_obj: Union[dict, BaseModel] = {}
     elif isinstance(init_response_obj, BaseModel):
-        response_obj = init_response_obj.model_dump()
+        response_obj = init_response_obj
         hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
@@ -4979,7 +4986,10 @@ def get_standard_logging_object_payload(
             ),
         )
 
-        id = response_obj.get("id", kwargs.get("litellm_call_id"))
+        if isinstance(response_obj, dict):
+            id = response_obj.get("id", kwargs.get("litellm_call_id"))
+        else:
+            id = getattr(response_obj, "id", None) or kwargs.get("litellm_call_id")
 
         _model_id = metadata.get("model_info", {}).get("id", "")
         _model_group = metadata.get("model_group", "")
