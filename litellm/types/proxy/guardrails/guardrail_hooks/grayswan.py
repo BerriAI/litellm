@@ -32,6 +32,14 @@ class GraySwanGuardrailConfigModelOptionalParams(BaseModel):
         default=None,
         description="Default Gray Swan category definitions to send with each request.",
     )
+    fail_open: Optional[bool] = Field(
+        default=True,
+        description="If true (default), errors contacting Gray Swan are logged and the request proceeds. If false, errors propagate and block the request.",
+    )
+    guardrail_timeout: Optional[float] = Field(
+        default=30.0,
+        description="Timeout in seconds for calling the Gray Swan guardrail service.",
+    )
 
 
 class GraySwanGuardrailConfigModel(
