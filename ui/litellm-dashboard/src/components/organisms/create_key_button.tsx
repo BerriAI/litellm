@@ -38,6 +38,7 @@ import {
 } from "../networking";
 import NumericalInput from "../shared/numerical_input";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
 
@@ -406,7 +407,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
-      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
+      const simplifiedError = simplifyKeyGenerateError(error);
+      NotificationsManager.fromBackend(simplifiedError);
     }
   };
 
