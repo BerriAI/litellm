@@ -3805,7 +3805,6 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-
       - ui_build:
           filters:
             branches:
