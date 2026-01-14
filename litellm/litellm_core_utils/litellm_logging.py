@@ -1927,7 +1927,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 try:
                     should_run = self.should_run_callback(
                         callback=callback,
-                        litellm_params=litellm_params_local,
+                        litellm_params=litellm_params,
                         event_hook="success_handler",
                     )
                     if not should_run:
