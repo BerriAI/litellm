@@ -502,7 +502,7 @@ Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
 
 LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
 
-This configuration is currently available on the config.yaml, with UI support coming soon.
+You can configure this either in `config.yaml` or directly from the LiteLLM UI (MCP Servers → Authentication → OAuth).
 
 ```yaml
 mcp_servers:
