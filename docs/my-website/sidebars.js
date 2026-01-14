@@ -971,6 +971,14 @@ const sidebars = {
       ],
     },
     "troubleshoot",
+    {
+      type: "category",
+      label: "Issue Reporting",
+      items: [
+        "troubleshoot/cpu_issues",
+        "troubleshoot/memory_issues",
+      ],
+    },
   ],
 };
 
