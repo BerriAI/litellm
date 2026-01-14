@@ -57,7 +57,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import load_credentials_from_list
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    load_credentials_from_list,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -3822,6 +3825,8 @@ class ProxyConfig:
                 model_cost_map_url = litellm.model_cost_map_url
                 new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
                 litellm.model_cost = new_model_cost_map
+                # Invalidate case-insensitive lookup map since model_cost was replaced
+                _invalidate_model_cost_lowercase_map()
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -7062,8 +7067,32 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             #########################################################
             # Transfrom the Response to the well known format
             #########################################################
-            if result is not None:
+            if result is not None and result.error is True:
+                # If disable_token_counter is enabled, raise HTTP error
+                if litellm.disable_token_counter is True:
+                    raise ProxyException(
+                        message=result.error_message or "Token counting failed",
+                        type="token_counting_error",
+                        param="model",
+                        code=result.status_code or 500,
+                    )
+                # Otherwise, log warning and fall back to local counter
+                verbose_proxy_logger.warning(
+                    f"Provider token counting failed ({result.status_code}): {result.error_message}. "
+                    "Falling back to local tokenizer."
+                )
+            else:
+                # Success - return the result
                 return result
+
+    # Check if token counter is disabled before fallback
+    if litellm.disable_token_counter is True:
+        raise ProxyException(
+            message="Token counting is disabled and no provider API result available",
+            type="token_counting_disabled",
+            param="model",
+            code=503,
+        )
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
@@ -10074,6 +10103,8 @@ async def reload_model_cost_map(
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
         litellm.model_cost = new_model_cost_map
+        # Invalidate case-insensitive lookup map since model_cost was replaced
+        _invalidate_model_cost_lowercase_map()
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload

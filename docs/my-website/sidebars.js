@@ -602,6 +602,7 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ai/azure_model_router",
             "providers/azure_ai_agents",
             "providers/azure_ocr",
             "providers/azure_document_intelligence",
