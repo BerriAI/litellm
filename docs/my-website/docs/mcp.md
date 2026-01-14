@@ -326,6 +326,7 @@ litellm_settings:
 </TabItem>
 </Tabs>
 
+
 ## Converting OpenAPI Specs to MCP Servers
 
 LiteLLM can automatically convert OpenAPI specifications into MCP servers, allowing you to expose any REST API as MCP tools. This is useful when you have existing APIs with OpenAPI/Swagger documentation and want to make them available as MCP tools.
@@ -502,7 +503,7 @@ Your OpenAPI specification should follow standard OpenAPI/Swagger conventions:
 
 LiteLLM v 1.77.6 added support for OAuth 2.0 Client Credentials for MCP servers.
 
-This configuration is currently available on the config.yaml, with UI support coming soon.
+You can configure this either in `config.yaml` or directly from the LiteLLM UI (MCP Servers → Authentication → OAuth).
 
 ```yaml
 mcp_servers:
@@ -1473,3 +1474,13 @@ async with stdio_client(server_params) as (read, write):
 
 </TabItem>
 </Tabs>
+
+## FAQ
+
+**Q: How do I use OAuth2 client_credentials (machine-to-machine) with MCP servers behind LiteLLM?**
+
+At the moment LiteLLM only forwards whatever `Authorization` header/value you configure for the MCP server; it does not issue OAuth2 tokens by itself. If your MCP requires the Client Credentials grant, obtain the access token directly from the authorization server and set that bearer token as the MCP server’s Authorization header value. LiteLLM does not yet fetch or refresh those machine-to-machine tokens on your behalf, but we plan to add first-class client_credentials support in a future release so the proxy can manage those tokens automatically.
+
+**Q: When I fetch an OAuth token from the LiteLLM UI, where is it stored?**
+
+The UI keeps only transient state in `sessionStorage` so the OAuth redirect flow can finish; the token is not persisted in the server or database.
