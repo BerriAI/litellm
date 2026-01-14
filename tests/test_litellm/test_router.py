@@ -1200,9 +1200,7 @@ async def test_acompletion_streaming_disable_fallbacks_midstream():
     print("\n=== Test 1: disable_fallbacks=True with original_exception ===")
 
     # Create an original exception to wrap
-    from litellm.llms.anthropic.chat.anthropic_chat_transformation import (
-        AnthropicError,
-    )
+    from litellm.llms.anthropic.common_utils import AnthropicError
 
     original_error = AnthropicError(
         status_code=500,

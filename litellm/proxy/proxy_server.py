@@ -887,6 +887,10 @@ def get_openapi_schema():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+    
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -909,6 +913,10 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+    
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -7086,8 +7094,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                     f"Provider token counting failed ({result.status_code}): {result.error_message}. "
                     "Falling back to local tokenizer."
                 )
-            else:
-                # Success - return the result
+            elif result is not None:
+                # Success - return the result (only if not None)
                 return result
 
     # Check if token counter is disabled before fallback

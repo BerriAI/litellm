@@ -134,6 +134,13 @@ class LangsmithLogger(CustomBatchLogger):
                 "metadata"
             ]  # ensure logged metadata is json serializable
 
+            extra_metadata = dict(metadata)
+            requester_metadata = extra_metadata.get("requester_metadata")
+            if requester_metadata and isinstance(requester_metadata, dict):
+                for key in ("session_id", "thread_id", "conversation_id"):
+                    if key in requester_metadata and key not in extra_metadata:
+                        extra_metadata[key] = requester_metadata[key]
+
             data = {
                 "name": run_name,
                 "run_type": "llm",  # this should always be llm, since litellm always logs llm calls. Langsmith allow us to log "chain"
@@ -143,7 +150,7 @@ class LangsmithLogger(CustomBatchLogger):
                 "start_time": payload["startTime"],
                 "end_time": payload["endTime"],
                 "tags": payload["request_tags"],
-                "extra": metadata,
+                "extra": extra_metadata,
             }
 
             if payload["error_str"] is not None and payload["status"] == "failure":
@@ -439,9 +446,9 @@ class LangsmithLogger(CustomBatchLogger):
         return log_queue_by_credentials
 
     def _get_sampling_rate_to_use_for_request(self, kwargs: Dict[str, Any]) -> float:
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         sampling_rate: float = self.sampling_rate
         if standard_callback_dynamic_params is not None:
             _sampling_rate = standard_callback_dynamic_params.get(
@@ -461,9 +468,9 @@ class LangsmithLogger(CustomBatchLogger):
 
         Otherwise, use the default credentials.
         """
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params", None)
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params", None)
         if standard_callback_dynamic_params is not None:
             credentials = self.get_credentials_from_env(
                 langsmith_api_key=standard_callback_dynamic_params.get(
