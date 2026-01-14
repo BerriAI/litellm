@@ -655,6 +655,11 @@ def convert_anyof_null_to_nullable(schema, depth=0):
 
 
 def add_object_type(schema):
+    # Gemini requires all function parameters to be type OBJECT
+    # Handle case where schema has no properties and no type (e.g. tools with no arguments)
+    if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
+        schema["type"] = "object"
+
     properties = schema.get("properties", None)
     if properties is not None:
         if "required" in schema and schema["required"] is None:
