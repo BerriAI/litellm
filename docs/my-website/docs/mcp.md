@@ -60,6 +60,8 @@ model_list:
 
 If `supported_db_objects` is not set, all object types are loaded from the database (default behavior).
 
+For diagnosing connectivity problems after setup, see the [MCP Troubleshooting Guide](./mcp_troubleshoot.md).
+
 <Tabs>
 <TabItem value="ui" label="LiteLLM UI">
 
@@ -1484,3 +1486,7 @@ At the moment LiteLLM only forwards whatever `Authorization` header/value you co
 **Q: When I fetch an OAuth token from the LiteLLM UI, where is it stored?**
 
 The UI keeps only transient state in `sessionStorage` so the OAuth redirect flow can finish; the token is not persisted in the server or database.
+
+**Q: I'm seeing MCP connection errors—what should I check?**
+
+Walk through the [MCP Troubleshooting Guide](./mcp_troubleshoot.md) for step-by-step isolation (Client → LiteLLM vs. LiteLLM → MCP), log examples, and verification methods like MCP Inspector and `curl`.
