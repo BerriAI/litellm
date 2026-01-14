@@ -360,6 +360,17 @@ class LiteLLMRoutes(enum.Enum):
         # OCR
         "/ocr",
         "/v1/ocr",
+        # containers
+        "/containers",
+        "/v1/containers",
+        "/containers/{container_id}",
+        "/v1/containers/{container_id}",
+        "/containers/{container_id}/files",
+        "/v1/containers/{container_id}/files",
+        "/containers/{container_id}/files/{file_id}",
+        "/v1/containers/{container_id}/files/{file_id}",
+        "/containers/{container_id}/files/{file_id}/content",
+        "/v1/containers/{container_id}/files/{file_id}/content",
     ]
 
     mapped_pass_through_routes = [

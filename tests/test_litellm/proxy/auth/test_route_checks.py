@@ -905,4 +905,111 @@ def test_route_in_additional_public_routes_exact_match():
         assert route_in_additonal_public_routes("/status") is True
         # Non-matching routes should fail
         assert route_in_additonal_public_routes("/other") is False
-        
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/containers",
+        "/v1/containers",
+        "/containers/cntr_123",
+        "/v1/containers/cntr_123",
+        "/containers/cntr_123/files",
+        "/v1/containers/cntr_123/files",
+        "/containers/cntr_123/files/file_456",
+        "/v1/containers/cntr_123/files/file_456",
+        "/containers/cntr_123/files/file_456/content",
+        "/v1/containers/cntr_123/files/file_456/content",
+    ],
+)
+def test_containers_route_is_llm_api_route(route):
+    """
+    Test that container routes are recognized as LLM API routes.
+
+    This test verifies the fix for issue #19088:
+    https://github.com/BerriAI/litellm/issues/19088
+
+    Container routes were missing from openai_routes, causing non-admin users
+    to receive 401 Unauthorized errors when calling container endpoints.
+    """
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+def test_containers_route_accessible_to_internal_users():
+    """
+    Test that internal users can access the containers routes.
+
+    This test verifies the fix for issue #19088:
+    https://github.com/BerriAI/litellm/issues/19088
+
+    Containers routes should be accessible to internal_user role since container
+    operations are a legitimate user feature, not a management/admin-only feature.
+    """
+
+    # Create an internal user object
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    # Create an internal user API key auth
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+
+    # Create a mock request
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    # Test that calling /v1/containers route does NOT raise an exception
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/v1/containers",
+            request=request,
+            valid_token=valid_token,
+            request_data={"name": "test-container"},
+        )
+        # If no exception is raised, the test passes
+    except Exception as e:
+        pytest.fail(
+            f"Internal user should be able to access /v1/containers route. Got error: {str(e)}"
+        )
+
+
+def test_containers_route_with_virtual_key_llm_api_routes():
+    """
+    Test that virtual keys with llm_api_routes permission can access containers endpoints.
+
+    Related to issue #19088: Container routes should be accessible when a key has
+    llm_api_routes permission.
+    """
+
+    # Create a virtual key with llm_api_routes permission
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        allowed_routes=["llm_api_routes"],
+    )
+
+    # Test that all container routes are accessible
+    test_routes = [
+        "/v1/containers",
+        "/containers",
+        "/v1/containers/cntr_123",
+        "/containers/cntr_123/files",
+        "/v1/containers/cntr_123/files/file_456",
+        "/v1/containers/cntr_123/files/file_456/content",
+    ]
+
+    for route in test_routes:
+        result = RouteChecks.is_virtual_key_allowed_to_call_route(
+            route=route, valid_token=valid_token
+        )
+        assert (
+            result is True
+        ), f"Virtual key with llm_api_routes should be able to access {route}"
+
