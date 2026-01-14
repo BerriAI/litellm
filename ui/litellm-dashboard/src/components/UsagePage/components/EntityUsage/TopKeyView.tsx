@@ -1,15 +1,14 @@
-import React, { useState } from "react";
-import { BarChart } from "@tremor/react";
-import KeyInfoView from "../../../templates/key_info_view";
-import { keyInfoV1Call } from "../../../networking";
-import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
-import { DataTable } from "../../../view_logs/table";
-import { Segmented, Tooltip } from "antd";
-import { Button } from "@tremor/react";
-import { formatNumberWithCommas } from "../../../../utils/dataUtils";
-import { TagUsage } from "../../types";
-import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { ChevronDownIcon, ChevronUpIcon } from "@heroicons/react/outline";
+import { BarChart, Button } from "@tremor/react";
+import { Segmented, Tooltip } from "antd";
+import React, { useState } from "react";
+import { formatNumberWithCommas } from "../../../../utils/dataUtils";
+import { transformKeyInfo } from "../../../key_team_helpers/transform_key_info";
+import { keyInfoV1Call } from "../../../networking";
+import KeyInfoView from "../../../templates/key_info_view";
+import { DataTable } from "../../../view_logs/table";
+import { TagUsage } from "../../types";
 
 interface TopKeyViewProps {
   topKeys: any[];
@@ -211,7 +210,7 @@ const TopKeyView: React.FC<TopKeyViewProps> = ({ topKeys, teams, showTags = fals
         <div className="relative max-h-[600px] overflow-y-auto">
           <BarChart
             className="mt-4 cursor-pointer hover:opacity-90"
-            style={{ height: topKeysLimit * 52 }}
+            style={{ height: Math.min(processedTopKeys.length, topKeysLimit) * 52 }}
             data={processedTopKeys}
             index="display_key_alias"
             categories={["spend"]}
