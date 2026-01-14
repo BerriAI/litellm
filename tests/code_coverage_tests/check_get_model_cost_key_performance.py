@@ -103,12 +103,34 @@ def check_get_model_cost_key_performance():
     func_lines = lines[func_start:func_end]
     problematic_lines = []
     
+    # Track if we're inside a docstring
+    in_docstring = False
+    docstring_quote = None
+    
     # Check for O(n) patterns
     for i, line in enumerate(func_lines, start=func_start + 1):
         line_stripped = line.strip()
         
-        # Skip comments and docstrings
-        if line_stripped.startswith('#') or line_stripped.startswith('"""') or line_stripped.startswith("'''"):
+        # Track docstring state (handle both single-line and multi-line docstrings)
+        if not in_docstring:
+            if line_stripped.startswith('"""') or line_stripped.startswith("'''"):
+                docstring_quote = '"""' if line_stripped.startswith('"""') else "'''"
+                # Check if it's a single-line docstring
+                if line_stripped.count(docstring_quote) >= 2:
+                    in_docstring = False  # Single-line, skip this line
+                    continue
+                else:
+                    in_docstring = True
+                    continue
+        else:
+            # Inside multi-line docstring, check for closing quote
+            if docstring_quote is not None and docstring_quote in line:
+                in_docstring = False
+                docstring_quote = None
+            continue  # Skip all lines inside docstring
+        
+        # Skip comments
+        if line_stripped.startswith('#'):
             continue
         
         # Check for for loops
