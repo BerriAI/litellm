@@ -360,6 +360,10 @@ class LiteLLMRoutes(enum.Enum):
         # OCR
         "/ocr",
         "/v1/ocr",
+
+        # containers API
+        "/containers/*",
+        "/v1/containers/*",
     ]
 
     mapped_pass_through_routes = [
