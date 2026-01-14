@@ -1380,11 +1380,6 @@ class Router:
 
         Catches errors for fallbacks using the router's fallback system
         """
-        if initial_kwargs.get("disable_fallbacks", False):
-            verbose_router_logger.info("Mid stream fallback disabled by user, re-raising original error")
-            if e.original_exception is not None:
-                raise e.original_exception
-            raise e
         from litellm.exceptions import MidStreamFallbackError
 
         class FallbackStreamWrapper(CustomStreamWrapper):
@@ -1409,6 +1404,15 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
+                # Check if fallbacks are disabled by user
+                if initial_kwargs.get("disable_fallbacks", False):
+                    verbose_router_logger.info(
+                        "Mid stream fallback disabled by user, re-raising original error"
+                    )
+                    if e.original_exception is not None:
+                        raise e.original_exception
+                    raise e
+
                 from litellm.main import stream_chunk_builder
 
                 complete_response_object = stream_chunk_builder(
