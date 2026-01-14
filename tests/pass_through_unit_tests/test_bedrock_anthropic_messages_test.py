@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import AsyncIterator, Dict, Any
 import asyncio
 import unittest.mock
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 import pytest
 from litellm.router import Router
 
@@ -65,4 +65,45 @@ async def test_anthropic_messages_litellm_router_bedrock():
     # Verify response
     INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST._validate_response(response)
 
+
+@pytest.mark.asyncio
+async def test_should_not_fail_with_forwarded_headers_bedrock_invoke_messages():
+    """
+    E2E test for Bedrock invoke messages with header forwarding enabled.
+
+    This calls the real Bedrock endpoint (no mocks) and should not raise
+    SigV4 signature mismatch errors when forwarded headers are present.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet-4-5-20250929",
+                "litellm_params": {
+                    "model": "bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                    "aws_region_name": os.getenv("AWS_REGION_NAME"),
+                },
+            }
+        ]
+    )
+
+    forwarded_headers = {
+        "x-forwarded-for": "10.11.232.194",
+        "x-forwarded-port": "443",
+        "x-forwarded-proto": "https",
+        "x-app": "cli",
+    }
+
+    response = await router.aanthropic_messages(
+        messages=[{"role": "user", "content": "hi"}],
+        model="claude-sonnet-4-5-20250929",
+        max_tokens=5,
+        stream=False,
+        headers=forwarded_headers,  # simulates forward_client_headers_to_llm_api
+        aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+        aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+        aws_region_name=os.getenv("AWS_REGION_NAME"),
+    )
+    print("INVOKE API RESPONSE: ", response)
+
+    INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST._validate_response(response)
 
