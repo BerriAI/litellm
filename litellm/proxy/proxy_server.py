@@ -2468,7 +2468,12 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
-
+                elif key == "json_logs" and value is True:
+                    litellm.json_logs = True
+                    litellm._turn_on_json()
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} Enabled JSON logging via config{reset_color_code}"
+                    )
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
