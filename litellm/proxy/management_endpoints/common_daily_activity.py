@@ -343,7 +343,7 @@ def _build_where_conditions(
     start_date: str,
     end_date: str,
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     exclude_entity_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Build prisma where clause for daily activity queries."""
@@ -357,7 +357,10 @@ def _build_where_conditions(
     if model:
         where_conditions["model"] = model
     if api_key:
-        where_conditions["api_key"] = api_key
+        if isinstance(api_key, list):
+            where_conditions["api_key"] = {"in": api_key}
+        else:
+            where_conditions["api_key"] = api_key
 
     if entity_id is not None:
         if isinstance(entity_id, list):
@@ -445,7 +448,7 @@ async def get_daily_activity(
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     page: int,
     page_size: int,
     exclude_entity_ids: Optional[List[str]] = None,
