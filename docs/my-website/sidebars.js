@@ -971,6 +971,13 @@ const sidebars = {
       ],
     },
     "troubleshoot",
+    {
+      type: "category",
+      label: "Troubleshooting",
+      items: [
+        "troubleshoot/cpu_issues",
+      ],
+    },
   ],
 };
 
