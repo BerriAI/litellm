@@ -410,3 +410,128 @@ async def test_organization_update_object_permissions_missing_permission_record(
 
     # Verify upsert was called to create new record
     mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_list_organization_filter_by_org_id(monkeypatch):
+    """
+    Test filtering organizations by org_id query parameter.
+    
+    This test verifies that when org_id is provided, only the organization
+    with that exact organization_id is returned.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        list_organization,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    
+    # Mock organization data
+    mock_org1 = SimpleNamespace(
+        organization_id="org-123",
+        organization_alias="Test Org 1",
+        model_dump=lambda: {
+            "organization_id": "org-123",
+            "organization_alias": "Test Org 1",
+        },
+    )
+    
+    # Mock find_many to return filtered results
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[mock_org1]
+    )
+    
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Test as proxy admin
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    )
+    
+    result = await list_organization(org_id="org-123", org_alias=None, user_api_key_dict=auth)
+
+    # Verify the correct organization was returned
+    assert len(result) == 1
+    assert result[0].organization_id == "org-123"
+    assert result[0].organization_alias == "Test Org 1"
+    
+    # Verify find_many was called with correct where conditions
+    mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
+    call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
+    assert call_args.kwargs["where"] == {"organization_id": "org-123"}
+    assert call_args.kwargs["include"] == {
+        "litellm_budget_table": True,
+        "members": True,
+        "teams": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_organization_filter_by_org_alias(monkeypatch):
+    """
+    Test filtering organizations by org_alias query parameter with case-insensitive partial matching.
+    
+    This test verifies that when org_alias is provided, organizations with matching
+    organization_alias (case-insensitive partial match) are returned.
+    """
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        list_organization,
+    )
+
+    # Mock prisma client
+    mock_prisma_client = AsyncMock()
+    
+    # Mock organization data
+    mock_org1 = SimpleNamespace(
+        organization_id="org-123",
+        organization_alias="My Test Organization",
+        model_dump=lambda: {
+            "organization_id": "org-123",
+            "organization_alias": "My Test Organization",
+        },
+    )
+    mock_org2 = SimpleNamespace(
+        organization_id="org-456",
+        organization_alias="Another Test Org",
+        model_dump=lambda: {
+            "organization_id": "org-456",
+            "organization_alias": "Another Test Org",
+        },
+    )
+    
+    # Mock find_many to return filtered results
+    mock_prisma_client.db.litellm_organizationtable.find_many = AsyncMock(
+        return_value=[mock_org1, mock_org2]
+    )
+    
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Test as proxy admin with org_alias filter
+    auth = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-user"
+    )
+    
+    result = await list_organization(org_id=None, org_alias="test", user_api_key_dict=auth)
+
+    # Verify organizations with "test" in alias were returned
+    assert len(result) == 2
+    assert all("test" in org.organization_alias.lower() for org in result)
+    
+    # Verify find_many was called with correct where conditions (case-insensitive contains)
+    mock_prisma_client.db.litellm_organizationtable.find_many.assert_called_once()
+    call_args = mock_prisma_client.db.litellm_organizationtable.find_many.call_args
+    assert call_args.kwargs["where"] == {
+        "organization_alias": {"contains": "test", "mode": "insensitive"}
+    }
+    assert call_args.kwargs["include"] == {
+        "litellm_budget_table": True,
+        "members": True,
+        "teams": True,
+    }

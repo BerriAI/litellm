@@ -1037,6 +1037,7 @@ async def bedrock_proxy_route(
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
         is_streaming_request=is_streaming_request,
+        _forward_headers=True
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,

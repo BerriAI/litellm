@@ -594,9 +594,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[
-            StandardCallbackDynamicParams
-        ] = kwargs.get("standard_callback_dynamic_params")
+        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
+            kwargs.get("standard_callback_dynamic_params")
+        )
 
         if not standard_callback_dynamic_params:
             return None
@@ -797,7 +797,7 @@ class OpenTelemetry(CustomLogger):
                 and self._token_usage_histogram
             ):
                 in_attrs = {**common_attrs, "gen_ai.token.type": "input"}
-                out_attrs = {**common_attrs, "gen_ai.token.type": "completion"}
+                out_attrs = {**common_attrs, "gen_ai.token.type": "output"}
                 self._token_usage_histogram.record(
                     usage.get("prompt_tokens", 0), attributes=in_attrs
                 )
@@ -1488,21 +1488,21 @@ class OpenTelemetry(CustomLogger):
             if usage:
                 self.safe_set_attribute(
                     span=span,
-                    key=SpanAttributes.LLM_USAGE_TOTAL_TOKENS.value,
+                    key=SpanAttributes.GEN_AI_USAGE_TOTAL_TOKENS.value,
                     value=usage.get("total_tokens"),
                 )
 
                 # The number of tokens used in the LLM response (completion).
                 self.safe_set_attribute(
                     span=span,
-                    key=SpanAttributes.LLM_USAGE_COMPLETION_TOKENS.value,
+                    key=SpanAttributes.GEN_AI_USAGE_OUTPUT_TOKENS.value,
                     value=usage.get("completion_tokens"),
                 )
 
                 # The number of tokens used in the LLM prompt.
                 self.safe_set_attribute(
                     span=span,
-                    key=SpanAttributes.LLM_USAGE_PROMPT_TOKENS.value,
+                    key=SpanAttributes.GEN_AI_USAGE_INPUT_TOKENS.value,
                     value=usage.get("prompt_tokens"),
                 )
 
@@ -1520,53 +1520,75 @@ class OpenTelemetry(CustomLogger):
                 self.set_tools_attributes(span, tools)
 
             if kwargs.get("messages"):
-                for idx, prompt in enumerate(kwargs.get("messages")):
-                    if prompt.get("role"):
-                        self.safe_set_attribute(
-                            span=span,
-                            key=f"{SpanAttributes.LLM_PROMPTS.value}.{idx}.role",
-                            value=prompt.get("role"),
-                        )
+                transformed_messages = (
+                    self._transform_messages_to_otel_semantic_conventions(
+                        kwargs.get("messages")
+                    )
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.GEN_AI_INPUT_MESSAGES.value,
+                    value=safe_dumps(transformed_messages),
+                )
 
-                    if prompt.get("content"):
-                        if not isinstance(prompt.get("content"), str):
-                            prompt["content"] = str(prompt.get("content"))
-                        self.safe_set_attribute(
-                            span=span,
-                            key=f"{SpanAttributes.LLM_PROMPTS.value}.{idx}.content",
-                            value=prompt.get("content"),
-                        )
+            if kwargs.get("system_instructions"):
+                transformed_system_instructions = (
+                    self._transform_messages_to_otel_semantic_conventions(
+                        kwargs.get("system_instructions")
+                    )
+                )
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.GEN_AI_SYSTEM_INSTRUCTIONS.value,
+                    value=safe_dumps(transformed_system_instructions),
+                )
+
+            self.safe_set_attribute(
+                span=span,
+                key=SpanAttributes.GEN_AI_OPERATION_NAME.value,
+                value=(
+                    "chat"
+                    if standard_logging_payload.get("call_type") == "completion"
+                    else standard_logging_payload.get("call_type") or "chat"
+                ),
+            )
+
+            if standard_logging_payload.get("request_id"):
+                self.safe_set_attribute(
+                    span=span,
+                    key=SpanAttributes.GEN_AI_REQUEST_ID.value,
+                    value=standard_logging_payload.get("request_id"),
+                )
             #############################################
             ########## LLM Response Attributes ##########
             #############################################
             if response_obj is not None:
                 if response_obj.get("choices"):
+                    transformed_choices = (
+                        self._transform_choices_to_otel_semantic_conventions(
+                            response_obj.get("choices")
+                        )
+                    )
+                    self.safe_set_attribute(
+                        span=span,
+                        key=SpanAttributes.GEN_AI_OUTPUT_MESSAGES.value,
+                        value=safe_dumps(transformed_choices),
+                    )
+
+                    finish_reasons = []
                     for idx, choice in enumerate(response_obj.get("choices")):
                         if choice.get("finish_reason"):
-                            self.safe_set_attribute(
-                                span=span,
-                                key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.finish_reason",
-                                value=choice.get("finish_reason"),
-                            )
-                        if choice.get("message"):
-                            if choice.get("message").get("role"):
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.role",
-                                    value=choice.get("message").get("role"),
-                                )
-                            if choice.get("message").get("content"):
-                                if not isinstance(
-                                    choice.get("message").get("content"), str
-                                ):
-                                    choice["message"]["content"] = str(
-                                        choice.get("message").get("content")
-                                    )
-                                self.safe_set_attribute(
-                                    span=span,
-                                    key=f"{SpanAttributes.LLM_COMPLETIONS.value}.{idx}.content",
-                                    value=choice.get("message").get("content"),
-                                )
+                            finish_reasons.append(choice.get("finish_reason"))
+
+                    if finish_reasons:
+                        self.safe_set_attribute(
+                            span=span,
+                            key=SpanAttributes.GEN_AI_RESPONSE_FINISH_REASONS.value,
+                            value=safe_dumps(finish_reasons),
+                        )
+
+                    for idx, choice in enumerate(response_obj.get("choices")):
+                        if choice.get("finish_reason"):
 
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
@@ -1607,6 +1629,66 @@ class OpenTelemetry(CustomLogger):
         """
         primitive_value = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
+
+    def _transform_messages_to_otel_semantic_conventions(
+        self, messages: Union[List[dict], str]
+    ) -> List[dict]:
+        """
+        Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
+        OTEL expects a 'parts' array instead of a single 'content' string.
+        """
+        if isinstance(messages, str):
+            # Handle system_instructions passed as a string
+            return [
+                {"role": "system", "parts": [{"type": "text", "content": messages}]}
+            ]
+
+        transformed = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            parts = []
+
+            if isinstance(content, str):
+                parts.append({"type": "text", "content": content})
+            elif isinstance(content, list):
+                # Handle multi-modal content if necessary
+                for part in content:
+                    if isinstance(part, dict):
+                        parts.append(part)
+                    else:
+                        parts.append({"type": "text", "content": str(part)})
+
+            transformed_msg = {"role": role, "parts": parts}
+            if "id" in msg:
+                transformed_msg["id"] = msg["id"]
+            if "tool_calls" in msg:
+                transformed_msg["tool_calls"] = msg["tool_calls"]
+            if "tool_call_id" in msg:
+                transformed_msg["tool_call_id"] = msg["tool_call_id"]
+            transformed.append(transformed_msg)
+
+        return transformed
+
+    def _transform_choices_to_otel_semantic_conventions(
+        self, choices: List[dict]
+    ) -> List[dict]:
+        """
+        Transforms choices into OTEL GenAI 1.38 compliant format for output.messages.
+        """
+        transformed = []
+        for choice in choices:
+            message = choice.get("message") or {}
+            finish_reason = choice.get("finish_reason")
+
+            transformed_msg = self._transform_messages_to_otel_semantic_conventions(
+                [message]
+            )[0]
+            if finish_reason:
+                transformed_msg["finish_reason"] = finish_reason
+
+            transformed.append(transformed_msg)
+        return transformed
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
         try:
