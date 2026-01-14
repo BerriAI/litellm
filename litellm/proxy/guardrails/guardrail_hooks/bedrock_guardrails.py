@@ -432,6 +432,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                     request_data=request_data
                 )
             )
+            guardrail_config = request_data.get("guardrail_config", {})
+            if (
+                isinstance(guardrail_config, dict)
+                and guardrail_config.get("api_key") is not None
+            ):
+                api_key = guardrail_config["api_key"]
         prepared_request = self._prepare_request(
             credentials=credentials,
             data=bedrock_request_data,
