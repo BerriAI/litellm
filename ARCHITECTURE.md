@@ -5,46 +5,67 @@ major components, how they interact, and the key design decisions that shape the
 
 ## 1. Repo Composition
 
-The repository has three main components:
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            LiteLLM Repository                               │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                     LiteLLM Proxy (litellm/proxy/)                    │  │
+│  │                                                                       │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │  │
+│  │  │   Budgets   │  │    Rate     │  │   Cost      │  │  Guardrails │  │  │
+│  │  │             │  │  Limiting   │  │  Tracking   │  │             │  │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘  │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  │  │
+│  │  │   Model     │  │   Prompt    │  │   Batches   │  │ Pass-through│  │  │
+│  │  │   Access    │  │    Mgmt     │  │     API     │  │  Endpoints  │  │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘  └─────────────┘  │  │
+│  │  ┌─────────────┐  ┌─────────────┐                                    │  │
+│  │  │    LLM      │  │     S3      │                                    │  │
+│  │  │Observability│  │   Logging   │                                    │  │
+│  │  └─────────────┘  └─────────────┘                                    │  │
+│  │                                                                       │  │
+│  │  ┌─────────────────────────────────────────────────────────────────┐ │  │
+│  │  │                    OpenAI Compatible REST API                   │ │  │
+│  │  └─────────────────────────────────────────────────────────────────┘ │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                   LiteLLM Python SDK (litellm/)                       │  │
+│  │                                                                       │  │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │  │
+│  │  │    main.py      │  │   anthropic_    │  │   google_genai/ │       │  │
+│  │  │   (OpenAI API)  │  │   interface/    │  │   (GenAI API)   │       │  │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────┘       │  │
+│  │  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐       │  │
+│  │  │   responses/    │  │    router.py    │  │   llms/         │       │  │
+│  │  │ (Responses API) │  │ (Load Balancing)│  │   (Providers)   │       │  │
+│  │  └─────────────────┘  └─────────────────┘  └─────────────────┘       │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+│  ┌───────────────────────────────────────────────────────────────────────┐  │
+│  │                   Integrations (litellm/integrations/)                │  │
+│  │                                                                       │  │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │  │
+│  │  │ Langfuse │ │ Datadog  │ │Prometheus│ │  Arize   │ │  Slack   │    │  │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘    │  │
+│  └───────────────────────────────────────────────────────────────────────┘  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
-### LiteLLM Python SDK (`litellm/`)
+**LiteLLM Proxy** (`litellm/proxy/`) - Production LLM Gateway with authentication, rate limiting,
+budgets, guardrails, and management APIs. Exposes OpenAI-compatible REST endpoints.
 
-The core SDK provides multiple interface styles for calling LLMs:
+**LiteLLM Python SDK** (`litellm/`) - Core library with multiple interface styles:
+- `main.py` - OpenAI-compatible: `completion()`, `embedding()`, `image_generation()`
+- `anthropic_interface/` - Native Anthropic SDK interface
+- `google_genai/` - Native Google GenAI SDK interface
+- `responses/` - OpenAI Responses API interface
+- `llms/` - Provider implementations with transformation classes
 
-| Interface | Location | Description |
-|-----------|----------|-------------|
-| **OpenAI-compatible** | `main.py` | `completion()`, `embedding()`, `image_generation()`, etc. |
-| **Anthropic-compatible** | `anthropic_interface/` | Native Anthropic SDK interface |
-| **Google GenAI-compatible** | `google_genai/` | Native Google GenAI SDK interface |
-| **Responses API** | `responses/` | OpenAI Responses API interface |
-
-Provider implementations live in `llms/{provider}/` with transformation classes that convert
-between the standard interface and provider-specific formats.
-
-### LiteLLM Proxy (`litellm/proxy/`)
-
-A production-ready LLM Gateway (FastAPI server) with:
-
-| Component | Location | Description |
-|-----------|----------|-------------|
-| **API Endpoints** | `proxy_server.py` | OpenAI-compatible REST API |
-| **Authentication** | `auth/` | API keys, JWT, OAuth2 |
-| **Management APIs** | `management_endpoints/` | Keys, teams, models, budgets |
-| **Guardrails** | `guardrails/` | Content filtering, PII detection |
-| **Database** | `db/` | Prisma ORM (PostgreSQL/SQLite) |
-| **Pass-through** | `pass_through_endpoints/` | Direct provider API forwarding |
-
-### Integrations (`litellm/integrations/`)
-
-Logging, observability, and callback integrations:
-
-| Category | Examples |
-|----------|----------|
-| **Tracing** | Langfuse, Datadog, OpenTelemetry, Arize |
-| **Metrics** | Prometheus, CloudZero, OpenMeter |
-| **Logging** | S3, GCS, DynamoDB |
-| **Alerting** | Slack, Email |
-| **Guardrails** | Lakera, Bedrock Guardrails, Presidio |
+**Integrations** (`litellm/integrations/`) - Logging and observability callbacks for 30+ platforms
 
 ## Request Flow
 
