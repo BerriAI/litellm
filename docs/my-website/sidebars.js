@@ -973,7 +973,7 @@ const sidebars = {
     "troubleshoot",
     {
       type: "category",
-      label: "Troubleshooting",
+      label: "Issue Reporting",
       items: [
         "troubleshoot/cpu_issues",
       ],
