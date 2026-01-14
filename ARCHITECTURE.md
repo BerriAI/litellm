@@ -3,55 +3,86 @@
 This document explains the internal architecture of LiteLLM for contributors. It describes the
 major components, how they interact, and the key design decisions that shape the library.
 
-## Overview
+## 1. Repo Composition
 
-LiteLLM provides a unified interface for 100+ LLM providers. The system has two main components:
+The repository has three main components:
 
-1. **Core Library (`litellm/`)** - Direct Python SDK for LLM calls
-2. **Proxy Server (`litellm/proxy/`)** - Production LLM Gateway with auth, rate limiting, and observability
+### LiteLLM Python SDK (`litellm/`)
+
+The core SDK provides multiple interface styles for calling LLMs:
+
+| Interface | Location | Description |
+|-----------|----------|-------------|
+| **OpenAI-compatible** | `main.py` | `completion()`, `embedding()`, `image_generation()`, etc. |
+| **Anthropic-compatible** | `anthropic_interface/` | Native Anthropic SDK interface |
+| **Google GenAI-compatible** | `google_genai/` | Native Google GenAI SDK interface |
+| **Responses API** | `responses/` | OpenAI Responses API interface |
+
+Provider implementations live in `llms/{provider}/` with transformation classes that convert
+between the standard interface and provider-specific formats.
+
+### LiteLLM Proxy (`litellm/proxy/`)
+
+A production-ready LLM Gateway (FastAPI server) with:
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| **API Endpoints** | `proxy_server.py` | OpenAI-compatible REST API |
+| **Authentication** | `auth/` | API keys, JWT, OAuth2 |
+| **Management APIs** | `management_endpoints/` | Keys, teams, models, budgets |
+| **Guardrails** | `guardrails/` | Content filtering, PII detection |
+| **Database** | `db/` | Prisma ORM (PostgreSQL/SQLite) |
+| **Pass-through** | `pass_through_endpoints/` | Direct provider API forwarding |
+
+### Integrations (`litellm/integrations/`)
+
+Logging, observability, and callback integrations:
+
+| Category | Examples |
+|----------|----------|
+| **Tracing** | Langfuse, Datadog, OpenTelemetry, Arize |
+| **Metrics** | Prometheus, CloudZero, OpenMeter |
+| **Logging** | S3, GCS, DynamoDB |
+| **Alerting** | Slack, Email |
+| **Guardrails** | Lakera, Bedrock Guardrails, Presidio |
 
 ## Request Flow
 
-The data flow for a completion request is as follows:
+The data flow for a proxy completion request is as follows:
 
 ```mermaid
-graph TD
-    subgraph "User Code"
-        Client["litellm.completion()"]
-    end
+sequenceDiagram
+    participant Client
+    participant ProxyServer as proxy/proxy_server.py<br/>chat_completion()
+    participant Auth as proxy/auth/<br/>user_api_key_auth.py
+    participant PreCall as proxy/litellm_pre_call_utils.py<br/>add_litellm_data_to_request()
+    participant Router as router.py<br/>Router.acompletion()
+    participant Main as main.py<br/>completion()
+    participant Handler as llms/custom_httpx/<br/>llm_http_handler.py
+    participant Transform as llms/{provider}/chat/<br/>transformation.py
+    participant HTTP as llms/custom_httpx/<br/>http_handler.py
+    participant Provider as LLM Provider API
 
-    subgraph "litellm/main.py"
-        GetProvider["get_llm_provider()"]
-        ProviderSwitch{"Provider<br/>Switch"}
-    end
-
-    subgraph "litellm/llms/custom_httpx/llm_http_handler.py"
-        BaseLLMHTTPHandler["BaseLLMHTTPHandler"]
-    end
-
-    subgraph "litellm/llms/{provider}/chat/transformation.py"
-        TransformRequest["ProviderConfig.transform_request()"]
-        TransformResponse["ProviderConfig.transform_response()"]
-    end
-
-    subgraph "litellm/llms/custom_httpx/http_handler.py"
-        HTTPHandler["HTTPHandler / AsyncHTTPHandler"]
-    end
-
-    subgraph "External"
-        ProviderAPI["LLM Provider API"]
-    end
-
-    Client --> GetProvider
-    GetProvider --> ProviderSwitch
-    ProviderSwitch --> BaseLLMHTTPHandler
-    BaseLLMHTTPHandler --> TransformRequest
-    TransformRequest --> HTTPHandler
-    HTTPHandler --> ProviderAPI
-    ProviderAPI --> HTTPHandler
-    HTTPHandler --> TransformResponse
-    TransformResponse --> BaseLLMHTTPHandler
-    BaseLLMHTTPHandler --> Client
+    Client->>ProxyServer: POST /v1/chat/completions
+    ProxyServer->>Auth: user_api_key_auth()
+    Auth-->>ProxyServer: UserAPIKeyAuth
+    ProxyServer->>PreCall: add_litellm_data_to_request()
+    PreCall-->>ProxyServer: Enhanced Request Data
+    ProxyServer->>Router: route_request() -> acompletion()
+    Router->>Main: litellm.acompletion()
+    Main->>Handler: BaseLLMHTTPHandler.completion()
+    Handler->>Transform: ProviderConfig.transform_request()
+    Transform-->>Handler: Provider-specific request
+    Handler->>HTTP: AsyncHTTPHandler.post()
+    HTTP->>Provider: Provider-specific HTTP Request
+    Provider-->>HTTP: Provider Response
+    HTTP-->>Handler: Raw Response
+    Handler->>Transform: ProviderConfig.transform_response()
+    Transform-->>Handler: ModelResponse
+    Handler-->>Main: ModelResponse
+    Main-->>Router: ModelResponse
+    Router-->>ProxyServer: ModelResponse
+    ProxyServer-->>Client: OpenAI-format JSON Response
 ```
 
 ## Provider Configuration
