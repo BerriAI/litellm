@@ -1,208 +1,125 @@
-# LiteLLM Architecture
+# LiteLLM Proxy Architecture
 
-This document explains the internal architecture of LiteLLM for contributors. It describes the
-major components, how they interact, and the key design decisions that shape the library.
+This document helps contributors understand where to make changes in the LiteLLM proxy.
 
-## Request Flow
-
-The data flow for a proxy completion request is as follows:
+## 1. Request Flow
 
 ```mermaid
 sequenceDiagram
     participant Client
-    participant ProxyServer as proxy/proxy_server.py<br/>chat_completion()
-    participant Auth as proxy/auth/<br/>user_api_key_auth.py
-    participant PreCall as proxy/litellm_pre_call_utils.py<br/>add_litellm_data_to_request()
-    participant Router as router.py<br/>Router.acompletion()
-    participant Main as main.py<br/>completion()
-    participant Handler as llms/custom_httpx/<br/>llm_http_handler.py
-    participant Transform as llms/{provider}/chat/<br/>transformation.py
-    participant HTTP as llms/custom_httpx/<br/>http_handler.py
+    participant ProxyServer as proxy/proxy_server.py
+    participant Auth as proxy/auth/user_api_key_auth.py
+    participant Router as router.py
+    participant Main as main.py
+    participant Handler as llms/custom_httpx/llm_http_handler.py
+    participant Transform as llms/{provider}/chat/transformation.py
     participant Provider as LLM Provider API
 
     Client->>ProxyServer: POST /v1/chat/completions
     ProxyServer->>Auth: user_api_key_auth()
-    Auth-->>ProxyServer: UserAPIKeyAuth
-    ProxyServer->>PreCall: add_litellm_data_to_request()
-    PreCall-->>ProxyServer: Enhanced Request Data
-    ProxyServer->>Router: route_request() -> acompletion()
+    ProxyServer->>Router: route_request()
     Router->>Main: litellm.acompletion()
     Main->>Handler: BaseLLMHTTPHandler.completion()
     Handler->>Transform: ProviderConfig.transform_request()
-    Transform-->>Handler: Provider-specific request
-    Handler->>HTTP: AsyncHTTPHandler.post()
-    HTTP->>Provider: Provider-specific HTTP Request
-    Provider-->>HTTP: Provider Response
-    HTTP-->>Handler: Raw Response
+    Handler->>Provider: HTTP Request
+    Provider-->>Handler: Response
     Handler->>Transform: ProviderConfig.transform_response()
-    Transform-->>Handler: ModelResponse
-    Handler-->>Main: ModelResponse
-    Main-->>Router: ModelResponse
-    Router-->>ProxyServer: ModelResponse
-    ProxyServer-->>Client: OpenAI-format JSON Response
+    Handler-->>Client: ModelResponse
 ```
 
-## Provider Configuration
+**Key files:**
+- `proxy/proxy_server.py` - API endpoints
+- `proxy/auth/` - Authentication
+- `router.py` - Load balancing, fallbacks
+- `router_strategy/` - Routing algorithms (`lowest_latency.py`, `simple_shuffle.py`, etc.)
 
-There is an architectural separation between the HTTP handling logic and provider-specific
-transformations. The `BaseConfig` class is the base for all provider transformations. The
-`BaseLLMHTTPHandler` in `llms/custom_httpx/llm_http_handler.py` is the central handler that
-orchestrates all provider calls.
+## 2. Translation Layer
 
-Each provider implements a `Config` class that inherits from `BaseConfig` and defines:
-- `transform_request()` - Convert OpenAI format to provider format
-- `transform_response()` - Convert provider response to OpenAI format
-- `get_supported_openai_params()` - List of supported parameters
-- `get_complete_url()` - Build the provider API endpoint
+When a request comes in, it goes through a **translation layer** that converts between API formats.
+Each translation is isolated in its own file, making it easy to test and modify independently.
 
-Example from `litellm/llms/bedrock/chat/agentcore/transformation.py`:
+### Where to find translations
+
+| Incoming API | Provider | Translation File |
+|--------------|----------|------------------|
+| `/v1/chat/completions` | Anthropic | `llms/anthropic/chat/transformation.py` |
+| `/v1/chat/completions` | Bedrock Converse | `llms/bedrock/chat/converse_transformation.py` |
+| `/v1/chat/completions` | Bedrock Invoke | `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py` |
+| `/v1/chat/completions` | Gemini | `llms/gemini/chat/transformation.py` |
+| `/v1/chat/completions` | Vertex AI | `llms/vertex_ai/gemini/transformation.py` |
+| `/v1/chat/completions` | OpenAI | `llms/openai/chat/gpt_transformation.py` |
+| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/experimental_pass_through/messages/transformation.py` |
+| `/v1/messages` (passthrough) | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py` |
+| `/v1/messages` (passthrough) | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/experimental_pass_through/transformation.py` |
+| Passthrough endpoints | All | `proxy/pass_through_endpoints/llm_provider_handlers/` |
+
+### Example: Debugging prompt caching
+
+If `/v1/messages` → Bedrock Converse prompt caching isn't working but Bedrock Invoke works:
+
+1. **Bedrock Converse translation**: `llms/bedrock/chat/converse_transformation.py`
+2. **Bedrock Invoke translation**: `llms/bedrock/chat/invoke_transformations/anthropic_claude3_transformation.py`
+3. Compare how each handles `cache_control` in `transform_request()`
+
+### How translations work
+
+Each provider has a `Config` class that inherits from `BaseConfig` (`llms/base_llm/chat/transformation.py`):
 
 ```python
-class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
+class ProviderConfig(BaseConfig):
     def transform_request(self, model, messages, optional_params, litellm_params, headers):
-        # Convert OpenAI messages to AgentCore format
+        # Convert OpenAI format → Provider format
         return {"messages": transformed_messages, ...}
     
     def transform_response(self, model, raw_response, model_response, logging_obj, ...):
-        # Convert AgentCore response to OpenAI ModelResponse
+        # Convert Provider format → OpenAI format
         return ModelResponse(choices=[...], usage=Usage(...))
 ```
 
-## HTTP Handler
+The `BaseLLMHTTPHandler` (`llms/custom_httpx/llm_http_handler.py`) calls these methods - you never need to modify the handler itself.
 
-The `BaseLLMHTTPHandler` (`llms/custom_httpx/llm_http_handler.py`) is the central orchestrator
-for all provider calls. It:
+## 3. Adding/Modifying Providers
 
-1. Receives the provider's `Config` class
-2. Calls `transform_request()` to build the provider-specific request
-3. Makes the HTTP call via `HTTPHandler` or `AsyncHTTPHandler`
-4. Calls `transform_response()` to normalize the response
-5. Handles streaming, retries, and error mapping
+### To add a new provider:
 
-This design means adding a new provider only requires implementing a `Config` class - no changes
-to the HTTP handling logic.
+1. Create `llms/{provider}/chat/transformation.py`
+2. Implement `Config` class with `transform_request()` and `transform_response()`
+3. Add tests in `tests/llm_translation/test_{provider}.py`
 
-## Router
+### To add a feature (e.g., prompt caching):
 
-The `Router` (`litellm/router.py`) manages multiple model deployments with load balancing,
-fallbacks, and health monitoring. It wraps the core `completion()` function.
+1. Find the translation file from the table above
+2. Modify `transform_request()` to handle the new parameter
+3. Add unit tests that verify the transformation
 
-Key concepts:
-- **Model Group**: A logical name (e.g., "gpt-4") that maps to multiple deployments
-- **Deployment**: A specific provider endpoint with credentials
-- **Routing Strategy**: Algorithm for selecting a deployment (e.g., `lowest-latency`, `simple-shuffle`)
-- **Cooldown**: Temporarily removing failed deployments from rotation
+### Testing checklist
 
-The routing strategies are implemented in `litellm/router_strategy/`:
-- `simple_shuffle.py` - Random selection
-- `lowest_latency.py` - Route to fastest deployment
-- `lowest_cost.py` - Route to cheapest deployment
-- `lowest_tpm_rpm.py` - Route based on available capacity
+When adding a feature, verify it works across all paths:
 
-## Proxy Server
+| Test | File Pattern |
+|------|--------------|
+| OpenAI passthrough | `tests/llm_translation/test_openai*.py` |
+| Anthropic direct | `tests/llm_translation/test_anthropic*.py` |
+| Bedrock Invoke | `tests/llm_translation/test_bedrock*.py` |
+| Bedrock Converse | `tests/llm_translation/test_bedrock*converse*.py` |
+| Vertex AI | `tests/llm_translation/test_vertex*.py` |
+| Gemini | `tests/llm_translation/test_gemini*.py` |
 
-The Proxy Server (`litellm/proxy/proxy_server.py`) is a FastAPI application that wraps the
-core library with enterprise features:
+### Unit testing translations
 
-```mermaid
-graph TD
-    subgraph "Incoming Request"
-        Client["POST /v1/chat/completions"]
-    end
-
-    subgraph "proxy/proxy_server.py"
-        Endpoint["chat_completion()"]
-    end
-
-    subgraph "proxy/auth/"
-        Auth["user_api_key_auth()"]
-    end
-
-    subgraph "proxy/"
-        PreCall["litellm_pre_call_utils.py"]
-        RouteRequest["route_llm_request.py"]
-    end
-
-    subgraph "litellm/"
-        Router["router.py"]
-        Main["main.py"]
-    end
-
-    Client --> Endpoint
-    Endpoint --> Auth
-    Auth --> PreCall
-    PreCall --> RouteRequest
-    RouteRequest --> Router
-    Router --> Main
-    Main --> Client
-```
-
-Key subsystems:
-- **Authentication** (`proxy/auth/`) - API key, JWT, OAuth2 validation
-- **Management APIs** (`proxy/management_endpoints/`) - Key, team, model, budget management
-- **Guardrails** (`proxy/guardrails/`) - Content filtering and safety checks
-- **Database** (`proxy/db/`) - Prisma ORM for PostgreSQL/SQLite
-
-## Caching
-
-LiteLLM provides multiple caching backends in `litellm/caching/`:
-
-| Backend | Use Case |
-|---------|----------|
-| `InMemoryCache` | Single-instance deployments |
-| `RedisCache` | Multi-instance with shared state |
-| `DualCache` | Fast local + persistent remote |
-| `S3Cache` | Long-term response storage |
-
-## Callbacks and Observability
-
-The callback system (`litellm/integrations/`) enables logging to 30+ observability platforms.
-Callbacks implement the `CustomLogger` interface from `integrations/custom_logger.py`:
+Translations are designed to be unit testable without making API calls:
 
 ```python
-class CustomLogger:
-    def log_success_event(self, kwargs, response_obj, start_time, end_time): ...
-    def log_failure_event(self, kwargs, response_obj, start_time, end_time): ...
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time): ...
-```
+from litellm.llms.bedrock.chat.converse_transformation import BedrockConverseConfig
 
-Register callbacks via `litellm.callbacks.append(MyCallback())` or in proxy config YAML.
-
-## Adding a New Provider
-
-1. Create `litellm/llms/{provider}/chat/transformation.py`
-2. Implement a `Config` class inheriting from `BaseConfig`
-3. Implement `transform_request()`, `transform_response()`, `get_complete_url()`
-4. Add provider routing in `litellm/main.py`
-5. Add tests in `tests/llm_translation/`
-6. Update `model_prices_and_context_window.json`
-
-See `litellm/llms/bedrock/chat/agentcore/transformation.py` for a complete example.
-
-## Directory Structure
-
-```
-litellm/
-├── main.py                 # Entry points: completion(), embedding(), etc.
-├── router.py               # Load balancing and fallbacks
-├── utils.py                # get_llm_provider(), helpers
-│
-├── llms/
-│   ├── base_llm/           # Base transformation classes
-│   │   └── chat/transformation.py  # BaseConfig
-│   ├── custom_httpx/
-│   │   ├── llm_http_handler.py     # BaseLLMHTTPHandler (central orchestrator)
-│   │   └── http_handler.py         # HTTPHandler, AsyncHTTPHandler
-│   └── {provider}/
-│       └── chat/transformation.py  # ProviderConfig
-│
-├── proxy/
-│   ├── proxy_server.py     # FastAPI application
-│   ├── auth/               # Authentication
-│   ├── management_endpoints/  # Admin APIs
-│   └── guardrails/         # Content filtering
-│
-├── caching/                # Cache backends
-├── integrations/           # Observability callbacks
-└── types/                  # Pydantic models
+def test_prompt_caching_transform():
+    config = BedrockConverseConfig()
+    result = config.transform_request(
+        model="anthropic.claude-3-opus",
+        messages=[{"role": "user", "content": "test", "cache_control": {"type": "ephemeral"}}],
+        optional_params={},
+        litellm_params={},
+        headers={}
+    )
+    assert "cachePoint" in str(result)  # Verify cache_control was translated
 ```
