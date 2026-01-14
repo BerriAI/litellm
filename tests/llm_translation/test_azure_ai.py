@@ -31,6 +31,8 @@ import pytest
 
 import litellm
 from litellm import completion
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.utils import StandardLoggingPayload
 
 
 @pytest.mark.parametrize(
@@ -369,6 +371,9 @@ def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
 
 @pytest.mark.asyncio
 async def test_azure_ai_model_router():
+    """
+    Test Azure AI model router non-streaming response cost tracking.
+    """
     litellm._turn_on_debug()
     response = await litellm.acompletion(
         model="azure_ai/azure-model-router",
@@ -377,9 +382,43 @@ async def test_azure_ai_model_router():
         api_key=os.getenv("AZURE_MODEL_ROUTER_API_KEY"),
     )
     print("response: ", response)
-    
 
     # Check response cost
     tracked_cost = response._hidden_params["response_cost"]
     assert tracked_cost > 0
     print("Tracked cost: ", tracked_cost)
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_model_router_streaming_model_in_chunk():
+    """
+    Test that Azure AI model router streaming returns the actual model in each chunk.
+    The response should contain the actual model used (e.g., gpt-4.1-nano) not the request model (azure-model-router).
+    """
+    litellm._turn_on_debug()
+    response = await litellm.acompletion(
+        model="azure_ai/azure-model-router",
+        messages=[{"role": "user", "content": "hi"}],
+        api_base="https://ishaa-mh6uutut-swedencentral.cognitiveservices.azure.com/openai/v1/",
+        api_key=os.getenv("AZURE_MODEL_ROUTER_API_KEY"),
+        stream=True,
+    )
+
+    # Collect chunks and check model field
+    chunks_with_model = []
+    async for chunk in response:
+        print(f"Chunk model: {chunk.model}")
+        if chunk.model and chunk.model.strip():
+            chunks_with_model.append(chunk.model)
+
+    print(f"All chunk models: {chunks_with_model}")
+
+    # At least some chunks should have a model
+    assert len(chunks_with_model) > 0, "No chunks had a model field set"
+
+    # The model should NOT be azure-model-router (the request model)
+    # It should be the actual model from the response (e.g., gpt-4.1-nano, gpt-5-nano, etc.)
+    for model in chunks_with_model:
+        assert model != "azure-model-router", f"Chunk model should be actual model, not request model. Got: {model}"
+        # The actual model should be a real model name like gpt-4.1-nano, gpt-5-nano, etc.
+        print(f"Verified chunk has actual model: {model}")
