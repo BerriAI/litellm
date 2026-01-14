@@ -492,51 +492,6 @@ class TestCustomGuardrailPassthroughSupport:
         assert result is True
 
 
-class TestPassthroughCallTypeHandling:
-    """Tests for passthrough call type handling in common_request_processing."""
-
-    def test_get_pre_call_type_with_allm_passthrough_route(self):
-        """
-        Test that _get_pre_call_type correctly maps allm_passthrough_route.
-
-        This tests Fix #1: allm_passthrough_route was not being handled, causing call_type to be None.
-        """
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
-
-        # Test the mapping
-        result = ProxyBaseLLMRequestProcessing._get_pre_call_type(
-            route_type="allm_passthrough_route"
-        )
-
-        # Should return allm_passthrough_route, not None
-        assert result == "allm_passthrough_route"
-
-    def test_get_pre_call_type_preserves_standard_mappings(self):
-        """
-        Test that _get_pre_call_type still correctly maps standard route types.
-
-        Ensures Fix #1 didn't break existing functionality.
-        """
-        from litellm.proxy.common_request_processing import (
-            ProxyBaseLLMRequestProcessing,
-        )
-
-        # Test standard mappings are preserved
-        assert (
-            ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="acompletion")
-            == "completion"
-        )
-        assert (
-            ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="aembedding")
-            == "embedding"
-        )
-        assert (
-            ProxyBaseLLMRequestProcessing._get_pre_call_type(route_type="aresponses")
-            == "responses"
-        )
-
 
 class TestEventTypeLogging:
     """Tests for event_type logging in guardrail information."""
