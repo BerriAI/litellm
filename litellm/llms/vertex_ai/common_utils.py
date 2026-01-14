@@ -453,9 +453,10 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     valid_schema_fields = set(get_type_hints(Schema).keys())
 
     defs = parameters.pop("$defs", {})
-    # flatten the defs
-    for name, value in defs.items():
-        unpack_defs(value, defs)
+    # Expand $ref references in parameters using the definitions
+    # Note: We don't pre-flatten defs as that causes exponential memory growth
+    # with circular references (see issue #19098). unpack_defs handles nested
+    # refs recursively and correctly detects/skips circular references.
     unpack_defs(parameters, defs)
 
     # 5. Nullable fields:
