@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 
@@ -6,8 +7,10 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
+from litellm.anthropic_interface import messages
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import Delta, ModelResponse, StreamingChoices
 
 
@@ -87,3 +90,62 @@ def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provide
         assert call_kwargs["custom_llm_provider"] == "my-custom-llm"
         assert call_kwargs["model"] == "my-custom-llm/my-custom-model"
         assert call_kwargs["api_key"] == "test-api-key"
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse_budget_tokens_preserved():
+    """
+    Test that budget_tokens value in thinking parameter is correctly passed to Bedrock Converse API
+    when using messages.acreate with bedrock/converse model.
+    
+    The bug was that the messages -> completion adapter was converting thinking to reasoning_effort
+    and losing the original budget_tokens value, causing it to use the default (128) instead.
+    """
+    client = AsyncHTTPHandler()
+    
+    with patch.object(client, "post") as mock_post:
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.headers = {}
+        mock_response.text = "mock response"
+        mock_response.json.return_value = {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "4"}]
+                }
+            },
+            "stopReason": "end_turn",
+            "usage": {
+                "inputTokens": 10,
+                "outputTokens": 5,
+                "totalTokens": 15
+            }
+        }
+        mock_post.return_value = mock_response
+        
+        try:
+            await messages.acreate(
+                client=client,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": "What is 2+2?"}],
+                model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                thinking={
+                    "budget_tokens": 1024,
+                    "type": "enabled"
+                },
+            )
+        except Exception:
+            pass  # Expected due to mock response format
+        
+        mock_post.assert_called_once()
+        
+        call_kwargs = mock_post.call_args.kwargs
+        json_data = call_kwargs.get("json") or json.loads(call_kwargs.get("data", "{}"))
+        
+        additional_fields = json_data.get("additionalModelRequestFields", {})
+        thinking_config = additional_fields.get("thinking", {})
+        
+        assert "thinking" in additional_fields, "thinking parameter should be in additionalModelRequestFields"
+        assert thinking_config.get("type") == "enabled", "thinking.type should be 'enabled'"
+        assert thinking_config.get("budget_tokens") == 1024, f"thinking.budget_tokens should be 1024, but got {thinking_config.get('budget_tokens')}"
