@@ -80,147 +80,123 @@ curl -X POST http://localhost:4000/chat/completions \
 
 This walkthrough shows how to add an Azure Model Router endpoint to LiteLLM using the Admin Dashboard.
 
-### Step 1: Navigate to Models Page
+### Select Provider
 
-Go to the Models page in your LiteLLM Dashboard.
+Navigate to the Models page and select "Azure AI Foundry (Studio)" as the provider.
+
+#### Navigate to Models Page
 
 ![Navigate to Models](./img/azure_model_router_01.jpeg)
 
-### Step 2: Select Provider
-
-Click the "Provider" dropdown field.
+#### Click Provider Dropdown
 
 ![Click Provider](./img/azure_model_router_02.jpeg)
 
-### Step 3: Choose Azure AI Foundry
-
-Select "Azure AI Foundry (Studio)" from the provider list.
+#### Choose Azure AI Foundry
 
 ![Select Azure AI Foundry](./img/azure_model_router_03.jpeg)
 
-### Step 4: Configure Model Name
+### Configure Model Name
 
-Click on the model name field to configure your model.
+Set up the model name by entering `azure_ai/` followed by your model router deployment name from Azure.
+
+#### Click Model Name Field
 
 ![Click Model Field](./img/azure_model_router_04.jpeg)
 
-### Step 5: Select Custom Model Name
-
-Choose "Custom Model Name (Enter below)" to enter a custom model identifier.
+#### Select Custom Model Name
 
 ![Select Custom Model](./img/azure_model_router_05.jpeg)
 
-### Step 6: Enter LiteLLM Model Name
-
-Click on "LiteLLM Model Name(s)" to specify the model name that will be used in API calls.
+#### Enter LiteLLM Model Name
 
 ![LiteLLM Model Name](./img/azure_model_router_06.jpeg)
 
-### Step 7: Enter Custom Model Name
-
-Click the "Enter custom model name" field.
+#### Click Custom Model Name Field
 
 ![Enter Custom Name Field](./img/azure_model_router_07.jpeg)
 
-### Step 8: Type Model Prefix
+#### Type Model Prefix
 
-Type `azure_ai/` as the prefix for your model name.
+Type `azure_ai/` as the prefix.
 
 ![Type azure_ai prefix](./img/azure_model_router_08.jpeg)
 
-### Step 9: Get Model Name from Azure Portal
+#### Copy Model Name from Azure Portal
 
-Switch to your Azure AI Foundry portal and locate your model router deployment name.
+Switch to Azure AI Foundry and copy your model router deployment name.
 
 ![Azure Portal Model Name](./img/azure_model_router_09.jpeg)
 
-### Step 10: Copy Model Name
-
-Copy the model router name (e.g., `azure-model-router`) from the Azure portal.
-
 ![Copy Model Name](./img/azure_model_router_10.jpeg)
 
-### Step 11: Paste Model Name
+#### Paste Model Name
 
-Paste the model name into the LiteLLM Dashboard field, resulting in `azure_ai/azure-model-router`.
+Paste to get `azure_ai/azure-model-router`.
 
 ![Paste Model Name](./img/azure_model_router_11.jpeg)
 
-### Step 12: Get API Base URL
+### Configure API Base and Key
 
-Go back to the Azure portal and copy the endpoint URL for your model router.
+Copy the endpoint URL and API key from Azure portal.
+
+#### Copy API Base URL from Azure
 
 ![Copy API Base](./img/azure_model_router_12.jpeg)
 
-### Step 13: Enter API Base
-
-Click the "API Base" field in the LiteLLM Dashboard.
+#### Enter API Base in LiteLLM
 
 ![Click API Base Field](./img/azure_model_router_13.jpeg)
 
-### Step 14: Paste API Base URL
-
-Paste the endpoint URL from Azure.
-
 ![Paste API Base](./img/azure_model_router_14.jpeg)
 
-### Step 15: Get API Key
-
-Copy your API key from the Azure portal.
+#### Copy API Key from Azure
 
 ![Copy API Key](./img/azure_model_router_15.jpeg)
 
-### Step 16: Enter API Key
-
-Click the "Azure API Key" field and paste your API key.
+#### Enter API Key in LiteLLM
 
 ![Enter API Key](./img/azure_model_router_16.jpeg)
 
-### Step 17: Test Connection
+### Test and Add Model
 
-Click "Test Connect" to verify your configuration works correctly.
+Verify your configuration works and save the model.
+
+#### Test Connection
 
 ![Test Connection](./img/azure_model_router_17.jpeg)
 
-### Step 18: Close Test Dialog
-
-After successful test, click "Close" to dismiss the test dialog.
+#### Close Test Dialog
 
 ![Close Dialog](./img/azure_model_router_18.jpeg)
 
-### Step 19: Add Model
-
-Click "Add Model" to save your Azure Model Router configuration.
+#### Add Model
 
 ![Add Model](./img/azure_model_router_19.jpeg)
 
-### Step 20: Test in Playground
+### Verify in Playground
 
-Navigate to the "Playground" to test your newly added model.
+Test your model and verify cost tracking is working.
+
+#### Open Playground
 
 ![Go to Playground](./img/azure_model_router_20.jpeg)
 
-### Step 21: Select Model
-
-Type "azure" to filter and select your Azure Model Router model.
+#### Select Model
 
 ![Select Model](./img/azure_model_router_21.jpeg)
 
-### Step 22: Send Test Message
-
-Type a test message in the chat field and send it.
+#### Send Test Message
 
 ![Send Message](./img/azure_model_router_22.jpeg)
 
-### Step 23: View Logs
-
-Click "Logs" to see the request details and cost tracking.
+#### View Logs
 
 ![View Logs](./img/azure_model_router_23.jpeg)
 
-### Step 24: Verify Cost Tracking
+#### Verify Cost Tracking
 
-You can see the cost is tracked correctly based on the actual model used by Azure Model Router.
+Cost is tracked based on the actual model used (e.g., `gpt-4.1-nano`).
 
 ![Verify Cost](./img/azure_model_router_24.jpeg)
 
@@ -253,29 +229,4 @@ cost = completion_cost(completion_response=response)
 print(f"Cost: ${cost}")
 ```
 
-## Supported Parameters
-
-Azure Model Router supports all standard chat completion parameters:
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `model` | string | Must be `azure_ai/azure-model-router` or your custom model name |
-| `messages` | array | Array of message objects |
-| `stream` | boolean | Enable streaming responses |
-| `stream_options` | object | Options for streaming (e.g., `{"include_usage": true}`) |
-| `temperature` | float | Sampling temperature |
-| `max_tokens` | integer | Maximum tokens to generate |
-| `top_p` | float | Nucleus sampling parameter |
-
-## Troubleshooting
-
-### Cost showing as None
-
-If cost tracking shows `None`, ensure:
-1. The actual model returned by Azure Model Router is in LiteLLM's pricing database
-2. You're using the latest version of LiteLLM
-
-### Streaming cost not tracked
-
-For streaming requests, LiteLLM extracts the model from the response chunks. This is handled automatically - no additional configuration needed.
 
