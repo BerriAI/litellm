@@ -66,3 +66,35 @@ async def test_anthropic_messages_litellm_router_bedrock():
     INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST._validate_response(response)
 
 
+@pytest.mark.asyncio
+async def test_anthropic_messages_bedrock_converse_with_thinking():
+    """
+    Test that bedrock/converse model works with thinking parameter.
+    Validates the request body from issue where budget_tokens was being lost.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                "litellm_params": {
+                    "model": "bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+                },
+            },
+        ]
+    )
+
+    messages = [{"role": "user", "content": "What is 2+2?"}]
+
+    response = await router.aanthropic_messages(
+        messages=messages,
+        model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
+        max_tokens=1026,
+        thinking={
+            "type": "enabled",
+            "budget_tokens": 1025
+        },
+    )
+    print("bedrock response: ", response)
+
+    # Verify response
+    INSTANCE_BASE_ANTHROPIC_MESSAGES_TEST._validate_response(response)

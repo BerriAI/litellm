@@ -17,7 +17,6 @@ from openai.types.chat.chat_completion_chunk import Choice as OpenAIStreamingCho
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     parse_tool_call_arguments,
 )
-
 from litellm.types.llms.anthropic import (
     AllAnthropicToolsValues,
     AnthopicMessagesAssistantMessageParam,
@@ -210,7 +209,7 @@ class LiteLLMAnthropicMessagesAdapter:
                             # Convert Anthropic image format to OpenAI format
                             source = content.get("source", {})
                             openai_image_url = (
-                                self._translate_anthropic_image_to_openai(source)
+                                self._translate_anthropic_image_to_openai(cast(dict, source))
                             )
 
                             if openai_image_url:
@@ -240,7 +239,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 # Combine all content items into a single tool message
                                 # to avoid creating multiple tool_result blocks with the same ID
                                 # (each tool_use must have exactly one tool_result)
-                                content_items = content.get("content", [])
+                                content_items = list(content.get("content", []))
 
                                 # For single-item content, maintain backward compatibility with string/url format
                                 if len(content_items) == 1:
@@ -266,7 +265,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                             source = c.get("source", {})
                                             openai_image_url = (
                                                 self._translate_anthropic_image_to_openai(
-                                                    source
+                                                    cast(dict, source)
                                                 )
                                                 or ""
                                             )
@@ -306,7 +305,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 source = c.get("source", {})
                                                 openai_image_url = (
                                                     self._translate_anthropic_image_to_openai(
-                                                        source
+                                                        cast(dict, source)
                                                     )
                                                     or ""
                                                 )
@@ -363,7 +362,7 @@ class LiteLLMAnthropicMessagesAdapter:
                                 }
                                 signature = (
                                     self._extract_signature_from_tool_use_content(
-                                        content
+                                        cast(Dict[str, Any], content)
                                     )
                                 )
 
@@ -424,14 +423,21 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_messages
 
-    def translate_anthropic_thinking_to_openai(
-        self, thinking: Dict[str, Any]
+    @staticmethod
+    def translate_anthropic_thinking_to_reasoning_effort(
+        thinking: Dict[str, Any]
     ) -> Optional[str]:
         """
         Translate Anthropic's thinking parameter to OpenAI's reasoning_effort.
 
         Anthropic thinking format: {'type': 'enabled'|'disabled', 'budget_tokens': int}
         OpenAI reasoning_effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'default'
+
+        Mapping:
+        - budget_tokens >= 10000 -> 'high'
+        - budget_tokens >= 5000  -> 'medium'
+        - budget_tokens >= 2000  -> 'low'
+        - budget_tokens < 2000   -> 'minimal'
         """
         if not isinstance(thinking, dict):
             return None
@@ -452,6 +458,53 @@ class LiteLLMAnthropicMessagesAdapter:
                 return "minimal"
 
         return None
+
+    @staticmethod
+    def is_anthropic_claude_model(model: str) -> bool:
+        """
+        Check if the model is an Anthropic Claude model that supports the thinking parameter.
+
+        Returns True for:
+        - anthropic/* models
+        - bedrock/*anthropic* models (including converse)
+        - vertex_ai/*claude* models
+        """
+        model_lower = model.lower()
+        return (
+            "anthropic" in model_lower
+            or "claude" in model_lower
+        )
+
+    @staticmethod
+    def translate_thinking_for_model(
+        thinking: Dict[str, Any],
+        model: str,
+    ) -> Dict[str, Any]:
+        """
+        Translate Anthropic thinking parameter based on the target model.
+
+        For Claude/Anthropic models: returns {'thinking': <original_thinking>}
+            - Preserves exact budget_tokens value
+
+        For non-Claude models: returns {'reasoning_effort': <mapped_value>}
+            - Converts thinking to reasoning_effort to avoid UnsupportedParamsError
+
+        Args:
+            thinking: Anthropic thinking dict with 'type' and 'budget_tokens'
+            model: The target model name
+
+        Returns:
+            Dict with either 'thinking' or 'reasoning_effort' key
+        """
+        if LiteLLMAnthropicMessagesAdapter.is_anthropic_claude_model(model):
+            return {"thinking": thinking}
+        else:
+            reasoning_effort = LiteLLMAnthropicMessagesAdapter.translate_anthropic_thinking_to_reasoning_effort(
+                thinking
+            )
+            if reasoning_effort:
+                return {"reasoning_effort": reasoning_effort}
+            return {}
 
     def translate_anthropic_tool_choice_to_openai(
         self, tool_choice: AnthropicMessagesToolChoice
@@ -566,11 +619,15 @@ class LiteLLMAnthropicMessagesAdapter:
         if "thinking" in anthropic_message_request:
             thinking = anthropic_message_request["thinking"]
             if thinking:
-                reasoning_effort = self.translate_anthropic_thinking_to_openai(
-                    thinking=cast(Dict[str, Any], thinking)
-                )
-                if reasoning_effort:
-                    new_kwargs["reasoning_effort"] = reasoning_effort
+                model = new_kwargs.get("model", "")
+                if self.is_anthropic_claude_model(model):
+                    new_kwargs["thinking"] = thinking  # type: ignore
+                else:
+                    reasoning_effort = self.translate_anthropic_thinking_to_reasoning_effort(
+                        cast(Dict[str, Any], thinking)
+                    )
+                    if reasoning_effort:
+                        new_kwargs["reasoning_effort"] = reasoning_effort
 
         translatable_params = self.translatable_anthropic_params()
         for k, v in anthropic_message_request.items():
