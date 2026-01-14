@@ -35,47 +35,34 @@ sequenceDiagram
 ```mermaid
 graph TD
     subgraph "Incoming Request"
-        Client["Client Request"]
+        Client["POST /v1/chat/completions"]
     end
 
     subgraph "proxy/proxy_server.py"
-        Endpoint["API Endpoints<br/>/v1/chat/completions, /v1/messages, etc."]
+        Endpoint["chat_completion()"]
     end
 
     subgraph "proxy/auth/"
-        Auth["user_api_key_auth.py<br/>API Key, JWT, OAuth2"]
+        Auth["user_api_key_auth()"]
     end
 
-    subgraph "proxy/hooks/"
-        Hooks["max_budget_limiter<br/>parallel_request_limiter<br/>cache_control_check"]
-    end
-
-    subgraph "proxy/*_endpoints/"
-        LLMEndpoints["anthropic_endpoints/<br/>vertex_ai_endpoints/<br/>google_endpoints/<br/>pass_through_endpoints/"]
+    subgraph "proxy/"
+        PreCall["litellm_pre_call_utils.py"]
+        RouteRequest["route_llm_request.py"]
     end
 
     subgraph "litellm/"
-        Router["router.py<br/>Load Balancing"]
-        Main["main.py<br/>completion()"]
-    end
-
-    subgraph "proxy/management_endpoints/"
-        Management["key_management.py<br/>team_management.py<br/>model_management.py"]
-    end
-
-    subgraph "proxy/db/"
-        DB["prisma_client.py<br/>PostgreSQL/SQLite"]
+        Router["router.py"]
+        Main["main.py"]
     end
 
     Client --> Endpoint
     Endpoint --> Auth
-    Auth --> Hooks
-    Hooks --> LLMEndpoints
-    LLMEndpoints --> Router
+    Auth --> PreCall
+    PreCall --> RouteRequest
+    RouteRequest --> Router
     Router --> Main
-    Endpoint --> Management
-    Management --> DB
-    Hooks --> DB
+    Main --> Client
 ```
 
 **Key files:**
