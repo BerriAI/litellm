@@ -22,7 +22,7 @@ from ...base_llm.audio_transcription.transformation import (
 from ...openai.transcriptions.whisper_transformation import (
     OpenAIWhisperAudioTranscriptionConfig,
 )
-from ..common_utils import IBMWatsonXMixin, _get_api_params
+from ..common_utils import IBMWatsonXMixin
 
 
 class IBMWatsonXAudioTranscriptionConfig(
