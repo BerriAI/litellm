@@ -1,4 +1,4 @@
-# LiteLLM Proxy Architecture
+# LiteLLM Architecture - LiteLLM SDK + AI Gateway
 
 This document helps contributors understand where to make changes in the LiteLLM proxy.
 
@@ -63,6 +63,53 @@ graph TD
     RouteRequest --> Router
     Router --> Main
     Main --> Client
+```
+
+### SDK Components (litellm/)
+
+```mermaid
+graph TD
+    subgraph "SDK Entry Points"
+        Completion["litellm.completion()"]
+        Messages["litellm.messages()"]
+    end
+
+    subgraph "main.py"
+        Main["completion()<br/>acompletion()"]
+    end
+
+    subgraph "utils.py"
+        GetProvider["get_llm_provider()"]
+    end
+
+    subgraph "llms/custom_httpx/"
+        Handler["llm_http_handler.py<br/>BaseLLMHTTPHandler"]
+        HTTP["http_handler.py<br/>HTTPHandler / AsyncHTTPHandler"]
+    end
+
+    subgraph "llms/{provider}/chat/"
+        Transform["transformation.py<br/>ProviderConfig"]
+    end
+
+    subgraph "litellm_core_utils/"
+        Streaming["streaming_handler.py"]
+        TokenCounter["token_counter.py"]
+    end
+
+    subgraph "integrations/"
+        Callbacks["custom_logger.py<br/>Langfuse, Datadog, etc."]
+    end
+
+    Completion --> Main
+    Messages --> Main
+    Main --> GetProvider
+    GetProvider --> Handler
+    Handler --> Transform
+    Transform --> HTTP
+    HTTP --> Provider["LLM Provider API"]
+    Handler --> Streaming
+    Handler --> Callbacks
+    Main --> TokenCounter
 ```
 
 **Key files:**
