@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Union
 import httpx
 
 import litellm
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
@@ -407,7 +408,7 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> Exception:
+    ) -> BaseLLMException:
         """Get the appropriate error class for OpenRouter errors."""
         return OpenRouterException(
             message=error_message,
