@@ -4525,8 +4525,13 @@ class StandardLoggingPayloadSetup:
             )
         elif isinstance(usage, dict):
             return Usage(**usage)
-
-        raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
+        else:
+            # Unknown type - return 0 tokens (defensive behavior)
+            return Usage(
+                prompt_tokens=0,
+                completion_tokens=0,
+                total_tokens=0,
+            )
 
     @staticmethod
     def get_model_cost_information(
