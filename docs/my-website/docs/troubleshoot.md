@@ -12,27 +12,37 @@ Your `config.yaml` file (redact sensitive info like API keys). Include number of
 
 The command used to start LiteLLM (e.g., `litellm --config config.yaml --num_workers 8 --detailed_debug`).
 
-### 3. Environment Variables
+### 3. LiteLLM Version
+
+- Current version  
+- Version when the issue first appeared (if different)  
+- If upgraded, the version changed from → to
+
+### 4. Environment Variables
 
 Non-sensitive environment variables not in your config (e.g., `NUM_WORKERS`, `LITELLM_LOG`, `LITELLM_MODE`, `HOST`, `PORT`, `REDIS_HOST`, `REDIS_PORT`). Do not include passwords or API keys.
 
-### 4. Server Specifications
+### 5. Server Specifications
 
-- **Testing/Development:** CPU cores, RAM, OS, Python version, LiteLLM version
+- **Testing/Development:** CPU cores, RAM, OS, Python version
 - **Production (if different):** CPU cores, RAM, deployment method, number of instances/replicas
 
-### 5. Database and Redis Usage
+### 6. Database and Redis Usage
 
 - **Database:** Using database? (`DATABASE_URL` set), database type and version
 - **Redis:** Using Redis? Redis version, configuration type (Standalone/Cluster/Sentinel).
 
-### 6. Endpoints
+### 7. Endpoints
 
 The endpoint(s) you're using that are experiencing issues (e.g., `/chat/completions`, `/embeddings`).
 
-### 7. Request Example
+### 8. Request Example
 
 A realistic example of the request causing issues, including expected vs. actual response and any error messages.
+
+### 9. Error Logs, Stack Traces, and Metrics
+
+Full error logs, stack traces, and any images from service metrics (CPU, memory, request rates, etc.) that might help diagnose the issue.
 
 ---
 
