@@ -7005,10 +7005,10 @@ class Router:
             pattern_deployments = self.pattern_router.route(full_model_name)
             if pattern_deployments:
                 # Return the first matching wildcard model_name
-                for deployment in pattern_deployments:
-                    model_name = deployment.get("model_name")
-                    if model_name:
-                        return model_name
+                for pattern_deployment in pattern_deployments:
+                    matched_model_name = pattern_deployment.get("model_name")
+                    if matched_model_name:
+                        return matched_model_name
 
         # No match found
         return None
