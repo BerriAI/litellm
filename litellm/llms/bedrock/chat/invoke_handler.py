@@ -1533,6 +1533,7 @@ class AWSEventStreamDecoder:
                     )
                 ],
                 id=self.response_id,
+                model=self.model,
                 usage=usage,
                 provider_specific_fields=model_response_provider_specific_fields,
             )
