@@ -142,6 +142,7 @@ async def test_bedrock_converse_budget_tokens_preserved():
         
         call_kwargs = mock_post.call_args.kwargs
         json_data = call_kwargs.get("json") or json.loads(call_kwargs.get("data", "{}"))
+        print("Request json: ", json.dumps(json_data, indent=4, default=str))
         
         additional_fields = json_data.get("additionalModelRequestFields", {})
         thinking_config = additional_fields.get("thinking", {})
