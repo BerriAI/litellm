@@ -4972,7 +4972,17 @@ def _try_create_usage_from_dict(usage: dict) -> Optional[Usage]:
     try:
         return Usage(**usage)
     except (TypeError, ValueError) as e:
-        verbose_logger.debug(f"Error creating Usage from dict: {e}, usage: {usage}")
+        # Avoid logging full dict contents, which may include sensitive data
+        try:
+            usage_keys = list(usage.keys())
+        except Exception:
+            usage_keys = None
+        verbose_logger.debug(
+            "Error creating Usage from dict: %s, usage keys: %s, usage type: %s",
+            e,
+            usage_keys,
+            type(usage),
+        )
         return None
 
 
