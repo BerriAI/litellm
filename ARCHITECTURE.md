@@ -30,6 +30,54 @@ sequenceDiagram
     Handler-->>Client: ModelResponse
 ```
 
+### Proxy Server Components
+
+```mermaid
+graph TD
+    subgraph "Incoming Request"
+        Client["Client Request"]
+    end
+
+    subgraph "proxy/proxy_server.py"
+        Endpoint["API Endpoints<br/>/v1/chat/completions, /v1/messages, etc."]
+    end
+
+    subgraph "proxy/auth/"
+        Auth["user_api_key_auth.py<br/>API Key, JWT, OAuth2"]
+    end
+
+    subgraph "proxy/hooks/"
+        Hooks["max_budget_limiter<br/>parallel_request_limiter<br/>cache_control_check"]
+    end
+
+    subgraph "proxy/*_endpoints/"
+        LLMEndpoints["anthropic_endpoints/<br/>vertex_ai_endpoints/<br/>google_endpoints/<br/>pass_through_endpoints/"]
+    end
+
+    subgraph "litellm/"
+        Router["router.py<br/>Load Balancing"]
+        Main["main.py<br/>completion()"]
+    end
+
+    subgraph "proxy/management_endpoints/"
+        Management["key_management.py<br/>team_management.py<br/>model_management.py"]
+    end
+
+    subgraph "proxy/db/"
+        DB["prisma_client.py<br/>PostgreSQL/SQLite"]
+    end
+
+    Client --> Endpoint
+    Endpoint --> Auth
+    Auth --> Hooks
+    Hooks --> LLMEndpoints
+    LLMEndpoints --> Router
+    Router --> Main
+    Endpoint --> Management
+    Management --> DB
+    Hooks --> DB
+```
+
 **Key files:**
 - `proxy/proxy_server.py` - Main API endpoints
 - `proxy/auth/` - Authentication
