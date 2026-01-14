@@ -4505,10 +4505,7 @@ class StandardLoggingPayloadSetup:
                 total_tokens=0,
             )
 
-        if isinstance(response_obj, dict):
-            usage = response_obj.get("usage", None)
-        else:
-            usage = getattr(response_obj, "usage", None)
+        usage = _safe_extract_usage_from_obj(response_obj)
         
         if usage is None:
             return Usage(
@@ -4516,22 +4513,24 @@ class StandardLoggingPayloadSetup:
                 completion_tokens=0,
                 total_tokens=0,
             )
-        elif isinstance(usage, Usage):
+        
+        if isinstance(usage, Usage):
             return usage
-        elif ResponseAPILoggingUtils._is_response_api_usage(usage):
-            # Handle ResponseAPIUsage (object or dict) from ResponsesAPIResponse
-            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                usage
-            )
-        elif isinstance(usage, dict):
-            return Usage(**usage)
-        else:
-            # Unknown type - return 0 tokens (defensive behavior)
-            return Usage(
-                prompt_tokens=0,
-                completion_tokens=0,
-                total_tokens=0,
-            )
+        
+        transformed_usage = _try_transform_response_api_usage(usage)
+        if transformed_usage is not None:
+            return transformed_usage
+        
+        if isinstance(usage, dict):
+            created_usage = _try_create_usage_from_dict(usage)
+            if created_usage is not None:
+                return created_usage
+        
+        return Usage(
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+        )
 
     @staticmethod
     def get_model_cost_information(
@@ -4579,7 +4578,9 @@ class StandardLoggingPayloadSetup:
         """
         if response_obj:
             if isinstance(response_obj, BaseModel):
-                final_response_obj: Optional[Union[dict, str, list]] = response_obj.model_dump()
+                final_response_obj: Optional[Union[dict, str, list]] = _safe_model_dump(
+                    response_obj, default={}
+                )
             else:
                 final_response_obj = response_obj
         elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
@@ -4595,7 +4596,7 @@ class StandardLoggingPayloadSetup:
         if modified_final_response_obj is not None and isinstance(
             modified_final_response_obj, BaseModel
         ):
-            final_response_obj = modified_final_response_obj.model_dump()
+            final_response_obj = _safe_model_dump(modified_final_response_obj, default={})
         else:
             final_response_obj = modified_final_response_obj
 
@@ -4866,6 +4867,115 @@ class StandardLoggingPayloadSetup:
         return request_tags
 
 
+def _safe_model_dump(
+    obj: BaseModel, default: Optional[Union[dict, str, list]] = None
+) -> Union[dict, str, list]:
+    """
+    Safely call model_dump() on a BaseModel with fallback strategies.
+    
+    Args:
+        obj: BaseModel instance to dump
+        default: Default value to return if all strategies fail
+        
+    Returns:
+        Dict representation of the BaseModel, or fallback value
+    """
+    if default is None:
+        default = {}
+    
+    try:
+        return obj.model_dump()
+    except (AttributeError, TypeError) as e:
+        verbose_logger.debug(
+            f"Error calling model_dump() on BaseModel: {e}, type: {type(obj)}"
+        )
+        try:
+            if hasattr(obj, "__dict__"):
+                return obj.__dict__
+            else:
+                return str(obj)
+        except Exception:
+            return default
+
+
+def _safe_get_attribute(
+    obj: Union[dict, BaseModel, Any], attr_name: str, default: Any = None
+) -> Any:
+    """
+    Safely get an attribute from a dict or BaseModel object.
+    
+    Args:
+        obj: Object to get attribute from (dict, BaseModel, or any object)
+        attr_name: Name of the attribute to get
+        default: Default value to return if attribute doesn't exist
+        
+    Returns:
+        Attribute value or default
+    """
+    try:
+        if isinstance(obj, dict):
+            return obj.get(attr_name, default)
+        else:
+            return getattr(obj, attr_name, default)
+    except (AttributeError, TypeError) as e:
+        verbose_logger.debug(
+            f"Error getting attribute '{attr_name}' from object: {e}, type: {type(obj)}"
+        )
+        return default
+
+
+def _safe_extract_usage_from_obj(
+    response_obj: Union[dict, BaseModel, Any]
+) -> Optional[Union[dict, Usage, Any]]:
+    """
+    Safely extract usage from response_obj (dict or BaseModel).
+    
+    Args:
+        response_obj: Response object (dict, BaseModel, or any object)
+        
+    Returns:
+        Usage object, dict, or None
+    """
+    return _safe_get_attribute(response_obj, "usage", None)
+
+
+def _try_transform_response_api_usage(usage: Any) -> Optional[Usage]:
+    """
+    Try to transform ResponseAPIUsage to Usage object.
+    
+    Args:
+        usage: Usage object (dict, ResponseAPIUsage, or other)
+        
+    Returns:
+        Transformed Usage object, or None if transformation fails
+    """
+    try:
+        if ResponseAPILoggingUtils._is_response_api_usage(usage):
+            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
+    except (AttributeError, TypeError, KeyError) as e:
+        verbose_logger.debug(
+            f"Error checking/transforming ResponseAPIUsage: {e}, type: {type(usage)}"
+        )
+    return None
+
+
+def _try_create_usage_from_dict(usage: dict) -> Optional[Usage]:
+    """
+    Try to create Usage object from dict.
+    
+    Args:
+        usage: Dict containing usage information
+        
+    Returns:
+        Usage object, or None if creation fails
+    """
+    try:
+        return Usage(**usage)
+    except (TypeError, ValueError) as e:
+        verbose_logger.debug(f"Error creating Usage from dict: {e}, usage: {usage}")
+        return None
+
+
 def _get_status_fields(
     status: StandardLoggingPayloadStatus,
     guardrail_information: Optional[List[dict]],
@@ -4923,10 +5033,13 @@ def _extract_response_obj_and_hidden_params(
         response_obj: Union[dict, BaseModel] = {}
     elif isinstance(init_response_obj, BaseModel):
         response_obj = init_response_obj
-        hidden_params = getattr(init_response_obj, "_hidden_params", None)
+        hidden_params = _safe_get_attribute(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
     else:
+        verbose_logger.debug(
+            f"Unknown init_response_obj type: {type(init_response_obj)}, defaulting to empty dict"
+        )
         response_obj = {}
 
     if original_exception is not None and hidden_params is None:
@@ -4989,10 +5102,7 @@ def get_standard_logging_object_payload(
             ),
         )
 
-        if isinstance(response_obj, dict):
-            id = response_obj.get("id", kwargs.get("litellm_call_id"))
-        else:
-            id = getattr(response_obj, "id", None) or kwargs.get("litellm_call_id")
+        id = _safe_get_attribute(response_obj, "id", None) or kwargs.get("litellm_call_id")
 
         _model_id = metadata.get("model_info", {}).get("id", "")
         _model_group = metadata.get("model_group", "")
