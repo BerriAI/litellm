@@ -1267,3 +1267,65 @@ def test_build_vertex_schema_empty_properties():
     parent_schema = result["properties"]["action"]["items"]["anyOf"][0]
     assert parent_schema["type"] == "object", "Parent schema should still have object type"
     assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
+
+
+def test_add_object_type_schema_with_no_properties_and_no_type():
+    """
+    Test that add_object_type adds type: object when schema has no properties and no type.
+    Fixes issue where tools with no arguments (e.g. EnterPlanMode) fail on Gemini.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with no properties and no type (the problematic case)
+    input_schema = {
+        "$schema": "https://json-schema.org/draft/2020-12/schema"
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type: object was added
+    assert input_schema.get("type") == "object", "type: object should be added"
+
+    # Verify $schema is preserved
+    assert input_schema.get("$schema") == "https://json-schema.org/draft/2020-12/schema"
+
+
+def test_add_object_type_does_not_override_existing_type():
+    """
+    Test add_object_type does not override existing type field.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with existing type
+    input_schema = {
+        "type": "string",
+        "description": "A string field"
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type was not changed
+    assert input_schema.get("type") == "string", "Existing type should not be changed"
+
+
+def test_add_object_type_does_not_add_type_when_anyof_present():
+    """
+    Test add_object_type does not add type: object when anyOf is present.
+    """
+    from litellm.llms.vertex_ai.common_utils import add_object_type
+
+    # Input: Schema with anyOf but no type
+    input_schema = {
+        "anyOf": [
+            {"type": "string"},
+            {"type": "null"}
+        ]
+    }
+
+    # Apply the transformation
+    add_object_type(input_schema)
+
+    # Verify type was not added (anyOf handles the type)
+    assert "type" not in input_schema, "type should not be added when anyOf is present"
