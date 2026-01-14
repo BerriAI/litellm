@@ -1,8 +1,12 @@
 # LiteLLM Architecture - LiteLLM SDK + AI Gateway
 
-This document helps contributors understand where to make changes in the LiteLLM proxy.
+This document helps contributors understand where to make changes in LiteLLM.
 
-## 1. Request Flow
+---
+
+## 1. AI Gateway (Proxy) Request Flow
+
+The AI Gateway (`litellm/proxy/`) wraps the SDK with authentication, rate limiting, and management features.
 
 ```mermaid
 sequenceDiagram
@@ -30,7 +34,7 @@ sequenceDiagram
     Handler-->>Client: ModelResponse
 ```
 
-### Proxy Server Components
+### Proxy Components
 
 ```mermaid
 graph TD
@@ -65,7 +69,46 @@ graph TD
     Main --> Client
 ```
 
-### SDK Components (litellm/)
+**Key proxy files:**
+- `proxy/proxy_server.py` - Main API endpoints
+- `proxy/auth/` - Authentication (API keys, JWT, OAuth2)
+- `proxy/hooks/` - Proxy-level callbacks
+- `router.py` - Load balancing, fallbacks
+- `router_strategy/` - Routing algorithms (`lowest_latency.py`, `simple_shuffle.py`, etc.)
+
+**LLM-specific proxy endpoints:**
+
+| Endpoint | Directory | Purpose |
+|----------|-----------|---------|
+| `/v1/messages` | `proxy/anthropic_endpoints/` | Anthropic Messages API |
+| `/vertex-ai/*` | `proxy/vertex_ai_endpoints/` | Vertex AI passthrough |
+| `/gemini/*` | `proxy/google_endpoints/` | Google AI Studio passthrough |
+| `/v1/images/*` | `proxy/image_endpoints/` | Image generation |
+| `/v1/batches` | `proxy/batches_endpoints/` | Batch processing |
+| `/v1/files` | `proxy/openai_files_endpoints/` | File uploads |
+| `/v1/fine_tuning` | `proxy/fine_tuning_endpoints/` | Fine-tuning jobs |
+| `/v1/rerank` | `proxy/rerank_endpoints/` | Reranking |
+| `/v1/responses` | `proxy/response_api_endpoints/` | OpenAI Responses API |
+| `/v1/vector_stores` | `proxy/vector_store_endpoints/` | Vector stores |
+| `/*` (passthrough) | `proxy/pass_through_endpoints/` | Direct provider passthrough |
+
+**Proxy Hooks** (`proxy/hooks/__init__.py`):
+
+| Hook | File | Purpose |
+|------|------|---------|
+| `max_budget_limiter` | `proxy/hooks/max_budget_limiter.py` | Enforce budget limits |
+| `parallel_request_limiter` | `proxy/hooks/parallel_request_limiter_v3.py` | Rate limiting per key/user |
+| `cache_control_check` | `proxy/hooks/cache_control_check.py` | Cache validation |
+| `responses_id_security` | `proxy/hooks/responses_id_security.py` | Response ID validation |
+| `litellm_skills` | `proxy/hooks/skills_injection.py` | Skills injection |
+
+To add a new proxy hook, implement `CustomLogger` and register in `PROXY_HOOKS`.
+
+---
+
+## 2. SDK Request Flow
+
+The SDK (`litellm/`) provides the core LLM calling functionality used by both direct SDK users and the AI Gateway.
 
 ```mermaid
 graph TD
@@ -114,42 +157,18 @@ graph TD
     Response -.->|async| Callbacks
 ```
 
-**Key files:**
-- `proxy/proxy_server.py` - Main API endpoints
-- `proxy/auth/` - Authentication
-- `proxy/hooks/` - Proxy-level callbacks (see table below)
-- `router.py` - Load balancing, fallbacks
-- `router_strategy/` - Routing algorithms (`lowest_latency.py`, `simple_shuffle.py`, etc.)
+**Key SDK files:**
+- `main.py` - Entry points: `completion()`, `acompletion()`, `embedding()`
+- `utils.py` - `get_llm_provider()` resolves model → provider
+- `llms/custom_httpx/llm_http_handler.py` - Central HTTP orchestrator
+- `llms/custom_httpx/http_handler.py` - Low-level HTTP client
+- `llms/{provider}/chat/transformation.py` - Provider-specific transformations
+- `litellm_core_utils/streaming_handler.py` - Streaming response handling
+- `integrations/` - Async callbacks (Langfuse, Datadog, etc.)
 
-**LLM-specific proxy endpoints:**
+---
 
-| Endpoint | Directory | Purpose |
-|----------|-----------|---------|
-| `/v1/messages` | `proxy/anthropic_endpoints/` | Anthropic Messages API |
-| `/vertex-ai/*` | `proxy/vertex_ai_endpoints/` | Vertex AI passthrough |
-| `/gemini/*` | `proxy/google_endpoints/` | Google AI Studio passthrough |
-| `/v1/images/*` | `proxy/image_endpoints/` | Image generation |
-| `/v1/batches` | `proxy/batches_endpoints/` | Batch processing |
-| `/v1/files` | `proxy/openai_files_endpoints/` | File uploads |
-| `/v1/fine_tuning` | `proxy/fine_tuning_endpoints/` | Fine-tuning jobs |
-| `/v1/rerank` | `proxy/rerank_endpoints/` | Reranking |
-| `/v1/responses` | `proxy/response_api_endpoints/` | OpenAI Responses API |
-| `/v1/vector_stores` | `proxy/vector_store_endpoints/` | Vector stores |
-| `/*` (passthrough) | `proxy/pass_through_endpoints/` | Direct provider passthrough |
-
-**Proxy Hooks** (`proxy/hooks/__init__.py`):
-
-| Hook | File | Purpose |
-|------|------|---------|
-| `max_budget_limiter` | `proxy/hooks/max_budget_limiter.py` | Enforce budget limits |
-| `parallel_request_limiter` | `proxy/hooks/parallel_request_limiter_v3.py` | Rate limiting per key/user |
-| `cache_control_check` | `proxy/hooks/cache_control_check.py` | Cache validation |
-| `responses_id_security` | `proxy/hooks/responses_id_security.py` | Response ID validation |
-| `litellm_skills` | `proxy/hooks/skills_injection.py` | Skills injection |
-
-To add a new proxy hook, implement `CustomLogger` and register in `PROXY_HOOKS`.
-
-## 2. Translation Layer
+## 3. Translation Layer
 
 When a request comes in, it goes through a **translation layer** that converts between API formats.
 Each translation is isolated in its own file, making it easy to test and modify independently.
@@ -194,7 +213,9 @@ class ProviderConfig(BaseConfig):
 
 The `BaseLLMHTTPHandler` (`llms/custom_httpx/llm_http_handler.py`) calls these methods - you never need to modify the handler itself.
 
-## 3. Adding/Modifying Providers
+---
+
+## 4. Adding/Modifying Providers
 
 ### To add a new provider:
 
