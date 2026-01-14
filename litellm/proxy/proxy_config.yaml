@@ -6,3 +6,5 @@ model_list:
     litellm_params:
       model: openai/*
 
+general_settings:
+  store_prompts_in_spend_logs: true
