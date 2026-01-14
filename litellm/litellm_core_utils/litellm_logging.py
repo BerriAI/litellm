@@ -5102,7 +5102,10 @@ def get_standard_logging_object_payload(
             ),
         )
 
-        id = _safe_get_attribute(response_obj, "id", None) or kwargs.get("litellm_call_id")
+        # Preserve falsy values (0, "", False) if they exist in response_obj
+        id = _safe_get_attribute(response_obj, "id", None)
+        if id is None:
+            id = kwargs.get("litellm_call_id")
 
         _model_id = metadata.get("model_info", {}).get("id", "")
         _model_group = metadata.get("model_group", "")
