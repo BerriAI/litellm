@@ -399,6 +399,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         selectedFilters={selectedTags}
         onFiltersChange={setSelectedTags}
         filterOptions={getAllTags() || undefined}
+        teams={teams || []}
       />
       <TabGroup>
         <NewBadge>
