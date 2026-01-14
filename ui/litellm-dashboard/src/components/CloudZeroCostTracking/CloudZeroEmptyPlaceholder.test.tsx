@@ -9,6 +9,6 @@ describe("CloudZeroEmptyPlaceholder", () => {
 
     expect(screen.getByText("No CloudZero Integration Found")).toBeInTheDocument();
     expect(screen.getByText(/Connect your CloudZero account/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create Integration" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add CloudZero Integration" })).toBeInTheDocument();
   });
 });

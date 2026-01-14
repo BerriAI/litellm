@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.11 - Google Interactions API"
+title: "v1.80.11-stable - Google Interactions API"
 slug: "v1-80-11"
 date: 2025-12-20T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:v1.80.11.rc.1
+docker.litellm.ai/berriai/litellm:v1.80.11-stable
 ```
 
 </TabItem>
@@ -79,12 +79,13 @@ This makes LiteLLM especially beneficial for serverless functions, Lambda deploy
 
 ## New Providers and Endpoints
 
-### New Providers (4 new providers)
+### New Providers (5 new providers)
 
 | Provider | Supported LiteLLM Endpoints | Description |
 | -------- | ------------------- | ----------- |
 | [Stability AI](../../docs/providers/stability) | `/images/generations`, `/images/edits` | Stable Diffusion 3, SD3.5, image editing and generation |
 | Venice.ai | `/chat/completions`, `/messages`, `/responses` | Venice.ai API integration via providers.json |
+| [Pydantic AI Agents](../../docs/providers/pydantic_ai_agent) | `/a2a` | Pydantic AI agents for A2A protocol workflows |
 | [VertexAI Agent Engine](../../docs/providers/vertex_ai_agent_engine) | `/a2a` | Google Vertex AI Agent Engine for agentic workflows |
 | [LinkUp Search](../../docs/search/linkup) | `/search` | LinkUp web search API integration |
 

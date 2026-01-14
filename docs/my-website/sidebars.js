@@ -55,6 +55,7 @@ const sidebars = {
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
         ...[
+          "proxy/guardrails/qualifire",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/onyx_security",
           "proxy/guardrails/aporia_api",
@@ -289,7 +290,7 @@ const sidebars = {
           label: "All Endpoints (Swagger)",
           href: "https://litellm-api.up.railway.app/",
         },
-  "proxy/enterprise",
+        "proxy/enterprise",
         {
           type: "category",
           label: "Authentication",
@@ -390,6 +391,9 @@ const sidebars = {
           items: [
             "proxy/cost_tracking",
             "proxy/custom_pricing",
+            "proxy/pricing_calculator",
+            "proxy/provider_margins",
+            "proxy/provider_discounts",
             "proxy/sync_models_github",
             "proxy/billing",
           ],
@@ -417,14 +421,8 @@ const sidebars = {
           ],
         },
         "assistants",
-        {
-          type: "category",
-          label: "/audio",
-          items: [
-            "audio_transcription",
-            "text_to_speech",
-          ]
-        },
+        "audio_transcription",
+        "text_to_speech",
         {
           type: "category",
           label: "/batches",
@@ -470,21 +468,17 @@ const sidebars = {
             "proxy/managed_finetuning",
           ]
         },
-          "generateContent",
-          "apply_guardrail",
-          "bedrock_invoke",
-          "interactions",
-        {
-          type: "category",
-          label: "/images",
-          items: [
-            "image_edits",
-            "image_generation",
-            "image_variations",
-          ]
-        },
+        "generateContent",
+        "apply_guardrail",
+        "bedrock_invoke",
+        "interactions",
+        "image_edits",
+        "image_generation",
+        "image_variations",
         "videos",
         "vector_store_files",
+        "vector_stores/create",
+        "vector_stores/search",
         {
           type: "category",
           label: "/mcp - Model Context Protocol",
@@ -529,9 +523,11 @@ const sidebars = {
           ]
         },
         "rag_ingest",
+        "rag_query",
         "realtime",
         "rerank",
         "response_api",
+        "response_api_compact",
         {
           type: "category",
           label: "/search",
@@ -549,14 +545,7 @@ const sidebars = {
           ]
         },
         "skills",
-        {
-          type: "category",
-          label: "/vector_stores",
-          items: [
-            "vector_stores/create",
-            "vector_stores/search",
-          ]
-        },
+
       ],
     },
     {
@@ -664,18 +653,22 @@ const sidebars = {
             "providers/bedrock_agents",
             "providers/bedrock_writer",
             "providers/bedrock_batches",
-            "providers/bedrock_vector_store",
-          ]
-        },
-        "providers/litellm_proxy",
-        "providers/ai21",
-        "providers/aiml",
+            "providers/aws_polly",
+        "providers/bedrock_vector_store",
+      ]
+    },
+    "providers/litellm_proxy",
+    "providers/abliteration",
+    "providers/ai21",
+    "providers/aiml",
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
+        "providers/apertis",
         "providers/baseten",
         "providers/bytez",
         "providers/cerebras",
+        "providers/chutes",
         "providers/clarifai",
         "providers/cloudflare_workers",
         "providers/codestral",
@@ -717,14 +710,18 @@ const sidebars = {
         "providers/langgraph",
         "providers/lemonade",
         "providers/llamafile",
+        "providers/llamagate",
         "providers/lm_studio",
+        "providers/manus",
         "providers/meta_llama",
         "providers/milvus_vector_stores",
         "providers/mistral",
+        "providers/minimax",
         "providers/moonshot",
         "providers/morph",
         "providers/nebius",
         "providers/nlp_cloud",
+        "providers/nano-gpt",
         "providers/novita",
         { type: "doc", id: "providers/nscale", label: "Nscale (EU Sovereign)" },
         {
@@ -741,6 +738,7 @@ const sidebars = {
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",
+        "providers/poe",
         "providers/publicai",
         "providers/predibase",
         "providers/pydantic_ai_agent",
@@ -757,6 +755,8 @@ const sidebars = {
         },
         "providers/sambanova",
         "providers/sap",
+        "providers/stability",
+        "providers/synthetic",
         "providers/snowflake",
         "providers/togetherai",
         "providers/topaz",
@@ -783,6 +783,7 @@ const sidebars = {
           ]
         },
         "providers/xai",
+        "providers/xiaomi_mimo",
         "providers/xinference",
         "providers/zai",
       ],

@@ -138,7 +138,7 @@ def _apply_budget_limits_to_end_user_params(
 ) -> None:
     """
     Helper function to apply budget limits to end user parameters.
-    
+
     Args:
         end_user_params: Dictionary to update with budget parameters
         budget_info: Budget table object containing limits
@@ -146,16 +146,14 @@ def _apply_budget_limits_to_end_user_params(
     """
     if budget_info.tpm_limit is not None:
         end_user_params["end_user_tpm_limit"] = budget_info.tpm_limit
-    
+
     if budget_info.rpm_limit is not None:
         end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
-    
+
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
-    
-    verbose_proxy_logger.debug(
-        f"Applied budget limits to end user {end_user_id}"
-    )
+
+    verbose_proxy_logger.debug(f"Applied budget limits to end user {end_user_id}")
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket):
@@ -170,12 +168,10 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     model = query_params.get("model")
 
-    
     async def return_body():
         return _realtime_request_body(model)
-    
-    request.body = return_body  # type: ignore
 
+    request.body = return_body  # type: ignore
 
     authorization = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
@@ -551,6 +547,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 valid_token = UserAPIKeyAuth(
                     api_key=None,
                     team_id=team_id,
+                    team_alias=(
+                        team_object.team_alias if team_object is not None else None
+                    ),
                     team_tpm_limit=(
                         team_object.tpm_limit if team_object is not None else None
                     ),
@@ -583,8 +582,25 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         if team_membership is not None
                         else None
                     ),
-                    team_metadata=team_object.metadata if team_object is not None else None,
+                    team_metadata=team_object.metadata
+                    if team_object is not None
+                    else None,
                 )
+                
+                # Check if model has zero cost - if so, skip all budget checks
+                model = get_model_from_request(request_data, route)
+                skip_budget_checks = False
+                if model is not None and llm_router is not None:
+                    from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                    
+                    skip_budget_checks = _is_model_cost_zero(
+                        model=model, llm_router=llm_router
+                    )
+                    if skip_budget_checks:
+                        verbose_proxy_logger.info(
+                            f"Skipping all budget checks for zero-cost model: {model}"
+                        )
+                
                 # run through common checks
                 _ = await common_checks(
                     request=request,
@@ -598,6 +614,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     llm_router=llm_router,
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
+                    skip_budget_checks=skip_budget_checks,
                 )
 
                 # return UserAPIKeyAuth object
@@ -666,9 +683,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     route=route,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -750,7 +767,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
                         code=400,
-                        param=api_key,
+                        param=abbreviate_api_key(api_key=api_key),
                     )
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
@@ -989,9 +1006,22 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     user_obj = None
 
-            # Check 3. Check if user is in their team budget
-            if valid_token.team_member_spend is not None:
+            # Check 2a. Check if model has zero cost - if so, skip all budget checks
+            model = get_model_from_request(request_data, route)
+            skip_budget_checks = False
+            if model is not None and llm_router is not None:
+                from litellm.proxy.auth.auth_checks import _is_model_cost_zero
+                
+                skip_budget_checks = _is_model_cost_zero(
+                    model=model, llm_router=llm_router
+                )
+                if skip_budget_checks:
+                    verbose_proxy_logger.info(
+                        f"Skipping all budget checks for zero-cost model: {model}"
+                    )
 
+            # Check 3. Check if user is in their team budget
+            if not skip_budget_checks and valid_token.team_member_spend is not None:
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
@@ -1052,48 +1082,49 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
                         code=400,
-                        param=api_key,
+                        param=abbreviate_api_key(api_key=api_key),
                     )
 
-            # Check 4. Token Spend is under budget
-            if RouteChecks.is_llm_api_route(route=route):
-                await _virtual_key_max_budget_check(
+            if not skip_budget_checks:
+                # Check 4. Token Spend is under budget
+                if RouteChecks.is_llm_api_route(route=route):
+                    await _virtual_key_max_budget_check(
+                        valid_token=valid_token,
+                        proxy_logging_obj=proxy_logging_obj,
+                        user_obj=user_obj,
+                    )
+
+                # Check 5. Max Budget Alert Check
+                await _virtual_key_max_budget_alert_check(
                     valid_token=valid_token,
                     proxy_logging_obj=proxy_logging_obj,
                     user_obj=user_obj,
                 )
 
-            # Check 5. Max Budget Alert Check
-            await _virtual_key_max_budget_alert_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-                user_obj=user_obj,
-            )
-
-            # Check 6. Soft Budget Check
-            await _virtual_key_soft_budget_check(
-                valid_token=valid_token,
-                proxy_logging_obj=proxy_logging_obj,
-                user_obj=user_obj,
-            )
-
-            # Check 5. Token Model Spend is under Model budget
-            max_budget_per_model = valid_token.model_max_budget
-            current_model = request_data.get("model", None)
-
-            if (
-                max_budget_per_model is not None
-                and isinstance(max_budget_per_model, dict)
-                and len(max_budget_per_model) > 0
-                and prisma_client is not None
-                and current_model is not None
-                and valid_token.token is not None
-            ):
-                ## GET THE SPEND FOR THIS MODEL
-                await model_max_budget_limiter.is_key_within_model_budget(
-                    user_api_key_dict=valid_token,
-                    model=current_model,
+                # Check 6. Soft Budget Check
+                await _virtual_key_soft_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_obj,
                 )
+
+                # Check 5. Token Model Spend is under Model budget
+                max_budget_per_model = valid_token.model_max_budget
+                current_model = request_data.get("model", None)
+
+                if (
+                    max_budget_per_model is not None
+                    and isinstance(max_budget_per_model, dict)
+                    and len(max_budget_per_model) > 0
+                    and prisma_client is not None
+                    and current_model is not None
+                    and valid_token.token is not None
+                ):
+                    ## GET THE SPEND FOR THIS MODEL
+                    await model_max_budget_limiter.is_key_within_model_budget(
+                        user_api_key_dict=valid_token,
+                        model=current_model,
+                    )
 
             # Check 6: Additional Common Checks across jwt + key auth
             if valid_token.team_id is not None:
@@ -1162,6 +1193,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 llm_router=llm_router,
                 proxy_logging_obj=proxy_logging_obj,
                 valid_token=valid_token,
+                skip_budget_checks=skip_budget_checks,
             )
             # Token passed all checks
             if valid_token is None:
@@ -1211,8 +1243,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             parent_otel_span=parent_otel_span,
             api_key=api_key,
         )
-
-
 
 
 @tracer.wrap()

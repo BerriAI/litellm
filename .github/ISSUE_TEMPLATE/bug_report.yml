@@ -17,6 +17,21 @@ body:
     validations:
       required: true
   - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Please provide detailed steps to reproduce this bug(A curl/python code to reproduce the bug)
+      placeholder: |
+        1. config.yaml file/ .env file/ etc.
+        2. Run the following code...
+        3. Observe the error...
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+  - type: textarea
     id: logs
     attributes:
       label: Relevant log output
@@ -27,6 +42,7 @@ body:
     attributes:
       label: What part of LiteLLM is this about?
       options:
+        - ''
         - "SDK (litellm Python package)"
         - "Proxy"
         - "UI Dashboard"

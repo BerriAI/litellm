@@ -64,13 +64,13 @@ const KeyLifecycleSettings: React.FC<KeyLifecycleSettingsProps> = ({
         <div className="space-y-2">
           <label className="text-sm font-medium text-gray-700 flex items-center space-x-1">
             <span>Expire Key</span>
-            <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days)">
+            <Tooltip title="Set when this key should expire. Format: 30s (seconds), 30m (minutes), 30h (hours), 30d (days). Use -1 to never expire.">
               <InfoCircleOutlined className="text-gray-400 cursor-help text-xs" />
             </Tooltip>
           </label>
           <TextInput
             name="duration"
-            placeholder="e.g., 30d"
+            placeholder="e.g., 30d or -1 to never expire"
             className="w-full"
             value={durationValue}
             onValueChange={handleDurationChange}

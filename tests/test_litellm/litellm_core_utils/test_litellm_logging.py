@@ -162,6 +162,40 @@ def test_logging_prevent_double_logging(logging_obj):
 
 
 @pytest.mark.asyncio
+async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
+    """Ensure DataDog logger instantiates even when LLM Obs logger already cached."""
+
+    # Ensure required env vars exist for Datadog loggers
+    monkeypatch.setenv("DD_API_KEY", "test")
+    monkeypatch.setenv("DD_SITE", "us5.datadoghq.com")
+
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.integrations.datadog.datadog import DataDogLogger
+    from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
+
+    logging_module._in_memory_loggers.clear()
+
+    try:
+        # Cache an LLM Obs logger first to mirror callbacks=["datadog_llm_observability", ...]
+        obs_logger = DataDogLLMObsLogger()
+        logging_module._in_memory_loggers.append(obs_logger)
+
+        datadog_logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="datadog",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        # Regression check: we expect a distinct DataDogLogger, not the LLM Obs logger
+        assert type(datadog_logger) is DataDogLogger
+        assert any(isinstance(cb, DataDogLLMObsLogger) for cb in logging_module._in_memory_loggers)
+        assert any(type(cb) is DataDogLogger for cb in logging_module._in_memory_loggers)
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.asyncio
 async def test_logging_result_for_bridge_calls(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.
@@ -357,6 +391,63 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "custom-tag" in tags
     assert "User-Agent: litellm" in tags
     assert "User-Agent: litellm/1.0.0" in tags
+
+
+def test_get_request_tags_does_not_mutate_original_tags():
+    """
+    Test that _get_request_tags does not mutate the original tags list in metadata.
+
+    This is a regression test for a bug where calling _get_request_tags multiple times
+    would cause User-Agent tags to be duplicated because the function was mutating
+    the original tags list instead of creating a copy.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create metadata with original tags
+    original_tags = ["custom-tag-1", "custom-tag-2"]
+    metadata = {"tags": original_tags}
+    litellm_params = {"metadata": metadata}
+    proxy_server_request = {
+        "headers": {
+            "user-agent": "AsyncOpenAI/Python 1.99.9",
+        }
+    }
+
+    # Call _get_request_tags multiple times (simulating multiple callbacks)
+    tags1 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+    tags2 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+    tags3 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+
+    # Verify the original tags list was NOT mutated
+    assert original_tags == ["custom-tag-1", "custom-tag-2"], (
+        f"Original tags list was mutated: {original_tags}"
+    )
+    assert metadata["tags"] == ["custom-tag-1", "custom-tag-2"], (
+        f"metadata['tags'] was mutated: {metadata['tags']}"
+    )
+
+    # Verify each returned list has exactly 2 User-Agent tags (not duplicated)
+    user_agent_count_1 = len([t for t in tags1 if t.startswith("User-Agent:")])
+    user_agent_count_2 = len([t for t in tags2 if t.startswith("User-Agent:")])
+    user_agent_count_3 = len([t for t in tags3 if t.startswith("User-Agent:")])
+
+    assert user_agent_count_1 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_1}"
+    assert user_agent_count_2 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_2}"
+    assert user_agent_count_3 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_3}"
+
+    # Verify all returned lists are independent (different objects)
+    assert tags1 is not tags2
+    assert tags2 is not tags3
+    assert tags1 is not original_tags
 
 
 def test_get_extra_header_tags():
