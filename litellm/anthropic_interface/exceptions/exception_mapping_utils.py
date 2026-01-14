@@ -4,7 +4,7 @@ Utilities for mapping exceptions to Anthropic error format.
 Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthropic response format.
 """
 
-import json
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from typing import Dict, Optional
 
 from .exceptions import AnthropicErrorResponse, AnthropicErrorType
@@ -78,16 +78,13 @@ class AnthropicExceptionMapping:
         - Generic: {"message": "..."}
         - Plain strings
         """
-        try:
-            parsed = json.loads(raw_message)
-            if isinstance(parsed, dict):
-                # Bedrock format
-                if "detail" in parsed and isinstance(parsed["detail"], dict):
-                    return parsed["detail"].get("message", raw_message)
-                # AWS/generic format
-                return parsed.get("Message") or parsed.get("message") or raw_message
-        except (json.JSONDecodeError, TypeError):
-            pass
+        parsed = safe_json_loads(raw_message)
+        if isinstance(parsed, dict):
+            # Bedrock format
+            if "detail" in parsed and isinstance(parsed["detail"], dict):
+                return parsed["detail"].get("message", raw_message)
+            # AWS/generic format
+            return parsed.get("Message") or parsed.get("message") or raw_message
         return raw_message
 
     @staticmethod
@@ -147,13 +144,9 @@ class AnthropicExceptionMapping:
             AnthropicErrorResponse dict
         """
         # Try to parse as JSON once
-        parsed: Optional[dict] = None
-        try:
-            parsed = json.loads(raw_message)
-            if not isinstance(parsed, dict):
-                parsed = None
-        except (json.JSONDecodeError, TypeError):
-            pass
+        parsed: Optional[dict] = safe_json_loads(raw_message)
+        if not isinstance(parsed, dict):
+            parsed = None
 
         # If parsed and already in Anthropic format - passthrough
         if parsed is not None and AnthropicExceptionMapping._is_anthropic_error_dict(parsed):
