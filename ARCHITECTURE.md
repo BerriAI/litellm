@@ -31,11 +31,27 @@ sequenceDiagram
 ```
 
 **Key files:**
-- `proxy/proxy_server.py` - API endpoints
+- `proxy/proxy_server.py` - Main API endpoints
 - `proxy/auth/` - Authentication
 - `proxy/hooks/` - Proxy-level callbacks (see table below)
 - `router.py` - Load balancing, fallbacks
 - `router_strategy/` - Routing algorithms (`lowest_latency.py`, `simple_shuffle.py`, etc.)
+
+**LLM-specific proxy endpoints:**
+
+| Endpoint | Directory | Purpose |
+|----------|-----------|---------|
+| `/v1/messages` | `proxy/anthropic_endpoints/` | Anthropic Messages API |
+| `/vertex-ai/*` | `proxy/vertex_ai_endpoints/` | Vertex AI passthrough |
+| `/gemini/*` | `proxy/google_endpoints/` | Google AI Studio passthrough |
+| `/v1/images/*` | `proxy/image_endpoints/` | Image generation |
+| `/v1/batches` | `proxy/batches_endpoints/` | Batch processing |
+| `/v1/files` | `proxy/openai_files_endpoints/` | File uploads |
+| `/v1/fine_tuning` | `proxy/fine_tuning_endpoints/` | Fine-tuning jobs |
+| `/v1/rerank` | `proxy/rerank_endpoints/` | Reranking |
+| `/v1/responses` | `proxy/response_api_endpoints/` | OpenAI Responses API |
+| `/v1/vector_stores` | `proxy/vector_store_endpoints/` | Vector stores |
+| `/*` (passthrough) | `proxy/pass_through_endpoints/` | Direct provider passthrough |
 
 **Proxy Hooks** (`proxy/hooks/__init__.py`):
 
