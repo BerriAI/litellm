@@ -4,6 +4,7 @@ import pytest
 
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
+from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import (
     MCPGuardrailTranslationHandler,
 )
@@ -30,11 +31,28 @@ class RecordingGuardrail(CustomGuardrail):
         return {"texts": inputs.get("texts", [])}
 
 
+class _NoopTranslation(BaseTranslation):
+    """Test translation handler that simply echoes input/output."""
+
+    async def process_input_messages(self, data, guardrail_to_apply, litellm_logging_obj=None):  # type: ignore[override]
+        return data
+
+    async def process_output_response(  # type: ignore[override]
+        self,
+        response,
+        guardrail_to_apply,
+        litellm_logging_obj=None,
+        user_api_key_dict=None,
+    ):
+        return response
+
+
 @pytest.fixture(autouse=True)
 def _inject_mcp_handler_mapping():
     """Inject MCP handler mapping so the unified guardrail can run inside tests."""
     unified_module.endpoint_guardrail_translation_mappings = {
         CallTypes.call_mcp_tool: MCPGuardrailTranslationHandler,
+        CallTypes.anthropic_messages: _NoopTranslation,
     }
     yield
     unified_module.endpoint_guardrail_translation_mappings = None
@@ -82,3 +100,29 @@ async def test_moderation_hook_uses_mcp_event_type():
     )
 
     assert guardrail.event_history == [GuardrailEventHooks.during_mcp_call]
+
+
+@pytest.mark.asyncio
+async def test_moderation_hook_runs_for_anthropic_messages():
+    """Ensure anthropic_messages requests still trigger guardrail moderation."""
+    handler = UnifiedLLMGuardrails()
+    guardrail = RecordingGuardrail()
+
+    data = {
+        "guardrail_to_apply": guardrail,
+        "messages": [
+            {
+                "role": "user",
+                "content": "Hello Anthropics",
+            }
+        ],
+        "model": "anthropic.claude-3",
+    }
+
+    await handler.async_moderation_hook(
+        data=data,
+        user_api_key_dict=None,
+        call_type=CallTypes.anthropic_messages.value,
+    )
+
+    assert guardrail.event_history == [GuardrailEventHooks.during_call]
