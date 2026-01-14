@@ -4506,12 +4506,11 @@ class StandardLoggingPayloadSetup:
             )
 
         if isinstance(response_obj, dict):
-            usage = response_obj.get("usage", None) or {}
+            usage = response_obj.get("usage", None)
         else:
-            usage = getattr(response_obj, "usage", None) or {}
-        if usage is None or (
-            not isinstance(usage, dict) and not isinstance(usage, Usage)
-        ):
+            usage = getattr(response_obj, "usage", None)
+        
+        if usage is None:
             return Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
@@ -4519,13 +4518,12 @@ class StandardLoggingPayloadSetup:
             )
         elif isinstance(usage, Usage):
             return usage
+        elif ResponseAPILoggingUtils._is_response_api_usage(usage):
+            # Handle ResponseAPIUsage (object or dict) from ResponsesAPIResponse
+            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                usage
+            )
         elif isinstance(usage, dict):
-            if ResponseAPILoggingUtils._is_response_api_usage(usage):
-                return (
-                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-                        usage
-                    )
-                )
             return Usage(**usage)
 
         raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
