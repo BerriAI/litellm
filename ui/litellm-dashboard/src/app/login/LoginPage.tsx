@@ -73,6 +73,7 @@ function LoginPageContent() {
           </div>
 
           <Alert
+            style={{display: 'none'}}
             message="Default Credentials"
             description={
               <>
