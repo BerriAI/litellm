@@ -7094,8 +7094,8 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
                     f"Provider token counting failed ({result.status_code}): {result.error_message}. "
                     "Falling back to local tokenizer."
                 )
-            else:
-                # Success - return the result
+            elif result is not None:
+                # Success - return the result (only if not None)
                 return result
 
     # Check if token counter is disabled before fallback

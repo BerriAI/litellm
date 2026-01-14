@@ -362,7 +362,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if has_stream_ended:
             # convert to model response
             model_response = cast(
-                ModelResponse, stream_chunk_builder(chunks=responses_so_far)
+                ModelResponse, stream_chunk_builder(chunks=responses_so_far, logging_obj=litellm_logging_obj)
             )
             # run process_output_response
             await self.process_output_response(

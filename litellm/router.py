@@ -1514,7 +1514,7 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
-    async def _acompletion(
+    async def _acompletion(  # noqa: PLR0915
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper,]:
         """
@@ -1699,13 +1699,13 @@ class Router:
         per-deployment retry settings instead of the global setting.
         """
         # Only set if exception doesn't already have num_retries
-        if hasattr(exception, "num_retries") and exception.num_retries is not None:
+        if hasattr(exception, "num_retries") and exception.num_retries is not None:  # type: ignore
             return
 
         litellm_params = deployment.get("litellm_params", {})
         dep_num_retries = litellm_params.get("num_retries")
         if dep_num_retries is not None and isinstance(dep_num_retries, int):
-            exception.num_retries = dep_num_retries
+            exception.num_retries = dep_num_retries  # type: ignore
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"

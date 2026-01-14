@@ -98,16 +98,16 @@ class IBMWatsonXAudioTranscriptionConfig(
         """
         # Use common utility to process the audio file
         processed_audio = process_audio_file(audio_file)
-
-        # Get API params to extract project_id or space_id
-        api_params = _get_api_params(params=optional_params.copy(), model=model)
+        project_id = optional_params.get("project_id") or optional_params.get(
+            "watsonx_project"
+        )
+        space_id = optional_params.get("space_id")
+        api_params = _get_api_params(params=optional_params, model=model)
 
         # Initialize form data with required fields
         form_data: WatsonXAudioTranscriptionRequestBody = {"model": model}
 
-        project_id = api_params.get("project_id")
-        space_id = api_params.get("space_id")
-
+        # Only add project_id or space_id if they were explicitly provided by the user
         if project_id:
             form_data["project_id"] = project_id
         elif space_id:
