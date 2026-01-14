@@ -88,15 +88,15 @@ graph TD
     end
 
     subgraph "llms/{provider}/chat/"
-        Transform["transformation.py<br/>ProviderConfig"]
+        TransformReq["transform_request()"]
+        TransformResp["transform_response()"]
     end
 
     subgraph "litellm_core_utils/"
         Streaming["streaming_handler.py"]
-        TokenCounter["token_counter.py"]
     end
 
-    subgraph "integrations/"
+    subgraph "integrations/ (async, off main thread)"
         Callbacks["custom_logger.py<br/>Langfuse, Datadog, etc."]
     end
 
@@ -104,12 +104,14 @@ graph TD
     Messages --> Main
     Main --> GetProvider
     GetProvider --> Handler
-    Handler --> Transform
-    Transform --> HTTP
+    Handler --> TransformReq
+    TransformReq --> HTTP
     HTTP --> Provider["LLM Provider API"]
-    Handler --> Streaming
-    Handler --> Callbacks
-    Main --> TokenCounter
+    Provider --> HTTP
+    HTTP --> TransformResp
+    TransformResp --> Streaming
+    Streaming --> Response["ModelResponse"]
+    Response -.->|async| Callbacks
 ```
 
 **Key files:**
