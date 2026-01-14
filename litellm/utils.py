@@ -5065,6 +5065,14 @@ def _get_model_cost_key(potential_key: str) -> Optional[str]:
     
     WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
     CPU overhead. This function is called frequently during router operations.
+    
+    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
+    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
+    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
+    
+    If you need to add a new helper function with O(n) operations that is conditionally
+    called and confirmed not to cause performance issues, add it to the allowed_helpers
+    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
     """
     global _model_cost_lowercase_map
     
