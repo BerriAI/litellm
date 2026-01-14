@@ -1853,6 +1853,14 @@ class Logging(LiteLLMLoggingBaseClass):
             cache_hit=cache_hit,
             standard_logging_object=kwargs.get("standard_logging_object", None),
         )
+        litellm_params = self.model_call_details.get("litellm_params", {})
+        is_sync_request = (
+            litellm_params.get(CallTypes.acompletion.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses.value, False) is not True
+            and litellm_params.get(CallTypes.aembedding.value, False) is not True
+            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
+            and litellm_params.get(CallTypes.atranscription.value, False) is not True
+        )
         try:
             ## BUILD COMPLETE STREAMED RESPONSE
             complete_streaming_response: Optional[
@@ -1915,7 +1923,6 @@ class Logging(LiteLLMLoggingBaseClass):
             self.has_run_logging(event_type="sync_success")
             for callback in callbacks:
                 try:
-                    litellm_params = self.model_call_details.get("litellm_params", {})
                     should_run = self.should_run_callback(
                         callback=callback,
                         litellm_params=litellm_params,
@@ -2185,22 +2192,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
                     if (
                         callback == "openmeter"
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "acompletion", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "aembedding", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "aimage_generation", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "atranscription", False
-                        )
-                        is not True
+                        and is_sync_request
                     ):
                         global openMeterLogger
                         if openMeterLogger is None:
@@ -2229,22 +2221,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         isinstance(callback, CustomLogger)
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "acompletion", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "aembedding", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "aimage_generation", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "atranscription", False
-                        )
-                        is not True
+                        and is_sync_request
                         and self.call_type
                         != CallTypes.pass_through.value  # pass-through endpoints call async_log_success_event
                     ):  # custom logger class
@@ -2272,22 +2249,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             )
                     if (
                         callable(callback) is True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "acompletion", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "aembedding", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "aimage_generation", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "atranscription", False
-                        )
-                        is not True
+                        and is_sync_request
                         and customLogger is not None
                     ):  # custom logger functions
                         print_verbose(
@@ -2737,6 +2699,15 @@ class Logging(LiteLLMLoggingBaseClass):
             event_type="sync_failure"
         ):  # prevent double logging
             return
+        litellm_params = self.model_call_details.get("litellm_params", {})
+        is_sync_request = (
+            litellm_params.get(CallTypes.acompletion.value, False) is not True
+            and litellm_params.get(CallTypes.aresponses.value, False) is not True
+            and litellm_params.get(CallTypes.aembedding.value, False) is not True
+            and litellm_params.get(CallTypes.aimage_generation.value, False) is not True
+            and litellm_params.get(CallTypes.atranscription.value, False) is not True
+        )
+
         try:
             start_time, end_time = self._failure_handler_helper_fn(
                 exception=exception,
@@ -2762,7 +2733,6 @@ class Logging(LiteLLMLoggingBaseClass):
             self.has_run_logging(event_type="sync_failure")
             for callback in callbacks:
                 try:
-                    litellm_params = self.model_call_details.get("litellm_params", {})
                     should_run = self.should_run_callback(
                         callback=callback,
                         litellm_params=litellm_params,
@@ -2830,14 +2800,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         )
                     if (
                         isinstance(callback, CustomLogger)
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "acompletion", False
-                        )
-                        is not True
-                        and self.model_call_details.get("litellm_params", {}).get(
-                            "aembedding", False
-                        )
-                        is not True
+                        and is_sync_request
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,

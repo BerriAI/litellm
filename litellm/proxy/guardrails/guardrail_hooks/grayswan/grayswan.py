@@ -1,6 +1,7 @@
 """Gray Swan Cygnal guardrail integration."""
 
 import os
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from fastapi import HTTPException
@@ -27,6 +28,10 @@ class GraySwanGuardrailMissingSecrets(Exception):
 
 class GraySwanGuardrailAPIError(Exception):
     """Raised when the Gray Swan API returns an error."""
+
+    def __init__(self, message: str, status_code: Optional[int] = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class GraySwanGuardrail(CustomGuardrail):
@@ -63,6 +68,8 @@ class GraySwanGuardrail(CustomGuardrail):
         policy_id: Optional[str] = None,
         streaming_end_of_stream_only: bool = False,
         streaming_sampling_rate: int = 5,
+        fail_open: Optional[bool] = True,
+        guardrail_timeout: Optional[float] = 30.0,
         **kwargs: Any,
     ) -> None:
         self.async_handler = get_async_httpx_client(
@@ -96,6 +103,8 @@ class GraySwanGuardrail(CustomGuardrail):
         self.reasoning_mode = self._resolve_reasoning_mode(reasoning_mode)
         self.categories = categories
         self.policy_id = policy_id
+        self.fail_open = True if fail_open is None else bool(fail_open)
+        self.guardrail_timeout = 30.0 if guardrail_timeout is None else float(guardrail_timeout)
 
         # Streaming configuration
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
@@ -202,18 +211,36 @@ class GraySwanGuardrail(CustomGuardrail):
         if payload is None:
             return inputs
 
-        # Call GraySwan API
-        response_json = await self._call_grayswan_api(payload)
-        # Process response
-        is_output = input_type == "response"
-        result = self._process_response_internal(
-            response_json=response_json,
-            request_data=request_data,
-            inputs=inputs,
-            is_output=is_output,
-        )
-
-        return result
+        start_time = time.time()
+        try:
+            response_json = await self._call_grayswan_api(payload)
+            is_output = input_type == "response"
+            result = self._process_response_internal(
+                response_json=response_json,
+                request_data=request_data,
+                inputs=inputs,
+                is_output=is_output,
+            )
+            return result
+        except Exception as exc:
+            end_time = time.time()
+            status_code = getattr(exc, "status_code", None) or getattr(
+                exc, "exception_status_code", None
+            )
+            self._log_guardrail_failure(
+                exc=exc,
+                request_data=request_data or {},
+                start_time=start_time,
+                end_time=end_time,
+                status_code=status_code,
+            )
+            if self.fail_open:
+                verbose_proxy_logger.warning(
+                    "Gray Swan Guardrail: fail_open=True. Allowing request to proceed despite error: %s",
+                    exc,
+                )
+                return inputs
+            raise GraySwanGuardrailAPIError(str(exc), status_code=status_code) from exc
 
     # ------------------------------------------------------------------
     # Legacy Test Interface (for backward compatibility)
@@ -348,7 +375,7 @@ class GraySwanGuardrail(CustomGuardrail):
                 url=self.monitor_url,
                 headers=headers,
                 json=payload,
-                timeout=30.0,
+                timeout=self.guardrail_timeout,
             )
             response.raise_for_status()
             result = response.json()
@@ -356,13 +383,11 @@ class GraySwanGuardrail(CustomGuardrail):
                 "Gray Swan Guardrail: monitor response %s", safe_dumps(result)
             )
             return result
-        except HTTPException:
-            raise
         except Exception as exc:
-            verbose_proxy_logger.exception(
-                "Gray Swan Guardrail: API request failed: %s", exc
+            status_code = getattr(exc, "status_code", None) or getattr(
+                exc, "exception_status_code", None
             )
-            raise GraySwanGuardrailAPIError(str(exc)) from exc
+            raise GraySwanGuardrailAPIError(str(exc), status_code=status_code) from exc
 
     def _process_response_internal(
         self,
@@ -579,3 +604,33 @@ class GraySwanGuardrail(CustomGuardrail):
         if env_val and env_val.lower() in self.SUPPORTED_REASONING_MODES:
             return env_val.lower()
         return None
+
+    def _log_guardrail_failure(
+        self,
+        exc: Exception,
+        request_data: dict,
+        start_time: float,
+        end_time: float,
+        status_code: Optional[int] = None,
+    ) -> None:
+        """Log guardrail failure and attach standard logging metadata."""
+        try:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=str(exc),
+                request_data=request_data,
+                guardrail_status="guardrail_failed_to_respond",
+                start_time=start_time,
+                end_time=end_time,
+                duration=end_time - start_time,
+                guardrail_provider="grayswan",
+            )
+        except Exception:
+            verbose_proxy_logger.exception(
+                "Gray Swan Guardrail: failed to log guardrail failure for error: %s",
+                exc,
+            )
+        verbose_proxy_logger.error(
+            "Gray Swan Guardrail: API request failed%s: %s",
+            f" (status_code={status_code})" if status_code else "",
+            exc,
+        )

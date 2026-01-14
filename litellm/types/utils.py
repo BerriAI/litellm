@@ -3118,6 +3118,12 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     """
     Original Response from upstream API call - if an API call was made for token counting
     """
+    error: bool = False
+    error_message: Optional[str] = None
+    """
+    HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
+    """
+    status_code: Optional[int] = None
 
 
 class CustomHuggingfaceTokenizer(TypedDict):
