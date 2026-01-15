@@ -483,6 +483,75 @@ class TestProxyInitializationHelpers:
                 # Verify that uvicorn.run was called again
                 mock_uvicorn_run.assert_called_once()
 
+    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers._run_gunicorn_server")
+    @patch("builtins.print")
+    def test_gunicorn_keepalive_timeout_flag(self, mock_print, mock_gunicorn):
+        """Test that the keepalive_timeout flag is properly passed to Gunicorn"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ):
+            result = runner.invoke(
+                run_server, ["--local", "--run_gunicorn", "--keepalive_timeout", "120"]
+            )
+            assert result.exit_code == 0
+
+            # Verify _run_gunicorn_server was called with keepalive_timeout
+            mock_gunicorn.assert_called_once()
+            call_kwargs = mock_gunicorn.call_args.kwargs
+            assert call_kwargs["keepalive_timeout"] == 120
+
+    @patch("litellm.proxy.proxy_cli.ProxyInitializationHelpers._run_gunicorn_server")
+    @patch("builtins.print")
+    def test_gunicorn_keepalive_default(self, mock_print, mock_gunicorn):
+        """Test that Gunicorn uses default 90s when keepalive_timeout not specified"""
+        from click.testing import CliRunner
+
+        from litellm.proxy.proxy_cli import run_server
+
+        runner = CliRunner()
+
+        mock_app = MagicMock()
+        mock_proxy_config = MagicMock()
+        mock_key_mgmt = MagicMock()
+        mock_save_worker_config = MagicMock()
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "proxy_server": MagicMock(
+                    app=mock_app,
+                    ProxyConfig=mock_proxy_config,
+                    KeyManagementSettings=mock_key_mgmt,
+                    save_worker_config=mock_save_worker_config,
+                )
+            },
+        ):
+            result = runner.invoke(run_server, ["--local", "--run_gunicorn"])
+            assert result.exit_code == 0
+
+            # Verify default behavior (keepalive_timeout is None, Gunicorn will use 90)
+            call_kwargs = mock_gunicorn.call_args.kwargs
+            assert call_kwargs.get("keepalive_timeout") is None
+
 
 class TestHealthAppFactory:
     """Test cases for the health app factory module"""
