@@ -1269,6 +1269,44 @@ def test_build_vertex_schema_empty_properties():
     assert "go_back" in parent_schema["properties"], "go_back should still be in parent properties"
 
 
+def test_build_vertex_schema_function_parameters_empty_properties():
+    """
+    Test _build_vertex_schema keeps type: object for function declaration parameters with empty properties.
+    
+    This test verifies the fix for Vertex AI function declarations where parameters schema
+    must have type: OBJECT even when properties is empty.
+    
+    Error from Vertex AI: "functionDeclaration parameters schema should be of type OBJECT"
+    """
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    # Input: Function parameters schema with empty properties (the problematic case)
+    # This matches the format from OpenAI tools API
+    input_schema = {
+        "type": "object",
+        "properties": {},
+        "title": "get_random_number_args",
+        "additionalProperties": False,
+        "required": [],
+    }
+
+    # Apply the transformation for function parameters (add_property_ordering=False)
+    result = _build_vertex_schema(input_schema, add_property_ordering=False)
+
+    # Verify type: object is preserved (required by Vertex AI for function declarations)
+    assert "type" in result, "Type should be preserved for function parameters"
+    assert result["type"] == "object", "Type should be 'object' for function parameters with empty properties"
+
+    # Verify empty properties was removed
+    assert "properties" not in result, "Empty properties should be removed"
+
+    # Verify required was removed
+    assert "required" not in result, "Required should be removed when properties is empty"
+
+    # Verify other fields are preserved
+    assert result.get("title") == "get_random_number_args", "Title should be preserved"
+
+
 def test_add_object_type_schema_with_no_properties_and_no_type():
     """
     Test that add_object_type adds type: object when schema has no properties and no type.
