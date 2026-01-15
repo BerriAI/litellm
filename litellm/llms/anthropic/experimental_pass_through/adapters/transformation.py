@@ -182,6 +182,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 AnthopicMessagesAssistantMessageParam,
             ]
         ],
+        model: Optional[str] = None,
     ) -> List:
         new_messages: List[AllMessageValues] = []
         for m in messages:
@@ -205,8 +206,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 type="text", text=content.get("text", "")
                             )
                             # Preserve cache_control if present (for prompt caching)
+                            # Only for Anthropic models that support prompt caching
                             cache_control = content.get("cache_control")
-                            if cache_control:
+                            if cache_control and model and self.is_anthropic_claude_model(model):
                                 text_obj["cache_control"] = cache_control  # type: ignore
                             new_user_content_list.append(text_obj)
                         elif content.get("type") == "image":
@@ -223,10 +225,6 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_obj = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
-                                # Preserve cache_control if present (for prompt caching)
-                                cache_control = content.get("cache_control")
-                                if cache_control:
-                                    image_obj["cache_control"] = cache_control  # type: ignore
                                 new_user_content_list.append(image_obj)
                         elif content.get("type") == "tool_result":
                             if "content" not in content:
@@ -537,7 +535,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self, tools: List[AllAnthropicToolsValues]
     ) -> List[ChatCompletionToolParam]:
         new_tools: List[ChatCompletionToolParam] = []
-        mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
+        mapped_tool_params = ["name", "input_schema", "description"]
         for tool in tools:
             function_chunk = ChatCompletionToolParamFunctionChunk(
                 name=tool["name"],
@@ -550,13 +548,9 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-
-            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
-            # Preserve cache_control if present (for prompt caching)
-            cache_control = tool.get("cache_control")
-            if cache_control:
-                tool_param["cache_control"] = cache_control  # type: ignore
-            new_tools.append(tool_param)
+            new_tools.append(
+                ChatCompletionToolParam(type="function", function=function_chunk)
+            )
 
         return new_tools
 
@@ -584,7 +578,8 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request["messages"],
         )
         new_messages = self.translate_anthropic_messages_to_openai(
-            messages=messages_list
+            messages=messages_list,
+            model=anthropic_message_request.get("model"),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         if "system" in anthropic_message_request:
