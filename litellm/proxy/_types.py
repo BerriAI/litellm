@@ -362,6 +362,8 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/ocr",
 
         # containers API
+        "/containers",
+        "/v1/containers",
         "/containers/*",
         "/v1/containers/*",
     ]
