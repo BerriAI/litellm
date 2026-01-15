@@ -204,6 +204,10 @@ class LiteLLMAnthropicMessagesAdapter:
                             text_obj = ChatCompletionTextObject(
                                 type="text", text=content.get("text", "")
                             )
+                            # Preserve cache_control if present (for prompt caching)
+                            cache_control = content.get("cache_control")
+                            if cache_control:
+                                text_obj["cache_control"] = cache_control  # type: ignore
                             new_user_content_list.append(text_obj)
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
@@ -219,6 +223,10 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_obj = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
+                                # Preserve cache_control if present (for prompt caching)
+                                cache_control = content.get("cache_control")
+                                if cache_control:
+                                    image_obj["cache_control"] = cache_control  # type: ignore
                                 new_user_content_list.append(image_obj)
                         elif content.get("type") == "tool_result":
                             if "content" not in content:
@@ -529,7 +537,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self, tools: List[AllAnthropicToolsValues]
     ) -> List[ChatCompletionToolParam]:
         new_tools: List[ChatCompletionToolParam] = []
-        mapped_tool_params = ["name", "input_schema", "description"]
+        mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
         for tool in tools:
             function_chunk = ChatCompletionToolParamFunctionChunk(
                 name=tool["name"],
@@ -542,9 +550,13 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            new_tools.append(
-                ChatCompletionToolParam(type="function", function=function_chunk)
-            )
+
+            tool_param = ChatCompletionToolParam(type="function", function=function_chunk)
+            # Preserve cache_control if present (for prompt caching)
+            cache_control = tool.get("cache_control")
+            if cache_control:
+                tool_param["cache_control"] = cache_control  # type: ignore
+            new_tools.append(tool_param)
 
         return new_tools
 
@@ -778,6 +790,12 @@ class LiteLLMAnthropicMessagesAdapter:
             input_tokens=usage.prompt_tokens or 0,
             output_tokens=usage.completion_tokens or 0,
         )
+        # Add cache tokens if available (for prompt caching support)
+        if hasattr(usage, "_cache_creation_input_tokens") and usage._cache_creation_input_tokens > 0:
+            anthropic_usage["cache_creation_input_tokens"] = usage._cache_creation_input_tokens
+        if hasattr(usage, "_cache_read_input_tokens") and usage._cache_read_input_tokens > 0:
+            anthropic_usage["cache_read_input_tokens"] = usage._cache_read_input_tokens
+
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
             type="message",
@@ -925,6 +943,11 @@ class LiteLLMAnthropicMessagesAdapter:
                     input_tokens=litellm_usage_chunk.prompt_tokens or 0,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
                 )
+                # Add cache tokens if available (for prompt caching support)
+                if hasattr(litellm_usage_chunk, "_cache_creation_input_tokens") and litellm_usage_chunk._cache_creation_input_tokens > 0:
+                    usage_delta["cache_creation_input_tokens"] = litellm_usage_chunk._cache_creation_input_tokens
+                if hasattr(litellm_usage_chunk, "_cache_read_input_tokens") and litellm_usage_chunk._cache_read_input_tokens > 0:
+                    usage_delta["cache_read_input_tokens"] = litellm_usage_chunk._cache_read_input_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             return MessageBlockDelta(
