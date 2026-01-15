@@ -5,7 +5,7 @@ from typing_extensions import NotRequired, TypedDict
 
 
 class WatsonXAPIParams(TypedDict):
-    project_id: str
+    project_id: Optional[str]
     space_id: Optional[str]
     region_name: Optional[str]
 
@@ -19,7 +19,7 @@ class WatsonXCredentials(TypedDict):
 class WatsonXAudioTranscriptionRequestBody(TypedDict):
     """
     WatsonX Audio Transcription API request body.
-    
+
     Follows multipart/form-data format for WatsonX Whisper models.
     See: https://cloud.ibm.com/apidocs/watsonx-ai
     """
@@ -27,8 +27,11 @@ class WatsonXAudioTranscriptionRequestBody(TypedDict):
     model: str
     """Model name (e.g., 'whisper-large-v3-turbo')"""
 
-    project_id: str
-    """WatsonX project ID (required)"""
+    project_id: NotRequired[str]
+    """WatsonX project ID (optional)"""
+
+    space_id: NotRequired[str]
+    """WatsonX space ID (optional)"""
 
     language: NotRequired[str]
     """Language code (e.g., 'en', 'es')"""
@@ -64,6 +67,7 @@ class WatsonXAIEndpoint(str, Enum):
 
 class WatsonXModelPattern(str, Enum):
     """Model identifier patterns for WatsonX models"""
+
     GRANITE_CHAT = "granite-chat"
     IBM_MISTRAL = "ibm-mistral"
     IBM_MISTRALAI = "ibm-mistralai"

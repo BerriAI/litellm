@@ -14,6 +14,7 @@ import time
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
+from litellm.types.utils import ModelResponse
 
 
 @pytest.fixture
@@ -275,6 +276,87 @@ async def test_logging_non_streaming_request():
     finally:
         # Restore original callbacks to ensure test isolation
         litellm.callbacks = original_callbacks
+
+
+@pytest.mark.parametrize("async_flag", ["acompletion", "aresponses"])
+def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, async_flag):
+    """Ensure sync success callbacks are skipped when async call type flags are set."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False  # simulate non-streaming request where sync callbacks would normally run
+    logging_obj.model_call_details["litellm_params"] = {async_flag: True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+    dummy_logger = DummyLogger()
+    dummy_logger.log_success_event = MagicMock()
+    dummy_logger.log_stream_event = MagicMock()
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[dummy_logger],
+    ):
+        logging_obj.success_handler(result=model_response)
+
+    dummy_logger.log_success_event.assert_not_called()
+    dummy_logger.log_stream_event.assert_not_called()
+
+
+@pytest.mark.parametrize("call_type", ["completion", "responses"])
+def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call_type):
+    """Ensure sync success callbacks execute when call type is sync (completion/responses)."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+    logging_obj.call_type = call_type
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.log_success_event = MagicMock()
+    dummy_logger.log_stream_event = MagicMock()
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[dummy_logger],
+    ):
+        logging_obj.success_handler(result=model_response)
+
+    dummy_logger.log_success_event.assert_called_once()
+    dummy_logger.log_stream_event.assert_not_called()
 
 
 def test_get_user_agent_tags():

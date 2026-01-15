@@ -729,8 +729,6 @@ class BedrockLLM(BaseAWSLLM):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
@@ -807,8 +805,6 @@ class BedrockLLM(BaseAWSLLM):
         else:
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
-
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
 
         prompt, chat_history = self.convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
@@ -970,15 +966,14 @@ class BedrockLLM(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        request = AWSRequest(
-            method="POST", url=endpoint_url, data=data, headers=headers
+        prepped = self.get_request_headers(
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=endpoint_url,
+            data=data,
+            headers=headers,
         )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
-        prepped = request.prepare()
 
         ## LOGGING
         logging_obj.pre_call(
@@ -1533,6 +1528,7 @@ class AWSEventStreamDecoder:
                     )
                 ],
                 id=self.response_id,
+                model=self.model,
                 usage=usage,
                 provider_specific_fields=model_response_provider_specific_fields,
             )

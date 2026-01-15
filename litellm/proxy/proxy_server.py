@@ -57,7 +57,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TokenCountResponse,
 )
-from litellm.utils import load_credentials_from_list
+from litellm.utils import (
+    _invalidate_model_cost_lowercase_map,
+    load_credentials_from_list,
+)
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
@@ -884,6 +887,10 @@ def get_openapi_schema():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+    
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -906,6 +913,10 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+    
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -2465,7 +2476,12 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
-
+                elif key == "json_logs" and value is True:
+                    litellm.json_logs = True
+                    litellm._turn_on_json()
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} Enabled JSON logging via config{reset_color_code}"
+                    )
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -3822,6 +3838,8 @@ class ProxyConfig:
                 model_cost_map_url = litellm.model_cost_map_url
                 new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
                 litellm.model_cost = new_model_cost_map
+                # Invalidate case-insensitive lookup map since model_cost was replaced
+                _invalidate_model_cost_lowercase_map()
 
                 # Update pod's in-memory last reload time
                 last_model_cost_map_reload = current_time.isoformat()
@@ -3983,7 +4001,7 @@ class ProxyConfig:
         )
 
         try:
-            await global_mcp_server_manager._add_mcp_servers_from_db_to_in_memory_registry()
+            await global_mcp_server_manager.reload_servers_from_database()
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_mcp_servers_in_db - {}".format(
@@ -4657,6 +4675,7 @@ class ProxyStartupEvent:
                 misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             )
             await proxy_config.get_credentials(prisma_client=prisma_client)
+
         await cls._initialize_slack_alerting_jobs(
             scheduler=scheduler,
             general_settings=general_settings,
@@ -7061,8 +7080,32 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             #########################################################
             # Transfrom the Response to the well known format
             #########################################################
-            if result is not None:
+            if result is not None and result.error is True:
+                # If disable_token_counter is enabled, raise HTTP error
+                if litellm.disable_token_counter is True:
+                    raise ProxyException(
+                        message=result.error_message or "Token counting failed",
+                        type="token_counting_error",
+                        param="model",
+                        code=result.status_code or 500,
+                    )
+                # Otherwise, log warning and fall back to local counter
+                verbose_proxy_logger.warning(
+                    f"Provider token counting failed ({result.status_code}): {result.error_message}. "
+                    "Falling back to local tokenizer."
+                )
+            elif result is not None:
+                # Success - return the result (only if not None)
                 return result
+
+    # Check if token counter is disabled before fallback
+    if litellm.disable_token_counter is True:
+        raise ProxyException(
+            message="Token counting is disabled and no provider API result available",
+            type="token_counting_disabled",
+            param="model",
+            code=503,
+        )
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None
@@ -10073,6 +10116,8 @@ async def reload_model_cost_map(
         model_cost_map_url = litellm.model_cost_map_url
         new_model_cost_map = get_model_cost_map(url=model_cost_map_url)
         litellm.model_cost = new_model_cost_map
+        # Invalidate case-insensitive lookup map since model_cost was replaced
+        _invalidate_model_cost_lowercase_map()
 
         # Update pod's in-memory last reload time
         global last_model_cost_map_reload

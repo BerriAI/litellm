@@ -28,6 +28,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+    get_response_headers,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -653,9 +656,7 @@ class ProxyBaseLLMRequestProcessing:
             proxy_logging_obj.during_call_hook(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
-                call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
-                    route_type=route_type  # type: ignore
-                ),
+                call_type=route_type,  # type: ignore
             )
         )
 
@@ -949,7 +950,15 @@ class ProxyBaseLLMRequestProcessing:
             timeout=timeout,
             litellm_logging_obj=_litellm_logging_obj,
         )
-        headers = getattr(e, "headers", {}) or {}
+        # Extract headers from exception - check both e.headers and e.response.headers
+        headers = getattr(e, "headers", None) or {}
+        if not headers:
+            # Try to get headers from e.response.headers (httpx.Response)
+            _response = getattr(e, "response", None)
+            if _response is not None:
+                _response_headers = getattr(_response, "headers", None)
+                if _response_headers:
+                    headers = get_response_headers(dict(_response_headers))
         headers.update(custom_headers)
 
         if isinstance(e, HTTPException):
@@ -1007,21 +1016,6 @@ class ProxyBaseLLMRequestProcessing:
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
-
-    @staticmethod
-    def _get_pre_call_type(
-        route_type: Literal[
-            "acompletion", "aembedding", "aresponses", "allm_passthrough_route"
-        ],
-    ) -> Literal["completion", "embedding", "responses", "allm_passthrough_route"]:
-        if route_type == "acompletion":
-            return "completion"
-        elif route_type == "aembedding":
-            return "embedding"
-        elif route_type == "aresponses":
-            return "responses"
-        elif route_type == "allm_passthrough_route":
-            return "allm_passthrough_route"
 
     #########################################################
     # Proxy Level Streaming Data Generator
