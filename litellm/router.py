@@ -6972,7 +6972,7 @@ class Router:
         return candidate_id in self.model_id_to_deployment_index_map
 
     def resolve_model_name_from_model_id(
-        self, model_id: Optional[str]
+        self, model_id: Optional[str], custom_llm_provider: Optional[str] = None
     ) -> Optional[str]:
         """
         Resolve model_name from model_id.
@@ -6982,12 +6982,15 @@ class Router:
 
         Strategy:
         1. First, check if model_id directly matches a model_name or deployment ID
-        2. If not, search through router's model_list to find a match by litellm_params.model
-        3. Return the model_name if found, None otherwise
+        2. If custom_llm_provider is provided, check with provider prefix
+        3. Search through router's model_list to find a match by litellm_params.model
+        4. If custom_llm_provider is provided, try to find a wildcard pattern match
+        5. Return the model_name if found, None otherwise
 
         Args:
             model_id: The model_id extracted from decoded video_id
                      (could be model_name or litellm_params.model value)
+            custom_llm_provider: The provider name (e.g., "vertex_ai") for wildcard matching
 
         Returns:
             model_name if found, None otherwise. If None, the request will fall through
@@ -7000,14 +7003,25 @@ class Router:
         if model_id in self.model_names or self.has_model_id(model_id):
             return model_id
 
-        # Strategy 2: Search through router's model_list to find by litellm_params.model
+        # Strategy 2: Check with provider prefix (e.g., "vertex_ai/veo-3.0-generate-preview")
+        if custom_llm_provider:
+            full_model_name = f"{custom_llm_provider}/{model_id}"
+            if full_model_name in self.model_names or self.has_model_id(full_model_name):
+                return full_model_name
+
+        # Strategy 3: Search through router's model_list to find by litellm_params.model
         all_models = self.get_model_list(model_name=None)
         if not all_models:
             return None
 
+        # First pass: exact matches (non-wildcard)
         for deployment in all_models:
             litellm_params = deployment.get("litellm_params", {})
             actual_model = litellm_params.get("model")
+
+            # Skip wildcard patterns in first pass
+            if actual_model and actual_model.endswith("/*"):
+                continue
 
             # Match by exact match or by checking if actual_model ends with /model_id or :model_id
             # e.g., model_id="veo-2.0-generate-001" matches actual_model="vertex_ai/veo-2.0-generate-001"
@@ -7021,6 +7035,19 @@ class Router:
                 model_name = deployment.get("model_name")
                 if model_name:
                     return model_name
+
+        # Strategy 4: Wildcard patterns using PatternMatchRouter
+        # For video status/content, we need to match model_id like "veo-3.0-generate-preview"
+        # to wildcard patterns like "vertex_ai/*"
+        if custom_llm_provider:
+            full_model_name = f"{custom_llm_provider}/{model_id}"
+            pattern_deployments = self.pattern_router.route(full_model_name)
+            if pattern_deployments:
+                # Return the first matching wildcard model_name
+                for pattern_deployment in pattern_deployments:
+                    matched_model_name = pattern_deployment.get("model_name")
+                    if matched_model_name:
+                        return matched_model_name
 
         # No match found
         return None
