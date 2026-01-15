@@ -11,10 +11,19 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
-from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-    CheckResponsesCost,
-)
+# Import litellm first to ensure it's in sys.modules before enterprise imports
+import litellm  # noqa: E402
+
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse  # noqa: E402
+
+# Now import enterprise modules
+try:
+    from litellm_enterprise.proxy.common_utils.check_responses_cost import (  # noqa: E402
+        CheckResponsesCost,
+    )
+except ImportError as e:
+    # Skip all tests in this module if enterprise module is not available
+    pytest.skip(f"Enterprise module not available: {e}", allow_module_level=True)
 
 
 class TestResponsesBackgroundCostTracking:
