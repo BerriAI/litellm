@@ -1,21 +1,39 @@
 {{- if .Values.migrationJob.enabled }}
-# This job runs the prisma migrations for the LiteLLM DB.
+# This job runs the Prisma migrations for the LiteLLM DB.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "litellm.fullname" . }}-migrations
+  labels:
+    {{- include "litellm.labels" . | nindent 4 }}
   annotations:
+    {{- if .Values.migrationJob.hooks.argocd.enabled }}
     argocd.argoproj.io/hook: PreSync
-    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation # delete old migration on a new deploy in case the migration needs to make updates
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    {{- end }}
+    {{- if .Values.migrationJob.hooks.helm.enabled }}
+    helm.sh/hook: "pre-install,pre-upgrade"
+    helm.sh/hook-delete-policy: "before-hook-creation"
+    helm.sh/hook-weight: {{ .Values.migrationJob.hooks.helm.weight | default "1" | quote }}
+    {{- end }}
     checksum/config: {{ toYaml .Values | sha256sum }}
 spec:
   template:
     metadata:
+      labels:
+        {{- include "litellm.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       annotations:
         {{- with .Values.migrationJob.annotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       serviceAccountName: {{ include "litellm.serviceAccountName" . }}
       containers:
         - name: prisma-migrations
@@ -38,14 +56,30 @@ spec:
                   name: {{ .Values.db.secret.name }}
                   key: {{ .Values.db.secret.passwordKey }}
             - name: DATABASE_HOST
+              {{- if .Values.db.secret.endpointKey }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.db.secret.name }}
+                  key: {{ .Values.db.secret.endpointKey }}
+              {{- else }}
               value: {{ .Values.db.endpoint }}
+              {{- end }}
             - name: DATABASE_NAME
               value: {{ .Values.db.database }}
             - name: DATABASE_URL
               value: {{ .Values.db.url | quote }}
-            {{- else }}
+            {{- else if .Values.db.deployStandalone }}
             - name: DATABASE_URL
               value: postgresql://{{ .Values.postgresql.auth.username }}:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql/{{ .Values.postgresql.auth.database }}
+            {{- end }}
+            {{- if .Values.envVars }}
+            {{- range $key, $val := .Values.envVars }}
+            - name: {{ $key }}
+              value: {{ $val | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.extraEnvVars }}
+              {{- toYaml . | nindent 12 }}
             {{- end }}
             - name: DISABLE_SCHEMA_UPDATE
               value: "false" # always run the migration from the Helm PreSync hook, override the value set
@@ -53,6 +87,13 @@ spec:
           volumeMounts:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          {{- with .Values.migrationJob.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- with .Values.migrationJob.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.volumes }}
       volumes:
         {{- toYaml . | nindent 8 }}

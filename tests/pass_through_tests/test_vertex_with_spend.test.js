@@ -64,7 +64,8 @@ beforeAll(() => {
     loadVertexAiCredentials();
 });
 
-
+// Configure Jest to retry flaky tests up to 3 times (useful for 429 rate limiting)
+jest.retryTimes(3);
 
 describe('Vertex AI Tests', () => {
     test('should successfully generate non-streaming content with tags', async () => {
@@ -84,7 +85,7 @@ describe('Vertex AI Tests', () => {
         };
 
         const generativeModel = vertexAI.getGenerativeModel(
-            { model: 'gemini-1.5-pro' },
+            { model: 'gemini-2.5-flash-lite' },
             requestOptions
         );
 
@@ -141,7 +142,7 @@ describe('Vertex AI Tests', () => {
         };
 
         const generativeModel = vertexAI.getGenerativeModel(
-            { model: 'gemini-1.5-pro' },
+            { model: 'gemini-2.5-flash-lite' },
             requestOptions
         );
 

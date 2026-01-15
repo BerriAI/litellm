@@ -41,8 +41,11 @@ class ContextCachingEndpoints(VertexBase):
     def _get_token_and_url_context_caching(
         self,
         gemini_api_key: Optional[str],
-        custom_llm_provider: Literal["gemini"],
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
         api_base: Optional[str],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_auth_header: Optional[str],
     ) -> Tuple[Optional[str], str]:
         """
         Internal function. Returns the token and url for the call.
@@ -58,9 +61,21 @@ class ContextCachingEndpoints(VertexBase):
             url = "https://generativelanguage.googleapis.com/v1beta/{}?key={}".format(
                 endpoint, gemini_api_key
             )
-
+        elif custom_llm_provider == "vertex_ai":
+            auth_header = vertex_auth_header
+            endpoint = "cachedContents"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
         else:
-            raise NotImplementedError
+            auth_header = vertex_auth_header
+            endpoint = "cachedContents"
+            if vertex_location == "global":
+                url = f"https://aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
+            else:
+                url = f"https://{vertex_location}-aiplatform.googleapis.com/v1beta1/projects/{vertex_project}/locations/{vertex_location}/{endpoint}"
+
 
         return self._check_custom_proxy(
             api_base=api_base,
@@ -70,6 +85,10 @@ class ContextCachingEndpoints(VertexBase):
             stream=None,
             auth_header=auth_header,
             url=url,
+            model=None,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_api_version="v1beta1" if custom_llm_provider == "vertex_ai_beta" else "v1",
         )
 
     def check_cache(
@@ -80,6 +99,10 @@ class ContextCachingEndpoints(VertexBase):
         api_key: str,
         api_base: Optional[str],
         logging_obj: Logging,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_auth_header: Optional[str],
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -94,8 +117,11 @@ class ContextCachingEndpoints(VertexBase):
 
         _, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
-            custom_llm_provider="gemini",
+            custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=vertex_auth_header
         )
         try:
             ## LOGGING
@@ -145,6 +171,10 @@ class ContextCachingEndpoints(VertexBase):
         api_key: str,
         api_base: Optional[str],
         logging_obj: Logging,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_auth_header: Optional[str]
     ) -> Optional[str]:
         """
         Checks if content already cached.
@@ -159,8 +189,11 @@ class ContextCachingEndpoints(VertexBase):
 
         _, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
-            custom_llm_provider="gemini",
+            custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=vertex_auth_header
         )
         try:
             ## LOGGING
@@ -205,15 +238,20 @@ class ContextCachingEndpoints(VertexBase):
     def check_and_create_cache(
         self,
         messages: List[AllMessageValues],  # receives openai format messages
+        optional_params: dict,  # cache the tools if present, in case cache content exists in messages
         api_key: str,
         api_base: Optional[str],
         model: str,
         client: Optional[HTTPHandler],
         timeout: Optional[Union[float, httpx.Timeout]],
         logging_obj: Logging,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_auth_header: Optional[str],
         extra_headers: Optional[dict] = None,
         cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[str]]:
+    ) -> Tuple[List[AllMessageValues], dict, Optional[str]]:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -225,13 +263,25 @@ class ContextCachingEndpoints(VertexBase):
         Follows - https://ai.google.dev/api/caching#request-body
         """
         if cached_content is not None:
-            return messages, cached_content
+            return messages, optional_params, cached_content
+
+        cached_messages, non_cached_messages = separate_cached_messages(
+            messages=messages
+        )
+
+        if len(cached_messages) == 0:
+            return messages, optional_params, None
+
+        tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
-            custom_llm_provider="gemini",
+            custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=vertex_auth_header
         )
 
         headers = {
@@ -252,15 +302,10 @@ class ContextCachingEndpoints(VertexBase):
         else:
             client = client
 
-        cached_messages, non_cached_messages = separate_cached_messages(
-            messages=messages
-        )
-
-        if len(cached_messages) == 0:
-            return messages, None
-
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
+        generated_cache_key = local_cache_obj.get_cache_key(
+            messages=cached_messages, tools=tools
+        )
         google_cache_name = self.check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -268,16 +313,27 @@ class ContextCachingEndpoints(VertexBase):
             api_key=api_key,
             api_base=api_base,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=vertex_auth_header
         )
         if google_cache_name:
-            return non_cached_messages, google_cache_name
+            return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
         cached_content_request_body = (
             transform_openai_messages_to_gemini_context_caching(
-                model=model, messages=cached_messages, cache_key=generated_cache_key
+                model=model,
+                messages=cached_messages,
+                cache_key=generated_cache_key,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
             )
         )
+
+        cached_content_request_body["tools"] = tools
 
         ## LOGGING
         logging_obj.pre_call(
@@ -305,20 +361,29 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_response_obj = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
-        return (non_cached_messages, cached_content_response_obj["name"])
+        return (
+            non_cached_messages,
+            optional_params,
+            cached_content_response_obj["name"],
+        )
 
     async def async_check_and_create_cache(
         self,
         messages: List[AllMessageValues],  # receives openai format messages
+        optional_params: dict,  # cache the tools if present, in case cache content exists in messages
         api_key: str,
         api_base: Optional[str],
         model: str,
         client: Optional[AsyncHTTPHandler],
         timeout: Optional[Union[float, httpx.Timeout]],
         logging_obj: Logging,
+        custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
+        vertex_project: Optional[str],
+        vertex_location: Optional[str],
+        vertex_auth_header: Optional[str],
         extra_headers: Optional[dict] = None,
         cached_content: Optional[str] = None,
-    ) -> Tuple[List[AllMessageValues], Optional[str]]:
+    ) -> Tuple[List[AllMessageValues], dict, Optional[str]]:
         """
         Receives
         - messages: List of dict - messages in the openai format
@@ -330,20 +395,25 @@ class ContextCachingEndpoints(VertexBase):
         Follows - https://ai.google.dev/api/caching#request-body
         """
         if cached_content is not None:
-            return messages, cached_content
+            return messages, optional_params, cached_content
 
         cached_messages, non_cached_messages = separate_cached_messages(
             messages=messages
         )
 
         if len(cached_messages) == 0:
-            return messages, None
+            return messages, optional_params, None
+
+        tools = optional_params.pop("tools", None)
 
         ## AUTHORIZATION ##
         token, url = self._get_token_and_url_context_caching(
             gemini_api_key=api_key,
-            custom_llm_provider="gemini",
+            custom_llm_provider=custom_llm_provider,
             api_base=api_base,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=vertex_auth_header
         )
 
         headers = {
@@ -362,7 +432,9 @@ class ContextCachingEndpoints(VertexBase):
             client = client
 
         ## CHECK IF CACHED ALREADY
-        generated_cache_key = local_cache_obj.get_cache_key(messages=cached_messages)
+        generated_cache_key = local_cache_obj.get_cache_key(
+            messages=cached_messages, tools=tools
+        )
         google_cache_name = await self.async_check_cache(
             cache_key=generated_cache_key,
             client=client,
@@ -370,16 +442,28 @@ class ContextCachingEndpoints(VertexBase):
             api_key=api_key,
             api_base=api_base,
             logging_obj=logging_obj,
+            custom_llm_provider=custom_llm_provider,
+            vertex_project=vertex_project,
+            vertex_location=vertex_location,
+            vertex_auth_header=vertex_auth_header
         )
+
         if google_cache_name:
-            return non_cached_messages, google_cache_name
+            return non_cached_messages, optional_params, google_cache_name
 
         ## TRANSFORM REQUEST
         cached_content_request_body = (
             transform_openai_messages_to_gemini_context_caching(
-                model=model, messages=cached_messages, cache_key=generated_cache_key
+                model=model,
+                messages=cached_messages,
+                cache_key=generated_cache_key,
+                custom_llm_provider=custom_llm_provider,
+                vertex_project=vertex_project,
+                vertex_location=vertex_location,
             )
         )
+
+        cached_content_request_body["tools"] = tools
 
         ## LOGGING
         logging_obj.pre_call(
@@ -407,7 +491,11 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_response_obj = VertexAICachedContentResponseObject(
             name=raw_response_cached.get("name"), model=raw_response_cached.get("model")
         )
-        return (non_cached_messages, cached_content_response_obj["name"])
+        return (
+            non_cached_messages,
+            optional_params,
+            cached_content_response_obj["name"],
+        )
 
     def get_cache(self):
         pass

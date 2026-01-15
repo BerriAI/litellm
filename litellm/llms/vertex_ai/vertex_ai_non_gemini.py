@@ -137,22 +137,24 @@ def completion(  # noqa: PLR0915
         )
         _vertex_llm_model_object = _get_client_from_cache(client_cache_key=_cache_key)
 
-        if _vertex_llm_model_object is None:
-            from google.auth.credentials import Credentials
+        # Load credentials - needed for both vertexai.init() and PredictionServiceClient
+        from google.auth.credentials import Credentials
 
-            if vertex_credentials is not None and isinstance(vertex_credentials, str):
-                import google.oauth2.service_account
+        if vertex_credentials is not None and isinstance(vertex_credentials, str):
+            import google.oauth2.service_account
 
-                json_obj = json.loads(vertex_credentials)
+            json_obj = json.loads(vertex_credentials)
 
-                creds = (
-                    google.oauth2.service_account.Credentials.from_service_account_info(
-                        json_obj,
-                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                    )
+            creds = (
+                google.oauth2.service_account.Credentials.from_service_account_info(
+                    json_obj,
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
                 )
-            else:
-                creds, _ = google.auth.default(quota_project_id=vertex_project)
+            )
+        else:
+            creds, _ = google.auth.default(quota_project_id=vertex_project)
+
+        if _vertex_llm_model_object is None:
             print_verbose(
                 f"VERTEX AI: creds={creds}; google application credentials: {os.getenv('GOOGLE_APPLICATION_CREDENTIALS')}"
             )
@@ -268,6 +270,7 @@ def completion(  # noqa: PLR0915
                 "instances": instances,
                 "vertex_location": vertex_location,
                 "vertex_project": vertex_project,
+                "vertex_credentials": creds,
                 "safety_settings": safety_settings,
                 **optional_params,
             }
@@ -371,9 +374,10 @@ def completion(  # noqa: PLR0915
                 },
             )
             llm_model = aiplatform.gapic.PredictionServiceClient(
-                client_options=client_options
+                client_options=client_options,
+                credentials=creds,
             )
-            request_str += f"llm_model = aiplatform.gapic.PredictionServiceClient(client_options={client_options})\n"
+            request_str += f"llm_model = aiplatform.gapic.PredictionServiceClient(client_options={client_options}, credentials=...)\n"
             endpoint_path = llm_model.endpoint_path(
                 project=vertex_project, location=vertex_location, endpoint=model
             )
@@ -498,6 +502,7 @@ async def async_completion(  # noqa: PLR0915
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     safety_settings=None,
     **optional_params,
 ):
@@ -557,9 +562,10 @@ async def async_completion(  # noqa: PLR0915
             )
 
             llm_model = aiplatform.gapic.PredictionServiceAsyncClient(
-                client_options=client_options
+                client_options=client_options,
+                credentials=vertex_credentials,
             )
-            request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options})\n"
+            request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options}, credentials=...)\n"
             endpoint_path = llm_model.endpoint_path(
                 project=vertex_project, location=vertex_location, endpoint=model
             )
@@ -661,6 +667,7 @@ async def async_streaming(  # noqa: PLR0915
     instances=None,
     vertex_project=None,
     vertex_location=None,
+    vertex_credentials=None,
     safety_settings=None,
     **optional_params,
 ):
@@ -724,9 +731,10 @@ async def async_streaming(  # noqa: PLR0915
             },
         )
         llm_model = aiplatform.gapic.PredictionServiceAsyncClient(
-            client_options=client_options
+            client_options=client_options,
+            credentials=vertex_credentials,
         )
-        request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options})\n"
+        request_str += f"llm_model = aiplatform.gapic.PredictionServiceAsyncClient(client_options={client_options}, credentials=...)\n"
         endpoint_path = llm_model.endpoint_path(
             project=vertex_project, location=vertex_location, endpoint=model
         )

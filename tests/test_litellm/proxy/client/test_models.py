@@ -1,5 +1,16 @@
+import os
+import sys
+
 import pytest
 import requests
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
+
+
+import responses
 
 from litellm.proxy.client import Client, ModelsManagementClient
 from litellm.proxy.client.exceptions import NotFoundError, UnauthorizedError
@@ -67,7 +78,8 @@ def test_list_url_variants(base_url, expected):
     assert request.url == expected
 
 
-def test_list_with_mock_response(client, requests_mock):
+@responses.activate
+def test_list_with_mock_response(client):
     """Test the full list execution with a mocked response"""
     mock_data = {
         "data": [
@@ -75,7 +87,12 @@ def test_list_with_mock_response(client, requests_mock):
             {"id": "gpt-3.5-turbo", "type": "model"},
         ]
     }
-    requests_mock.get("http://localhost:8000/models", json=mock_data)
+    responses.add(
+        responses.GET,
+        "http://localhost:8000/models",
+        json=mock_data,
+        status=200,
+    )
 
     response = client.list()
     assert response == mock_data["data"]
@@ -83,11 +100,13 @@ def test_list_with_mock_response(client, requests_mock):
     assert response[0]["id"] == "gpt-4"
 
 
-def test_list_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_list_unauthorized_error(client):
     """Test that list raises UnauthorizedError for 401 responses"""
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         "http://localhost:8000/models",
-        status_code=401,
+        status=401,
         json={"error": "Invalid API key"},
     )
 
@@ -96,11 +115,13 @@ def test_list_unauthorized_error(client, requests_mock):
     assert exc_info.value.orig_exception.response.status_code == 401
 
 
-def test_list_other_errors(client, requests_mock):
+@responses.activate
+def test_list_other_errors(client):
     """Test that list raises normal HTTPError for non-401 errors"""
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         "http://localhost:8000/models",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 
@@ -127,62 +148,6 @@ def test_client_initialization_strips_trailing_slash():
     """Test that the client properly strips trailing slashes from base_url during initialization"""
     client = ModelsManagementClient(base_url="http://localhost:8000/////")
     assert client._base_url == "http://localhost:8000"
-
-
-def test_list_with_mock_response(client, requests_mock):
-    """Test the full list execution with a mocked response"""
-    mock_data = {
-        "data": [
-            {"id": "gpt-4", "type": "model"},
-            {"id": "gpt-3.5-turbo", "type": "model"},
-        ]
-    }
-    requests_mock.get("http://localhost:8000/models", json=mock_data)
-
-    response = client.list()
-    assert response == mock_data["data"]
-    assert len(response) == 2
-    assert response[0]["id"] == "gpt-4"
-
-
-def test_list_unauthorized_error(client, requests_mock):
-    """Test that list raises UnauthorizedError for 401 responses"""
-    requests_mock.get(
-        "http://localhost:8000/models",
-        status_code=401,
-        json={"error": "Invalid API key"},
-    )
-
-    with pytest.raises(UnauthorizedError) as exc_info:
-        client.list()
-    assert exc_info.value.orig_exception.response.status_code == 401
-
-
-def test_list_other_errors(client, requests_mock):
-    """Test that list raises normal HTTPError for non-401 errors"""
-    requests_mock.get(
-        "http://localhost:8000/models",
-        status_code=500,
-        json={"error": "Internal Server Error"},
-    )
-
-    with pytest.raises(requests.exceptions.HTTPError) as exc_info:
-        client.list()
-    assert exc_info.value.response.status_code == 500
-
-
-@pytest.mark.parametrize(
-    "api_key",
-    [
-        "",  # Empty string
-        None,  # None value
-    ],
-)
-def test_list_invalid_api_keys(base_url, api_key):
-    """Test that the client handles invalid API keys appropriately"""
-    client = ModelsManagementClient(base_url=base_url, api_key=api_key)
-    request = client.list(return_request=True)
-    assert "Authorization" not in request.headers
 
 
 def test_client_initialization(base_url, api_key):
@@ -258,28 +223,38 @@ def test_new_without_model_info(client):
     assert request.json == {"model_name": model_name, "litellm_params": model_params}
 
 
-def test_new_mock_response(client, requests_mock):
+@responses.activate
+def test_new_mock_response(client):
     """Test new with a mocked successful response"""
     model_name = "gpt-4"
     model_params = {"model": "openai/gpt-4"}
     mock_response = {"model_id": "123", "status": "success"}
 
     # Mock the POST request
-    requests_mock.post(f"{client._base_url}/model/new", json=mock_response)
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/model/new",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.new(model_name=model_name, model_params=model_params)
 
     assert response == mock_response
 
 
-def test_new_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_new_unauthorized_error(client):
     """Test that new raises UnauthorizedError for 401 responses"""
     model_name = "gpt-4"
     model_params = {"model": "openai/gpt-4"}
 
     # Mock a 401 response
-    requests_mock.post(
-        f"{client._base_url}/model/new", status_code=401, json={"error": "Unauthorized"}
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/model/new",
+        status=401,
+        json={"error": "Unauthorized"},
     )
 
     with pytest.raises(UnauthorizedError):
@@ -304,26 +279,34 @@ def test_delete_request_creation(client, base_url, api_key):
     assert request.json == {"id": model_id}
 
 
-def test_delete_mock_response(client, requests_mock):
+@responses.activate
+def test_delete_mock_response(client):
     """Test delete with a mocked successful response"""
     model_id = "model-123"
     mock_response = {"message": "Model: model-123 deleted successfully"}
 
     # Mock the POST request
-    requests_mock.post(f"{client._base_url}/model/delete", json=mock_response)
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/model/delete",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.delete(model_id=model_id)
     assert response == mock_response
 
 
-def test_delete_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_delete_unauthorized_error(client):
     """Test that delete raises UnauthorizedError for 401 responses"""
     model_id = "model-123"
 
     # Mock a 401 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/delete",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -331,14 +314,16 @@ def test_delete_unauthorized_error(client, requests_mock):
         client.delete(model_id=model_id)
 
 
-def test_delete_404_error(client, requests_mock):
+@responses.activate
+def test_delete_404_error(client):
     """Test that delete raises NotFoundError for 404 responses"""
     model_id = "model-123"
 
     # Mock a 404 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/delete",
-        status_code=404,
+        status=404,
         json={"error": "Model not found"},
     )
 
@@ -347,14 +332,16 @@ def test_delete_404_error(client, requests_mock):
     assert exc_info.value.orig_exception.response.status_code == 404
 
 
-def test_delete_not_found_in_text(client, requests_mock):
+@responses.activate
+def test_delete_not_found_in_text(client):
     """Test that delete raises NotFoundError when response contains 'not found'"""
     model_id = "model-123"
 
     # Mock a response with "not found" in text but different status code
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/delete",
-        status_code=400,  # Different status code
+        status=400,  # Different status code
         json={"error": "The specified model was not found in the system"},
     )
 
@@ -363,14 +350,16 @@ def test_delete_not_found_in_text(client, requests_mock):
     assert "not found" in exc_info.value.orig_exception.response.text.lower()
 
 
-def test_delete_other_errors(client, requests_mock):
+@responses.activate
+def test_delete_other_errors(client):
     """Test that delete raises normal HTTPError for other error responses"""
     model_id = "model-123"
 
     # Mock a 500 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/delete",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 
@@ -391,7 +380,8 @@ def test_info_request_creation(client, base_url, api_key):
     assert request.headers["Authorization"] == f"Bearer {api_key}"
 
 
-def test_info_success(client, requests_mock):
+@responses.activate
+def test_info_success(client):
     """Test info with a successful response"""
     mock_response = {
         "data": [
@@ -411,7 +401,12 @@ def test_info_success(client, requests_mock):
         ]
     }
 
-    requests_mock.get(f"{client._base_url}/v1/model/info", json=mock_response)
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/v1/model/info",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.info()
     assert response == mock_response["data"]
@@ -420,11 +415,13 @@ def test_info_success(client, requests_mock):
     assert response[1]["model_name"] == "gpt-3.5-turbo"
 
 
-def test_info_unauthorized(client, requests_mock):
+@responses.activate
+def test_info_unauthorized(client):
     """Test that info raises UnauthorizedError for unauthorized requests"""
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         f"{client._base_url}/v1/model/info",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -433,11 +430,13 @@ def test_info_unauthorized(client, requests_mock):
     assert exc_info.value.orig_exception.response.status_code == 401
 
 
-def test_info_server_error(client, requests_mock):
+@responses.activate
+def test_info_server_error(client):
     """Test that info raises HTTPError for server errors"""
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         f"{client._base_url}/v1/model/info",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 
@@ -488,7 +487,8 @@ def test_get_invalid_params():
     )
 
 
-def test_get_success_by_id(client, requests_mock):
+@responses.activate
+def test_get_success_by_id(client):
     """Test get successfully finding a model by ID"""
     model_id = "model-123"
     mock_models = {
@@ -505,14 +505,20 @@ def test_get_success_by_id(client, requests_mock):
         ]
     }
 
-    requests_mock.get(f"{client._base_url}/v1/model/info", json=mock_models)
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/v1/model/info",
+        json=mock_models,
+        status=200,
+    )
 
     response = client.get(model_id=model_id)
     assert response["model_info"]["id"] == model_id
     assert response["model_name"] == "gpt-4"
 
 
-def test_get_success_by_name(client, requests_mock):
+@responses.activate
+def test_get_success_by_name(client):
     """Test get successfully finding a model by name"""
     model_name = "gpt-4"
     mock_models = {
@@ -525,24 +531,32 @@ def test_get_success_by_name(client, requests_mock):
         ]
     }
 
-    requests_mock.get(f"{client._base_url}/v1/model/info", json=mock_models)
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/v1/model/info",
+        json=mock_models,
+        status=200,
+    )
 
     response = client.get(model_name=model_name)
     assert response["model_name"] == model_name
 
 
-def test_get_not_found(client, requests_mock):
+@responses.activate
+def test_get_not_found(client):
     """Test that get raises NotFoundError when model is not found"""
     model_name = "nonexistent-model"
 
     # Mock successful response but with no matching model
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         f"{client._base_url}/v1/model/info",
         json={
             "data": [
                 {"model_name": "gpt-3.5-turbo", "model_info": {"id": "other-model"}}
             ]
         },
+        status=200,
     )
 
     with pytest.raises(NotFoundError) as exc_info:
@@ -551,13 +565,15 @@ def test_get_not_found(client, requests_mock):
     assert "model_name=" + model_name in str(exc_info.value)
 
 
-def test_get_unauthorized(client, requests_mock):
+@responses.activate
+def test_get_unauthorized(client):
     """Test that get raises UnauthorizedError for unauthorized requests"""
     model_id = "model-123"
 
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         f"{client._base_url}/v1/model/info",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -566,13 +582,15 @@ def test_get_unauthorized(client, requests_mock):
     assert exc_info.value.orig_exception.response.status_code == 401
 
 
-def test_get_server_error(client, requests_mock):
+@responses.activate
+def test_get_server_error(client):
     """Test that get raises HTTPError for server errors"""
     model_id = "model-123"
 
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         f"{client._base_url}/v1/model/info",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 
@@ -623,7 +641,8 @@ def test_update_without_model_info(client):
     assert request.json == {"id": model_id, "litellm_params": model_params}
 
 
-def test_update_mock_response(client, requests_mock):
+@responses.activate
+def test_update_mock_response(client):
     """Test update with a mocked successful response"""
     model_id = "model-123"
     model_params = {"model": "openai/gpt-4"}
@@ -634,22 +653,29 @@ def test_update_mock_response(client, requests_mock):
     }
 
     # Mock the POST request
-    requests_mock.post(f"{client._base_url}/model/update", json=mock_response)
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/model/update",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.update(model_id=model_id, model_params=model_params)
 
     assert response == mock_response
 
 
-def test_update_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_update_unauthorized_error(client):
     """Test that update raises UnauthorizedError for 401 responses"""
     model_id = "model-123"
     model_params = {"model": "openai/gpt-4"}
 
     # Mock a 401 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/update",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -657,15 +683,17 @@ def test_update_unauthorized_error(client, requests_mock):
         client.update(model_id=model_id, model_params=model_params)
 
 
-def test_update_404_error(client, requests_mock):
+@responses.activate
+def test_update_404_error(client):
     """Test that update raises NotFoundError for 404 responses"""
     model_id = "model-123"
     model_params = {"model": "openai/gpt-4"}
 
     # Mock a 404 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/update",
-        status_code=404,
+        status=404,
         json={"error": "Model not found"},
     )
 
@@ -674,15 +702,17 @@ def test_update_404_error(client, requests_mock):
     assert exc_info.value.orig_exception.response.status_code == 404
 
 
-def test_update_not_found_in_text(client, requests_mock):
+@responses.activate
+def test_update_not_found_in_text(client):
     """Test that update raises NotFoundError when response contains 'not found'"""
     model_id = "model-123"
     model_params = {"model": "openai/gpt-4"}
 
     # Mock a response with "not found" in text but different status code
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/update",
-        status_code=400,  # Different status code
+        status=400,  # Different status code
         json={"error": "The specified model was not found in the system"},
     )
 
@@ -691,15 +721,17 @@ def test_update_not_found_in_text(client, requests_mock):
     assert "not found" in exc_info.value.orig_exception.response.text.lower()
 
 
-def test_update_other_errors(client, requests_mock):
+@responses.activate
+def test_update_other_errors(client):
     """Test that update raises normal HTTPError for other error responses"""
     model_id = "model-123"
     model_params = {"model": "openai/gpt-4"}
 
     # Mock a 500 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/model/update",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 

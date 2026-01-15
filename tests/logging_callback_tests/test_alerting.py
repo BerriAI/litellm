@@ -8,7 +8,7 @@ import os
 import random
 import sys
 import time
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -141,22 +141,6 @@ def slack_alerting():
     return SlackAlerting(
         alerting_threshold=1, internal_usage_cache=DualCache(), alerting=["slack"]
     )
-
-
-# Test for hanging LLM responses
-@pytest.mark.asyncio
-async def test_response_taking_too_long_hanging(slack_alerting):
-    request_data = {
-        "model": "test_model",
-        "messages": "test_messages",
-        "litellm_status": "running",
-    }
-    with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
-        await slack_alerting.response_taking_too_long(
-            type="hanging_request", request_data=request_data
-        )
-
-        mock_send_alert.assert_awaited_once()
 
 
 # Test for slow LLM responses
@@ -493,6 +477,7 @@ async def test_send_daily_reports_all_zero_or_none():
         "token_budget",
         "user_budget",
         "team_budget",
+        "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
     ],
@@ -503,7 +488,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
 
     with patch.object(slack_alerting, "send_alert", new=AsyncMock()) as mock_send_alert:
         user_info = {
-            "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+            "token": "sk-test-mock-token-606",
             "spend": 86,
             "max_budget": 100,
             "user_id": "ishaan@berri.ai",
@@ -530,6 +515,7 @@ async def test_send_token_budget_crossed_alerts(alerting_type):
         "token_budget",
         "user_budget",
         "team_budget",
+        "organization_budget",
         "proxy_budget",
         "projected_limit_exceeded",
     ],
@@ -542,7 +528,7 @@ async def test_webhook_alerting(alerting_type):
         slack_alerting, "send_webhook_alert", new=AsyncMock()
     ) as mock_send_alert:
         user_info = {
-            "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+            "token": "sk-test-mock-token-606",
             "spend": 1,
             "max_budget": 0,
             "user_id": "ishaan@berri.ai",
@@ -573,7 +559,7 @@ async def test_webhook_alerting(alerting_type):
 #         slack_alerting, "send_webhook_alert", new=AsyncMock()
 #     ) as mock_send_alert:
 #         user_info = {
-#             "token": "50e55ca5bfbd0759697538e8d23c0cd5031f52d9e19e176d7233b20c7c4d3403",
+#             "token": "sk-test-mock-token-606",
 #             "spend": 1,
 #             "max_budget": 0,
 #             "user_id": "ishaan@berri.ai",

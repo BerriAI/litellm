@@ -3,7 +3,7 @@ Functions to create audit logs for LiteLLM Proxy
 """
 
 import json
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime, timezone
 
 import litellm
@@ -38,7 +38,13 @@ async def create_object_audit_log(
     - user_api_key_dict: UserAPIKeyAuth - The user api key dictionary.
     - litellm_proxy_admin_name: Optional[str] - The name of the proxy admin.
     """
-    if not litellm.store_audit_logs:
+    from litellm.secret_managers.main import get_secret_bool
+
+    store_audit_logs = litellm.store_audit_logs or get_secret_bool(
+        "LITELLM_STORE_AUDIT_LOGS"
+    )
+
+    if store_audit_logs is not True:
         return
 
     await create_audit_log_for_update(
@@ -62,7 +68,12 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     """
     Create an audit log for an object.
     """
-    if not litellm.store_audit_logs:
+    from litellm.secret_managers.main import get_secret_bool
+
+    store_audit_logs = litellm.store_audit_logs or get_secret_bool(
+        "LITELLM_STORE_AUDIT_LOGS"
+    )
+    if store_audit_logs is not True:
         return
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
@@ -70,8 +81,6 @@ async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
     if premium_user is not True:
         return
 
-    if litellm.store_audit_logs is not True:
-        return
     if prisma_client is None:
         raise Exception("prisma_client is None, no DB connected")
 

@@ -17,7 +17,7 @@ MLflow’s integration with LiteLLM supports advanced observability compatible w
 Install MLflow:
 
 ```shell
-pip install mlflow
+pip install "litellm[mlflow]"
 ```
 
 To enable MLflow auto tracing for LiteLLM:
@@ -160,6 +160,102 @@ class CustomAgent:
 
 This approach generates a unified trace, combining your custom Python code with LiteLLM calls.
 
+## LiteLLM Proxy Server 
+
+### Dependencies
+
+For using `mlflow` on LiteLLM Proxy Server, you need to install the `mlflow` package on your docker container.
+
+```shell
+pip install "mlflow>=3.1.4"
+```
+
+### Configuration
+
+Configure MLflow in your LiteLLM proxy configuration file:
+
+```yaml
+model_list:
+  - model_name: openai/*
+    litellm_params:
+      model: openai/*
+
+litellm_settings:
+  success_callback: ["mlflow"]
+  failure_callback: ["mlflow"]
+```
+
+### Environment Variables
+
+For MLflow with Databricks service, set these required environment variables:
+
+```shell
+DATABRICKS_TOKEN="dapixxxxx"
+DATABRICKS_HOST="https://dbc-xxxx.cloud.databricks.com"
+MLFLOW_TRACKING_URI="databricks"
+MLFLOW_REGISTRY_URI="databricks-uc"
+MLFLOW_EXPERIMENT_ID="xxxx"
+```
+
+### Adding Tags for Better Tracing
+
+You can add custom tags to your requests for improved trace organization and filtering in MLflow. Tags help you categorize and search your traces by job ID, task name, or any custom metadata.
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
+<Tabs>
+<TabItem value="curl" label="curl">
+
+```shell
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+    --header 'Content-Type: application/json' \
+    --header 'Authorization: Bearer sk-1234' \
+    --data '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+        {
+        "role": "user",
+        "content": "what llm are you"
+        }
+    ],
+    "litellm_metadata": {
+        "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+    }
+}'
+```
+
+</TabItem>
+<TabItem value="openai-python" label="OpenAI Python SDK">
+
+```python
+from openai import OpenAI
+
+# Initialize the OpenAI client pointing to your LiteLLM proxy
+client = OpenAI(
+    api_key="sk-1234",  # Your LiteLLM proxy API key
+    base_url="http://0.0.0.0:4000"  # Your LiteLLM proxy URL
+)
+
+# Make a request with tags in metadata
+response = client.chat.completions.create(
+    model="gemini-2.5-flash",
+    messages=[
+        {
+            "role": "user", 
+            "content": "what llm are you"
+        }
+    ],
+    extra_body={
+        "litellm_metadata": {
+            "tags": ["jobID:214590dsff09fds", "taskName:run_page_classification"]
+        }
+    }
+)
+```
+
+</TabItem>
+</Tabs>
 
 ## Support
 

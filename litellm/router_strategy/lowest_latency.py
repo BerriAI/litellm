@@ -8,6 +8,7 @@ import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import safe_divide_seconds
 from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -31,10 +32,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
     logged_failure: int = 0
 
     def __init__(
-        self, router_cache: DualCache, model_list: list, routing_args: dict = {}
+        self, router_cache: DualCache, routing_args: dict = {}
     ):
         self.router_cache = router_cache
-        self.model_list = model_list
         self.routing_args = RoutingArgs(**routing_args)
 
     def log_success_event(  # noqa: PLR0915
@@ -44,10 +44,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
             """
             Update latency usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            metadata_field = self._select_metadata_field(kwargs)
+            if kwargs["litellm_params"].get(metadata_field) is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
+                model_group = kwargs["litellm_params"][metadata_field].get(
                     "model_group", None
                 )
 
@@ -77,8 +78,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 current_minute = datetime.now().strftime("%M")
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms: timedelta = end_time - start_time
-                time_to_first_token_response_time: Optional[timedelta] = None
+                response_ms = end_time - start_time
+                time_to_first_token_response_time = None
 
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
@@ -95,14 +96,26 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = float(
-                            response_ms.total_seconds() / completion_tokens
-                        )
+                        
+                        # Handle both timedelta and float response times
+                        if isinstance(response_ms, timedelta):
+                            response_seconds = response_ms.total_seconds()
+                        else:
+                            response_seconds = response_ms
+                            
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if final_value is not None:
+                            final_value = float(final_value)
+                        else:
+                            final_value = response_seconds
 
                         if time_to_first_token_response_time is not None:
-                            time_to_first_token = float(
-                                time_to_first_token_response_time.total_seconds()
-                                / completion_tokens
+                            if isinstance(time_to_first_token_response_time, timedelta):
+                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                            else:
+                                ttft_seconds = time_to_first_token_response_time
+                            time_to_first_token = safe_divide_seconds(
+                                ttft_seconds, completion_tokens
                             )
 
                 # ------------
@@ -181,12 +194,13 @@ class LowestLatencyLoggingHandler(CustomLogger):
         Check if Timeout Error, if timeout set deployment latency -> 100
         """
         try:
+            metadata_field = self._select_metadata_field(kwargs)
             _exception = kwargs.get("exception", None)
             if isinstance(_exception, litellm.Timeout):
-                if kwargs["litellm_params"].get("metadata") is None:
+                if kwargs["litellm_params"].get(metadata_field) is None:
                     pass
                 else:
-                    model_group = kwargs["litellm_params"]["metadata"].get(
+                    model_group = kwargs["litellm_params"][metadata_field].get(
                         "model_group", None
                     )
 
@@ -251,10 +265,11 @@ class LowestLatencyLoggingHandler(CustomLogger):
             """
             Update latency usage on success
             """
-            if kwargs["litellm_params"].get("metadata") is None:
+            metadata_field = self._select_metadata_field(kwargs)
+            if kwargs["litellm_params"].get(metadata_field) is None:
                 pass
             else:
-                model_group = kwargs["litellm_params"]["metadata"].get(
+                model_group = kwargs["litellm_params"][metadata_field].get(
                     "model_group", None
                 )
 
@@ -285,8 +300,8 @@ class LowestLatencyLoggingHandler(CustomLogger):
                 current_minute = datetime.now().strftime("%M")
                 precise_minute = f"{current_date}-{current_hour}-{current_minute}"
 
-                response_ms: timedelta = end_time - start_time
-                time_to_first_token_response_time: Optional[timedelta] = None
+                response_ms = end_time - start_time
+                time_to_first_token_response_time = None
                 if kwargs.get("stream", None) is not None and kwargs["stream"] is True:
                     # only log ttft for streaming request
                     time_to_first_token_response_time = (
@@ -302,14 +317,26 @@ class LowestLatencyLoggingHandler(CustomLogger):
                     if _usage is not None:
                         completion_tokens = _usage.completion_tokens
                         total_tokens = _usage.total_tokens
-                        final_value = float(
-                            response_ms.total_seconds() / completion_tokens
-                        )
+                        
+                        # Handle both timedelta and float response times
+                        if isinstance(response_ms, timedelta):
+                            response_seconds = response_ms.total_seconds()
+                        else:
+                            response_seconds = response_ms
+                            
+                        final_value = safe_divide_seconds(response_seconds, completion_tokens)
+                        if final_value is not None:
+                            final_value = float(final_value)
+                        else:
+                            final_value = response_ms
 
                         if time_to_first_token_response_time is not None:
-                            time_to_first_token = float(
-                                time_to_first_token_response_time.total_seconds()
-                                / completion_tokens
+                            if isinstance(time_to_first_token_response_time, timedelta):
+                                ttft_seconds = time_to_first_token_response_time.total_seconds()
+                            else:
+                                ttft_seconds = time_to_first_token_response_time
+                            time_to_first_token = safe_divide_seconds(
+                                ttft_seconds, completion_tokens
                             )
                 # ------------
                 # Update usage
@@ -519,9 +546,9 @@ class LowestLatencyLoggingHandler(CustomLogger):
         # Pick a random deployment from valid deployments
         random_valid_deployment = random.choice(valid_deployments)
         deployment = random_valid_deployment[0]
-
-        if request_kwargs is not None and "metadata" in request_kwargs:
-            request_kwargs["metadata"][
+        metadata_field = self._select_metadata_field(request_kwargs)
+        if request_kwargs is not None and metadata_field in request_kwargs:
+            request_kwargs[metadata_field][
                 "_latency_per_deployment"
             ] = _latency_per_deployment
         return deployment

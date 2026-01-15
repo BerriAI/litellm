@@ -29,8 +29,10 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
 )
-from litellm.types.utils import ModelResponse
-from litellm.utils import CustomStreamWrapper
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+    from litellm.types.utils import ModelResponse
 
 from ..base_utils import (
     map_developer_role_to_system_role,
@@ -87,6 +89,7 @@ class BaseConfig(ABC):
             for k, v in cls.__dict__.items()
             if not k.startswith("__")
             and not k.startswith("_abc")
+            and not k.startswith("_is_base_class")
             and not isinstance(
                 v,
                 (
@@ -94,9 +97,11 @@ class BaseConfig(ABC):
                     types.BuiltinFunctionType,
                     classmethod,
                     staticmethod,
+                    property,
                 ),
             )
             and v is not None
+            and not callable(v)  # Filter out any callable objects including mocks
         }
 
     def get_json_schema_from_pydantic_object(
@@ -127,10 +132,10 @@ class BaseConfig(ABC):
 
         Checks 'non_default_params' for 'thinking' and 'max_tokens'
 
-        if 'thinking' is enabled and 'max_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
+        if 'thinking' is enabled and 'max_tokens' or 'max_completion_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
         """
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if is_thinking_enabled and "max_tokens" not in non_default_params:
+        if is_thinking_enabled and ("max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params):
             thinking_token_budget = cast(dict, optional_params["thinking"]).get(
                 "budget_tokens", None
             )
@@ -284,6 +289,7 @@ class BaseConfig(ABC):
         optional_params: dict,
         request_data: dict,
         api_base: str,
+        api_key: Optional[str] = None,
         model: Optional[str] = None,
         stream: Optional[bool] = None,
         fake_stream: Optional[bool] = None,
@@ -359,7 +365,7 @@ class BaseConfig(ABC):
         self,
         model: str,
         raw_response: httpx.Response,
-        model_response: ModelResponse,
+        model_response: "ModelResponse",
         logging_obj: LiteLLMLoggingObj,
         request_data: dict,
         messages: List[AllMessageValues],
@@ -368,7 +374,7 @@ class BaseConfig(ABC):
         encoding: Any,
         api_key: Optional[str] = None,
         json_mode: Optional[bool] = None,
-    ) -> ModelResponse:
+    ) -> "ModelResponse":
         pass
 
     @abstractmethod
@@ -379,7 +385,7 @@ class BaseConfig(ABC):
 
     def get_model_response_iterator(
         self,
-        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        streaming_response: Union[Iterator[str], AsyncIterator[str], "ModelResponse"],
         sync_stream: bool,
         json_mode: Optional[bool] = False,
     ) -> Any:
@@ -397,7 +403,7 @@ class BaseConfig(ABC):
         client: Optional[AsyncHTTPHandler] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
     def get_sync_custom_stream_wrapper(
@@ -412,7 +418,7 @@ class BaseConfig(ABC):
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
         json_mode: Optional[bool] = None,
         signed_json_body: Optional[bytes] = None,
-    ) -> CustomStreamWrapper:
+    ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
     @property

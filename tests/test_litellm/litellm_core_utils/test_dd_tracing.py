@@ -9,7 +9,10 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.litellm_core_utils.dd_tracing import _should_use_dd_tracer
+from litellm.litellm_core_utils.dd_tracing import (
+    _should_use_dd_profiler,
+    _should_use_dd_tracer,
+)
 from litellm.litellm_core_utils.dd_tracing import tracer as dd_tracer
 
 
@@ -89,3 +92,25 @@ def test_should_use_dd_tracer():
         mock_get_secret.return_value = False
         assert _should_use_dd_tracer() is False
         mock_get_secret.assert_called_once_with("USE_DDTRACE", False)
+
+
+def test_should_use_dd_profiler():
+    """
+    Test that the should_use_dd_profiler function works as expected
+    """
+    with patch(
+        "litellm.litellm_core_utils.dd_tracing.get_secret_bool"
+    ) as mock_get_secret:
+        # Test when USE_DDPROFILER is True
+
+        mock_get_secret.return_value = True
+        assert _should_use_dd_profiler() is True
+        mock_get_secret.assert_called_once_with("USE_DDPROFILER", False)
+
+        # Reset the mock for the next test
+        mock_get_secret.reset_mock()
+
+        # Test when USE_DDPROFILER is False
+        mock_get_secret.return_value = False
+        assert _should_use_dd_profiler() is False
+        mock_get_secret.assert_called_once_with("USE_DDPROFILER", False)

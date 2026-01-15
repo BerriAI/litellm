@@ -27,6 +27,7 @@ import litellm
 from litellm import (
     ModelResponse,
     RateLimitError,
+    ServiceUnavailableError,
     Timeout,
     completion,
     completion_cost,
@@ -69,7 +70,7 @@ def test_completion_bedrock_claude_completion_auth():
 
     try:
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -105,7 +106,7 @@ def test_completion_bedrock_guardrails(streaming):
     try:
         if streaming is False:
             response = completion(
-                model="anthropic.claude-v2",
+                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -133,7 +134,7 @@ def test_completion_bedrock_guardrails(streaming):
         else:
             litellm.set_verbose = True
             response = completion(
-                model="anthropic.claude-v2",
+                model="anthropic.claude-3-5-sonnet-20240620-v1:0",
                 messages=[
                     {
                         "content": "where do i buy coffee from? ",
@@ -160,39 +161,6 @@ def test_completion_bedrock_guardrails(streaming):
                 saw_trace is True
             ), "Did not see trace in response even when trace=enabled sent in the guardrailConfig"
 
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_completion_bedrock_claude_2_1_completion_auth():
-    print("calling bedrock claude 2.1 completion params auth")
-    import os
-
-    aws_access_key_id = os.environ["AWS_ACCESS_KEY_ID"]
-    aws_secret_access_key = os.environ["AWS_SECRET_ACCESS_KEY"]
-    aws_region_name = os.environ["AWS_REGION_NAME"]
-
-    os.environ.pop("AWS_ACCESS_KEY_ID", None)
-    os.environ.pop("AWS_SECRET_ACCESS_KEY", None)
-    os.environ.pop("AWS_REGION_NAME", None)
-    try:
-        response = completion(
-            model="bedrock/anthropic.claude-v2:1",
-            messages=messages,
-            max_tokens=10,
-            temperature=0.1,
-            aws_access_key_id=aws_access_key_id,
-            aws_secret_access_key=aws_secret_access_key,
-            aws_region_name=aws_region_name,
-        )
-        # Add any assertions here to check the response
-        print(response)
-
-        os.environ["AWS_ACCESS_KEY_ID"] = aws_access_key_id
-        os.environ["AWS_SECRET_ACCESS_KEY"] = aws_secret_access_key
-        os.environ["AWS_REGION_NAME"] = aws_region_name
     except RateLimitError:
         pass
     except Exception as e:
@@ -228,7 +196,7 @@ def test_completion_bedrock_claude_external_client_auth():
         )
 
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -265,7 +233,7 @@ def test_completion_bedrock_claude_sts_client_auth():
         litellm.set_verbose = True
 
         response = completion(
-            model="bedrock/anthropic.claude-instant-v1",
+            model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
             messages=messages,
             max_tokens=10,
             temperature=0.1,
@@ -327,7 +295,7 @@ def bedrock_session_token_creds():
         aws_role_name = (
             "arn:aws:iam::335785316107:role/litellm-github-unit-tests-circleci"
         )
-        aws_web_identity_token = "oidc/circleci_v2/"
+        aws_web_identity_token = "test-oidc-token-123"
 
         creds = bllm.get_credentials(
             aws_region_name=aws_region_name,
@@ -354,10 +322,7 @@ def process_stream_response(res, messages):
     return res
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
+@pytest.mark.skip(reason="Cannot run without being in CircleCI Runner")
 def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds):
     print("\ncalling bedrock claude with aws_session_token auth")
 
@@ -438,10 +403,7 @@ def test_completion_bedrock_claude_aws_session_token(bedrock_session_token_creds
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.skipif(
-    os.environ.get("CIRCLE_OIDC_TOKEN_V2") is None,
-    reason="Cannot run without being in CircleCI Runner",
-)
+@pytest.mark.skip(reason="Cannot run without being in CircleCI Runner")
 def test_completion_bedrock_claude_aws_bedrock_client(bedrock_session_token_creds):
     print("\ncalling bedrock claude with aws_session_token auth")
 
@@ -734,8 +696,6 @@ def test_bedrock_stop_value(stop, model):
     "model",
     [
         "anthropic.claude-3-sonnet-20240229-v1:0",
-        # "meta.llama3-70b-instruct-v1:0",
-        "anthropic.claude-v2",
         "mistral.mixtral-8x7b-instruct-v0:1",
     ],
 )
@@ -939,7 +899,7 @@ def test_bedrock_ptu():
         )
         try:
             response = litellm.completion(
-                model="bedrock/anthropic.claude-instant-v1",
+                model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
                 messages=[{"role": "user", "content": "What's AWS?"}],
                 model_id=model_id,
                 client=client,
@@ -1105,7 +1065,7 @@ def test_completion_bedrock_external_client_region():
         with patch.object(client, "post", new=Mock()) as mock_client_post:
             try:
                 response = completion(
-                    model="bedrock/anthropic.claude-instant-v1",
+                    model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0",
                     messages=messages,
                     max_tokens=10,
                     temperature=0.1,
@@ -1266,6 +1226,7 @@ def test_bedrock_tools_pt_invalid_names():
 
 def test_bedrock_tools_transformation_valid_params():
     from litellm.types.llms.bedrock import ToolJsonSchemaBlock
+
     tools = [
         {
             "type": "function",
@@ -1288,14 +1249,17 @@ def test_bedrock_tools_transformation_valid_params():
     result = _bedrock_tools_pt(tools)
 
     print("bedrock tools after prompt formatting=", result)
-     # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
+    # Ensure the keys for properties in the response is a subset of keys in ToolJsonSchemaBlock
     toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
     assert toolJsonSchema is not None
     print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
-    print("allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys())
-    assert set(toolJsonSchema.keys()).issubset(set(ToolJsonSchemaBlock.__annotations__.keys()))
+    print(
+        "allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys()
+    )
+    assert set(toolJsonSchema.keys()).issubset(
+        set(ToolJsonSchemaBlock.__annotations__.keys())
+    )
 
-    
     assert isinstance(result, list)
     assert len(result) == 1
     assert "toolSpec" in result[0]
@@ -1303,9 +1267,11 @@ def test_bedrock_tools_transformation_valid_params():
     assert result[0]["toolSpec"]["description"] == "Invalid name test"
     assert "inputSchema" in result[0]["toolSpec"]
     assert "json" in result[0]["toolSpec"]["inputSchema"]
-    assert result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"] == "string"
+    assert (
+        result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"]
+        == "string"
+    )
     assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
-
 
 
 def test_not_found_error():
@@ -2049,10 +2015,16 @@ def test_bedrock_context_window_error():
 
 def test_bedrock_converse_route():
     litellm.set_verbose = True
-    litellm.completion(
-        model="bedrock/converse/us.amazon.nova-pro-v1:0",
-        messages=[{"role": "user", "content": "Hello, world!"}],
-    )
+    try:
+        litellm.completion(
+            model="bedrock/converse/us.amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+        )
+    except ServiceUnavailableError as e:
+        if "Too many requests" in str(e):
+            pytest.skip("Skipping test due to AWS Bedrock rate limiting")
+        else:
+            raise
 
 
 def test_bedrock_mapped_converse_models():
@@ -2269,7 +2241,6 @@ class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
 
-    
     def test_prompt_caching(self):
         """
         TODO: Ensure this test passes our base llm test suite
@@ -2364,7 +2335,8 @@ def test_bedrock_custom_continue_message():
 
 def test_bedrock_no_default_message():
     """
-    Test that empty content is handled correctly when modify_params=False
+    Test that empty content is replaced with placeholder when modify_params=False.
+    AWS Bedrock doesn't allow empty or whitespace-only text content.
     """
     messages = [
         {"role": "user", "content": "Hello!"},
@@ -2380,15 +2352,13 @@ def test_bedrock_no_default_message():
         llm_provider="bedrock",
     )
 
-    # Verify empty message is present and valid message remains
+    # Verify empty message is replaced with placeholder and valid message remains
     assistant_messages = [
         msg for msg in formatted_messages if msg["role"] == "assistant"
     ]
-    assert len(assistant_messages) == 2  # Both empty and valid messages present
-    assert assistant_messages[0]["content"][0]["text"] == ""  # First message is empty
-    assert (
-        assistant_messages[1]["content"][0]["text"] == "Valid response"
-    )  # Second message is valid
+    assert len(assistant_messages) == 2
+    assert assistant_messages[0]["content"][0]["text"] == "."
+    assert assistant_messages[1]["content"][0]["text"] == "Valid response"
 
 
 @pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
@@ -2479,7 +2449,9 @@ def test_bedrock_process_empty_text_blocks():
     assert modified_message["content"][0]["text"] == "Please continue."
 
 
-@pytest.mark.skip(reason="Skipping test due to bedrock changing their response schema support. Come back to this.")
+@pytest.mark.skip(
+    reason="Skipping test due to bedrock changing their response schema support. Come back to this."
+)
 def test_nova_optional_params_tool_choice():
     try:
         litellm.drop_params = True
@@ -2499,7 +2471,12 @@ def test_nova_optional_params_tool_choice():
                         "parameters": {
                             "$defs": {
                                 "TurnDurationEnum": {
-                                    "enum": ["action", "encounter", "battle", "operation"],
+                                    "enum": [
+                                        "action",
+                                        "encounter",
+                                        "battle",
+                                        "operation",
+                                    ],
                                     "title": "TurnDurationEnum",
                                     "type": "string",
                                 }
@@ -2512,10 +2489,22 @@ def test_nova_optional_params_tool_choice():
                                 },
                                 "prompt": {"title": "Prompt", "type": "string"},
                                 "name": {"title": "Name", "type": "string"},
-                                "description": {"title": "Description", "type": "string"},
-                                "competitve": {"title": "Competitve", "type": "boolean"},
-                                "players_min": {"title": "Players Min", "type": "integer"},
-                                "players_max": {"title": "Players Max", "type": "integer"},
+                                "description": {
+                                    "title": "Description",
+                                    "type": "string",
+                                },
+                                "competitve": {
+                                    "title": "Competitve",
+                                    "type": "boolean",
+                                },
+                                "players_min": {
+                                    "title": "Players Min",
+                                    "type": "integer",
+                                },
+                                "players_max": {
+                                    "title": "Players Max",
+                                    "type": "integer",
+                                },
                                 "turn_duration": {
                                     "$ref": "#/$defs/TurnDurationEnum",
                                     "description": "how long the passing of a turn should represent for a game at this scale",
@@ -2539,6 +2528,7 @@ def test_nova_optional_params_tool_choice():
         )
     except litellm.APIConnectionError:
         pass
+
 
 class TestBedrockEmbedding(BaseLLMEmbeddingTest):
     def get_base_embedding_call_args(self) -> dict:
@@ -2586,7 +2576,7 @@ async def test_bedrock_image_url_sync_client():
                 {
                     "type": "image_url",
                     "image_url": {
-                        "url": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/dd/Gfp-wisconsin-madison-the-nature-boardwalk.jpg/2560px-Gfp-wisconsin-madison-the-nature-boardwalk.jpg"
+                        "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
                     },
                 },
             ],
@@ -2845,6 +2835,34 @@ def test_bedrock_invoke_provider():
         )
         == "nova"
     )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-pro-v1:0")
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-lite-v1:0"
+        )
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-micro-v1:0"
+        )
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-premier-v1:0"
+        )
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-2-lite-v1:0"
+        )
+        == "nova"
+    )
 
 
 def test_bedrock_description_param():
@@ -3021,7 +3039,8 @@ def test_bedrock_application_inference_profile():
     client = HTTPHandler()
     client2 = HTTPHandler()
 
-    tools = [{
+    tools = [
+        {
             "type": "function",
             "function": {
                 "name": "get_current_weather",
@@ -3039,11 +3058,10 @@ def test_bedrock_application_inference_profile():
                         },
                     },
                     "required": ["location"],
-                }
-            }
+                },
+            },
         }
     ]
-
 
     with patch.object(client, "post") as mock_post, patch.object(
         client2, "post"
@@ -3054,7 +3072,7 @@ def test_bedrock_application_inference_profile():
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 model_id="arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 client=client,
-                tools=tools
+                tools=tools,
             )
         except Exception as e:
             print(e)
@@ -3064,7 +3082,7 @@ def test_bedrock_application_inference_profile():
                 model="bedrock/converse/arn:aws:bedrock:eu-central-1:000000000000:application-inference-profile/a0a0a0a0a0a0",
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
                 client=client2,
-                tools=tools
+                tools=tools,
             )
         except Exception as e:
             print(e)
@@ -3092,7 +3110,6 @@ def return_mocked_response(model: str):
             "stopReason": "max_tokens",
             "usage": {"inputTokens": 5, "outputTokens": 10, "totalTokens": 15},
         }
-
 
 
 @pytest.mark.parametrize(
@@ -3141,3 +3158,799 @@ async def test_bedrock_max_completion_tokens(model: str):
         }
 
 
+def test_bedrock_meta_llama_function_calling():
+    """
+    Tests that:
+    - meta llama models support function calling
+    """
+    from litellm.utils import return_raw_request
+    from litellm.types.utils import CallTypes
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
+    request_args = {
+        "messages": messages,
+        "tools": tools,
+        "model": "bedrock/us.meta.llama4-scout-17b-instruct-v1:0",
+    }
+
+    response = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs=request_args,
+    )
+
+    print(response)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_bedrock_passthrough(sync_mode: bool):
+    import litellm
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    if sync_mode:
+        response = litellm.llm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
+    else:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke",
+            data=data,
+        )
+
+    print(response.text)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_bedrock_passthrough_router():
+    """
+    Test bedrock passthrough using litellm.Router with async mode.
+    Tests that the router:
+    1. Resolves the router model name to the actual deployment
+    2. Replaces the router model name in the endpoint with the actual deployment model
+    """
+    import litellm
+    from litellm import Router
+
+    litellm._turn_on_debug()
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "special-bedrock-model",
+                "litellm_params": {
+                    "model": "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+                },
+            }
+        ]
+    )
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    # Endpoint uses the router model name which should be replaced with actual deployment
+    response = await router.allm_passthrough_route(
+        model="special-bedrock-model",
+        method="POST",
+        endpoint="/model/special-bedrock-model/invoke",
+        data=data,
+    )
+
+    print(response.text)
+
+    assert response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_bedrock_converse__streaming_passthrough(monkeypatch):
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    import asyncio
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": "Write an article about impact of high inflation to GDP of a country"
+                    }
+                ],
+            }
+        ],
+        "system": [{"text": "You are an economist with access to lots of data"}],
+        "inferenceConfig": {"maxTokens": 100, "temperature": 0.5},
+    }
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/converse-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(1)
+
+        mock_callback.assert_called_once()
+        print(mock_callback.call_args.kwargs.keys())
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+        response_cost = mock_callback.call_args.kwargs["kwargs"]["response_cost"]
+        assert response_cost is not None and response_cost > 0
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_streaming_passthrough_test2(monkeypatch):
+    import litellm
+    import time
+    import asyncio
+    from unittest.mock import MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(5)
+
+        mock_callback.assert_called_once()
+        # check standard logging payload created
+        print(mock_callback.call_args.kwargs.keys())
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+
+
+@pytest.mark.asyncio
+async def test_bedrock_streaming_passthrough_test1(monkeypatch):
+    import litellm
+    import time
+    import asyncio
+    from unittest.mock import MagicMock
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class MockCustomLogger(CustomLogger):
+        pass
+
+    mock_custom_logger = MockCustomLogger()
+    monkeypatch.setattr(litellm, "callbacks", [mock_custom_logger])
+
+    litellm._turn_on_debug()
+
+    data = {
+        "max_tokens": 512,
+        "messages": [{"role": "user", "content": "Hey"}],
+        "system": [
+            {
+                "type": "text",
+                "text": "Analyze if this message indicates a new conversation topic. If it does, extract a 2-3 word title that captures the new topic. Format your response as a JSON object with two fields: 'isNewTopic' (boolean) and 'title' (string, or null if isNewTopic is false). Only include these fields, no other text.",
+            }
+        ],
+        "temperature": 0,
+        "metadata": {
+            "user_id": "5dd07c33da27e6d2968d94ea20bf47a7b090b6b158b82328d54da2909a108e84"
+        },
+        "anthropic_version": "bedrock-2023-05-31",
+        "anthropic_beta": ["claude-code-20250219"],
+    }
+
+    with patch.object(mock_custom_logger, "async_log_success_event") as mock_callback:
+        response = await litellm.allm_passthrough_route(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0",
+            method="POST",
+            endpoint="/model/us.anthropic.claude-3-5-sonnet-20240620-v1:0/invoke-with-response-stream",
+            data=data,
+        )
+        async for chunk in response:
+            print(chunk)
+
+        await asyncio.sleep(5)
+
+        mock_callback.assert_called_once()
+        # check standard logging payload created
+        print(mock_callback.call_args.kwargs.keys())
+        assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
+        assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
+
+
+def test_bedrock_openai_imported_model():
+    """
+    Test that Bedrock imported models using OpenAI format work correctly.
+
+    This test validates:
+    1. The request body follows OpenAI Chat Completions format
+    2. The URL is correctly constructed for Bedrock invoke endpoint
+    3. Messages with system, user roles and image_url content are preserved
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    # Sample base64 image data (truncated for test)
+    sample_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+
+    messages = [
+        {
+            "role": "system",
+            "content": "You are a helpful assistant that can analyze images.",
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Spot the difference between the two images?",
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{sample_base64}"},
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{sample_base64}"},
+                },
+            ],
+        },
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/openai/arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy",
+                messages=messages,
+                max_tokens=300,
+                temperature=0.5,
+                client=client,
+            )
+        except Exception as e:
+            print(f"Exception (expected during mock): {e}")
+
+        mock_post.assert_called_once()
+
+        # Validate URL
+        url = mock_post.call_args.kwargs["url"]
+        print(f"URL: {url}")
+        assert "bedrock-runtime.us-east-1.amazonaws.com" in url
+        assert (
+            "arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy" in url
+        )
+        assert "/invoke" in url
+
+        # Validate request body follows OpenAI format
+        request_body = json.loads(mock_post.call_args.kwargs["data"])
+        print(f"Request body: {json.dumps(request_body, indent=2)}")
+
+        # Check messages structure
+        assert "messages" in request_body
+        assert len(request_body["messages"]) == 2
+
+        # Check system message
+        system_msg = request_body["messages"][0]
+        assert system_msg["role"] == "system"
+        assert "helpful assistant" in system_msg["content"]
+
+        # Check user message with image content
+        user_msg = request_body["messages"][1]
+        assert user_msg["role"] == "user"
+        assert isinstance(user_msg["content"], list)
+        assert len(user_msg["content"]) == 3
+
+        # Check text content
+        assert user_msg["content"][0]["type"] == "text"
+        assert "Spot the difference" in user_msg["content"][0]["text"]
+
+        # Check image_url content
+        assert user_msg["content"][1]["type"] == "image_url"
+        assert "image_url" in user_msg["content"][1]
+        assert user_msg["content"][1]["image_url"]["url"].startswith(
+            "data:image/jpeg;base64,"
+        )
+
+        assert user_msg["content"][2]["type"] == "image_url"
+        assert "image_url" in user_msg["content"][2]
+
+        # Check max_tokens and temperature
+        assert request_body["max_tokens"] == 300
+        assert request_body["temperature"] == 0.5
+
+
+def test_bedrock_nova_provider_detection():
+    """
+    Test that Nova models are correctly detected even when prefixed with "amazon."
+    Regression test for issue #17910 where models like "amazon.nova-pro-v1:0"
+    were incorrectly identified as "amazon" (Titan) instead of "nova".
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    # Test various Nova model formats
+    nova_test_cases = [
+        ("us.amazon.nova-pro-v1:0", "nova"),
+        ("us.amazon.nova-lite-v1:0", "nova"),
+        ("us.amazon.nova-micro-v1:0", "nova"),
+        ("amazon.nova-pro-v1:0", "nova"),
+        ("amazon.nova-lite-v1:0", "nova"),
+        ("amazon.nova-micro-v1:0", "nova"),
+        ("amazon.nova-premier-v1:0", "nova"),
+        ("amazon.nova-2-lite-v1:0", "nova"),
+        ("bedrock/amazon.nova-pro-v1:0", "nova"),
+        ("bedrock/invoke/amazon.nova-pro-v1:0", "nova"),
+        ("amazon.Nova-pro-v1:0", "nova"),
+        ("amazon.NOVA-pro-v1:0", "nova"),
+    ]
+
+    for model, expected in nova_test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert (
+            provider == expected
+        ), f"Failed for model: {model}, expected: {expected}, got: {provider}"
+
+    # Verify that Amazon Titan models still return "amazon"
+    titan_test_cases = [
+        ("amazon.titan-text-express-v1", "amazon"),
+        ("us.amazon.titan-text-lite-v1", "amazon"),
+    ]
+
+    for model, expected in titan_test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert (
+            provider == expected
+        ), f"Failed for model: {model}, expected: {expected}, got: {provider}"
+
+
+def test_bedrock_openai_provider_detection():
+    """
+    Test that the OpenAI provider is correctly detected from model strings.
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    # Test various OpenAI model formats
+    test_cases = [
+        "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123",
+        "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/xyz789",
+    ]
+
+    for model in test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert (
+            provider == "openai"
+        ), f"Failed for model: {model}, got provider: {provider}"
+        print(f"✓ Provider detection works for: {model}")
+
+
+def test_bedrock_openai_model_id_extraction():
+    """
+    Test that the model ID (ARN) is correctly extracted and encoded for OpenAI models.
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    model = (
+        "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
+    )
+    provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+
+    model_id = BaseAWSLLM.get_bedrock_model_id(
+        model=model, provider=provider, optional_params={}
+    )
+
+    # The ARN should be double URL encoded
+    assert "arn" in model_id
+    assert "imported-model" in model_id
+    print(f"✓ Model ID extracted and encoded: {model_id}")
+
+
+def test_bedrock_openai_convert_messages_to_prompt():
+    """
+    Test that convert_messages_to_prompt returns empty string for OpenAI models.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
+
+    bedrock_llm = BedrockLLM()
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    prompt, chat_history = bedrock_llm.convert_messages_to_prompt(
+        model="test-model", messages=messages, provider="openai", custom_prompt_dict={}
+    )
+
+    # OpenAI models use messages directly, no prompt conversion
+    assert prompt == ""
+    assert chat_history is None
+    print("✓ convert_messages_to_prompt returns empty for OpenAI")
+
+
+def test_bedrock_openai_response_parsing():
+    """
+    Test that OpenAI responses are correctly parsed.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
+    from litellm import ModelResponse
+    from unittest.mock import Mock
+    import json
+
+    bedrock_llm = BedrockLLM()
+
+    # Mock OpenAI-style response
+    openai_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": "The capital of France is Paris.",
+                    "role": "assistant",
+                },
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+    }
+
+    mock_response = Mock()
+    mock_response.json.return_value = openai_response
+    mock_response.text = json.dumps(openai_response)
+    mock_response.status_code = 200
+    mock_response.headers = {}
+
+    model_response = ModelResponse()
+    mock_logging = Mock()
+
+    result = bedrock_llm.process_response(
+        model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
+        response=mock_response,
+        model_response=model_response,
+        stream=False,
+        logging_obj=mock_logging,
+        optional_params={},
+        api_key="",
+        data={},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        print_verbose=lambda x: None,
+        encoding=None,
+    )
+
+    # Verify response content
+    assert result.choices[0].message.content == "The capital of France is Paris."
+    assert result.choices[0].finish_reason == "stop"
+
+    # Verify usage
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 8
+    assert result.usage.total_tokens == 18
+
+    print("✓ OpenAI response parsing works correctly")
+
+
+def test_bedrock_openai_request_transformation():
+    """
+    Test that the request is correctly transformed for OpenAI models.
+    """
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+        AmazonInvokeConfig,
+    )
+
+    config = AmazonInvokeConfig()
+
+    model = "openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    optional_params = {
+        "max_tokens": 100,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "stream": False,
+    }
+
+    litellm_params = {}
+    headers = {}
+
+    with patch.object(config, "get_bedrock_invoke_provider", return_value="openai"):
+        result = config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params.copy(),
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    # Verify the request uses messages format (not prompt)
+    assert "messages" in result
+    assert len(result["messages"]) == 2
+    assert result["messages"][0]["role"] == "system"
+    assert result["messages"][1]["role"] == "user"
+
+    # Verify parameters are included
+    assert "max_tokens" in result
+    assert "temperature" in result
+
+    print("✓ Request transformation works correctly")
+
+
+def test_bedrock_openai_parameter_filtering():
+    """
+    Test that only supported OpenAI parameters are included in the request.
+    """
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
+    config = AmazonBedrockOpenAIConfig()
+    model = "test-model"
+
+    supported_params = config.get_supported_openai_params(model=model)
+
+    # Verify common OpenAI parameters are supported
+    assert "max_tokens" in supported_params
+    assert "temperature" in supported_params
+    assert "top_p" in supported_params
+    assert "stream" in supported_params
+    assert "stop" in supported_params
+
+    print(f"✓ Parameter filtering supports: {len(supported_params)} parameters")
+    print(f"  Supported params: {supported_params}")
+
+
+def test_bedrock_openai_route_detection():
+    """
+    Test that the OpenAI route is correctly detected.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    test_cases = [
+        ("openai/arn:aws:bedrock:us-east-1:123:imported-model/test", "openai"),
+        ("bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test", "openai"),
+    ]
+
+    for model, expected_route in test_cases:
+        route = BedrockModelInfo.get_bedrock_route(model)
+        assert route == expected_route, f"Failed for model: {model}, got route: {route}"
+        print(f"✓ Route detection works for: {model} -> {route}")
+
+
+def test_bedrock_openai_explicit_route_check():
+    """
+    Test the explicit OpenAI route checker helper method.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    # Test with openai/ prefix
+    assert (
+        BedrockModelInfo._explicit_openai_route(
+            "openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
+        )
+        is True
+    )
+    assert (
+        BedrockModelInfo._explicit_openai_route(
+            "bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
+        )
+        is True
+    )
+
+    # Test without openai/ prefix
+    assert BedrockModelInfo._explicit_openai_route("anthropic.claude-3-sonnet") is False
+    assert (
+        BedrockModelInfo._explicit_openai_route(
+            "arn:aws:bedrock:us-east-1:123:imported-model/test"
+        )
+        is False
+    )
+
+    print("✓ Explicit route check works correctly")
+
+
+def test_bedrock_openai_config_initialization():
+    """
+    Test that AmazonBedrockOpenAIConfig can be properly initialized.
+    """
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
+    config = AmazonBedrockOpenAIConfig()
+
+    # Verify it has the necessary methods
+    assert hasattr(config, "get_supported_openai_params")
+    assert hasattr(config, "transform_request")
+    assert hasattr(config, "transform_response")
+    assert hasattr(config, "map_openai_params")
+
+    print("✓ AmazonBedrockOpenAIConfig initializes correctly")
+
+
+def test_bedrock_openai_multiple_message_types():
+    """
+    Test that various message content types are handled correctly.
+    """
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    # Test with mixed content types
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Simple text message"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Complex message with text"},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,iVBORw0KGg"},
+                },
+            ],
+        },
+    ]
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = completion(
+                model="bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
+                messages=messages,
+                max_tokens=50,
+                client=client,
+            )
+        except Exception as e:
+            pass
+
+        # Verify the request was made
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs["data"])
+
+            # Verify messages are preserved
+            assert "messages" in request_body
+            assert len(request_body["messages"]) == 3
+
+            # Verify mixed content is handled
+            assert isinstance(request_body["messages"][2]["content"], list)
+
+            print("✓ Multiple message types handled correctly")
+
+
+def test_bedrock_openai_error_handling():
+    """
+    Test that errors from OpenAI models are properly handled.
+    """
+    from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
+    from litellm import ModelResponse
+    from litellm.llms.bedrock.common_utils import BedrockError
+    from unittest.mock import Mock
+    import json
+
+    bedrock_llm = BedrockLLM()
+
+    # Mock error response
+    mock_response = Mock()
+    mock_response.json.side_effect = Exception("Invalid JSON")
+    mock_response.text = "Invalid response"
+    mock_response.status_code = 422
+
+    model_response = ModelResponse()
+    mock_logging = Mock()
+
+    with pytest.raises(BedrockError) as exc_info:
+        bedrock_llm.process_response(
+            model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
+            response=mock_response,
+            model_response=model_response,
+            stream=False,
+            logging_obj=mock_logging,
+            optional_params={},
+            api_key="",
+            data={},
+            messages=[],
+            print_verbose=lambda x: None,
+            encoding=None,
+        )
+
+    assert exc_info.value.status_code == 422
+    print("✓ Error handling works correctly")

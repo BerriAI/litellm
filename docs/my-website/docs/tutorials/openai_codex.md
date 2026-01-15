@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Using LiteLLM with OpenAI Codex
+# OpenAI Codex
 
 This guide walks you through connecting OpenAI Codex to LiteLLM. Using LiteLLM with Codex allows teams to:
 - Access 100+ LLMs through the Codex interface
@@ -53,7 +53,7 @@ yarn global add @openai/codex
 docker run \
     -v $(pwd)/litellm_config.yaml:/app/config.yaml \
     -p 4000:4000 \
-    ghcr.io/berriai/litellm:main-latest \
+    docker.litellm.ai/berriai/litellm:main-latest \
     --config /app/config.yaml
 ```
 

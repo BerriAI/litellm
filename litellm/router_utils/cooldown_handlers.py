@@ -7,12 +7,14 @@ Router cooldown handlers
 """
 
 import asyncio
+import math
 from typing import TYPE_CHECKING, Any, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
+    DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
     DEFAULT_FAILURE_THRESHOLD_PERCENT,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
@@ -61,6 +63,8 @@ def _is_cooldown_required(
                     return False
 
         if isinstance(exception_status, str):
+            if len(exception_status) == 0:
+                return False
             exception_status = int(exception_status)
 
         if exception_status >= 400 and exception_status < 500:
@@ -96,6 +100,7 @@ def _should_run_cooldown_logic(
     deployment: Optional[str],
     exception_status: Union[str, int],
     original_exception: Any,
+    time_to_cooldown: Optional[float] = None,
 ) -> bool:
     """
     Helper that decides if cooldown logic should be run
@@ -114,6 +119,17 @@ def _should_run_cooldown_logic(
     ):
         verbose_router_logger.debug(
             "Should Not Run Cooldown Logic: deployment id is none or model group can't be found."
+        )
+        return False
+
+    #########################################################
+    # If time_to_cooldown is 0 or 0.0000000, don't run cooldown logic
+    #########################################################
+    if time_to_cooldown is not None and math.isclose(
+        a=time_to_cooldown, b=0.0, abs_tol=1e-9
+    ):
+        verbose_router_logger.debug(
+            "Should Not Run Cooldown Logic: time_to_cooldown is effectively 0"
         )
         return False
 
@@ -216,8 +232,10 @@ def _should_cooldown_deployment(
             return True
         elif (
             percent_fails > DEFAULT_FAILURE_THRESHOLD_PERCENT
+            and total_requests_this_minute >= DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS
             and not is_single_deployment_model_group  # by default we should avoid cooldowns on single deployment model groups
         ):
+            # Only apply error rate cooldown when we have enough requests to make the percentage meaningful
             return True
 
         elif (
@@ -261,7 +279,11 @@ def _set_cooldown_deployments(
 
     if (
         _should_run_cooldown_logic(
-            litellm_router_instance, deployment, exception_status, original_exception
+            litellm_router_instance=litellm_router_instance,
+            deployment=deployment,
+            exception_status=exception_status,
+            original_exception=original_exception,
+            time_to_cooldown=time_to_cooldown,
         )
         is False
         or deployment is None
@@ -270,20 +292,19 @@ def _set_cooldown_deployments(
         return False
 
     exception_status_int = cast_exception_status_to_int(exception_status)
-
     verbose_router_logger.debug(f"Attempting to add {deployment} to cooldown list")
-    cooldown_time = litellm_router_instance.cooldown_time or 1
-    if time_to_cooldown is not None:
-        cooldown_time = time_to_cooldown
 
     if _should_cooldown_deployment(
-        litellm_router_instance, deployment, exception_status, original_exception
+        litellm_router_instance=litellm_router_instance,
+        deployment=deployment,
+        exception_status=exception_status,
+        original_exception=original_exception,
     ):
         litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(
             model_id=deployment,
             original_exception=original_exception,
             exception_status=exception_status_int,
-            cooldown_time=cooldown_time,
+            cooldown_time=time_to_cooldown,
         )
 
         # Trigger cooldown callback handler
@@ -292,7 +313,7 @@ def _set_cooldown_deployments(
                 litellm_router_instance=litellm_router_instance,
                 deployment_id=deployment,
                 exception_status=exception_status,
-                cooldown_time=cooldown_time,
+                cooldown_time=time_to_cooldown,
             )
         )
         return True

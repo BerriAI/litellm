@@ -19,6 +19,9 @@ from litellm.caching.caching import DualCache
 from litellm.constants import HOURS_IN_A_DAY
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_alert_type
+from litellm.integrations.SlackAlerting.hanging_request_check import (
+    AlertingHangingRequestCheck,
+)
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     _add_key_name_and_team_to_alert,
@@ -38,7 +41,7 @@ from litellm.types.integrations.slack_alerting import *
 
 from ..email_templates.templates import *
 from .batching_handler import send_to_webhook, squash_payloads
-from .utils import _add_langfuse_trace_id_to_alert, process_slack_alerting_variables
+from .utils import process_slack_alerting_variables
 
 if TYPE_CHECKING:
     from litellm.router import Router as _Router
@@ -86,6 +89,9 @@ class SlackAlerting(CustomBatchLogger):
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
+        self.hanging_request_check = AlertingHangingRequestCheck(
+            slack_alerting_object=self,
+        )
         super().__init__(**kwargs, flush_lock=self.flush_lock)
 
     def update_values(
@@ -107,10 +113,10 @@ class SlackAlerting(CustomBatchLogger):
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
-            if not self.periodic_started: 
+            if not self.periodic_started:
                 asyncio.create_task(self.periodic_flush())
                 self.periodic_started = True
-                
+
         if alert_to_webhook_url is not None:
             # update the dict
             if self.alert_to_webhook_url is None:
@@ -127,6 +133,33 @@ class SlackAlerting(CustomBatchLogger):
                 self.alert_to_webhook_url.update(_new_values)
         if llm_router is not None:
             self.llm_router = llm_router
+
+    def _prepare_outage_value_for_cache(
+        self, outage_value: Union[dict, ProviderRegionOutageModel, OutageModel]
+    ) -> dict:
+        """
+        Helper method to prepare outage value for Redis caching.
+        Converts set objects to lists for JSON serialization.
+        """
+        # Convert to dict for processing
+        cache_value = dict(outage_value)
+
+        if "deployment_ids" in cache_value and isinstance(
+            cache_value["deployment_ids"], set
+        ):
+            cache_value["deployment_ids"] = list(cache_value["deployment_ids"])
+        return cache_value
+
+    def _restore_outage_value_from_cache(
+        self, outage_value: Optional[dict]
+    ) -> Optional[dict]:
+        """
+        Helper method to restore outage value after retrieving from cache.
+        Converts list objects back to sets for proper handling.
+        """
+        if outage_value and isinstance(outage_value.get("deployment_ids"), list):
+            outage_value["deployment_ids"] = set(outage_value["deployment_ids"])
+        return outage_value
 
     async def deployment_in_cooldown(self):
         pass
@@ -451,106 +484,17 @@ class SlackAlerting(CustomBatchLogger):
 
     async def response_taking_too_long(
         self,
-        start_time: Optional[datetime.datetime] = None,
-        end_time: Optional[datetime.datetime] = None,
-        type: Literal["hanging_request", "slow_response"] = "hanging_request",
         request_data: Optional[dict] = None,
     ):
         if self.alerting is None or self.alert_types is None:
             return
-        model: str = ""
-        if request_data is not None:
-            model = request_data.get("model", "")
-            messages = request_data.get("messages", None)
-            if messages is None:
-                # if messages does not exist fallback to "input"
-                messages = request_data.get("input", None)
 
-            # try casting messages to str and get the first 100 characters, else mark as None
-            try:
-                messages = str(messages)
-                messages = messages[:100]
-            except Exception:
-                messages = ""
+        if AlertType.llm_requests_hanging not in self.alert_types:
+            return
 
-            if (
-                litellm.turn_off_message_logging
-                or litellm.redact_messages_in_exceptions
-            ):
-                messages = (
-                    "Message not logged. litellm.redact_messages_in_exceptions=True"
-                )
-            request_info = f"\nRequest Model: `{model}`\nMessages: `{messages}`"
-        else:
-            request_info = ""
-
-        if type == "hanging_request":
-            await asyncio.sleep(
-                self.alerting_threshold
-            )  # Set it to 5 minutes - i'd imagine this might be different for streaming, non-streaming, non-completion (embedding + img) requests
-            alerting_metadata: dict = {}
-            if await self._request_is_completed(request_data=request_data) is True:
-                return
-
-            if request_data is not None:
-                if request_data.get("deployment", None) is not None and isinstance(
-                    request_data["deployment"], dict
-                ):
-                    _api_base = litellm.get_api_base(
-                        model=model,
-                        optional_params=request_data["deployment"].get(
-                            "litellm_params", {}
-                        ),
-                    )
-
-                    if _api_base is None:
-                        _api_base = ""
-
-                    request_info += f"\nAPI Base: {_api_base}"
-                elif request_data.get("metadata", None) is not None and isinstance(
-                    request_data["metadata"], dict
-                ):
-                    # In hanging requests sometime it has not made it to the point where the deployment is passed to the `request_data``
-                    # in that case we fallback to the api base set in the request metadata
-                    _metadata: dict = request_data["metadata"]
-                    _api_base = _metadata.get("api_base", "")
-
-                    request_info = _add_key_name_and_team_to_alert(
-                        request_info=request_info, metadata=_metadata
-                    )
-
-                    if _api_base is None:
-                        _api_base = ""
-
-                    if "alerting_metadata" in _metadata:
-                        alerting_metadata = _metadata["alerting_metadata"]
-                    request_info += f"\nAPI Base: `{_api_base}`"
-                # only alert hanging responses if they have not been marked as success
-                alerting_message = (
-                    f"`Requests are hanging - {self.alerting_threshold}s+ request time`"
-                )
-
-                if "langfuse" in litellm.success_callback:
-                    langfuse_url = await _add_langfuse_trace_id_to_alert(
-                        request_data=request_data,
-                    )
-
-                    if langfuse_url is not None:
-                        request_info += "\n🪢 Langfuse Trace: {}".format(langfuse_url)
-
-                # add deployment latencies to alert
-                _deployment_latency_map = self._get_deployment_latencies_to_alert(
-                    metadata=request_data.get("metadata", {})
-                )
-                if _deployment_latency_map is not None:
-                    request_info += f"\nDeployment Latencies\n{_deployment_latency_map}"
-
-                await self.send_alert(
-                    message=alerting_message + request_info,
-                    level="Medium",
-                    alert_type=AlertType.llm_requests_hanging,
-                    alerting_metadata=alerting_metadata,
-                )
+        await self.hanging_request_check.add_request_to_hanging_request_check(
+            request_data=request_data
+        )
 
     async def failed_tracking_alert(self, error_message: str, failing_model: str):
         """
@@ -587,9 +531,11 @@ class SlackAlerting(CustomBatchLogger):
         self,
         type: Literal[
             "token_budget",
-            "soft_budget",
             "user_budget",
+            "soft_budget",
+            "max_budget_alert",
             "team_budget",
+            "organization_budget",
             "proxy_budget",
             "projected_limit_exceeded",
         ],
@@ -888,9 +834,13 @@ class SlackAlerting(CustomBatchLogger):
         ### UNIQUE CACHE KEY ###
         cache_key = provider + region_name
 
-        outage_value: Optional[ProviderRegionOutageModel] = (
-            await self.internal_usage_cache.async_get_cache(key=cache_key)
-        )
+        outage_value: Optional[
+            ProviderRegionOutageModel
+        ] = await self.internal_usage_cache.async_get_cache(key=cache_key)
+
+        # Convert deployment_ids back to set if it was stored as a list
+        if outage_value is not None:
+            outage_value = self._restore_outage_value_from_cache(outage_value)  # type: ignore
 
         if (
             getattr(exception, "status_code", None) is None
@@ -915,9 +865,11 @@ class SlackAlerting(CustomBatchLogger):
             )
 
             ## add to cache ##
+            # Convert set to list for JSON serialization
+            cache_value = self._prepare_outage_value_for_cache(outage_value)
             await self.internal_usage_cache.async_set_cache(
                 key=cache_key,
-                value=outage_value,
+                value=cache_value,
                 ttl=self.alerting_args.region_outage_alert_ttl,
             )
             return
@@ -983,8 +935,10 @@ class SlackAlerting(CustomBatchLogger):
             outage_value["major_alert_sent"] = True
 
         ## update cache ##
+        # Convert set to list for JSON serialization
+        cache_value = self._prepare_outage_value_for_cache(outage_value)
         await self.internal_usage_cache.async_set_cache(
-            key=cache_key, value=outage_value
+            key=cache_key, value=cache_value
         )
 
     async def outage_alerts(
@@ -1108,8 +1062,10 @@ class SlackAlerting(CustomBatchLogger):
                 outage_value["major_alert_sent"] = True
 
             ## update cache ##
+            # Convert set to list for JSON serialization
+            cache_value = self._prepare_outage_value_for_cache(outage_value)
             await self.internal_usage_cache.async_set_cache(
-                key=deployment_id, value=outage_value
+                key=deployment_id, value=cache_value
             )
         except Exception:
             pass
@@ -1390,7 +1346,7 @@ Model Info:
             subject=email_event["subject"],
             html=email_event["html"],
         )
-        if webhook_event.event_group == "team":
+        if webhook_event.event_group == Litellm_EntityType.TEAM:
             from litellm.integrations.email_alerting import send_team_budget_alert
 
             await send_team_budget_alert(webhook_event=webhook_event)
@@ -1450,12 +1406,13 @@ Model Info:
         # Get the current timestamp
         current_time = datetime.now().strftime("%H:%M:%S")
         _proxy_base_url = os.getenv("PROXY_BASE_URL", None)
+        # Use .name if it's an enum, otherwise use as is
+        alert_type_name = getattr(alert_type, "name", alert_type)
+        alert_type_formatted = f"Alert type: `{alert_type_name}`"
         if alert_type == "daily_reports" or alert_type == "new_model_added":
-            formatted_message = message
+            formatted_message = alert_type_formatted + message
         else:
-            formatted_message = (
-                f"Level: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
-            )
+            formatted_message = f"{alert_type_formatted}\nLevel: `{level}`\nTimestamp: `{current_time}`\n\nMessage: {message}"
 
         if kwargs:
             for key, value in kwargs.items():
@@ -1471,9 +1428,9 @@ Model Info:
             self.alert_to_webhook_url is not None
             and alert_type in self.alert_to_webhook_url
         ):
-            slack_webhook_url: Optional[Union[str, List[str]]] = (
-                self.alert_to_webhook_url[alert_type]
-            )
+            slack_webhook_url: Optional[
+                Union[str, List[str]]
+            ] = self.alert_to_webhook_url[alert_type]
         elif self.default_webhook_url is not None:
             slack_webhook_url = self.default_webhook_url
         else:

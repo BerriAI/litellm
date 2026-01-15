@@ -2,12 +2,16 @@
 Wrapper around router cache. Meant to handle model cooldown logic
 """
 
+import functools
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, TypedDict, Union
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+
+from typing_extensions import TypedDict
 
 from litellm import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -29,17 +33,25 @@ class CooldownCache:
         self.cache = cache
         self.default_cooldown_time = default_cooldown_time
         self.in_memory_cache = InMemoryCache()
+        # Initialize the masker with custom settings for exception strings
+        self.exception_masker = SensitiveDataMasker(
+            visible_prefix=50,  # Show first 50 characters
+            visible_suffix=0,  # Show last 0 characters
+            mask_char="*",  # Use * for masking
+        )
 
     def _common_add_cooldown_logic(
         self, model_id: str, original_exception, exception_status, cooldown_time: float
     ) -> Tuple[str, CooldownCacheValue]:
         try:
             current_time = time.time()
-            cooldown_key = f"deployment:{model_id}:cooldown"
+            cooldown_key = CooldownCache.get_cooldown_cache_key(model_id)
 
             # Store the cooldown information for the deployment separately
             cooldown_data = CooldownCacheValue(
-                exception_received=str(original_exception),
+                exception_received=self.exception_masker._mask_value(
+                    str(original_exception)
+                ),
                 status_code=str(exception_status),
                 timestamp=current_time,
                 cooldown_time=cooldown_time,
@@ -62,7 +74,15 @@ class CooldownCache:
         cooldown_time: Optional[float],
     ):
         try:
-            _cooldown_time = cooldown_time or self.default_cooldown_time
+            #########################################################
+            # get cooldown time
+            # 1. If dynamic cooldown time is set for the model/deployment, use that
+            # 2. If no dynamic cooldown time is set, use the default cooldown time set on CooldownCache
+            _cooldown_time = cooldown_time
+            if _cooldown_time is None:
+                _cooldown_time = self.default_cooldown_time
+            #########################################################
+
             cooldown_key, cooldown_data = self._common_add_cooldown_logic(
                 model_id=model_id,
                 original_exception=original_exception,
@@ -85,8 +105,9 @@ class CooldownCache:
             raise e
 
     @staticmethod
+    @functools.lru_cache(maxsize=1024)
     def get_cooldown_cache_key(model_id: str) -> str:
-        return f"deployment:{model_id}:cooldown"
+        return "deployment:" + model_id + ":cooldown"
 
     async def async_get_active_cooldowns(
         self, model_ids: List[str], parent_otel_span: Optional[Span]
@@ -106,9 +127,9 @@ class CooldownCache:
         )
         active_cooldowns: List[Tuple[str, CooldownCacheValue]] = []
 
-        if results is None:
+        if results is None or all(v is None for v in results):
             return active_cooldowns
-
+        
         # Process the results
         for model_id, result in zip(model_ids, results):
             if result and isinstance(result, dict):
@@ -121,7 +142,7 @@ class CooldownCache:
         self, model_ids: List[str], parent_otel_span: Optional[Span]
     ) -> List[Tuple[str, CooldownCacheValue]]:
         # Generate the keys for the deployments
-        keys = [f"deployment:{model_id}:cooldown" for model_id in model_ids]
+        keys = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
         # Retrieve the values for the keys using mget
         results = (
             self.cache.batch_get_cache(keys=keys, parent_otel_span=parent_otel_span)

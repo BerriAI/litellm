@@ -202,3 +202,73 @@ def test_cache_ping_with_redis_version_float(mock_redis_success):
     cache_params = data["health_check_cache_params"]
     assert isinstance(cache_params, dict)
     assert isinstance(cache_params.get("redis_version"), float)
+
+
+@pytest.fixture
+def mock_redis_client_list_restricted(mocker):
+    """Mock Redis cache where CLIENT LIST is restricted (like GCP Redis)"""
+
+    def mock_client_list():
+        raise Exception("ERR unknown command 'CLIENT'")
+
+    def mock_info():
+        return {
+            "redis_version": "6.2.7",
+            "used_memory": "1000000",
+            "connected_clients": "5",
+            "keyspace_hits": "1000",
+            "keyspace_misses": "100",
+        }
+
+    mock_cache = mocker.MagicMock()
+    mock_cache.type = "redis"
+    mock_cache.cache = RedisCache(host="localhost", port=6379, password="hello")
+    mock_cache.cache.client_list = mock_client_list
+    mock_cache.cache.info = mock_info
+
+    mocker.patch.object(litellm, "cache", mock_cache)
+    return mock_cache
+
+
+@pytest.fixture
+def mock_redis_client_list_success(mocker):
+    """Mock Redis cache where CLIENT LIST works normally"""
+
+    def mock_client_list():
+        return [
+            {"id": "1", "addr": "127.0.0.1:54321", "name": "client1"},
+            {"id": "2", "addr": "127.0.0.1:54322", "name": "client2"},
+        ]
+
+    def mock_info():
+        return {
+            "redis_version": "6.2.7",
+            "used_memory": "1000000",
+            "connected_clients": "2",
+        }
+
+    mock_cache = mocker.MagicMock()
+    mock_cache.type = "redis"
+    mock_cache.cache = RedisCache(host="localhost", port=6379, password="hello")
+    mock_cache.cache.client_list = mock_client_list
+    mock_cache.cache.info = mock_info
+
+    mocker.patch.object(litellm, "cache", mock_cache)
+    return mock_cache
+
+
+def test_cache_redis_info_no_cache():
+    """Test /cache/redis/info when no cache is initialized"""
+    original_cache = litellm.cache
+    litellm.cache = None
+
+    response = client.get(
+        "/cache/redis/info", headers={"Authorization": "Bearer sk-1234"}
+    )
+    assert response.status_code == 503
+
+    data = response.json()
+    assert "Cache not initialized" in data["detail"]
+
+    # Restore original cache
+    litellm.cache = original_cache

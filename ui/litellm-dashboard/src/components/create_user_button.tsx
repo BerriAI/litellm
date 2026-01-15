@@ -1,16 +1,15 @@
 import React, { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { Button, Modal, Form, Input, Select, Select as Select2 } from "antd";
 import {
-  Button,
-  Modal,
-  Form,
-  Input,
-  message,
-  Select,
-  InputNumber,
-  Select as Select2,
-} from "antd";
-import { Button as Button2, Text, TextInput, SelectItem, Accordion, AccordionHeader, AccordionBody, Title, } from "@tremor/react";
+  Button as Button2,
+  Text,
+  TextInput,
+  SelectItem,
+  Accordion,
+  AccordionHeader,
+  AccordionBody,
+  Title,
+} from "@tremor/react";
 import OnboardingModal from "./onboarding_link";
 import { InvitationLink } from "./onboarding_link";
 import {
@@ -18,13 +17,29 @@ import {
   modelAvailableCall,
   invitationCreateCall,
   getProxyUISettings,
+  getProxyBaseUrl,
 } from "./networking";
 import BulkCreateUsers from "./bulk_create_users_button";
 const { Option } = Select;
 import { Tooltip } from "antd";
-import { InfoCircleOutlined } from '@ant-design/icons';
+import { InfoCircleOutlined } from "@ant-design/icons";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import { useQueryClient } from "@tanstack/react-query";
+import NotificationsManager from "./molecules/notifications_manager";
+import TeamDropdown from "./common_components/team_dropdown";
+
+// Helper function to generate UUID compatible across all environments
+const generateUUID = (): string => {
+  if (typeof crypto !== "undefined" && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  // Fallback UUID generation for environments without crypto.randomUUID
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    const r = (Math.random() * 16) | 0;
+    const v = c == "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+};
 
 interface CreateuserProps {
   userID: string;
@@ -57,24 +72,15 @@ const Createuser: React.FC<CreateuserProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiuser, setApiuser] = useState<boolean>(false);
   const [userModels, setUserModels] = useState<string[]>([]);
-  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] =
-    useState(false);
-  const [invitationLinkData, setInvitationLinkData] =
-    useState<InvitationLink | null>(null);
-  const router = useRouter();
-  const isLocal = process.env.NODE_ENV === "development";
-
-  const [baseUrl, setBaseUrl] = useState("http://localhost:4000");
+  const [isInvitationLinkModalVisible, setIsInvitationLinkModalVisible] = useState(false);
+  const [invitationLinkData, setInvitationLinkData] = useState<InvitationLink | null>(null);
+  const [baseUrl, setBaseUrl] = useState<string | null>(null);
   // get all models
   useEffect(() => {
     const fetchData = async () => {
       try {
         const userRole = "any"; // You may need to get the user role dynamically
-        const modelDataResponse = await modelAvailableCall(
-          accessToken,
-          userID,
-          userRole,
-        );
+        const modelDataResponse = await modelAvailableCall(accessToken, userID, userRole);
         // Assuming modelDataResponse.data contains an array of model objects with a 'model_name' property
         const availableModels = [];
         for (let i = 0; i < modelDataResponse.data.length; i++) {
@@ -97,17 +103,11 @@ const Createuser: React.FC<CreateuserProps> = ({
       }
     };
 
+    setBaseUrl(getProxyBaseUrl());
+
     fetchData(); // Call the function to fetch model data when the component mounts
   }, []); // Empty dependency array to run only once
 
-  useEffect(() => {
-    if (!router) {
-      return;
-    }
-
-    const base = new URL("/", window.location.href);
-    setBaseUrl(base.toString());
-  }, [router]);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -119,20 +119,20 @@ const Createuser: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string, models?: string[], user_role: string }) => {
+  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string }) => {
     try {
-      message.info("Making API Call");
+      NotificationsManager.info("Making API Call");
       if (!isEmbedded) {
         setIsModalVisible(true);
       }
       if ((!formValues.models || formValues.models.length === 0) && formValues.user_role !== "proxy_admin") {
-        console.log("formValues.user_role", formValues.user_role)
+        console.log("formValues.user_role", formValues.user_role);
         // If models is empty or undefined, set it to "no-default-models"
         formValues.models = ["no-default-models"];
       }
       console.log("formValues in create user:", formValues);
       const response = await userCreateCall(accessToken, null, formValues);
-      await queryClient.invalidateQueries({ queryKey: ['userList'] })
+      await queryClient.invalidateQueries({ queryKey: ["userList"] });
       console.log("user create Response:", response);
       setApiuser(true);
       const user_id = response.data?.user_id || response.user_id;
@@ -155,7 +155,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         // create an InvitationLink Object for this user for the SSO flow
         // for SSO the invite link is the proxy base url since the User just needs to login
         const invitationLink: InvitationLink = {
-          id: crypto.randomUUID(), // Generate a unique ID
+          id: generateUUID(), // Generate a unique ID
           user_id: user_id,
           is_accepted: false,
           accepted_at: null,
@@ -170,12 +170,12 @@ const Createuser: React.FC<CreateuserProps> = ({
         setIsInvitationLinkModalVisible(true);
       }
 
-      message.success("API user Created");
+      NotificationsManager.success("API user Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error: any) {
       const errorMessage = error.response?.data?.detail || error?.message || "Error creating the user";
-      message.error(errorMessage);
+      NotificationsManager.fromBackend(errorMessage);
       console.error("Error creating the user:", error);
     }
   };
@@ -183,56 +183,35 @@ const Createuser: React.FC<CreateuserProps> = ({
   // Modify the return statement to handle embedded mode
   if (isEmbedded) {
     return (
-      <Form
-        form={form}
-        onFinish={handleCreate}
-        labelCol={{ span: 8 }}
-        wrapperCol={{ span: 16 }}
-        labelAlign="left"
-      >
+      <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
         <Form.Item label="User Email" name="user_email">
           <TextInput placeholder="" />
         </Form.Item>
         <Form.Item label="User Role" name="user_role">
           <Select2>
             {possibleUIRoles &&
-              Object.entries(possibleUIRoles).map(
-                ([role, { ui_label, description }]) => (
-                  <SelectItem key={role} value={role} title={ui_label}>
-                    <div className="flex">
-                      {ui_label}{" "}
-                      <p
-                        className="ml-2"
-                        style={{ color: "gray", fontSize: "12px" }}
-                      >
-                        {description}
-                      </p>
-                    </div>
-                  </SelectItem>
-                ),
-              )}
+              Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
+                <SelectItem key={role} value={role} title={ui_label}>
+                  <div className="flex">
+                    {ui_label}{" "}
+                    <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
+                      {description}
+                    </p>
+                  </div>
+                </SelectItem>
+              ))}
           </Select2>
         </Form.Item>
-        <Form.Item label="Team ID" name="team_id">
-          <Select placeholder="Select Team ID" style={{ width: "100%" }}>
-            {teams ? (
-              teams.map((team: any) => (
-                <Option key={team.team_id} value={team.team_id}>
-                  {team.team_alias}
-                </Option>
-              ))
-            ) : (
-              <Option key="default" value={null}>
-                Default Team
-              </Option>
-            )}
+        <Form.Item label="Team" name="team_id">
+          <Select placeholder="Select Team" style={{ width: "100%" }}>
+            <TeamDropdown teams={teams} />
           </Select>
         </Form.Item>
 
         <Form.Item label="Metadata" name="metadata">
           <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
         </Form.Item>
-        
+
         <div style={{ textAlign: "right", marginTop: "10px" }}>
           <Button htmlType="submit">Create User</Button>
         </div>
@@ -243,14 +222,10 @@ const Createuser: React.FC<CreateuserProps> = ({
   // Original return for standalone mode
   return (
     <div className="flex gap-2">
-      <Button2 className="mx-auto mb-0" onClick={() => setIsModalVisible(true)}>
+      <Button2 className="mb-0" onClick={() => setIsModalVisible(true)}>
         + Invite User
       </Button2>
-      <BulkCreateUsers 
-        accessToken={accessToken}
-        teams={teams}
-        possibleUIRoles={possibleUIRoles}
-      />
+      <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
       <Modal
         title="Invite User"
         visible={isModalVisible}
@@ -260,97 +235,82 @@ const Createuser: React.FC<CreateuserProps> = ({
         onCancel={handleCancel}
       >
         <Text className="mb-1">Create a User who can own keys</Text>
-        <Form
-          form={form}
-          onFinish={handleCreate}
-          labelCol={{ span: 8 }}
-          wrapperCol={{ span: 16 }}
-          labelAlign="left"
-        >
+        <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           <Form.Item label="User Email" name="user_email">
             <TextInput placeholder="" />
           </Form.Item>
-          <Form.Item label={
-                  <span>
-                    Global Proxy Role{' '}
-                    <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
-                      <InfoCircleOutlined/>
-                    </Tooltip>
-                  </span>
-                } 
-              name="user_role">
+          <Form.Item
+            label={
+              <span>
+                Global Proxy Role{" "}
+                <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                  <InfoCircleOutlined />
+                </Tooltip>
+              </span>
+            }
+            name="user_role"
+          >
             <Select2>
               {possibleUIRoles &&
-                Object.entries(possibleUIRoles).map(
-                  ([role, { ui_label, description }]) => (
-                    <SelectItem key={role} value={role} title={ui_label}>
-                      <div className="flex">
-                        {ui_label}{" "}
-                        <p
-                          className="ml-2"
-                          style={{ color: "gray", fontSize: "12px" }}
-                        >
-                          {description}
-                        </p>
-                      </div>
-                    </SelectItem>
-                  ),
-                )}
+                Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
+                  <SelectItem key={role} value={role} title={ui_label}>
+                    <div className="flex">
+                      {ui_label}{" "}
+                      <p className="ml-2" style={{ color: "gray", fontSize: "12px" }}>
+                        {description}
+                      </p>
+                    </div>
+                  </SelectItem>
+                ))}
             </Select2>
           </Form.Item>
-          
-          <Form.Item label="Team ID" className="gap-2" name="team_id" help="If selected, user will be added as a 'user' role to the team.">
-            <Select placeholder="Select Team ID" style={{ width: "100%" }}>
-              {teams ? (
-                teams.map((team: any) => (
-                  <Option key={team.team_id} value={team.team_id}>
-                    {team.team_alias}
-                  </Option>
-                ))
-              ) : (
-                <Option key="default" value={null}>
-                  Default Team
-                </Option>
-              )}
-            </Select>
+
+          <Form.Item
+            label="Team"
+            className="gap-2"
+            name="team_id"
+            help="If selected, user will be added as a 'user' role to the team."
+          >
+            <TeamDropdown teams={teams} />
           </Form.Item>
 
           <Form.Item label="Metadata" name="metadata">
             <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
           </Form.Item>
           <Accordion>
-          <AccordionHeader>
-            <Title>Personal Key Creation</Title>
-          </AccordionHeader>
-          <AccordionBody>
-            <Form.Item className="gap-2" label={
-                <span>
-                  Models{' '}
-                  <Tooltip title="Models user has access to, outside of team scope.">
-                    <InfoCircleOutlined style={{ marginLeft: '4px' }} />
-                  </Tooltip>
-                </span>
-              } name="models" help="Models user has access to, outside of team scope.">
-              <Select2
-                mode="multiple"
-                placeholder="Select models"
-                style={{ width: "100%" }}
+            <AccordionHeader>
+              <Title>Personal Key Creation</Title>
+            </AccordionHeader>
+            <AccordionBody>
+              <Form.Item
+                className="gap-2"
+                label={
+                  <span>
+                    Models{" "}
+                    <Tooltip title="Models user has access to, outside of team scope.">
+                      <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                    </Tooltip>
+                  </span>
+                }
+                name="models"
+                help="Models user has access to, outside of team scope."
               >
-                <Select2.Option
-                  key="all-proxy-models"
-                  value="all-proxy-models"
-                >
-                  All Proxy Models
-                </Select2.Option>
-                {userModels.map((model) => (
-                  <Select2.Option key={model} value={model}>
-                    {getModelDisplayName(model)}
+                <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
+                  <Select2.Option key="all-proxy-models" value="all-proxy-models">
+                    All Proxy Models
                   </Select2.Option>
-                ))}
-              </Select2>
-            </Form.Item>
-          </AccordionBody>
-        </Accordion>
+                  <Select2.Option key="no-default-models" value="no-default-models">
+                    No Default Models
+                  </Select2.Option>
+                  {userModels.map((model) => (
+                    <Select2.Option key={model} value={model}>
+                      {getModelDisplayName(model)}
+                    </Select2.Option>
+                  ))}
+                </Select2>
+              </Form.Item>
+            </AccordionBody>
+          </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
             <Button htmlType="submit">Create User</Button>
           </div>
@@ -360,7 +320,7 @@ const Createuser: React.FC<CreateuserProps> = ({
         <OnboardingModal
           isInvitationLinkModalVisible={isInvitationLinkModalVisible}
           setIsInvitationLinkModalVisible={setIsInvitationLinkModalVisible}
-          baseUrl={baseUrl}
+          baseUrl={baseUrl || ""}
           invitationLinkData={invitationLinkData}
         />
       )}

@@ -7,19 +7,13 @@ import httpx  # type: ignore
 
 import litellm
 from litellm import LlmProviders
+from litellm.types.llms.vertex_ai import VertexPartnerProvider
 from litellm.utils import ModelResponse
 
 from ...custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from ..vertex_llm_base import VertexBase
 
 base_llm_http_handler = BaseLLMHTTPHandler()
-
-
-class VertexPartnerProvider(str, Enum):
-    mistralai = "mistralai"
-    llama = "llama"
-    ai21 = "ai21"
-    claude = "claude"
 
 
 class VertexAIError(Exception):
@@ -35,77 +29,63 @@ class VertexAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
-def create_vertex_url(
-    vertex_location: str,
-    vertex_project: str,
-    partner: VertexPartnerProvider,
-    stream: Optional[bool],
-    model: str,
-    api_base: Optional[str] = None,
-) -> str:
-    """Return the base url for the vertex partner models"""
-
-    api_base = api_base or f"https://{vertex_location}-aiplatform.googleapis.com"
-    if partner == VertexPartnerProvider.llama:
-        return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/endpoints/openapi/chat/completions"
-    elif partner == VertexPartnerProvider.mistralai:
-        if stream:
-            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:streamRawPredict"
-        else:
-            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/mistralai/models/{model}:rawPredict"
-    elif partner == VertexPartnerProvider.ai21:
-        if stream:
-            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:streamRawPredict"
-        else:
-            return f"{api_base}/v1beta1/projects/{vertex_project}/locations/{vertex_location}/publishers/ai21/models/{model}:rawPredict"
-    elif partner == VertexPartnerProvider.claude:
-        if stream:
-            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:streamRawPredict"
-        else:
-            return f"{api_base}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/anthropic/models/{model}:rawPredict"
+class PartnerModelPrefixes(str, Enum):
+    META_PREFIX = "meta/"
+    DEEPSEEK_PREFIX = "deepseek-ai"
+    MISTRAL_PREFIX = "mistral"
+    CODERESTAL_PREFIX = "codestral"
+    JAMBA_PREFIX = "jamba"
+    CLAUDE_PREFIX = "claude"
+    QWEN_PREFIX = "qwen"
+    GPT_OSS_PREFIX = "openai/gpt-oss-"
+    MINIMAX_PREFIX = "minimaxai/"
+    MOONSHOT_PREFIX = "moonshotai/"
+    ZAI_PREFIX = "zai-org/"
 
 
 class VertexAIPartnerModels(VertexBase):
     def __init__(self) -> None:
         pass
 
-    def get_complete_url(
-        self,
-        custom_api_base: Optional[str],
-        vertex_location: Optional[str],
-        vertex_project: Optional[str],
-        project_id: str,
-        partner: VertexPartnerProvider,
-        stream: Optional[bool],
-        model: str,
-    ) -> str:
-        api_base = self.get_api_base(
-            api_base=custom_api_base, vertex_location=vertex_location
-        )
-        default_api_base = create_vertex_url(
-            vertex_location=vertex_location or "us-central1",
-            vertex_project=vertex_project or project_id,
-            partner=partner,  # type: ignore
-            stream=stream,
-            model=model,
-            api_base=api_base,
-        )
+    @staticmethod
+    def is_vertex_partner_model(model: str):
+        """
+        Check if the model string is a Vertex AI Partner Model
+        Only use this once you have confirmed that custom_llm_provider is vertex_ai
 
-        if len(default_api_base.split(":")) > 1:
-            endpoint = default_api_base.split(":")[-1]
-        else:
-            endpoint = ""
+        Returns:
+            bool: True if the model string is a Vertex AI Partner Model, False otherwise
+        """
+        if (
+            model.startswith(PartnerModelPrefixes.META_PREFIX)
+            or model.startswith(PartnerModelPrefixes.DEEPSEEK_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MISTRAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CODERESTAL_PREFIX)
+            or model.startswith(PartnerModelPrefixes.JAMBA_PREFIX)
+            or model.startswith(PartnerModelPrefixes.CLAUDE_PREFIX)
+            or model.startswith(PartnerModelPrefixes.QWEN_PREFIX)
+            or model.startswith(PartnerModelPrefixes.GPT_OSS_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MINIMAX_PREFIX)
+            or model.startswith(PartnerModelPrefixes.MOONSHOT_PREFIX)
+            or model.startswith(PartnerModelPrefixes.ZAI_PREFIX)
+        ):
+            return True
+        return False
 
-        _, api_base = self._check_custom_proxy(
-            api_base=custom_api_base,
-            custom_llm_provider="vertex_ai",
-            gemini_api_key=None,
-            endpoint=endpoint,
-            stream=stream,
-            auth_header=None,
-            url=default_api_base,
-        )
-        return api_base
+    @staticmethod
+    def should_use_openai_handler(model: str):
+        OPENAI_LIKE_VERTEX_PROVIDERS = [
+            "llama",
+            PartnerModelPrefixes.DEEPSEEK_PREFIX,
+            PartnerModelPrefixes.QWEN_PREFIX,
+            PartnerModelPrefixes.GPT_OSS_PREFIX,
+            PartnerModelPrefixes.MINIMAX_PREFIX,
+            PartnerModelPrefixes.MOONSHOT_PREFIX,
+            PartnerModelPrefixes.ZAI_PREFIX,
+        ]
+        if any(provider in model for provider in OPENAI_LIKE_VERTEX_PROVIDERS):
+            return True
+        return False
 
     def completion(
         self,
@@ -170,7 +150,7 @@ class VertexAIPartnerModels(VertexBase):
 
             optional_params["stream"] = stream
 
-            if "llama" in model:
+            if self.should_use_openai_handler(model):
                 partner = VertexPartnerProvider.llama
             elif "mistral" in model or "codestral" in model:
                 partner = VertexPartnerProvider.mistralai
@@ -181,7 +161,7 @@ class VertexAIPartnerModels(VertexBase):
             else:
                 raise ValueError(f"Unknown partner model: {model}")
 
-            api_base = self.get_complete_url(
+            api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
                 vertex_location=vertex_location,
                 vertex_project=vertex_project,
@@ -246,7 +226,7 @@ class VertexAIPartnerModels(VertexBase):
                     client=client,
                     custom_llm_provider=LlmProviders.VERTEX_AI.value,
                 )
-            elif "llama" in model:
+            elif self.should_use_openai_handler(model):
                 return base_llm_http_handler.completion(
                     model=model,
                     stream=stream,
@@ -283,6 +263,80 @@ class VertexAIPartnerModels(VertexBase):
                 custom_llm_provider="vertex_ai",
                 custom_endpoint=True,
             )
+
+        except Exception as e:
+            if hasattr(e, "status_code"):
+                raise e
+            raise VertexAIError(status_code=500, message=str(e))
+
+    async def count_tokens(
+        self,
+        model: str,
+        messages: list,
+        litellm_params: dict,
+        vertex_project=None,
+        vertex_location=None,
+        vertex_credentials=None,
+    ):
+        """
+        Count tokens for Vertex AI partner models (Anthropic Claude, Mistral, etc.)
+
+        Args:
+            model: The model name (e.g., "claude-3-5-sonnet-20241022")
+            messages: List of messages in Anthropic Messages API format
+            litellm_params: LiteLLM parameters dict
+            vertex_project: Optional Google Cloud project ID
+            vertex_location: Optional Vertex AI location
+            vertex_credentials: Optional Vertex AI credentials
+
+        Returns:
+            Dict containing token count information
+        """
+        try:
+            import vertexai
+        except Exception as e:
+            raise VertexAIError(
+                status_code=400,
+                message=f"""vertexai import failed please run `pip install -U "google-cloud-aiplatform>=1.38"`. Got error: {e}""",
+            )
+
+        if not (
+            hasattr(vertexai, "preview") or hasattr(vertexai.preview, "language_models")
+        ):
+            raise VertexAIError(
+                status_code=400,
+                message="""Upgrade vertex ai. Run `pip install "google-cloud-aiplatform>=1.38"`""",
+            )
+
+        try:
+            from litellm.llms.vertex_ai.vertex_ai_partner_models.count_tokens.handler import (
+                VertexAIPartnerModelsTokenCounter,
+            )
+
+            # Prepare request data in Anthropic Messages API format
+            request_data = {
+                "model": model,
+                "messages": messages,
+            }
+
+            # Prepare litellm_params with credentials
+            _litellm_params = litellm_params.copy()
+            if vertex_project:
+                _litellm_params["vertex_project"] = vertex_project
+            if vertex_location:
+                _litellm_params["vertex_location"] = vertex_location
+            if vertex_credentials:
+                _litellm_params["vertex_credentials"] = vertex_credentials
+
+            # Call the token counter
+            token_counter = VertexAIPartnerModelsTokenCounter()
+            result = await token_counter.handle_count_tokens_request(
+                model=model,
+                request_data=request_data,
+                litellm_params=_litellm_params,
+            )
+
+            return result
 
         except Exception as e:
             if hasattr(e, "status_code"):

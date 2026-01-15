@@ -1,5 +1,15 @@
+import os
+import sys
+
 import pytest
 import requests
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
+
+import responses
 
 from litellm.proxy.client import Client, ModelGroupsManagementClient
 from litellm.proxy.client.exceptions import UnauthorizedError
@@ -67,7 +77,8 @@ def test_info_url_variants(base_url, expected):
     assert request.url == expected
 
 
-def test_info_with_mock_response(client, requests_mock):
+@responses.activate
+def test_info_with_mock_response(client):
     """Test the full info execution with a mocked response"""
     mock_data = {
         "data": [
@@ -86,7 +97,12 @@ def test_info_with_mock_response(client, requests_mock):
             },
         ]
     }
-    requests_mock.get(f"{client._base_url}/model_group/info", json=mock_data)
+    responses.add(
+        responses.GET,
+        f"{client._base_url}/model_group/info",
+        json=mock_data,
+        status=200,
+    )
 
     response = client.info()
     assert response == mock_data["data"]
@@ -95,11 +111,13 @@ def test_info_with_mock_response(client, requests_mock):
     assert response[1]["model_group_name"] == "azure-group"
 
 
-def test_info_unauthorized_error(client, requests_mock):
+@responses.activate
+def test_info_unauthorized_error(client):
     """Test that info raises UnauthorizedError for 401 responses"""
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         f"{client._base_url}/model_group/info",
-        status_code=401,
+        status=401,
         json={"error": "Invalid API key"},
     )
 
@@ -108,11 +126,13 @@ def test_info_unauthorized_error(client, requests_mock):
     assert exc_info.value.orig_exception.response.status_code == 401
 
 
-def test_info_other_errors(client, requests_mock):
+@responses.activate
+def test_info_other_errors(client):
     """Test that info raises normal HTTPError for non-401 errors"""
-    requests_mock.get(
+    responses.add(
+        responses.GET,
         f"{client._base_url}/model_group/info",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 

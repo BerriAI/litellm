@@ -10,7 +10,7 @@ from fastapi.exceptions import HTTPException
 from httpx import Request, Response
 
 from litellm import DualCache
-from litellm.proxy.guardrails.guardrail_hooks.aim import (
+from litellm.proxy.guardrails.guardrail_hooks.aim.aim import (
     AimGuardrail,
     AimGuardrailMissingSecrets,
 )
@@ -185,7 +185,7 @@ async def test_anonymize_callback__it_returns_redacted_content(mode: str):
 
 
 @pytest.mark.asyncio
-async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
+async def test_post_call__with_anonymized_entities__it_doesnt_deanonymize_output():
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -209,6 +209,7 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
         "messages": [
             {"role": "user", "content": "Hi my name id Brian"},
         ],
+        "litellm_call_id": "test-call-id",
     }
 
     with patch(
@@ -216,19 +217,27 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
     ) as mock_post:
 
         def mock_post_detect_side_effect(url, *args, **kwargs):
-            if url.endswith("/detect/openai/v2"):
+            request_body = kwargs.get("json", {})
+            request_headers = kwargs.get("headers", {})
+            assert (
+                request_headers["x-aim-call-id"] == "test-call-id"
+            ), "Wrong header: x-aim-call-id"
+            assert (
+                request_headers["x-aim-gateway-key-alias"] == "test-key"
+            ), "Wrong header: x-aim-gateway-key-alias"
+            if request_body["messages"][-1]["role"] == "user":
                 return response_with_detections
-            elif url.endswith("/detect/output/v2"):
+            elif request_body["messages"][-1]["role"] == "assistant":
                 return response_without_detections
             else:
-                raise ValueError("Unexpected URL: {}".format(url))
+                raise ValueError("Unexpected request: {}".format(request_body))
 
         mock_post.side_effect = mock_post_detect_side_effect
 
         data = await aim_guardrail.async_pre_call_hook(
             data=data,
             cache=DualCache(),
-            user_api_key_dict=UserAPIKeyAuth(),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
             call_type="completion",
         )
         assert data["messages"][0]["content"] == "Hi my name is [NAME_1]"
@@ -248,9 +257,11 @@ async def test_post_call__with_anonymized_entities__it_deanonymizes_output():
             )
 
         result = await aim_guardrail.async_post_call_success_hook(
-            data=data, response=llm_response(), user_api_key_dict=UserAPIKeyAuth()
+            data=data,
+            response=llm_response(),
+            user_api_key_dict=UserAPIKeyAuth(key_alias="test-key"),
         )
-        assert result["choices"][0]["message"]["content"] == "Hello Brian! How are you?"
+        assert result["choices"][0]["message"]["content"] == "Hello [NAME_1]! How are you?"
 
 
 @pytest.mark.asyncio
@@ -298,7 +309,7 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
         yield websocket_mock
 
     monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
     )
 
     results = []
@@ -316,6 +327,8 @@ async def test_post_call_stream__all_chunks_are_valid(monkeypatch, length: int):
 
 @pytest.mark.asyncio
 async def test_post_call_stream__blocked_chunks(monkeypatch):
+    from litellm.proxy.proxy_server import StreamingCallbackError
+
     init_guardrails_v2(
         all_guardrails=[
             {
@@ -357,17 +370,27 @@ async def test_post_call_stream__blocked_chunks(monkeypatch):
         yield websocket_mock
 
     monkeypatch.setattr(
-        "litellm.proxy.guardrails.guardrail_hooks.aim.connect", connect_mock
+        "litellm.proxy.guardrails.guardrail_hooks.aim.aim.connect", connect_mock
     )
 
     results = []
-    with pytest.raises(StreamingCallbackError, match="Jailbreak detected"):
+    # For async generators, we need to manually iterate and catch the exception
+    exception_caught = False
+    try:
         async for result in aim_guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=UserAPIKeyAuth(),
             response=llm_response(),
             request_data=data,
         ):
             results.append(result)
+    except StreamingCallbackError:
+        exception_caught = True
+    except Exception as e:
+        print("INSIDE EXCEPTION")
+        raise e
+
+    # Assert that the exception was caught
+    assert exception_caught, "StreamingCallbackError should have been raised"
 
     # Chunks that were received before the blocking message should be returned as usual.
     assert len(results) == 1
@@ -420,23 +443,23 @@ response_with_detections = Response(
         "required_action": {
             "action_type": "anonymize_action",
             "policy_name": "PII",
-            "chat_redaction_result": {
-                "all_redacted_messages": [
-                    {
-                        "content": "Hi my name is [NAME_1]",
-                        "role": "user",
-                        "additional_contents": [],
-                        "received_message_id": "0",
-                        "extra_fields": {},
-                    }
-                ],
-                "redacted_new_message": {
+        },
+        "redacted_chat": {
+            "all_redacted_messages": [
+                {
                     "content": "Hi my name is [NAME_1]",
                     "role": "user",
                     "additional_contents": [],
                     "received_message_id": "0",
                     "extra_fields": {},
-                },
+                }
+            ],
+            "redacted_new_message": {
+                "content": "Hi my name is [NAME_1]",
+                "role": "user",
+                "additional_contents": [],
+                "received_message_id": "0",
+                "extra_fields": {},
             },
         },
     },

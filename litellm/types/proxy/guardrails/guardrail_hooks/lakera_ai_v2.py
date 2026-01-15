@@ -1,4 +1,6 @@
-from typing import Dict, List, Optional, TypedDict
+from typing import Dict, List, Optional
+
+from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import AllMessageValues
 

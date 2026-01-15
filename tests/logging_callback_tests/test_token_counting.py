@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 import pytest
 from dotenv import load_dotenv
 from fastapi import Request
@@ -175,7 +175,7 @@ async def test_stream_token_counting_anthropic_with_include_usage():
     input_text = "Respond in just 1 word. Say ping"
 
     response = await litellm.acompletion(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         messages=[{"role": "user", "content": input_text}],
         max_tokens=4096,
         stream=True,
@@ -198,7 +198,7 @@ async def test_stream_token_counting_anthropic_with_include_usage():
 
     # print making the same request with anthropic client
     anthropic_response = anthropic_client.messages.create(
-        model="claude-3-5-sonnet-20240620",
+        model="claude-sonnet-4-5-20250929",
         max_tokens=4096,
         messages=[{"role": "user", "content": input_text}],
         stream=True,
@@ -223,26 +223,31 @@ async def test_stream_token_counting_anthropic_with_include_usage():
         json.dumps(all_anthropic_usage_chunks, indent=4, default=str),
     )
 
-    input_tokens_anthropic_api = sum(
-        [getattr(usage, "input_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
-    )
-    output_tokens_anthropic_api = sum(
-        [getattr(usage, "output_tokens", 0) or 0 for usage in all_anthropic_usage_chunks]
-    )
-    print("input_tokens_anthropic_api", input_tokens_anthropic_api)
-    print("output_tokens_anthropic_api", output_tokens_anthropic_api)
+    # Get the most recent value of input tokens (iterate backwards to find last non-zero value)
+    anthropic_api_input_tokens = 0
+    for usage in reversed(all_anthropic_usage_chunks):
+        if getattr(usage, "input_tokens", 0) > 0:
+            anthropic_api_input_tokens = getattr(usage, "input_tokens", 0)
+            break
+    anthropic_api_output_tokens = 0
+    for usage in reversed(all_anthropic_usage_chunks):
+        if getattr(usage, "output_tokens", 0) > 0:
+            anthropic_api_output_tokens = getattr(usage, "output_tokens", 0)
+            break
+    print("input_tokens_anthropic_api", anthropic_api_input_tokens)
+    print("output_tokens_anthropic_api", anthropic_api_output_tokens)
 
     print("input_tokens_litellm", custom_logger.recorded_usage.prompt_tokens)
     print("output_tokens_litellm", custom_logger.recorded_usage.completion_tokens)
 
     ## Assert Accuracy of token counting
     # input tokens should be exactly the same
-    assert input_tokens_anthropic_api == custom_logger.recorded_usage.prompt_tokens
+    assert anthropic_api_input_tokens == custom_logger.recorded_usage.prompt_tokens
 
     # output tokens can have at max abs diff of 10. We can't guarantee the response from two api calls will be exactly the same
     assert (
         abs(
-            output_tokens_anthropic_api - custom_logger.recorded_usage.completion_tokens
+            anthropic_api_output_tokens - custom_logger.recorded_usage.completion_tokens
         )
         <= 10
     )

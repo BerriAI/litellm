@@ -184,3 +184,12 @@ Cli arguments,  --host, --port, --num_workers
      ```shell
      litellm --log_config path/to/log_config.conf
      ```
+
+## --skip_server_startup
+   - **Default:** `False`
+   - **Type:** `bool` (Flag)
+   - Skip starting the server after setup (useful for DB migrations only).
+   - **Usage:** 
+     ```shell
+     litellm --skip_server_startup
+     ```

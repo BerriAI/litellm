@@ -4,6 +4,9 @@ import TabItem from '@theme/TabItem';
 # Anthropic
 LiteLLM supports all anthropic models.
 
+- `claude-sonnet-4-5-20250929`
+- `claude-opus-4-5-20251101`
+- `claude-opus-4-1-20250805`
 - `claude-4` (`claude-opus-4-20250514`, `claude-sonnet-4-20250514`)
 - `claude-3.7` (`claude-3-7-sonnet-20250219`)
 - `claude-3.5` (`claude-3-5-sonnet-20240620`)
@@ -15,11 +18,11 @@ LiteLLM supports all anthropic models.
 
 | Property | Details |
 |-------|-------|
-| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. |
-| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`) |
-| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview) |
-| API Endpoint for Provider | https://api.anthropic.com |
-| Supported Endpoints | `/chat/completions` |
+| Description | Claude is a highly performant, trustworthy, and intelligent AI platform built by Anthropic. Claude excels at tasks involving language, reasoning, analysis, coding, and more. Also available via Azure Foundry. |
+| Provider Route on LiteLLM | `anthropic/` (add this prefix to the model name, to route any requests to Anthropic - e.g. `anthropic/claude-3-5-sonnet-20240620`). For Azure Foundry deployments, use `azure/claude-*` (see [Azure Anthropic documentation](../providers/azure/azure_anthropic)) |
+| Provider Doc | [Anthropic ↗](https://docs.anthropic.com/en/docs/build-with-claude/overview), [Azure Foundry Claude ↗](https://learn.microsoft.com/en-us/azure/ai-services/foundry-models/claude) |
+| API Endpoint for Provider | https://api.anthropic.com (or Azure Foundry endpoint: `https://<resource-name>.services.ai.azure.com/anthropic`) |
+| Supported Endpoints | `/chat/completions`, `/v1/messages` (passthrough) |
 
 
 ## Supported OpenAI Parameters
@@ -38,13 +41,118 @@ Check this in code, [here](../completion/input.md#translated-openai-params)
 "extra_headers",
 "parallel_tool_calls",
 "response_format",
-"user"
+"user",
+"reasoning_effort",
 ```
 
 :::info
 
-Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
+**Notes:**
+- Anthropic API fails requests when `max_tokens` are not passed. Due to this litellm passes `max_tokens=4096` when no `max_tokens` are passed.
+- `response_format` is fully supported for Claude Sonnet 4.5 and Opus 4.1 models (see [Structured Outputs](#structured-outputs) section)
+- `reasoning_effort` is automatically mapped to `output_config={"effort": ...}` for Claude Opus 4.5 models (see [Effort Parameter](./anthropic_effort.md))
 
+:::
+
+## **Structured Outputs**
+
+LiteLLM supports Anthropic's [structured outputs feature](https://platform.claude.com/docs/en/build-with-claude/structured-outputs) for Claude Sonnet 4.5 and Opus 4.1 models. When you use `response_format` with these models, LiteLLM automatically:
+- Adds the required `structured-outputs-2025-11-13` beta header
+- Transforms OpenAI's `response_format` to Anthropic's `output_format` format
+
+### Supported Models
+- `sonnet-4-5` or `sonnet-4.5` (all Sonnet 4.5 variants)
+- `opus-4-1` or `opus-4.1` (all Opus 4.1 variants)
+  - `opus-4-5` or `opus-4.5` (all Opus 4.5 variants)
+  
+### Example Usage
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="claude-sonnet-4-5-20250929",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    response_format={
+        "type": "json_schema",
+        "json_schema": {
+            "name": "capital_response",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string"},
+                    "capital": {"type": "string"}
+                },
+                "required": ["country", "capital"],
+                "additionalProperties": False
+            }
+        }
+    }
+)
+
+print(response.choices[0].message.content)
+# Output: {"country": "France", "capital": "Paris"}
+```
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-5
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
+      api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-sonnet-4-5",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "response_format": {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "capital_response",
+            "strict": true,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "country": {"type": "string"},
+                    "capital": {"type": "string"}
+                },
+                "required": ["country", "capital"],
+                "additionalProperties": false
+            }
+        }
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+When using structured outputs with supported models, LiteLLM automatically:
+- Converts OpenAI's `response_format` to Anthropic's `output_schema`
+- Adds the `anthropic-beta: structured-outputs-2025-11-13` header
+- Creates a tool with the schema and forces the model to use it
 :::
 
 ## API Keys
@@ -54,7 +162,68 @@ import os
 
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 # os.environ["ANTHROPIC_API_BASE"] = "" # [OPTIONAL] or 'ANTHROPIC_BASE_URL'
+# os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true" # [OPTIONAL] Disable automatic URL suffix appending
 ```
+
+:::tip Azure Foundry Support
+
+Claude models are also available via Microsoft Azure Foundry. Use the `azure/` prefix instead of `anthropic/` and configure Azure authentication. See the [Azure Anthropic documentation](../providers/azure/azure_anthropic) for details.
+
+Example:
+```python
+response = completion(
+    model="azure/claude-sonnet-4-5",
+    api_base="https://<resource-name>.services.ai.azure.com/anthropic",
+    api_key="your-azure-api-key",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
+
+:::
+
+### Custom API Base
+
+When using a custom API base for Anthropic (e.g., a proxy or custom endpoint), LiteLLM automatically appends the appropriate suffix (`/v1/messages` or `/v1/complete`) to your base URL.
+
+If your custom endpoint already includes the full path or doesn't follow Anthropic's standard URL structure, you can disable this automatic suffix appending:
+
+```python
+import os
+
+os.environ["ANTHROPIC_API_BASE"] = "https://my-custom-endpoint.com/custom/path"
+os.environ["LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX"] = "true"  # Prevents automatic suffix
+```
+
+Without `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX`:
+- Base URL `https://my-proxy.com` → `https://my-proxy.com/v1/messages`
+- Base URL `https://my-proxy.com/api` → `https://my-proxy.com/api/v1/messages`
+
+With `LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX=true`:
+- Base URL `https://my-proxy.com/custom/path` → `https://my-proxy.com/custom/path` (unchanged)
+
+### Azure AI Foundry (Alternative Method)
+
+:::tip Recommended Method
+For full Azure support including Azure AD authentication, use the dedicated [Azure Anthropic provider](./azure/azure_anthropic) with `azure_ai/` prefix.
+:::
+
+As an alternative, you can use the `anthropic/` provider directly with your Azure endpoint since Azure exposes Claude using Anthropic's native API.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-5",
+    api_base="https://<your-resource>.services.ai.azure.com/anthropic",
+    api_key="<your-azure-api-key>",
+    messages=[{"role": "user", "content": "Hello!"}],
+)
+print(response)
+```
+
+:::info
+**Finding your Azure endpoint:** Go to Azure AI Foundry → Your deployment → Overview. Your base URL will be `https://<resource-name>.services.ai.azure.com/anthropic`
+:::
 
 ## Usage
 
@@ -107,7 +276,7 @@ model_list:
   - model_name: claude-4 ### RECEIVED MODEL NAME ###
     litellm_params: # all params accepted by litellm.completion() - https://docs.litellm.ai/docs/completion/input
       model: claude-opus-4-20250514 ### MODEL NAME sent to `litellm.completion()` ###
-      api_key: "os.environ/ANTHROPIC_API_KEY" # does os.getenv("AZURE_API_KEY_EU")
+      api_key: "os.environ/ANTHROPIC_API_KEY" # does os.getenv("ANTHROPIC_API_KEY")
 ```
 
 ```bash
@@ -246,6 +415,7 @@ print(response)
 
 | Model Name       | Function Call                              |
 |------------------|--------------------------------------------|
+| claude-sonnet-4-5  | `completion('claude-sonnet-4-5-20250929', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-opus-4  | `completion('claude-opus-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-sonnet-4  | `completion('claude-sonnet-4-20250514', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
 | claude-3.7  | `completion('claude-3-7-sonnet-20250219', messages)` | `os.environ['ANTHROPIC_API_KEY']`       |
@@ -274,7 +444,7 @@ Here's what a sample Raw Request from LiteLLM for Anthropic Context Caching look
 POST Request Sent from LiteLLM:
 curl -X POST \
 https://api.anthropic.com/v1/messages \
--H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' -H 'anthropic-beta: prompt-caching-2024-07-31' \
+-H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' \
 -d '{'model': 'claude-3-5-sonnet-20240620', [
     {
       "role": "user",
@@ -302,6 +472,8 @@ https://api.anthropic.com/v1/messages \
   "max_tokens": 10
 }'
 ```
+
+**Note:** Anthropic no longer requires the `anthropic-beta: prompt-caching-2024-07-31` header. Prompt caching now works automatically when you use `cache_control` in your messages.
 ::: 
 
 ### Caching - Large Context Caching 
@@ -606,11 +778,6 @@ response = await client.chat.completions.create(
 
 ## **Function/Tool Calling**
 
-:::info 
-
-LiteLLM now uses Anthropic's 'tool' param 🎉 (v1.34.29+)
-:::
-
 ```python
 from litellm import completion
 
@@ -669,6 +836,185 @@ response = completion(
 )
 ```
 
+### Disable Tool Calling
+
+You can disable tool calling by setting the `tool_choice` to `"none"`.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-3-opus-20240229",
+    messages=messages,
+    tools=tools,
+    tool_choice="none",
+)
+
+```
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: anthropic-claude-model
+    litellm_params:
+        model: anthropic/claude-3-opus-20240229
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+Replace `anything` with your LiteLLM Proxy Virtual Key, if [setup](../proxy/virtual_keys).
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer anything" \
+  -d '{
+    "model": "anthropic-claude-model",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp", "require_approval": "never"}],
+    "tool_choice": "none"
+  }'
+```
+</TabItem>
+</Tabs>
+
+
+
+### MCP Tool Calling 
+
+Here's how to use MCP tool calling with Anthropic:
+
+<Tabs>
+<TabItem value="sdk" label="LiteLLM SDK">
+
+LiteLLM supports MCP tool calling with Anthropic in the OpenAI Responses API format.
+
+<Tabs>
+<TabItem value="openai_format" label="OpenAI Format">
+
+
+```python
+import os 
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+tools=[
+    {
+        "type": "mcp",
+        "server_label": "deepwiki",
+        "server_url": "https://mcp.deepwiki.com/mcp",
+        "require_approval": "never",
+    },
+]
+
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    tools=tools
+)
+```
+
+</TabItem>
+<TabItem value="anthropic_format" label="Anthropic Format">
+
+```python
+import os 
+from litellm import completion
+
+os.environ["ANTHROPIC_API_KEY"] = "sk-ant-..."
+
+tools = [
+    {
+        "type": "url",
+        "url": "https://mcp.deepwiki.com/mcp",
+        "name": "deepwiki-mcp",
+    }
+]
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    tools=tools
+)
+
+print(response)
+```
+</TabItem>
+
+</Tabs>
+
+</TabItem>
+<TabItem value="proxy" label="LiteLLM Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-4-sonnet
+    litellm_params:
+        model: anthropic/claude-sonnet-4-20250514
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+<Tabs>
+<TabItem value="openai" label="OpenAI Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-4-sonnet",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [{"type": "mcp", "server_label": "deepwiki", "server_url": "https://mcp.deepwiki.com/mcp", "require_approval": "never"}]
+  }'
+```
+
+</TabItem>
+<TabItem value="anthropic" label="Anthropic Format">
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "claude-4-sonnet",
+    "messages": [{"role": "user", "content": "Who won the World Cup in 2022?"}],
+    "tools": [
+        {
+            "type": "url",
+            "url": "https://mcp.deepwiki.com/mcp",
+            "name": "deepwiki-mcp",
+        }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
+</TabItem>
+</Tabs>
 
 ### Parallel Function Calling 
 
@@ -755,7 +1101,31 @@ except Exception as e:
 
 s/o @[Shekhar Patnaik](https://www.linkedin.com/in/patnaikshekhar) for requesting this!
 
-### Anthropic Hosted Tools (Computer, Text Editor, Web Search)
+### Context Management (Beta)
+
+Anthropic’s [context editing](https://docs.claude.com/en/docs/build-with-claude/context-editing) API lets you automatically clear older tool results or thinking blocks. LiteLLM now forwards the native `context_management` payload when you call Anthropic models, and automatically attaches the required `context-management-2025-06-27` beta header.
+
+```python
+from litellm import completion
+
+response = completion(
+    model="anthropic/claude-sonnet-4-20250514",
+    messages=[{"role": "user", "content": "Summarize the latest tool results"}],
+    context_management={
+        "edits": [
+            {
+                "type": "clear_tool_uses_20250919",
+                "trigger": {"type": "input_tokens", "value": 30000},
+                "keep": {"type": "tool_uses", "value": 3},
+                "clear_at_least": {"type": "input_tokens", "value": 5000},
+                "exclude_tools": ["web_search"],
+            }
+        ]
+    },
+)
+```
+
+### Anthropic Hosted Tools (Computer, Text Editor, Web Search, Memory)
 
 
 <Tabs>
@@ -985,6 +1355,72 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </Tabs>
 
 </TabItem>
+
+<TabItem value="memory" label="Memory">
+
+:::info
+The Anthropic Memory tool is currently in beta.
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+tools = [{
+    "type": "memory_20250818",
+    "name": "memory"
+}]
+
+model = "claude-sonnet-4-5-20250929" 
+messages = [{"role": "user", "content": "Please remember that my favorite color is blue."}]
+
+response = completion(
+    model=model,
+    messages=messages,
+    tools=tools,
+)
+
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-memory-model
+    litellm_params:
+        model: anthropic/claude-sonnet-4-5-20250929
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $LITELLM_KEY" \
+    -d '{
+    "model": "claude-memory-model",
+    "messages": [{"role": "user", "content": "Please remember that my favorite color is blue."}],
+    "tools": [{"type": "memory_20250818", "name": "memory"}]
+    }'
+```
+</TabItem>
+</Tabs>
+
+</TabItem>
+
 </Tabs>
 
 
@@ -1256,9 +1692,9 @@ Assistant:
 ```
 
 
-## Usage - PDF 
+## Usage - PDF
 
-Pass base64 encoded PDF files to Anthropic models using the `image_url` field.
+Pass base64 encoded PDF files to Anthropic models using the `file` content type with a `file_data` field.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">
@@ -1502,3 +1938,87 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+
+## Usage - Agent Skills
+
+LiteLLM supports using Agent Skills with the API
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+response = completion(
+    model="claude-sonnet-4-5-20250929",
+    messages=messages,
+    tools= [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    container= {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+)
+```
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+    - model_name: claude-sonnet-4-5-20250929
+        litellm_params:
+        model: anthropic/claude-sonnet-4-5-20250929
+        api_key: os.environ/ANTHROPIC_API_KEY
+```
+
+2. Start Proxy
+
+```
+litellm --config /path/to/config.yaml
+```
+
+3. Test it! 
+
+```bash
+curl --location 'http://localhost:4000/chat/completions' \
+--header 'Content-Type: application/json' \
+--header 'Authorization: Bearer <YOUR-LITELLM-KEY>' \
+--data '{
+    "model": "claude-sonnet-4-5-20250929",
+    "messages": [
+        {
+            "role": "user",
+            "content": "Hi"
+        }
+    ],
+    "tools": [
+        {
+            "type": "code_execution_20250825",
+            "name": "code_execution"
+        }
+    ],
+    "container": {
+        "skills": [
+            {
+                "type": "anthropic",
+                "skill_id": "pptx",
+                "version": "latest"
+            }
+        ]
+    }
+}'
+```
+
+</TabItem>
+</Tabs>
+
+The container and its "id" will be present in "provider_specific_fields" in streaming/non-streaming response

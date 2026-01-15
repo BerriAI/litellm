@@ -39,8 +39,8 @@ V0 Scope:
 
 def _add_azure_related_dynamic_params(data: dict) -> dict:
     data["api_version"] = "2024-02-15-preview"
-    data["api_base"] = os.getenv("AZURE_ASSISTANTS_API_BASE")
-    data["api_key"] = os.getenv("AZURE_ASSISTANTS_API_KEY")
+    data["api_base"] = os.getenv("AZURE_API_BASE")
+    data["api_key"] = os.getenv("AZURE_API_KEY")
     return data
 
 
@@ -77,7 +77,7 @@ async def test_create_delete_assistants(provider, sync_mode):
     litellm._turn_on_debug()
     data = {
         "custom_llm_provider": provider,
-        "model": "gpt-4.5-preview",
+        "model": "gpt-4.1",
         "instructions": "You are a personal math tutor. When asked a question, write and run Python code to answer the question.",
         "name": "Math Tutor",
         "tools": [{"type": "code_interpreter"}],

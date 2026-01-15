@@ -1,5 +1,15 @@
+import os
+import sys
+
 import pytest
 import requests
+
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
+
+
+import responses
 
 from litellm.proxy.client.chat import ChatClient
 from litellm.proxy.client.exceptions import UnauthorizedError
@@ -117,7 +127,8 @@ def test_completions_all_parameters(client, sample_messages):
     }
 
 
-def test_completions_mock_response(client, sample_messages, requests_mock):
+@responses.activate
+def test_completions_mock_response(client, sample_messages):
     """Test completions with a mocked successful response"""
     mock_response = {
         "id": "chatcmpl-123",
@@ -138,7 +149,12 @@ def test_completions_mock_response(client, sample_messages, requests_mock):
     }
 
     # Mock the POST request
-    requests_mock.post(f"{client._base_url}/chat/completions", json=mock_response)
+    responses.add(
+        responses.POST,
+        f"{client._base_url}/chat/completions",
+        json=mock_response,
+        status=200,
+    )
 
     response = client.completions(model="gpt-4", messages=sample_messages)
 
@@ -149,12 +165,14 @@ def test_completions_mock_response(client, sample_messages, requests_mock):
     )
 
 
-def test_completions_unauthorized_error(client, sample_messages, requests_mock):
+@responses.activate
+def test_completions_unauthorized_error(client, sample_messages):
     """Test that completions raises UnauthorizedError for 401 responses"""
     # Mock a 401 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/chat/completions",
-        status_code=401,
+        status=401,
         json={"error": "Unauthorized"},
     )
 
@@ -162,12 +180,14 @@ def test_completions_unauthorized_error(client, sample_messages, requests_mock):
         client.completions(model="gpt-4", messages=sample_messages)
 
 
-def test_completions_other_errors(client, sample_messages, requests_mock):
+@responses.activate
+def test_completions_other_errors(client, sample_messages):
     """Test that completions raises HTTPError for other error responses"""
     # Mock a 500 response
-    requests_mock.post(
+    responses.add(
+        responses.POST,
         f"{client._base_url}/chat/completions",
-        status_code=500,
+        status=500,
         json={"error": "Internal Server Error"},
     )
 

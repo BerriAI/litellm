@@ -4,17 +4,22 @@ Common helpers / utils across al OpenAI endpoints
 
 import hashlib
 import json
-from typing import Any, Dict, List, Literal, Optional, Union
+import ssl
+from typing import Any, Dict, List, Literal, Optional, TYPE_CHECKING, Union
 
 import httpx
 import openai
 from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+
+if TYPE_CHECKING:
+    from aiohttp import ClientSession
 
 import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
     AsyncHTTPHandler,
+    get_ssl_configuration,
 )
 
 
@@ -192,21 +197,36 @@ class BaseOpenAILLM:
         return param_names
 
     @staticmethod
-    def _get_async_http_client() -> Optional[httpx.AsyncClient]:
+    def _get_async_http_client(
+        shared_session: Optional["ClientSession"] = None,
+    ) -> Optional[httpx.AsyncClient]:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
+        # Get unified SSL configuration
+        ssl_config = get_ssl_configuration()
+
         return httpx.AsyncClient(
-            limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
-            verify=litellm.ssl_verify,
-            transport=AsyncHTTPHandler._create_async_transport(),
+            verify=ssl_config,
+            transport=AsyncHTTPHandler._create_async_transport(
+                ssl_context=ssl_config
+                if isinstance(ssl_config, ssl.SSLContext)
+                else None,
+                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+                shared_session=shared_session,
+            ),
+            follow_redirects=True,
         )
 
     @staticmethod
     def _get_sync_http_client() -> Optional[httpx.Client]:
         if litellm.client_session is not None:
             return litellm.client_session
+
+        # Get unified SSL configuration
+        ssl_config = get_ssl_configuration()
+
         return httpx.Client(
-            limits=httpx.Limits(max_connections=1000, max_keepalive_connections=100),
-            verify=litellm.ssl_verify,
+            verify=ssl_config,
+            follow_redirects=True,
         )

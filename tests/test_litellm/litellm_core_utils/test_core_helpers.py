@@ -1,37 +1,45 @@
-import json
-import os
-import sys
-from unittest.mock import MagicMock, patch
+"""Tests for litellm_core_utils.core_helpers module."""
 
-import pytest
-
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
-
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.core_helpers import reconstruct_model_name
 
 
-def test_get_litellm_metadata_from_kwargs():
-    kwargs = {
-        "litellm_params": {
-            "litellm_metadata": {},
-            "metadata": {"user_api_key": "1234567890"},
-        },
-    }
-    assert get_litellm_metadata_from_kwargs(kwargs) == {"user_api_key": "1234567890"}
+def test_reconstruct_model_name_prefers_deployment_value():
+    """Ensure deployment metadata wins when reconstructing the model name."""
+
+    metadata = {"deployment": "vertex_ai/gemini-1.5-flash"}
+
+    result = reconstruct_model_name(
+        model_name="gemini-1.5-flash",
+        custom_llm_provider="vertex_ai",
+        metadata=metadata,
+    )
+
+    assert result == "vertex_ai/gemini-1.5-flash"
 
 
-def test_add_missing_spend_metadata_to_litellm_metadata():
-    litellm_metadata = {"test_key": "test_value"}
-    metadata = {"user_api_key_hash_value": "1234567890"}
-    kwargs = {
-        "litellm_params": {
-            "litellm_metadata": litellm_metadata,
-            "metadata": metadata,
-        },
-    }
-    assert get_litellm_metadata_from_kwargs(kwargs) == {
-        "test_key": "test_value",
-        "user_api_key_hash_value": "1234567890",
-    }
+def test_reconstruct_model_name_adds_bedrock_prefix_when_missing():
+    """Bedrock model names without prefixes should gain the provider prefix."""
+
+    metadata = {}
+
+    result = reconstruct_model_name(
+        model_name="us.anthropic.claude-3-sonnet",
+        custom_llm_provider="bedrock",
+        metadata=metadata,
+    )
+
+    assert result == "bedrock/us.anthropic.claude-3-sonnet"
+
+
+def test_reconstruct_model_name_returns_original_for_other_providers():
+    """Non-Bedrock providers should not prepend anything."""
+
+    metadata = {}
+
+    result = reconstruct_model_name(
+        model_name="claude-3-sonnet",
+        custom_llm_provider="anthropic",
+        metadata=metadata,
+    )
+
+    assert result == "claude-3-sonnet"

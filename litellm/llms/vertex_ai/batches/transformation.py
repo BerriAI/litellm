@@ -1,5 +1,5 @@
-import uuid
-from typing import Dict
+from litellm._uuid import uuid
+from typing import Any, Dict
 
 from litellm.llms.vertex_ai.common_utils import (
     _convert_vertex_datetime_to_openai_datetime,
@@ -68,6 +68,33 @@ class VertexAIBatchTransformation:
         )
 
     @classmethod
+    def transform_vertex_ai_batch_list_response_to_openai_list_response(
+        cls, response: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Transforms Vertex AI batch list response into OpenAI-compatible list response.
+        """
+
+        batch_jobs = response.get("batchPredictionJobs", []) or []
+        data = [
+            cls.transform_vertex_ai_batch_response_to_openai_batch_response(job)
+            for job in batch_jobs
+        ]
+
+        first_id = data[0].id if len(data) > 0 else None
+        last_id = data[-1].id if len(data) > 0 else None
+        next_page_token = response.get("nextPageToken")
+
+        return {
+            "object": "list",
+            "data": data,
+            "first_id": first_id,
+            "last_id": last_id,
+            "has_more": bool(next_page_token),
+            "next_page_token": next_page_token,
+        }
+
+    @classmethod
     def _get_batch_id_from_vertex_ai_batch_response(
         cls, response: VertexBatchPredictionResponse
     ) -> str:
@@ -114,7 +141,14 @@ class VertexAIBatchTransformation:
         """
         Gets the output file id from the Vertex AI Batch response
         """
-        output_file_id: str = ""
+
+        output_file_id: str = (
+            response.get("outputInfo", OutputInfo()).get("gcsOutputDirectory", "")
+            + "/predictions.jsonl"
+        )
+        if output_file_id != "/predictions.jsonl":
+            return output_file_id
+
         output_config = response.get("outputConfig")
         if output_config is None:
             return output_file_id

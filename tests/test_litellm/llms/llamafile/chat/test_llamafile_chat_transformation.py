@@ -8,90 +8,64 @@ from litellm.llms.llamafile.chat.transformation import LlamafileChatConfig
 
 
 @pytest.mark.parametrize(
-    "input_api_key, api_key_from_secret_manager, expected_api_key, secret_manager_called",
+    "input_api_key, env_api_key, expected_api_key",
     [
-        ("user-provided-key", "secret-key", "user-provided-key", False),
-        (None, "secret-key", "secret-key", True),
-        (None, None, "fake-api-key", True),
-        (
-            "",
-            "secret-key",
-            "secret-key",
-            True,
-        ),  # Empty string should fall back to secret
-        (
-            "",
-            None,
-            "fake-api-key",
-            True,
-        ),  # Empty string with no secret should use the fake key
+        ("user-provided-key", "secret-key", "user-provided-key"),
+        (None, "secret-key", "secret-key"),
+        (None, None, "fake-api-key"),
+        ("", "secret-key", "secret-key"),  # Empty string should fall back to secret
+        ("", None, "fake-api-key"),  # Empty string with no secret should use the fake key
     ],
 )
 def test_resolve_api_key(
-    input_api_key, api_key_from_secret_manager, expected_api_key, secret_manager_called
+    input_api_key, env_api_key, expected_api_key
 ):
-    with patch(
-        "litellm.llms.llamafile.chat.transformation.get_secret_str"
-    ) as mock_get_secret:
-        mock_get_secret.return_value = api_key_from_secret_manager
-
+    env = {}
+    if env_api_key is not None:
+        env["LLAMAFILE_API_KEY"] = env_api_key
+        
+    with patch.dict("os.environ", env, clear=True):
         result = LlamafileChatConfig._resolve_api_key(input_api_key)
-
-        if secret_manager_called:
-            mock_get_secret.assert_called_once_with("LLAMAFILE_API_KEY")
-        else:
-            mock_get_secret.assert_not_called()
-
         assert result == expected_api_key
 
 
 @pytest.mark.parametrize(
-    "input_api_base, api_base_from_secret_manager, expected_api_base, secret_manager_called",
+    "input_api_base, env_api_base, expected_api_base",
     [
         (
             "https://user-api.example.com",
             "https://secret-api.example.com",
             "https://user-api.example.com",
-            False,
         ),
         (
             None,
             "https://secret-api.example.com",
             "https://secret-api.example.com",
-            True,
         ),
-        (None, None, "http://127.0.0.1:8080/v1", True),
+        (None, None, "http://127.0.0.1:8080/v1"),
         (
             "",
             "https://secret-api.example.com",
             "https://secret-api.example.com",
-            True,
         ),  # Empty string should fall back
     ],
 )
 def test_resolve_api_base(
     input_api_base,
-    api_base_from_secret_manager,
+    env_api_base,
     expected_api_base,
-    secret_manager_called,
 ):
-    with patch(
-        "litellm.llms.llamafile.chat.transformation.get_secret_str"
-    ) as mock_get_secret:
-        mock_get_secret.return_value = api_base_from_secret_manager
-
+    env = {}
+    if env_api_base is not None:
+        env["LLAMAFILE_API_BASE"] = env_api_base
+        
+    with patch.dict("os.environ", env, clear=True):
         result = LlamafileChatConfig._resolve_api_base(input_api_base)
-
-        if secret_manager_called:
-            mock_get_secret.assert_called_once_with("LLAMAFILE_API_BASE")
-        else:
-            mock_get_secret.assert_not_called()
-
         assert result == expected_api_base
 
 
 @pytest.mark.parametrize(
-    "api_base, api_key, secret_base, secret_key, expected_base, expected_key",
+    "api_base, api_key, env_base, env_key, expected_base, expected_key",
     [
         # User-provided values
         (
@@ -102,7 +76,7 @@ def test_resolve_api_base(
             "https://user-api.example.com",
             "user-key",
         ),
-        # Fallback to secrets
+        # Fallback to env vars
         (
             None,
             None,
@@ -133,19 +107,16 @@ def test_resolve_api_base(
     ],
 )
 def test_get_openai_compatible_provider_info(
-    api_base, api_key, secret_base, secret_key, expected_base, expected_key
+    api_base, api_key, env_base, env_key, expected_base, expected_key
 ):
     config = LlamafileChatConfig()
+    
+    env = {}
+    if env_base is not None:
+        env["LLAMAFILE_API_BASE"] = env_base
+    if env_key is not None:
+        env["LLAMAFILE_API_KEY"] = env_key
 
-    def fake_get_secret(key: str) -> Optional[str]:
-        return {"LLAMAFILE_API_BASE": secret_base, "LLAMAFILE_API_KEY": secret_key}.get(
-            key
-        )
-
-    patch_secret = patch(
-        "litellm.llms.llamafile.chat.transformation.get_secret_str",
-        side_effect=fake_get_secret,
-    )
     patch_base = patch.object(
         LlamafileChatConfig,
         "_resolve_api_base",
@@ -157,7 +128,7 @@ def test_get_openai_compatible_provider_info(
         wraps=LlamafileChatConfig._resolve_api_key,
     )
 
-    with patch_secret as mock_secret, patch_base as mock_base, patch_key as mock_key:
+    with patch.dict("os.environ", env, clear=True), patch_base as mock_base, patch_key as mock_key:
         result_base, result_key = config._get_openai_compatible_provider_info(
             api_base, api_key
         )
@@ -167,14 +138,6 @@ def test_get_openai_compatible_provider_info(
 
         mock_base.assert_called_once_with(api_base)
         mock_key.assert_called_once_with(api_key)
-
-        # Ensure get_secret_str was used as expected within the methods
-        if api_base and api_key:
-            mock_secret.assert_not_called()
-        elif api_base or api_key:
-            mock_secret.assert_called_once()
-        else:
-            assert mock_secret.call_count == 2
 
 
 def test_completion_with_custom_llamafile_model():

@@ -1,0 +1,127 @@
+suite: test migrations job
+templates:
+  - migrations-job.yaml
+tests:
+  - it: should work with envVars
+    template: migrations-job.yaml
+    set:
+      envVars:
+        TEST_ENV_VAR: "test_value"
+        ANOTHER_VAR: "another_value"
+      migrationJob:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: TEST_ENV_VAR
+            value: "test_value"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ANOTHER_VAR
+            value: "another_value"
+
+  - it: should work with extraEnvVars
+    template: migrations-job.yaml
+    set:
+      extraEnvVars:
+        - name: EXTRA_ENV_VAR
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.labels['env']
+        - name: SIMPLE_EXTRA_VAR
+          value: "simple_value"
+      migrationJob:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA_ENV_VAR
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.labels['env']
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: SIMPLE_EXTRA_VAR
+            value: "simple_value"
+
+  - it: should work with both envVars and extraEnvVars
+    template: migrations-job.yaml
+    set:
+      envVars:
+        ENV_VAR: "env_var_value"
+      extraEnvVars:
+        - name: EXTRA_ENV_VAR
+          value: "extra_env_var_value"
+      migrationJob:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: ENV_VAR
+            value: "env_var_value"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: EXTRA_ENV_VAR
+            value: "extra_env_var_value"
+
+  - it: should not render when migrations job is disabled
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: should still include default env vars
+    template: migrations-job.yaml
+    set:
+      envVars:
+        CUSTOM_VAR: "custom_value"
+      migrationJob:
+        enabled: true
+      db:
+        useExisting: true
+        endpoint: "test-db"
+        database: "testdb"
+        url: "postgresql://user:pass@test-db:5432/testdb"
+        secret:
+          name: "test-secret"
+          usernameKey: "username"
+          passwordKey: "password"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DISABLE_SCHEMA_UPDATE
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_HOST
+            value: "test-db"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CUSTOM_VAR
+            value: "custom_value"
+
+  - it: should not include DATABASE_URL when deployStandalone is false
+    template: migrations-job.yaml
+    set:
+      migrationJob:
+        enabled: true
+      db:
+        deployStandalone: false
+        useExisting: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_URL

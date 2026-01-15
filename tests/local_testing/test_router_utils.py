@@ -32,7 +32,7 @@ def test_returned_settings():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -96,7 +96,7 @@ def test_update_kwargs_before_fallbacks_unit_test():
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -133,7 +133,7 @@ async def test_update_kwargs_before_fallbacks(call_type):
             {
                 "model_name": "gpt-3.5-turbo",
                 "litellm_params": {
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": "bad-key",
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -240,7 +240,7 @@ async def test_call_router_callbacks_on_success():
     )
 
     with patch.object(
-        router.cache, "async_increment_cache", new=AsyncMock()
+        router.cache, "async_increment_cache_pipeline", new=AsyncMock()
     ) as mock_callback:
         await router.acompletion(
             model="gemini/gemini-1.5-flash",
@@ -248,18 +248,22 @@ async def test_call_router_callbacks_on_success():
             mock_response="Hello, I'm good.",
         )
         await asyncio.sleep(1)
-        assert mock_callback.call_count == 2
+        assert mock_callback.call_count == 1
 
-        assert (
-            mock_callback.call_args_list[0]
-            .kwargs["key"]
-            .startswith("global_router:1:gemini/gemini-1.5-flash:tpm")
-        )
-        assert (
-            mock_callback.call_args_list[1]
-            .kwargs["key"]
-            .startswith("global_router:1:gemini/gemini-1.5-flash:rpm")
-        )
+        increment_list = mock_callback.call_args_list[0].kwargs["increment_list"]
+        assert len(increment_list) == 2
+
+        for increment in increment_list:
+            if "tpm" in increment["key"]:
+                assert increment["key"].startswith(
+                    "global_router:1:gemini/gemini-1.5-flash:tpm"
+                )
+                assert increment["increment_value"] == 30
+            elif "rpm" in increment["key"]:
+                assert increment["key"].startswith(
+                    "global_router:1:gemini/gemini-1.5-flash:rpm"
+                )
+                assert increment["increment_value"] == 1
 
 
 @pytest.mark.asyncio
@@ -414,6 +418,7 @@ def test_router_handle_clientside_credential():
             "api_key": "123",
             "metadata": {"model_group": "gemini/gemini-1.5-flash"},
         },
+        function_name="acompletion",
     )
 
     assert new_deployment.litellm_params.api_key == "123"
@@ -453,9 +458,61 @@ def test_router_get_deployment_credentials():
     assert credentials["api_key"] == "123"
 
 
+def test_router_get_deployment_credentials_with_provider():
+    """
+    Test that get_deployment_credentials_with_provider returns credentials with provider info.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "sk-test-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                "model_info": {"id": "openai-deployment-1"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-sonnet",
+                    "api_key": "sk-ant-123",
+                },
+                "model_info": {"id": "anthropic-deployment-1"},
+            },
+        ]
+    )
+
+    # Test getting credentials by model_id
+    credentials = router.get_deployment_credentials_with_provider(model_id="openai-deployment-1")
+    assert credentials is not None
+    assert credentials["api_key"] == "sk-test-123"
+    assert credentials["custom_llm_provider"] == "openai"
+    assert credentials["api_base"] == "https://api.openai.com/v1"
+
+    # Test getting credentials by model_group_name (model_name)
+    credentials2 = router.get_deployment_credentials_with_provider(model_id="claude-3")
+    assert credentials2 is not None
+    assert credentials2["api_key"] == "sk-ant-123"
+    assert credentials2["custom_llm_provider"] == "anthropic"
+
+    # Test with non-existent model
+    credentials3 = router.get_deployment_credentials_with_provider(model_id="non-existent")
+    assert credentials3 is None
+
+
 def test_router_get_deployment_model_info():
     router = Router(
-        model_list=[{"model_name": "gemini/*", "litellm_params": {"model": "gemini/*"}, "model_info": {"id": "1"}}]
+        model_list=[
+            {
+                "model_name": "gemini/*",
+                "litellm_params": {"model": "gemini/*"},
+                "model_info": {"id": "1"},
+            }
+        ]
     )
-    model_info = router.get_deployment_model_info(model_id="1", model_name="gemini/gemini-1.5-flash")
+    model_info = router.get_deployment_model_info(
+        model_id="1", model_name="gemini/gemini-1.5-flash"
+    )
     assert model_info is not None

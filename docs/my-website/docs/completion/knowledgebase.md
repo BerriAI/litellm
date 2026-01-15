@@ -17,6 +17,12 @@ LiteLLM integrates with vector stores, allowing your models to access your organ
 
 ## Supported Vector Stores
 - [Bedrock Knowledge Bases](https://aws.amazon.com/bedrock/knowledge-bases/)
+- [OpenAI Vector Stores](https://platform.openai.com/docs/api-reference/vector-stores/search)
+- [Azure Vector Stores](https://learn.microsoft.com/en-us/azure/ai-services/openai/how-to/file-search?tabs=python#vector-stores) (Cannot be directly queried. Only available for calling in Assistants messages.)
+- [Azure AI Search](/docs/providers/azure_ai_vector_stores) (Vector search with Azure AI Search indexes)
+- [Vertex AI RAG API](https://cloud.google.com/vertex-ai/generative-ai/docs/rag-overview)
+- [Gemini File Search](https://ai.google.dev/gemini-api/docs/file-search)
+- [RAGFlow Datasets](/docs/providers/ragflow_vector_store.md) (Dataset management only, search not supported)
 
 ## Quick Start
 
@@ -157,6 +163,129 @@ print(response.choices[0].message.content)
 </TabItem>
 </Tabs>
 
+## Provider Specific Guides
+
+This section covers how to add your vector stores to LiteLLM. If you want support for a new provider, please file an issue [here](https://github.com/BerriAI/litellm/issues).
+
+### Bedrock Knowledge Bases
+
+**1. Set up your Bedrock Knowledge Base**
+
+Ensure you have a Bedrock Knowledge Base created in your AWS account with the appropriate permissions configured.
+
+**2. Add to LiteLLM UI**
+
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"Bedrock"** as the provider
+3. Enter your Bedrock Knowledge Base ID in the **"Vector Store ID"** field
+
+<Image 
+  img={require('../../img/kb_2.png')}
+  style={{width: '60%', display: 'block'}}
+/>
+
+
+### Vertex AI RAG Engine
+
+**1. Get your Vertex AI RAG Engine ID**
+
+1. Navigate to your RAG Engine Corpus in the [Google Cloud Console](https://console.cloud.google.com/vertex-ai/rag/corpus)
+2. Select the **RAG Engine** you want to integrate with LiteLLM
+
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
+<Image 
+  img={require('../../img/kb_vertex1.png')}
+  style={{width: '60%', display: 'block'}}
+/>
+</div>
+
+3. Click the **"Details"** button and copy the UUID for the RAG Engine
+4. The ID should look like: `6917529027641081856`
+
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
+<Image 
+  img={require('../../img/kb_vertex2.png')}
+  style={{width: '60%', display: 'block'}}
+/>
+</div>
+
+**2. Add to LiteLLM UI**
+
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"Vertex AI RAG Engine"** as the provider
+3. Enter your Vertex AI RAG Engine ID in the **"Vector Store ID"** field
+
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
+<Image 
+  img={require('../../img/kb_vertex3.png')}
+  style={{width: '60%', display: 'block'}}
+/>
+</div>
+
+### PG Vector
+
+**1. Deploy the litellm-pg-vector-store connector**
+
+LiteLLM provides a server that exposes OpenAI-compatible `vector_store` endpoints for PG Vector. The LiteLLM Proxy server connects to your deployed service and uses it as a vector store when querying.
+
+1. Follow the deployment instructions for the litellm-pg-vector-store connector [here](https://github.com/BerriAI/litellm-pgvector)
+2. For detailed configuration options, see the [configuration guide](https://github.com/BerriAI/litellm-pgvector?tab=readme-ov-file#configuration)
+
+**Example .env configuration for deploying litellm-pg-vector-store:**
+
+```env
+DATABASE_URL="postgresql://neondb_owner:xxxx"
+SERVER_API_KEY="sk-1234"
+HOST="0.0.0.0"
+PORT=8001
+EMBEDDING__MODEL="text-embedding-ada-002"
+EMBEDDING__BASE_URL="http://localhost:4000"
+EMBEDDING__API_KEY="sk-1234"
+EMBEDDING__DIMENSIONS=1536
+DB_FIELDS__ID_FIELD="id"
+DB_FIELDS__CONTENT_FIELD="content"
+DB_FIELDS__METADATA_FIELD="metadata"
+DB_FIELDS__EMBEDDING_FIELD="embedding"
+DB_FIELDS__VECTOR_STORE_ID_FIELD="vector_store_id"
+DB_FIELDS__CREATED_AT_FIELD="created_at"
+```
+
+**2. Add to LiteLLM UI**
+
+Once your litellm-pg-vector-store is deployed:
+
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"PG Vector"** as the provider
+3. Enter your **API Base URL** and **API Key** for your `litellm-pg-vector-store` container
+   - The API Key field corresponds to the `SERVER_API_KEY` from your .env configuration
+
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
+<Image 
+  img={require('../../img/kb_pg1.png')}
+  style={{width: '60%', display: 'block'}}
+/>
+</div>
+
+### OpenAI Vector Stores
+
+**1. Set up your OpenAI Vector Store**
+
+1. Create your Vector Store on the [OpenAI platform](https://platform.openai.com/storage/vector_stores)
+2. Note your Vector Store ID (format: `vs_687ae3b2439881918b433cb99d10662e`)
+
+**2. Add to LiteLLM UI**
+
+1. Navigate to **Tools > Vector Stores > "Add new vector store"**
+2. Select **"OpenAI"** as the provider
+3. Enter your **Vector Store ID** in the corresponding field
+4. Enter your **OpenAI API Key** in the API Key field
+
+<div style={{margin: '20px 0', padding: '10px', border: '1px solid #ddd', borderRadius: '8px', display: 'inline-block', boxShadow: '0 2px 8px rgba(0,0,0,0.1)'}}>
+<Image 
+  img={require('../../img/kb_openai1.png')}
+  style={{width: '60%', display: 'block'}}
+/>
+</div>
 
 
 
@@ -285,6 +414,219 @@ This is sent to: `https://bedrock-agent-runtime.{aws_region}.amazonaws.com/knowl
 ```
 
 This process happens automatically whenever you include the `vector_store_ids` parameter in your request.
+
+## Accessing Search Results (Citations)
+
+When using vector stores, LiteLLM automatically returns search results in `provider_specific_fields`. This allows you to show users citations for the AI's response.
+
+### Key Concept
+
+Search results are always in: `response.choices[0].message.provider_specific_fields["search_results"]`
+
+For streaming: Results appear in the **final chunk** when `finish_reason == "stop"`
+
+### Non-Streaming Example
+
+
+**Non-Streaming Response with search results:**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "LiteLLM is a platform...",
+      "provider_specific_fields": {
+        "search_results": [{
+          "search_query": "What is litellm?",
+          "data": [{
+            "score": 0.95,
+            "content": [{"text": "...", "type": "text"}],
+            "filename": "litellm-docs.md",
+            "file_id": "doc-123"
+          }]
+        }]
+      }
+    },
+    "finish_reason": "stop"
+  }]
+}
+```
+
+<Tabs>
+<TabItem value="python-sdk" label="Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+response = client.chat.completions.create(
+    model="claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "What is litellm?"}],
+    tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}]
+)
+
+# Get AI response
+print(response.choices[0].message.content)
+
+# Get search results (citations)
+search_results = response.choices[0].message.provider_specific_fields.get("search_results", [])
+
+for result_page in search_results:
+    for idx, item in enumerate(result_page['data'], 1):
+        print(f"[{idx}] {item.get('filename', 'Unknown')} (score: {item['score']:.2f})")
+```
+
+</TabItem>
+
+<TabItem value="typescript" label="TypeScript SDK">
+
+```typescript
+import OpenAI from 'openai';
+
+const client = new OpenAI({
+  baseURL: 'http://localhost:4000',
+  apiKey: process.env.LITELLM_API_KEY
+});
+
+const response = await client.chat.completions.create({
+  model: 'claude-3-5-sonnet',
+  messages: [{ role: 'user', content: 'What is litellm?' }],
+  tools: [{ type: 'file_search', vector_store_ids: ['T37J8R4WTM'] }]
+});
+
+// Get AI response
+console.log(response.choices[0].message.content);
+
+// Get search results (citations)
+const message = response.choices[0].message as any;
+const searchResults = message.provider_specific_fields?.search_results || [];
+
+searchResults.forEach((page: any) => {
+  page.data.forEach((item: any, idx: number) => {
+    console.log(`[${idx + 1}] ${item.filename || 'Unknown'} (${item.score.toFixed(2)})`);
+  });
+});
+```
+
+</TabItem>
+</Tabs>
+
+### Streaming Example
+
+**Streaming Response with search results (final chunk):**
+
+```json
+{
+  "id": "chatcmpl-abc123",
+  "choices": [{
+    "index": 0,
+    "delta": {
+      "provider_specific_fields": {
+        "search_results": [{
+          "search_query": "What is litellm?",
+          "data": [{
+            "score": 0.95,
+            "content": [{"text": "...", "type": "text"}],
+            "filename": "litellm-docs.md",
+            "file_id": "doc-123"
+          }]
+        }]
+      }
+    },
+    "finish_reason": "stop"
+  }]
+}
+```
+
+<Tabs>
+<TabItem value="python-sdk" label="Python SDK">
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:4000",
+    api_key="your-litellm-api-key"
+)
+
+stream = client.chat.completions.create(
+    model="claude-3-5-sonnet",
+    messages=[{"role": "user", "content": "What is litellm?"}],
+    tools=[{"type": "file_search", "vector_store_ids": ["T37J8R4WTM"]}],
+    stream=True
+)
+
+for chunk in stream:
+    # Stream content
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)
+    
+    # Get citations in final chunk
+    if chunk.choices[0].finish_reason == "stop":
+        search_results = getattr(chunk.choices[0].delta, 'provider_specific_fields', {}).get('search_results', [])
+        if search_results:
+            print("\n\nSources:")
+            for page in search_results:
+                for idx, item in enumerate(page['data'], 1):
+                    print(f"  [{idx}] {item.get('filename', 'Unknown')} ({item['score']:.2f})")
+```
+
+</TabItem>
+
+<TabItem value="typescript" label="TypeScript SDK">
+
+```typescript
+import OpenAI from 'openai';
+
+const stream = await client.chat.completions.create({
+  model: 'claude-3-5-sonnet',
+  messages: [{ role: 'user', content: 'What is litellm?' }],
+  tools: [{ type: 'file_search', vector_store_ids: ['T37J8R4WTM'] }],
+  stream: true
+});
+
+for await (const chunk of stream) {
+  // Stream content
+  if (chunk.choices[0]?.delta?.content) {
+    process.stdout.write(chunk.choices[0].delta.content);
+  }
+  
+  // Get citations in final chunk
+  if (chunk.choices[0]?.finish_reason === 'stop') {
+    const searchResults = (chunk.choices[0].delta as any).provider_specific_fields?.search_results || [];
+    if (searchResults.length > 0) {
+      console.log('\n\nSources:');
+      searchResults.forEach((page: any) => {
+        page.data.forEach((item: any, idx: number) => {
+          console.log(`  [${idx + 1}] ${item.filename || 'Unknown'} (${item.score.toFixed(2)})`);
+        });
+      });
+    }
+  }
+}
+```
+
+</TabItem>
+</Tabs>
+
+### Search Result Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `search_query` | string | The query used to search the vector store |
+| `data` | array | Array of search results |
+| `data[].score` | float | Relevance score (0-1, higher is more relevant) |
+| `data[].content` | array | Content chunks with `text` and `type` |
+| `data[].filename` | string | Name of the source file (optional) |
+| `data[].file_id` | string | Identifier for the source file (optional) |
+| `data[].attributes` | object | Provider-specific metadata (optional) |
 
 ## API Reference
 

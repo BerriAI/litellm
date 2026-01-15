@@ -1,7 +1,17 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# 💰 Budgets, Rate Limits
+# Budgets, Rate Limits
+
+:::info **Budget Setup Options**
+**Personal budgets**: Create virtual keys without team_id for individual spending limits
+
+**Team budgets**: Add team_id to virtual keys to utilize a team's shared budget
+
+**Team member budgets**: Set individual spending limits within the team's shared budget
+
+***If a key belongs to a team, the team budget is applied, not the user's personal budget.***
+:::
 
 Requirements: 
 
@@ -57,6 +67,9 @@ You can:
 :::info
 
 **Step-by step tutorial on setting, resetting budgets on Teams here (API or using Admin UI)**
+
+> **Prerequisite:**
+> To enable team member rate limits, you must set the environment variable `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING=true` before starting the proxy server. Without this, team member rate limits will not be enforced.
 
 👉 [https://docs.litellm.ai/docs/proxy/team_budgets](https://docs.litellm.ai/docs/proxy/team_budgets)
 
@@ -114,7 +127,7 @@ curl 'http://0.0.0.0:4000/team/new' \
 --data-raw '{
   "team_alias": "my-new-team_4",
   "members_with_roles": [{"role": "admin", "user_id": "5c4a0aa3-a1e1-43dc-bd87-3c2da8382a3a"}],
-  "budget_duration": 10s,
+  "budget_duration": "30s",
 }'
 ```
 
@@ -194,7 +207,9 @@ Apply a budget across all calls an internal user (key owner) can make on the pro
 
 :::info
 
-For most use-cases, we recommend setting team-member budgets
+For keys, with a 'team_id' set, the team budget is used instead of the user's personal budget.
+
+To apply a budget to a user within a team, use team member budgets.
 
 :::
 
@@ -238,7 +253,7 @@ curl 'http://0.0.0.0:4000/user/new' \
 --data-raw '{
   "team_id": "core-infra", # [OPTIONAL]
   "max_budget": 10,
-  "budget_duration": 10s,
+  "budget_duration": "30s",
 }'
 ```
 
@@ -319,7 +334,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --data-raw '{
   "team_id": "core-infra", # [OPTIONAL]
   "max_budget": 10,
-  "budget_duration": 10s,
+  "budget_duration": "30s",
 }'
 ```
 
@@ -480,7 +495,7 @@ curl 'http://0.0.0.0:4000/user/new' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "max_budget": 10,
-  "budget_duration": 10s, # 👈 KEY CHANGE
+  "budget_duration": "30s", # 👈 KEY CHANGE
 }'
 ```
 </TabItem>
@@ -492,7 +507,7 @@ curl 'http://0.0.0.0:4000/key/generate' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "max_budget": 10,
-  "budget_duration": 10s, # 👈 KEY CHANGE
+  "budget_duration": "30s", # 👈 KEY CHANGE
 }'
 ```
 
@@ -505,7 +520,7 @@ curl 'http://0.0.0.0:4000/team/new' \
 --header 'Content-Type: application/json' \
 --data-raw '{
   "max_budget": 10,
-  "budget_duration": 10s, # 👈 KEY CHANGE
+  "budget_duration": "30s", # 👈 KEY CHANGE
 }'
 ```
 </TabItem>
@@ -790,6 +805,11 @@ Expected Response:
 ### [BETA] Multi-instance rate limiting
 
 Enable multi-instance rate limiting with the env var `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"`
+
+**Important Notes:**
+- Setting `EXPERIMENTAL_MULTI_INSTANCE_RATE_LIMITING="True"` is required for team member rate limits to function, not just for multi-instance scenarios.
+- **Rate limits do not apply to proxy admin users.** 
+- When testing rate limits, use internal user roles (non-admin) to ensure limits are enforced as expected.
 
 Changes: 
 - This moves to using async_increment instead of async_set_cache when updating current requests/tokens. 

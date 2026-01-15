@@ -10,7 +10,7 @@ import TabItem from '@theme/TabItem';
 
 [Enterprise Pricing](https://www.litellm.ai/#pricing)
 
-[Get free 7-day trial key](https://www.litellm.ai/#trial)
+[Get free 7-day trial key](https://www.litellm.ai/enterprise#trial)
 
 :::
 

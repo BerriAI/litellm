@@ -9,6 +9,7 @@ from test_openai_files_endpoints import upload_file, delete_file
 import os
 import sys
 import time
+from unittest.mock import patch, MagicMock, AsyncMock
 
 
 BASE_URL = "http://localhost:4000"  # Replace with your actual base URL
@@ -71,7 +72,7 @@ def create_batch_oai_sdk(filepath: str, custom_llm_provider: str) -> str:
     batch_input_file = client.files.create(
         file=open(filepath, "rb"),
         purpose="batch",
-        extra_body={"custom_llm_provider": custom_llm_provider},
+        extra_headers={"custom-llm-provider": custom_llm_provider},
     )
     batch_input_file_id = batch_input_file.id
 
@@ -84,7 +85,7 @@ def create_batch_oai_sdk(filepath: str, custom_llm_provider: str) -> str:
         metadata={
             "description": filepath,
         },
-        extra_body={"custom_llm_provider": custom_llm_provider},
+        extra_headers={"custom-llm-provider": custom_llm_provider},
     )
 
     print(f"Batch submitted. ID: {rq.id}")
@@ -97,7 +98,7 @@ def await_batch_completion(batch_id: str, custom_llm_provider: str):
 
     while tries < max_tries:
         batch = client.batches.retrieve(
-            batch_id, extra_body={"custom_llm_provider": custom_llm_provider}
+            batch_id, extra_headers={"custom-llm-provider": custom_llm_provider}
         )
         if batch.status == "completed":
             print(f"Batch {batch_id} completed.")
@@ -116,24 +117,24 @@ def write_content_to_file(
     batch_id: str, output_path: str, custom_llm_provider: str
 ) -> str:
     batch = client.batches.retrieve(
-        batch_id=batch_id, extra_body={"custom_llm_provider": custom_llm_provider}
+        batch_id=batch_id, extra_headers={"custom-llm-provider": custom_llm_provider}
     )
     content = client.files.content(
         file_id=batch.output_file_id,
-        extra_body={"custom_llm_provider": custom_llm_provider},
+        extra_headers={"custom-llm-provider": custom_llm_provider},
     )
     print("content from files.content", content.content)
     content.write_to_file(output_path)
 
 
-import jsonlines
-
-
 def read_jsonl(filepath: str):
+    import json
+
     results = []
-    with jsonlines.open(filepath) as f:
+    with open(filepath, "r") as f:
         for line in f:
-            results.append(line)
+            if line.strip():
+                results.append(json.loads(line))
 
     for item in results:
         print(item)
@@ -143,7 +144,7 @@ def read_jsonl(filepath: str):
 
 def get_any_completed_batch_id_azure():
     print("AZURE getting any completed batch id")
-    list_of_batches = client.batches.list(extra_body={"custom_llm_provider": "azure"})
+    list_of_batches = client.batches.list(extra_headers={"custom-llm-provider": "azure"})
     print("list of batches", list_of_batches)
     for batch in list_of_batches:
         if batch.status == "completed":
@@ -151,7 +152,7 @@ def get_any_completed_batch_id_azure():
     return None
 
 
-@pytest.mark.parametrize("custom_llm_provider", ["azure", "openai"])
+@pytest.mark.parametrize("custom_llm_provider", ["openai"])
 def test_e2e_batches_files(custom_llm_provider):
     """
     [PROD Test] Ensures OpenAI Batches + files work with OpenAI SDK
@@ -201,7 +202,7 @@ def test_vertex_batches_endpoint():
     file_obj = oai_client.files.create(
         file=open(file_path, "rb"),
         purpose="batch",
-        extra_body={"custom_llm_provider": "vertex_ai"},
+        extra_headers={"custom-llm-provider": "vertex_ai"},
     )
     print("Response from creating file=", file_obj)
 
@@ -214,8 +215,80 @@ def test_vertex_batches_endpoint():
         completion_window="24h",
         endpoint="/v1/chat/completions",
         input_file_id=batch_input_file_id,
-        extra_body={"custom_llm_provider": "vertex_ai"},
+        extra_headers={"custom-llm-provider": "vertex_ai"},
         metadata={"key1": "value1", "key2": "value2"},
     )
     print("response from create batch", create_batch_response)
     pass
+
+
+@pytest.mark.skip(reason="Local only test to verify if things work well")
+@pytest.mark.asyncio
+async def test_list_batches_with_target_model_names():
+    """
+    Unit test to verify that target_model_names query parameter is properly handled
+    in the list_batches endpoint
+    """
+
+    # Test data
+    target_model_names = "gpt-4,gpt-3.5-turbo"
+    expected_model = "gpt-4"  # Should use the first model from the comma-separated list
+
+    # Mock response for list_batches
+    mock_batch_response = {
+        "object": "list",
+        "data": [
+            {
+                "id": "batch_abc123",
+                "object": "batch",
+                "endpoint": "/v1/chat/completions",
+                "status": "validating",
+                "input_file_id": "file-abc123",
+                "completion_window": "24h",
+                "created_at": 1711471533,
+                "metadata": {},
+            }
+        ],
+        "first_id": "batch_abc123",
+        "last_id": "batch_abc123",
+        "has_more": False,
+    }
+
+    # Mock the request and FastAPI dependencies
+    mock_request = MagicMock()
+    mock_request.method = "GET"
+    mock_request.url.query = f"target_model_names={target_model_names}&limit=10"
+
+    mock_fastapi_response = MagicMock()
+    mock_user_api_key_dict = MagicMock()
+
+    # Mock _read_request_body to return our target_model_names
+    with patch(
+        "litellm.proxy.batches_endpoints.endpoints._read_request_body"
+    ) as mock_read_body, patch("litellm.proxy.proxy_server.llm_router") as mock_router:
+
+        mock_read_body.return_value = {"target_model_names": target_model_names}
+        mock_router.alist_batches = AsyncMock(return_value=mock_batch_response)
+
+        # Import and call the function directly
+        from litellm.proxy.batches_endpoints.endpoints import list_batches
+
+        response = await list_batches(
+            request=mock_request,
+            fastapi_response=mock_fastapi_response,
+            target_model_names=target_model_names,
+            limit=10,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        # Verify that router.alist_batches was called with the correct model
+        mock_router.alist_batches.assert_called_once()
+        call_args = mock_router.alist_batches.call_args
+
+        # Check that the model parameter was set to the first model in the list
+        assert call_args.kwargs["model"] == expected_model
+        assert call_args.kwargs["limit"] == 10
+
+        # Verify the response structure
+        assert response["object"] == "list"
+        assert len(response["data"]) > 0

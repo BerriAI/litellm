@@ -2,7 +2,6 @@ import pytest
 
 from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
 
-
 @pytest.mark.parametrize(
     "model_name,expected",
     [
@@ -10,13 +9,11 @@ from litellm.llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig
         ("o1", True),
         ("o3", True),
         ("o4-mini", True),
-        ("o1-preview", True),
         ("o3-mini", True),
         # Valid O-series models with provider prefix
         ("openai/o1", True),
         ("openai/o3", True),
         ("openai/o4-mini", True),
-        ("openai/o1-preview", True),
         ("openai/o3-mini", True),
         # Non-O-series models
         ("gpt-4", False),

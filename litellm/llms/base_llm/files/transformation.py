@@ -2,11 +2,14 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
+from openai.types.file_deleted import FileDeleted
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.files import TwoStepFileUploadConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
+    FileContentRequest,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     OpenAIFilesPurpose,
@@ -18,6 +21,7 @@ from ..chat.transformation import BaseConfig
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.router import Router as _Router
+    from litellm.types.llms.openai import HttpxBinaryResponseContent
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     Span = Any
@@ -33,6 +37,16 @@ class BaseFilesConfig(BaseConfig):
     @abstractmethod
     def custom_llm_provider(self) -> LlmProviders:
         pass
+
+    @property
+    def file_upload_http_method(self) -> str:
+        """
+        HTTP method to use for file uploads.
+        Override this in provider configs if they need different methods.
+        Default is POST (used by most providers like OpenAI, Anthropic).
+        S3-based providers like Bedrock should return "PUT".
+        """
+        return "POST"
 
     @abstractmethod
     def get_supported_openai_params(
@@ -64,7 +78,15 @@ class BaseFilesConfig(BaseConfig):
         create_file_data: CreateFileRequest,
         optional_params: dict,
         litellm_params: dict,
-    ) -> Union[dict, str, bytes]:
+    ) -> Union[dict, str, bytes, "TwoStepFileUploadConfig"]:
+        """
+        Transform OpenAI-style file creation request into provider-specific format.
+        
+        Returns:
+            - dict: For pre-signed single-step uploads (e.g., Bedrock S3)
+            - str/bytes: For traditional file uploads
+            - TwoStepFileUploadConfig: For two-step upload process (e.g., Manus, GCS)
+        """
         pass
 
     @abstractmethod
@@ -75,6 +97,86 @@ class BaseFilesConfig(BaseConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
+        pass
+
+    @abstractmethod
+    def transform_retrieve_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file retrieve request into provider-specific format."""
+        pass
+
+    @abstractmethod
+    def transform_retrieve_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> OpenAIFileObject:
+        """Transform file retrieve response into OpenAI format."""
+        pass
+
+    @abstractmethod
+    def transform_delete_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file delete request into provider-specific format."""
+        pass
+
+    @abstractmethod
+    def transform_delete_file_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> "FileDeleted":
+        """Transform file delete response into OpenAI format."""
+        pass
+
+    @abstractmethod
+    def transform_list_files_request(
+        self,
+        purpose: Optional[str],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file list request into provider-specific format."""
+        pass
+
+    @abstractmethod
+    def transform_list_files_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> List[OpenAIFileObject]:
+        """Transform file list response into OpenAI format."""
+        pass
+
+    @abstractmethod
+    def transform_file_content_request(
+        self,
+        file_content_request: "FileContentRequest",
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        """Transform file content request into provider-specific format."""
+        pass
+
+    @abstractmethod
+    def transform_file_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> "HttpxBinaryResponseContent":
+        """Transform file content response into OpenAI format."""
         pass
 
     def transform_request(
@@ -125,6 +227,7 @@ class BaseFileEndpoints(ABC):
         self,
         file_id: str,
         litellm_parent_otel_span: Optional[Span],
+        llm_router: Optional[Router] = None,
     ) -> OpenAIFileObject:
         pass
 
@@ -154,5 +257,5 @@ class BaseFileEndpoints(ABC):
         litellm_parent_otel_span: Optional[Span],
         llm_router: Router,
         **data: Dict,
-    ) -> str:
+    ) -> "HttpxBinaryResponseContent":
         pass

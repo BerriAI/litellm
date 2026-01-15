@@ -49,6 +49,24 @@ response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content
 print(response)
 ```
 
+#### Sample Rate Options
+
+- **SENTRY_API_SAMPLE_RATE**: Controls what percentage of errors are sent to Sentry
+  - Value between 0 and 1 (default is 1.0 or 100% of errors)
+  - Example: 0.5 sends 50% of errors, 0.1 sends 10% of errors
+
+- **SENTRY_API_TRACE_RATE**: Controls what percentage of transactions are sampled for performance monitoring
+  - Value between 0 and 1 (default is 1.0 or 100% of transactions)
+  - Example: 0.5 traces 50% of transactions, 0.1 traces 10% of transactions
+
+These options are useful for high-volume applications where sampling a subset of errors and transactions provides sufficient visibility while managing costs.
+
+#### Sentry Environment
+- **SENTRY_ENVIRONMENT**: Specifies the environment name for your Sentry events (e.g., "production", "staging", "development")
+  - Helps organize and filter errors by deployment environment in Sentry dashboard
+  - Example: `os.environ["SENTRY_ENVIRONMENT"] = "staging"`
+  - If not set, Sentry will use 'production' as the default environment
+
 ## Redacting Messages, Response Content from Sentry Logging 
 
 Set `litellm.turn_off_message_logging=True` This will prevent the messages and responses from being logged to sentry, but request metadata will still be logged.

@@ -10,10 +10,13 @@ This is an __init__.py file to allow the following interface
 
 """
 
-from typing import AsyncIterator, Dict, Iterator, List, Optional, Union
+from typing import Any, AsyncIterator, Coroutine, Dict, List, Optional, Union
 
 from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
     anthropic_messages as _async_anthropic_messages,
+)
+from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+    anthropic_messages_handler as _sync_anthropic_messages,
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
@@ -34,6 +37,7 @@ async def acreate(
     tools: Optional[List[Dict]] = None,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
+    container: Optional[Dict] = None,
     **kwargs
 ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
     """
@@ -53,6 +57,7 @@ async def acreate(
         tools (List[Dict], optional): List of tool definitions
         top_k (int, optional): Top K sampling parameter
         top_p (float, optional): Nucleus sampling parameter
+        container (Dict, optional): Container config with skills for code execution
         **kwargs: Additional arguments
 
     Returns:
@@ -72,11 +77,12 @@ async def acreate(
         tools=tools,
         top_k=top_k,
         top_p=top_p,
+        container=container,
         **kwargs,
     )
 
 
-async def create(
+def create(
     max_tokens: int,
     messages: List[Dict],
     model: str,
@@ -90,8 +96,13 @@ async def create(
     tools: Optional[List[Dict]] = None,
     top_k: Optional[int] = None,
     top_p: Optional[float] = None,
+    container: Optional[Dict] = None,
     **kwargs
-) -> Union[AnthropicMessagesResponse, Iterator]:
+) -> Union[
+    AnthropicMessagesResponse,
+    AsyncIterator[Any],
+    Coroutine[Any, Any, Union[AnthropicMessagesResponse, AsyncIterator[Any]]],
+]:
     """
     Async wrapper for Anthropic's messages API
 
@@ -114,4 +125,20 @@ async def create(
     Returns:
         Dict: Response from the API
     """
-    raise NotImplementedError("This function is not implemented")
+    return _sync_anthropic_messages(
+        max_tokens=max_tokens,
+        messages=messages,
+        model=model,
+        metadata=metadata,
+        stop_sequences=stop_sequences,
+        stream=stream,
+        system=system,
+        temperature=temperature,
+        thinking=thinking,
+        tool_choice=tool_choice,
+        tools=tools,
+        top_k=top_k,
+        top_p=top_p,
+        container=container,
+        **kwargs,
+    )

@@ -18,7 +18,7 @@ from litellm import Choices, Message, ModelResponse
 from base_llm_unit_tests import BaseLLMChatTest, BaseOSeriesModelsTest
 
 
-@pytest.mark.parametrize("model", ["o1-preview", "o1-mini", "o1"])
+@pytest.mark.parametrize("model", ["o1-mini", "o1"])
 @pytest.mark.asyncio
 async def test_o1_handle_system_role(model):
     """
@@ -68,7 +68,7 @@ async def test_o1_handle_system_role(model):
 
 @pytest.mark.parametrize(
     "model, expected_tool_calling_support",
-    [("o1-preview", False), ("o1-mini", False), ("o1", True)],
+    [("o1-mini", False), ("o1", True)],
 )
 @pytest.mark.asyncio
 async def test_o1_handle_tool_calling_optional_params(
@@ -96,7 +96,7 @@ async def test_o1_handle_tool_calling_optional_params(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0314", "gpt-4-32k", "o1-preview"])
+@pytest.mark.parametrize("model", ["gpt-4", "gpt-4-0314", "gpt-4-32k"])
 async def test_o1_max_completion_tokens(model: str):
     """
     Tests that:
@@ -210,7 +210,7 @@ def test_o3_reasoning_effort():
     assert resp.choices[0].message.content is not None
 
 
-@pytest.mark.parametrize("model", ["o1-preview", "o1-mini", "o1", "o3-mini"])
+@pytest.mark.parametrize("model", ["o1", "o3-mini"])
 def test_streaming_response(model):
     """Test that streaming response is returned correctly"""
     from litellm import completion

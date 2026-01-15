@@ -24,8 +24,8 @@ def test_using_litellm():
 
 
 def test_litellm_proxy_server():
-    # Install the litellm[proxy] package
-    subprocess.run(["pip", "install", "litellm[proxy]"])
+    # Install the local litellm[proxy] package in development mode
+    subprocess.run(["pip", "install", "-e", ".[proxy]"])
 
     # Import the proxy_server module
     try:
@@ -38,10 +38,21 @@ def test_litellm_proxy_server():
 
 
 def test_package_dependencies():
+    """
+    Test that all optional dependencies are correctly specified in extras.
+    """
     try:
-        import tomli
         import pathlib
         import litellm
+        
+        # Try to import tomllib (Python 3.11+) or tomli (older versions)
+        try:
+            import tomllib as tomli
+        except ImportError:
+            try:
+                import tomli
+            except ImportError:
+                pytest.skip("tomli/tomllib not available - skipping dependency check")
 
         # Get the litellm package root path
         litellm_path = pathlib.Path(litellm.__file__).parent.parent
@@ -91,11 +102,30 @@ import requests
 
 
 def test_litellm_proxy_server_config_no_general_settings():
-    # Install the litellm[proxy] package
-    # Start the server
+    # Install the local litellm packages in development mode
+    server_process = None
     try:
-        subprocess.run(["pip", "install", "litellm[proxy]"])
-        subprocess.run(["pip", "install", "litellm[extra_proxy]"])
+        subprocess.run(["pip", "install", "-e", ".[proxy]"])
+        subprocess.run(["pip", "install", "-e", ".[extra_proxy]"])
+        
+        # Ensure Prisma client is generated
+        try:
+            # Get the project root directory (where schema.prisma is located)
+            project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+            print(f"Running prisma generate from: {project_root}")
+            
+            result = subprocess.run(
+                ["prisma", "generate"], 
+                capture_output=True, 
+                text=True, 
+                check=True,
+                cwd=project_root
+            )
+            print(f"Prisma generate stdout: {result.stdout}")
+        except subprocess.CalledProcessError as e:
+            print(f"Prisma generate failed: {e}")
+            print(f"Prisma generate stderr: {e.stderr}")
+            raise
         filepath = os.path.dirname(os.path.abspath(__file__))
         config_fp = f"{filepath}/test_configs/test_config_no_auth.yaml"
         server_process = subprocess.Popen(
@@ -136,8 +166,9 @@ def test_litellm_proxy_server_config_no_general_settings():
         pytest.fail("Failed to connect to the server")
     finally:
         # Shut down the server
-        server_process.terminate()
-        server_process.wait()
+        if server_process:
+            server_process.terminate()
+            server_process.wait()
 
     # Additional assertions can be added here
     assert True

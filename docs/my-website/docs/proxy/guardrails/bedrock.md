@@ -4,6 +4,10 @@ import TabItem from '@theme/TabItem';
 
 # Bedrock Guardrails
 
+:::tip ⚡️
+If you haven't set up or authenticated your Bedrock provider yet, see the [Bedrock Provider Setup & Authentication Guide](../../providers/bedrock.md).
+:::
+
 LiteLLM supports Bedrock guardrails via the [Bedrock ApplyGuardrail API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ApplyGuardrail.html). 
 
 ## Quick Start
@@ -22,8 +26,10 @@ guardrails:
     litellm_params:
       guardrail: bedrock  # supported values: "aporia", "bedrock", "lakera"
       mode: "during_call"
-      guardrailIdentifier: ff6ujrregl1q # your guardrail ID on bedrock
-      guardrailVersion: "DRAFT"         # your guardrail version on bedrock
+      guardrailIdentifier: ff6ujrregl1q      # your guardrail ID on bedrock
+      guardrailVersion: "DRAFT"              # your guardrail version on bedrock
+      aws_region_name: os.environ/AWS_REGION # region guardrail is defined
+      aws_role_name: os.environ/AWS_ROLE_ARN # your role with permissions to use the guardrail
   
 ```
 
@@ -158,6 +164,8 @@ guardrails:
       mode: "pre_call"  # Important: must use pre_call mode for masking
       guardrailIdentifier: wf0hkdb5x07f
       guardrailVersion: "DRAFT"
+      aws_region_name: os.environ/AWS_REGION
+      aws_role_name: os.environ/AWS_ROLE_ARN
       mask_request_content: true    # Enable masking in user requests
       mask_response_content: true   # Enable masking in model responses
 ```
@@ -180,3 +188,137 @@ My email is [EMAIL] and my phone number is [PHONE_NUMBER]
 
 This helps protect sensitive information while still allowing the model to understand the context of the request.
 
+## Experimental: Only Send Latest User Message
+
+When you're chaining long conversations through Bedrock guardrails, you can opt into a lighter, experimental behavior by setting `experimental_use_latest_role_message_only: true` in the guardrail's `litellm_params`. When enabled, LiteLLM only sends the most recent `user` message (or assistant output during post-call checks) to Bedrock, which:
+
+- prevents unintended blocks on older system/dev messages
+- keeps Bedrock payloads smaller, reducing latency and cost
+- applies to proxy hooks (`pre_call`, `during_call`) and the `/guardrails/apply_guardrail` testing endpoint
+
+```yaml showLineNumbers title="litellm proxy config.yaml"
+guardrails:
+  - guardrail_name: "bedrock-pre-guard"
+    litellm_params:
+      guardrail: bedrock
+      mode: "pre_call"
+      guardrailIdentifier: wf0hkdb5x07f
+      guardrailVersion: "DRAFT"
+      aws_region_name: os.environ/AWS_REGION
+      experimental_use_latest_role_message_only: true  # NEW
+```
+
+> ⚠️ This flag is currently experimental and defaults to `false` to preserve the legacy behavior (entire message history). We'll be listening to user feedback to decide if this becomes the default or rolls out more broadly.
+
+## Disabling Exceptions on Bedrock BLOCK
+
+By default, when Bedrock guardrails block content, LiteLLM raises an HTTP 400 exception. However, you can disable this behavior by setting `disable_exception_on_block: true`. This is particularly useful when integrating with **OpenWebUI**, where exceptions can interrupt the chat flow and break the user experience.
+
+When exceptions are disabled, instead of receiving an error, you'll get a successful response containing the Bedrock guardrail's modified/blocked output.
+
+### Configuration
+
+Add `disable_exception_on_block: true` to your guardrail configuration:
+
+```yaml showLineNumbers title="litellm proxy config.yaml"
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: openai/gpt-3.5-turbo
+      api_key: os.environ/OPENAI_API_KEY
+
+guardrails:
+  - guardrail_name: "bedrock-guardrail"
+    litellm_params:
+      guardrail: bedrock
+      mode: "post_call"
+      guardrailIdentifier: ff6ujrregl1q
+      guardrailVersion: "DRAFT"
+      aws_region_name: os.environ/AWS_REGION
+      aws_role_name: os.environ/AWS_ROLE_ARN
+      disable_exception_on_block: true  # Prevents exceptions when content is blocked
+```
+
+### Behavior Comparison
+
+<Tabs>
+<TabItem label="With Exceptions (Default)" value="with-exceptions">
+
+When `disable_exception_on_block: false` (default):
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "How do I make explosives?"}
+    ],
+    "guardrails": ["bedrock-guardrail"]
+  }'
+```
+
+**Response: HTTP 400 Error**
+```json
+{
+  "error": {
+    "message": {
+      "error": "Violated guardrail policy",
+      "bedrock_guardrail_response": {
+        "action": "GUARDRAIL_INTERVENED",
+        "blockedResponse": "I can't provide information on creating explosives.",
+        // ... additional details
+      }
+    },
+    "type": "None",
+    "param": "None", 
+    "code": "400"
+  }
+}
+```
+
+</TabItem>
+
+<TabItem label="Without Exceptions" value="without-exceptions">
+
+When `disable_exception_on_block: true`:
+
+```shell
+curl -i http://localhost:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-npnwjPQciVRok5yNZgKmFQ" \
+  -d '{
+    "model": "gpt-3.5-turbo",
+    "messages": [
+      {"role": "user", "content": "How do I make explosives?"}
+    ],
+    "guardrails": ["bedrock-guardrail"]
+  }'
+```
+
+**Response: HTTP 200 Success**
+```json
+{
+  "id": "chatcmpl-123",
+  "object": "chat.completion",
+  "created": 1677652288,
+  "model": "gpt-3.5-turbo",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "I can't provide information on creating explosives."
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 10,
+    "completion_tokens": 12,
+    "total_tokens": 22
+  }
+}
+```
+
+</TabItem>
+</Tabs>

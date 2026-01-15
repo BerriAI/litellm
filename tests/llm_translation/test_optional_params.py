@@ -23,6 +23,7 @@ from litellm.utils import (
     get_optional_params,
     get_optional_params_embeddings,
     get_optional_params_image_gen,
+    get_requester_metadata,
 )
 
 ## get_optional_params_embeddings
@@ -67,6 +68,39 @@ def test_anthropic_optional_params(stop_sequence, expected_count):
     assert len(optional_params) == expected_count
 
 
+def test_get_requester_metadata_returns_none_for_empty():
+    metadata = {"requester_metadata": {}}
+    assert get_requester_metadata(metadata) is None
+
+
+@patch("litellm.main.openai_chat_completions.completion")
+def test_requester_metadata_forwarded_to_openai(mock_completion):
+    mock_completion.return_value = MagicMock()
+    metadata = {
+        "requester_metadata": {
+            "custom_meta_key": "value",
+            "hidden_params": "secret",
+            "int_value": 123,
+        }
+    }
+
+    original_api_key = litellm.api_key
+    litellm.api_key = "sk-test"
+    original_preview_flag = litellm.enable_preview_features
+    litellm.enable_preview_features = True
+
+    try:
+        litellm.completion(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata=metadata,
+        )
+    finally:
+        litellm.api_key = original_api_key
+        litellm.enable_preview_features = original_preview_flag
+
+    sent_metadata = mock_completion.call_args.kwargs["optional_params"]["metadata"]
+    assert sent_metadata == {"custom_meta_key": "value"}
 
 
 def test_get_optional_params_with_allowed_openai_params():
@@ -74,12 +108,30 @@ def test_get_optional_params_with_allowed_openai_params():
     Test if use can dynamically pass in allowed_openai_params to override default behavior
     """
     litellm.drop_params = True
-    tools = [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_time",
+                "description": "Get the current time in a given location.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name, e.g. San Francisco",
+                        }
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
     response_format = {"type": "json"}
     reasoning_effort = "low"
     optional_params = get_optional_params(
-        model="cf/llama-3.1-70b-instruct", 
-        custom_llm_provider="cloudflare", 
+        model="cf/llama-3.1-70b-instruct",
+        custom_llm_provider="cloudflare",
         allowed_openai_params=["tools", "reasoning_effort", "response_format"],
         tools=tools,
         response_format=response_format,
@@ -88,7 +140,7 @@ def test_get_optional_params_with_allowed_openai_params():
     print(f"optional_params: {optional_params}")
     assert optional_params["tools"] == tools
     assert optional_params["response_format"] == response_format
-    assert optional_params["reasoning_effort"] == reasoning_effort  
+    assert optional_params["reasoning_effort"] == reasoning_effort
 
 
 def test_bedrock_optional_params_embeddings():
@@ -460,6 +512,7 @@ def test_dynamic_drop_params_e2e():
         print(mock_response.call_args.kwargs["data"])
         assert "response_format" not in mock_response.call_args.kwargs["data"]
 
+
 def test_dynamic_pass_additional_params():
     with patch(
         "litellm.llms.custom_httpx.http_handler.HTTPHandler.post", new=MagicMock()
@@ -618,7 +671,10 @@ def test_get_optional_params_num_retries():
     """
     Relevant issue - https://github.com/BerriAI/litellm/issues/5124
     """
-    with patch("litellm.main.get_optional_params", new=MagicMock(return_value={"max_retries": 0})) as mock_client:
+    with patch(
+        "litellm.main.get_optional_params",
+        new=MagicMock(return_value={"max_retries": 0}),
+    ) as mock_client:
         _ = litellm.completion(
             model="gpt-3.5-turbo",
             messages=[{"role": "user", "content": "Hello world"}],
@@ -985,7 +1041,7 @@ def test_watsonx_tool_choice():
         model="gemini-1.5-pro", custom_llm_provider="watsonx", tool_choice="auto"
     )
     print(optional_params)
-    assert optional_params["tool_choice_options"] == "auto"
+    assert optional_params["tool_choice_option"] == "auto"
 
 
 def test_watsonx_text_top_k():
@@ -1425,13 +1481,18 @@ def test_azure_modalities_param():
     assert optional_params["modalities"] == ["text", "audio"]
     assert optional_params["audio"] == {"type": "audio_input", "input": "test.wav"}
 
+
 def test_litellm_proxy_thinking_param():
     optional_params = get_optional_params(
         model="gpt-4o",
         custom_llm_provider="litellm_proxy",
         thinking={"type": "enabled", "budget_tokens": 1024},
     )
-    assert optional_params["extra_body"]["thinking"] == {"type": "enabled", "budget_tokens": 1024}
+    assert optional_params["extra_body"]["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 1024,
+    }
+
 
 def test_gemini_modalities_param():
     optional_params = get_optional_params(
@@ -1441,18 +1502,34 @@ def test_gemini_modalities_param():
     )
 
     assert optional_params["responseModalities"] == ["TEXT", "IMAGE"]
-    
-
 
 
 def test_azure_response_format_param():
     optional_params = litellm.get_optional_params(
         model="azure/o_series/test-o3-mini",
         custom_llm_provider="azure/o_series",
-        tools= [{'type': 'function', 'function': {'name': 'get_current_time', 'description': 'Get the current time in a given location.', 'parameters': {'type': 'object', 'properties': {'location': {'type': 'string', 'description': 'The city name, e.g. San Francisco'}}, 'required': ['location']}}}]
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_current_time",
+                    "description": "Get the current time in a given location.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "location": {
+                                "type": "string",
+                                "description": "The city name, e.g. San Francisco",
+                            }
+                        },
+                        "required": ["location"],
+                    },
+                },
+            }
+        ],
     )
 
-    
+
 @pytest.mark.parametrize(
     "model, provider",
     [
@@ -1471,7 +1548,6 @@ def test_anthropic_unified_reasoning_content(model, provider):
     assert optional_params["thinking"] == {"type": "enabled", "budget_tokens": 4096}
 
 
-
 def test_azure_response_format(monkeypatch):
     monkeypatch.setenv("AZURE_API_VERSION", "2025-02-01")
     optional_params = get_optional_params(
@@ -1481,6 +1557,7 @@ def test_azure_response_format(monkeypatch):
     )
     assert optional_params["response_format"] == {"type": "json_object"}
 
+
 def test_cohere_embed_dimensions_param():
     optional_params = get_optional_params_embeddings(
         model="embed-multilingual-v3.0",
@@ -1488,3 +1565,65 @@ def test_cohere_embed_dimensions_param():
         encoding_format="float",
     )
     assert optional_params["embedding_types"] == ["float"]
+
+
+def test_optional_params_with_additional_drop_params():
+    optional_params = get_optional_params(
+        model="gpt-4o",
+        custom_llm_provider="openai",
+        additional_drop_params=["red"],
+        drop_params=True,
+        red="blue",
+    )
+    print(f"optional_params: {optional_params}")
+    assert "red" not in optional_params
+    assert "red" not in optional_params["extra_body"]
+
+
+def test_azure_ai_cohere_embed_input_type_param():
+    optional_params = get_optional_params_embeddings(
+        model="embed-v-4-0",
+        custom_llm_provider="azure_ai",
+        input_type="text",
+        dimensions=1536,
+    )
+    assert optional_params["dimensions"] == 1536
+    assert optional_params["extra_body"]["input_type"] == "text"
+
+
+def test_optional_params_image_gen_with_aspect_ratio():
+    optional_params = get_optional_params_image_gen(
+        model="imagen-4.0-ultra-generate-001",
+        custom_llm_provider="vertex_ai",
+        aspect_ratio="16:9",
+    )
+    assert optional_params["aspect_ratio"] == "16:9"
+
+
+def test_optional_params_responses_api_allowed_openai_params():
+    from litellm import responses
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        try:
+            response = litellm.responses(
+                model="openai/o1-pro",
+                input="Tell me a three sentence bedtime story about a unicorn.",
+                max_output_tokens=100,
+                top_logprobs=10,
+                allowed_openai_params=["top_logprobs"],
+                client=client,
+            )
+        except Exception as e:
+            import traceback
+
+            traceback.print_exc()
+            print("error: ", e)
+
+        mock_post.assert_called_once()
+        request_body = mock_post.call_args.kwargs
+        print("request_body: ", request_body)
+        assert "top_logprobs" in request_body["json"]

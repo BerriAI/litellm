@@ -1,8 +1,7 @@
 "use client";
-import React, { Suspense, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { modelHubCall } from "@/components/networking";
-import ModelHub from "@/components/model_hub";
+import PublicModelHubPage from "@/components/public_model_hub";
 
 export default function PublicModelHub() {
   const searchParams = useSearchParams()!;
@@ -19,7 +18,5 @@ export default function PublicModelHub() {
    * populate navbar
    *
    */
-  return (
-    <ModelHub accessToken={accessToken} publicPage={true} premiumUser={false} />
-  );
+  return <PublicModelHubPage accessToken={accessToken} />;
 }

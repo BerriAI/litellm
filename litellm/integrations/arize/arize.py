@@ -9,9 +9,11 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 from litellm.integrations.arize import _utils
+from litellm.integrations.arize._utils import ArizeOTELAttributes
 from litellm.integrations.opentelemetry import OpenTelemetry
 from litellm.types.integrations.arize import ArizeConfig
 from litellm.types.services import ServiceLoggerPayload
+from litellm.types.utils import StandardCallbackDynamicParams
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -32,7 +34,7 @@ class ArizeLogger(OpenTelemetry):
 
     @staticmethod
     def set_arize_attributes(span: Span, kwargs, response_obj):
-        _utils.set_attributes(span, kwargs, response_obj)
+        _utils.set_attributes(span, kwargs, response_obj, ArizeOTELAttributes)
         return
 
     @staticmethod
@@ -46,8 +48,10 @@ class ArizeLogger(OpenTelemetry):
         Raises:
             ValueError: If required environment variables are not set.
         """
+        space_id = os.environ.get("ARIZE_SPACE_ID")
         space_key = os.environ.get("ARIZE_SPACE_KEY")
         api_key = os.environ.get("ARIZE_API_KEY")
+        project_name = os.environ.get("ARIZE_PROJECT_NAME")
 
         grpc_endpoint = os.environ.get("ARIZE_ENDPOINT")
         http_endpoint = os.environ.get("ARIZE_HTTP_ENDPOINT")
@@ -66,10 +70,12 @@ class ArizeLogger(OpenTelemetry):
             endpoint = "https://otlp.arize.com/v1"
 
         return ArizeConfig(
+            space_id=space_id,
             space_key=space_key,
             api_key=api_key,
             protocol=protocol,
             endpoint=endpoint,
+            project_name=project_name,
         )
 
     async def async_service_success_hook(
@@ -95,10 +101,79 @@ class ArizeLogger(OpenTelemetry):
         """Arize is used mainly for LLM I/O tracing, sending router+caching metrics adds bloat to arize logs"""
         pass
 
-    def create_litellm_proxy_request_started_span(
-        self,
-        start_time: datetime,
-        headers: dict,
-    ):
-        """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
-        pass
+    # def create_litellm_proxy_request_started_span(
+    #     self,
+    #     start_time: datetime,
+    #     headers: dict,
+    # ):
+    #     """Arize is used mainly for LLM I/O tracing, sending Proxy Server Request adds bloat to arize logs"""
+    #     pass
+
+    async def async_health_check(self):
+        """
+        Performs a health check for Arize integration.
+
+        Returns:
+            dict: Health check result with status and message
+        """
+        try:
+            config = self.get_arize_config()
+
+            if not config.space_id and not config.space_key:
+                return {
+                    "status": "unhealthy",
+                    "error_message": "ARIZE_SPACE_ID or ARIZE_SPACE_KEY environment variable not set",
+                }
+
+            if not config.api_key:
+                return {
+                    "status": "unhealthy",
+                    "error_message": "ARIZE_API_KEY environment variable not set",
+                }
+
+            return {
+                "status": "healthy",
+                "message": "Arize credentials are configured properly",
+            }
+
+        except Exception as e:
+            return {
+                "status": "unhealthy",
+                "error_message": f"Arize health check failed: {str(e)}",
+            }
+
+    def construct_dynamic_otel_headers(
+        self, standard_callback_dynamic_params: StandardCallbackDynamicParams
+    ) -> Optional[dict]:
+        """
+        Construct dynamic Arize headers from standard callback dynamic params
+
+        This is used for team/key based logging.
+
+        Returns:
+            dict: A dictionary of dynamic Arize headers
+        """
+        dynamic_headers = {}
+
+        #########################################################
+        # `arize-space-id` handling
+        # the suggested param is `arize_space_key`
+        #########################################################
+        if standard_callback_dynamic_params.get("arize_space_id"):
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
+                "arize_space_id"
+            )
+        if standard_callback_dynamic_params.get("arize_space_key"):
+            dynamic_headers["arize-space-id"] = standard_callback_dynamic_params.get(
+                "arize_space_key"
+            )
+
+        #########################################################
+        # `api_key` handling
+        #########################################################
+        if standard_callback_dynamic_params.get("arize_api_key"):
+            dynamic_headers["api_key"] = standard_callback_dynamic_params.get(
+                "arize_api_key"
+            )
+
+        return dynamic_headers

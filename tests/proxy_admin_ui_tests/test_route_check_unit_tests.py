@@ -1,7 +1,7 @@
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 import datetime as dt
 from datetime import datetime
 
@@ -83,12 +83,14 @@ def test_is_llm_api_route():
     )
     assert (
         RouteChecks.is_llm_api_route(
-            "/openai/deployments/anthropic/claude-3-5-sonnet-20240620/chat/completions"
+            "/openai/deployments/anthropic/claude-sonnet-4-5-20250929/chat/completions"
         )
         is True
     )
 
     # MCP routes
+    assert RouteChecks.is_llm_api_route("/mcp") is True
+    assert RouteChecks.is_llm_api_route("/mcp/") is True
     assert RouteChecks.is_llm_api_route("/mcp/tools") is True
     assert RouteChecks.is_llm_api_route("/mcp/tools/call") is True
     assert RouteChecks.is_llm_api_route("/mcp/tools/list") is True

@@ -1,11 +1,13 @@
 import json
 import os
 import time
-import uuid
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from httpx import Headers, Response
+from openai.types.file_deleted import FileDeleted
 
+from litellm._uuid import uuid
+from litellm.files.utils import FilesAPIUtils
 from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.files.transformation import (
@@ -23,6 +25,7 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     CreateFileRequest,
     FileTypes,
+    HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
     OpenAIFileObject,
     PathLike,
@@ -260,10 +263,13 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
             raise ValueError("file is required")
         extracted_file_data = extract_file_data(file_data)
         extracted_file_data_content = extracted_file_data.get("content")
-        if (
-            create_file_data.get("purpose") == "batch"
-            and extracted_file_data.get("content_type") == "application/jsonl"
-            and extracted_file_data_content is not None
+
+        if extracted_file_data_content is None:
+            raise ValueError("file content is required")
+
+        if FilesAPIUtils.is_batch_jsonl_file(
+            create_file_data=create_file_data,
+            extracted_file_data=extracted_file_data,
         ):
             ## 1. If jsonl, check if there's a model name
             file_content = self._get_content_from_openai_file(
@@ -279,7 +285,7 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
                     openai_jsonl_content
                 )
             )
-            return json.dumps(vertex_jsonl_content)
+            return "\n".join(json.dumps(item) for item in vertex_jsonl_content)
         elif isinstance(extracted_file_data_content, bytes):
             return extracted_file_data_content
         else:
@@ -328,6 +334,70 @@ class VertexAIFilesConfig(VertexBase, BaseFilesConfig):
         return VertexAIError(
             status_code=status_code, message=error_message, headers=headers
         )
+
+    def transform_retrieve_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("VertexAIFilesConfig does not support file retrieval")
+
+    def transform_retrieve_file_response(
+        self,
+        raw_response: Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> OpenAIFileObject:
+        raise NotImplementedError("VertexAIFilesConfig does not support file retrieval")
+
+    def transform_delete_file_request(
+        self,
+        file_id: str,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("VertexAIFilesConfig does not support file deletion")
+
+    def transform_delete_file_response(
+        self,
+        raw_response: Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> FileDeleted:
+        raise NotImplementedError("VertexAIFilesConfig does not support file deletion")
+
+    def transform_list_files_request(
+        self,
+        purpose: Optional[str],
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("VertexAIFilesConfig does not support file listing")
+
+    def transform_list_files_response(
+        self,
+        raw_response: Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> List[OpenAIFileObject]:
+        raise NotImplementedError("VertexAIFilesConfig does not support file listing")
+
+    def transform_file_content_request(
+        self,
+        file_content_request,
+        optional_params: dict,
+        litellm_params: dict,
+    ) -> tuple[str, dict]:
+        raise NotImplementedError("VertexAIFilesConfig does not support file content retrieval")
+
+    def transform_file_content_response(
+        self,
+        raw_response: Response,
+        logging_obj: LiteLLMLoggingObj,
+        litellm_params: dict,
+    ) -> HttpxBinaryResponseContent:
+        raise NotImplementedError("VertexAIFilesConfig does not support file content retrieval")
 
 
 class VertexAIJsonlFilesTransformation(VertexGeminiConfig):

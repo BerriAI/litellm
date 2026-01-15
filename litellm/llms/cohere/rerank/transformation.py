@@ -7,8 +7,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.rerank import OptionalRerankParams, RerankRequest
-from litellm.types.utils import RerankResponse
+from litellm.types.rerank import OptionalRerankParams, RerankRequest, RerankResponse
 
 from ..common_utils import CohereError
 
@@ -21,7 +20,12 @@ class CohereRerankConfig(BaseRerankConfig):
     def __init__(self) -> None:
         pass
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")
@@ -53,26 +57,27 @@ class CohereRerankConfig(BaseRerankConfig):
         return_documents: Optional[bool] = True,
         max_chunks_per_doc: Optional[int] = None,
         max_tokens_per_doc: Optional[int] = None,
-    ) -> OptionalRerankParams:
+    ) -> Dict:
         """
         Map Cohere rerank params
 
         No mapping required - returns all supported params
         """
-        return OptionalRerankParams(
+        return dict(OptionalRerankParams(
             query=query,
             documents=documents,
             top_n=top_n,
             rank_fields=rank_fields,
             return_documents=return_documents,
             max_chunks_per_doc=max_chunks_per_doc,
-        )
+        ))
 
     def validate_environment(
         self,
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        optional_params: Optional[dict] = None,
     ) -> dict:
         if api_key is None:
             api_key = (
@@ -87,7 +92,7 @@ class CohereRerankConfig(BaseRerankConfig):
             )
 
         default_headers = {
-            "Authorization": f"bearer {api_key}",
+            "Authorization": f"Bearer {api_key}",
             "accept": "application/json",
             "content-type": "application/json",
         }
@@ -102,7 +107,7 @@ class CohereRerankConfig(BaseRerankConfig):
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: OptionalRerankParams,
+        optional_rerank_params: Dict,
         headers: dict,
     ) -> dict:
         if "query" not in optional_rerank_params:

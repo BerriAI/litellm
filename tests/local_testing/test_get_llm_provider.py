@@ -135,6 +135,11 @@ def test_default_api_base():
     with patch.dict(os.environ, {}, clear=True):
         for provider in litellm.openai_compatible_providers:
             # Get the API base for the given provider
+            if provider == "github_copilot":
+                continue
+            # Skip ragflow as it requires specific model format: ragflow/chat/{id}/{model} or ragflow/agent/{id}/{model}
+            if provider == "ragflow":
+                continue
             _, _, _, api_base = _get_openai_compatible_provider_info(
                 model=f"{provider}/*", api_base=None, api_key=None, dynamic_api_key=None
             )

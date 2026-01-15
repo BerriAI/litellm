@@ -80,7 +80,7 @@ def test_embedding(client):
             my_custom_logger.async_success_embedding is True
         )  # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert (
-            my_custom_logger.async_embedding_kwargs["model"] == "azure-embedding-model"
+            my_custom_logger.async_embedding_kwargs["model"] == "text-embedding-ada-002"
         )  # checks if kwargs passed to async_log_success_event are correct
         kwargs = my_custom_logger.async_embedding_kwargs
         litellm_params = kwargs.get("litellm_params")
@@ -91,7 +91,9 @@ def test_embedding(client):
         assert "headers" in metadata
         proxy_server_request = litellm_params.get("proxy_server_request")
         model_info = litellm_params.get("model_info")
-        assert proxy_server_request == {
+        # Remove arrival_time from comparison as it's dynamic
+        proxy_server_request_copy = {k: v for k, v in proxy_server_request.items() if k != "arrival_time"}
+        assert proxy_server_request_copy == {
             "url": "http://testserver/embeddings",
             "method": "POST",
             "headers": {
@@ -164,7 +166,7 @@ def test_chat_completion(client):
             my_custom_logger.async_success == True
         )  # checks if the status of async_success is True, only the async_log_success_event can set this to true
         assert (
-            my_custom_logger.async_completion_kwargs["model"] == "chatgpt-v-3"
+            my_custom_logger.async_completion_kwargs["model"] == "gpt-4.1-nano"
         )  # checks if kwargs passed to async_log_success_event are correct
         print(
             "\n\n Custom Logger Async Completion args",
@@ -188,7 +190,9 @@ def test_chat_completion(client):
         }
 
         assert "authorization" not in proxy_server_request_object["headers"]
-        assert proxy_server_request_object == {
+        # Remove arrival_time from comparison as it's dynamic
+        proxy_server_request_copy = {k: v for k, v in proxy_server_request_object.items() if k != "arrival_time"}
+        assert proxy_server_request_copy == {
             "url": "http://testserver/chat/completions",
             "method": "POST",
             "headers": {

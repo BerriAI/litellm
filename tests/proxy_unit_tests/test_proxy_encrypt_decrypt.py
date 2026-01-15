@@ -21,11 +21,13 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 
 def test_encrypt_decrypt_with_master_key():
     setattr(proxy_server, "master_key", "sk-1234")
-    assert decrypt_value_helper(encrypt_value_helper("test")) == "test"
-    assert decrypt_value_helper(encrypt_value_helper(10)) == 10
-    assert decrypt_value_helper(encrypt_value_helper(True)) is True
-    assert decrypt_value_helper(encrypt_value_helper(None)) is None
-    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10})) == {"rpm": 10}
+    assert decrypt_value_helper(encrypt_value_helper("test"), key="test_key") == "test"
+    assert decrypt_value_helper(encrypt_value_helper(10), key="test_key") == 10
+    assert decrypt_value_helper(encrypt_value_helper(True), key="test_key") is True
+    assert decrypt_value_helper(encrypt_value_helper(None), key="test_key") is None
+    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10}), key="test_key") == {
+        "rpm": 10
+    }
 
     # encryption should actually occur for strings
     assert encrypt_value_helper("test") != "test"
@@ -34,11 +36,13 @@ def test_encrypt_decrypt_with_master_key():
 def test_encrypt_decrypt_with_salt_key():
     os.environ["LITELLM_SALT_KEY"] = "sk-salt-key2222"
     print(f"LITELLM_SALT_KEY: {os.environ['LITELLM_SALT_KEY']}")
-    assert decrypt_value_helper(encrypt_value_helper("test")) == "test"
-    assert decrypt_value_helper(encrypt_value_helper(10)) == 10
-    assert decrypt_value_helper(encrypt_value_helper(True)) is True
-    assert decrypt_value_helper(encrypt_value_helper(None)) is None
-    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10})) == {"rpm": 10}
+    assert decrypt_value_helper(encrypt_value_helper("test"), key="test_key") == "test"
+    assert decrypt_value_helper(encrypt_value_helper(10), key="test_key") == 10
+    assert decrypt_value_helper(encrypt_value_helper(True), key="test_key") is True
+    assert decrypt_value_helper(encrypt_value_helper(None), key="test_key") is None
+    assert decrypt_value_helper(encrypt_value_helper({"rpm": 10}), key="test_key") == {
+        "rpm": 10
+    }
 
     # encryption should actually occur for strings
     assert encrypt_value_helper("test") != "test"

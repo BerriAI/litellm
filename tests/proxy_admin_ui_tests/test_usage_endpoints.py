@@ -16,7 +16,7 @@ For all tests - test the following:
 import os
 import sys
 import traceback
-import uuid
+from litellm._uuid import uuid
 from datetime import datetime
 
 from dotenv import load_dotenv
@@ -87,12 +87,12 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.caching.caching import DualCache
+from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 from litellm.proxy._types import (
     DynamoDBArgs,
     GenerateKeyRequest,
     RegenerateKeyRequest,
     KeyRequest,
-    LiteLLM_UpperboundKeyGenerateParams,
     NewCustomerRequest,
     NewTeamRequest,
     NewUserRequest,

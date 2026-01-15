@@ -14,8 +14,8 @@ async def handle_oauth2_proxy_request(request: Request) -> UserAPIKeyAuth:
 
     verbose_proxy_logger.debug("Handling oauth2 proxy request")
     # Define the OAuth2 config mappings
-    oauth2_config_mappings: Dict[str, str] = general_settings.get(
-        "oauth2_config_mappings", None
+    oauth2_config_mappings: Dict[str, str] = (
+        general_settings.get("oauth2_config_mappings") or {}
     )
     verbose_proxy_logger.debug(f"Oauth2 config mappings: {oauth2_config_mappings}")
 

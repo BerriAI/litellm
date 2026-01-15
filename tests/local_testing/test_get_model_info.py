@@ -158,26 +158,6 @@ def test_get_model_info_ft_model_with_provider_prefix():
     assert info["key"] == "ft:gpt-3.5-turbo"
 
 
-def test_get_whitelisted_models():
-    """
-    Snapshot of all bedrock models as of 12/24/2024.
-
-    Enforce any new bedrock chat model to be added as `bedrock_converse` unless explicitly whitelisted.
-
-    Create whitelist to prevent naming regressions for older litellm versions.
-    """
-    whitelisted_models = []
-    for model, info in litellm.model_cost.items():
-        if info["litellm_provider"] == "bedrock" and info["mode"] == "chat":
-            whitelisted_models.append(model)
-
-        # Write to a local file
-    with open("whitelisted_bedrock_models.txt", "w") as file:
-        for model in whitelisted_models:
-            file.write(f"{model}\n")
-
-    print("whitelisted_models written to whitelisted_bedrock_models.txt")
-
 
 def _enforce_bedrock_converse_models(
     model_cost: List[Dict[str, Any]], whitelist_models: List[str]
@@ -392,3 +372,86 @@ def test_get_model_info_cost_calculator_bedrock_region_cris_stripped(model, prov
     print("info", info)
     assert info["key"] == "us.anthropic.claude-3-haiku-20240307-v1:0"
     assert info["litellm_provider"] == "bedrock"
+
+
+def test_get_model_info_case_insensitive_lookup(monkeypatch):
+    """
+    Test that model info lookup is case-insensitive.
+
+    This ensures that users can use lowercase model names even when the model cost
+    map has mixed-case keys (e.g., "Qwen/Qwen3-Next-80B-A3B-Thinking").
+
+    Related Slack discussion: Users were getting "does not support parameters: ['tools']"
+    errors when using lowercase model names like "qwen/qwen3-next-80b-a3b-thinking"
+    because the lookup was case-sensitive.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register a test model with mixed-case name
+    litellm.register_model(
+        {
+            "together_ai/Qwen/Qwen3-Next-80B-A3B-Thinking": {
+                "input_cost_per_token": 0.0001,
+                "output_cost_per_token": 0.0002,
+                "litellm_provider": "together_ai",
+                "supports_function_calling": True,
+            }
+        }
+    )
+
+    # Test 1: Exact case should work
+    info = litellm.get_model_info(
+        model="Qwen/Qwen3-Next-80B-A3B-Thinking", custom_llm_provider="together_ai"
+    )
+    assert info is not None
+    assert info["supports_function_calling"] is True
+
+    # Test 2: Lowercase should also work (case-insensitive lookup)
+    info_lower = litellm.get_model_info(
+        model="qwen/qwen3-next-80b-a3b-thinking", custom_llm_provider="together_ai"
+    )
+    assert info_lower is not None
+    assert info_lower["supports_function_calling"] is True
+
+    # Test 3: Mixed case should also work
+    info_mixed = litellm.get_model_info(
+        model="QWEN/qwen3-NEXT-80b-a3b-thinking", custom_llm_provider="together_ai"
+    )
+    assert info_mixed is not None
+    assert info_mixed["supports_function_calling"] is True
+
+
+def test_get_model_info_case_insensitive_supports_function_calling(monkeypatch):
+    """
+    Test that supports_function_calling check works with case-insensitive model lookup.
+    """
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register a model with mixed-case name that supports function calling
+    litellm.register_model(
+        {
+            "test_provider/TestModel-ABC": {
+                "input_cost_per_token": 0.0001,
+                "output_cost_per_token": 0.0002,
+                "litellm_provider": "test_provider",
+                "supports_function_calling": True,
+            }
+        }
+    )
+
+    # Test that supports_function_calling works with lowercase model name
+    from litellm.utils import supports_function_calling
+
+    # Exact case
+    assert (
+        supports_function_calling("TestModel-ABC", custom_llm_provider="test_provider")
+        is True
+    )
+
+    # Lowercase (should now work with case-insensitive lookup)
+    assert (
+        supports_function_calling("testmodel-abc", custom_llm_provider="test_provider")
+        is True
+    )

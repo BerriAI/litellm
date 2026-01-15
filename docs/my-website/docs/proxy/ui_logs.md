@@ -69,13 +69,13 @@ general_settings:
 
 You can control how many logs are deleted per run using this environment variable:
 
-`SPEND_LOG_RUN_LOOPS=200  # Deletes up to 200,000 logs in one run (batch size = 1000)`
+`SPEND_LOG_RUN_LOOPS=200  # Deletes up to 200,000 logs in one run`
+
+Set `SPEND_LOG_CLEANUP_BATCH_SIZE` to control how many logs are deleted per batch (default `1000`).
 
 For detailed architecture and how it works, see [Spend Logs Deletion](../proxy/spend_logs_deletion).
 
 
+## What gets logged? 
 
-
-
-
-
+[Here's a schema](https://github.com/BerriAI/litellm/blob/1cdd4065a645021aea931afb9494e7694b4ec64b/schema.prisma#L285) breakdown of what gets logged.

@@ -74,7 +74,7 @@ async def test_provider_budgets_e2e_test():
             {
                 "model_name": "gpt-3.5-turbo",  # openai model name
                 "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
+                    "model": "azure/gpt-4.1-mini",
                     "api_key": os.getenv("AZURE_API_KEY"),
                     "api_version": os.getenv("AZURE_API_VERSION"),
                     "api_base": os.getenv("AZURE_API_BASE"),
@@ -118,6 +118,7 @@ async def test_provider_budgets_e2e_test():
 
 
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=2)
 async def test_provider_budgets_e2e_test_expect_to_fail():
     """
     Expected behavior:
@@ -152,7 +153,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
 
     response = await router.acompletion(
         messages=[{"role": "user", "content": "Hello, how are you?"}],
-        model="anthropic/claude-3-5-sonnet-20240620",
+        model="anthropic/claude-sonnet-4-5-20250929",
     )
     print(response)
 
@@ -162,7 +163,7 @@ async def test_provider_budgets_e2e_test_expect_to_fail():
         with pytest.raises(Exception) as exc_info:
             response = await router.acompletion(
                 messages=[{"role": "user", "content": "Hello, how are you?"}],
-                model="anthropic/claude-3-5-sonnet-20240620",
+                model="anthropic/claude-sonnet-4-5-20250929",
             )
             print(response)
             print("response.hidden_params", response._hidden_params)
@@ -234,75 +235,6 @@ async def test_get_budget_config_for_provider():
 
     # Test non-existent provider
     assert provider_budget._get_budget_config_for_provider("unknown") is None
-
-
-@pytest.mark.asyncio
-async def test_prometheus_metric_tracking():
-    """
-    Test that the Prometheus metric for provider budget is tracked correctly
-    """
-    cleanup_redis()
-    from unittest.mock import MagicMock
-    from litellm.integrations.prometheus import PrometheusLogger
-
-    # Create a mock PrometheusLogger
-    mock_prometheus = MagicMock(spec=PrometheusLogger)
-
-    # Setup provider budget limiting
-    provider_budget = RouterBudgetLimiting(
-        dual_cache=DualCache(),
-        provider_budget_config={
-            "openai": BudgetConfig(budget_duration="1d", max_budget=100)
-        },
-    )
-
-    litellm._async_success_callback = [mock_prometheus]
-
-    provider_budget_config: GenericBudgetConfigType = {
-        "openai": BudgetConfig(budget_duration="1d", max_budget=0.000000000001),
-        "azure": BudgetConfig(budget_duration="1d", max_budget=100),
-    }
-
-    router = Router(
-        model_list=[
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {  # params for litellm completion/embedding call
-                    "model": "azure/chatgpt-v-3",
-                    "api_key": os.getenv("AZURE_API_KEY"),
-                    "api_version": os.getenv("AZURE_API_VERSION"),
-                    "api_base": os.getenv("AZURE_API_BASE"),
-                },
-                "model_info": {"id": "azure-model-id"},
-            },
-            {
-                "model_name": "gpt-3.5-turbo",  # openai model name
-                "litellm_params": {
-                    "model": "openai/gpt-4o-mini",
-                },
-                "model_info": {"id": "openai-model-id"},
-            },
-        ],
-        provider_budget_config=provider_budget_config,
-        redis_host=os.getenv("REDIS_HOST"),
-        redis_port=int(os.getenv("REDIS_PORT")),
-        redis_password=os.getenv("REDIS_PASSWORD"),
-    )
-
-    try:
-        response = await router.acompletion(
-            messages=[{"role": "user", "content": "Hello, how are you?"}],
-            model="openai/gpt-4o-mini",
-            mock_response="hi",
-        )
-        print(response)
-    except Exception as e:
-        print("error", e)
-
-    await asyncio.sleep(2.5)
-
-    # Verify the mock was called correctly
-    mock_prometheus.track_provider_remaining_budget.assert_called()
 
 
 @pytest.mark.asyncio

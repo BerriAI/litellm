@@ -28,7 +28,7 @@ import Image from '@theme/IdealImage';
 
 :::info
 
-Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/#trial)
+Get a free 7-day LiteLLM Enterprise trial here. [Start here](https://www.litellm.ai/enterprise#trial)
 
 **No call needed**
 

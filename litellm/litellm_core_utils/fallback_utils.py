@@ -1,9 +1,9 @@
-import uuid
-from copy import deepcopy
+from litellm._uuid import uuid
 from typing import Optional
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.core_helpers import safe_deep_copy, filter_internal_params
 
 from .asyncify import run_async_function
 
@@ -41,13 +41,16 @@ async def async_completion_with_fallbacks(**kwargs):
     most_recent_exception_str: Optional[str] = None
     for fallback in fallbacks:
         try:
-            completion_kwargs = deepcopy(base_kwargs)
+            completion_kwargs = safe_deep_copy(base_kwargs)
             # Handle dictionary fallback configurations
             if isinstance(fallback, dict):
                 model = fallback.pop("model", original_model)
                 completion_kwargs.update(fallback)
             else:
                 model = fallback
+
+            # Filter out internal parameters that shouldn't be sent to provider APIs
+            completion_kwargs = filter_internal_params(completion_kwargs)
 
             response = await litellm.acompletion(
                 **completion_kwargs,

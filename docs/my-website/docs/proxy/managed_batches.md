@@ -147,7 +147,7 @@ print(file_response.text)
 ```python showLineNumbers title="create_batch.py"
 ...
 
-client.batches.list(limit=10, extra_body={"target_model_names": "gpt-4o-batch"})
+client.batches.list(limit=10, extra_query={"target_model_names": "gpt-4o-batch"})
 ```
 
 ### [Coming Soon] Cancel a batch
@@ -261,3 +261,14 @@ print(f"status: {status}")
 When a `target_model_names` is specified, the file is written to all deployments that match the `target_model_names`.
 
 No additional infrastructure is required.
+
+## Could the batch be created at the eastus-01 deployment but a subsequent get of the batch could be routed to (a different) eastus2-01 deployment ?
+
+**A.** You can loadbalance b/w multiple models for the initial create batch. Once that's created - we return a file id, which encodes the model deployment used, so it's sticky and only sends any get/delete to that deployment. 
+
+
+
+
+
+
+
