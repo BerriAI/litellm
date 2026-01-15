@@ -98,9 +98,9 @@ class TestCreateToolFunction:
 
         assert callable(func)
 
-        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_get_client:
             async_client = _create_mock_client("post", "verified")
-            mock_client.return_value = async_client
+            mock_get_client.return_value = async_client
 
             result = await func(**{"2fa-code": "123456"})
             assert result == "verified"
