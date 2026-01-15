@@ -5,7 +5,8 @@ Features (independently enable-able):
 1. Responses API continuity: when a `previous_response_id` is provided, route to the
    deployment that generated the original response (highest priority).
 2. API-key affinity: map an API key hash -> deployment id for a TTL and re-use that
-   deployment for subsequent requests to the same model-map key.
+   deployment for subsequent requests to the same router deployment model name
+   (alias-safe, aligns to `model_map_information.model_map_key`).
 
 This is designed to support "implicit prompt caching" scenarios (no explicit cache_control),
 where routing to a consistent deployment is still beneficial.
@@ -106,9 +107,18 @@ class DeploymentAffinityCheck(CustomLogger):
         """
         Derive a stable model-map key from a router deployment dict.
 
+        Primary source: `deployment.model_name` (Router's canonical group name after
+        alias resolution). This is stable across provider-specific deployments (e.g.,
+        Azure/Vertex/Bedrock for the same logical model) and aligns with
+        `model_map_information.model_map_key` in standard logging.
+
         Prefer `base_model` when available (important for Azure), otherwise fall back to
         parsing `litellm_params.model`.
         """
+        model_name = deployment.get("model_name")
+        if isinstance(model_name, str) and model_name:
+            return model_name
+
         model_info = deployment.get("model_info")
         if isinstance(model_info, dict):
             base_model = model_info.get("base_model")
@@ -209,9 +219,7 @@ class DeploymentAffinityCheck(CustomLogger):
         return None
 
     @staticmethod
-    def _find_deployment_by_model_id(
-        healthy_deployments: List[dict], model_id: str
-    ) -> Optional[dict]:
+    def _find_deployment_by_model_id(healthy_deployments: List[dict], model_id: str) -> Optional[dict]:
         for deployment in healthy_deployments:
             model_info = deployment.get("model_info")
             if not isinstance(model_info, dict):
@@ -241,9 +249,7 @@ class DeploymentAffinityCheck(CustomLogger):
         if self.enable_responses_api_affinity:
             previous_response_id = request_kwargs.get("previous_response_id")
             if previous_response_id is not None:
-                responses_model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(
-                    str(previous_response_id)
-                )
+                responses_model_id = ResponsesAPIRequestUtils.get_model_id_from_response_id(str(previous_response_id))
                 if responses_model_id is not None:
                     deployment = self._find_deployment_by_model_id(
                         healthy_deployments=typed_healthy_deployments,
@@ -345,29 +351,25 @@ class DeploymentAffinityCheck(CustomLogger):
             )
             return None
 
-        # Primary scope: stable model-map key (used to handle aliases that ultimately map to the same
-        # underlying base model).
-        model_map_key: Optional[str] = None
-        base_model = model_info.get("base_model")
-        if isinstance(base_model, str) and base_model:
-            model_map_key = base_model
-        else:
-            litellm_model_name = kwargs.get("model")
-            if isinstance(litellm_model_name, str) and litellm_model_name:
-                model_map_key = self._get_model_map_key_from_litellm_model_name(
-                    litellm_model_name
-                )
+        # Scope affinity by the Router deployment model name (alias-safe, consistent across
+        # heterogeneous providers, and matches standard logging's `model_map_key`).
+        deployment_model_name: Optional[str] = None
+        for metadata in metadata_dicts:
+            maybe_deployment_model_name = metadata.get("deployment_model_name")
+            if isinstance(maybe_deployment_model_name, str) and maybe_deployment_model_name:
+                deployment_model_name = maybe_deployment_model_name
+                break
 
-        if not model_map_key:
+        if not deployment_model_name:
             verbose_router_logger.warning(
-                "DeploymentAffinityCheck: model_map_key missing; skipping affinity cache update. model_id=%s",
+                "DeploymentAffinityCheck: deployment_model_name missing; skipping affinity cache update. model_id=%s",
                 model_id,
             )
             return None
 
         try:
             cache_key = self.get_affinity_cache_key(
-                model_group=model_map_key, user_key=user_key
+                model_group=deployment_model_name, user_key=user_key
             )
             await self.cache.async_set_cache(
                 cache_key,
@@ -377,7 +379,7 @@ class DeploymentAffinityCheck(CustomLogger):
 
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: set affinity mapping model_map_key=%s deployment=%s ttl=%s user_key=%s",
-                model_map_key,
+                deployment_model_name,
                 model_id,
                 self.ttl_seconds,
                 self._shorten_for_logs(user_key),
@@ -386,7 +388,7 @@ class DeploymentAffinityCheck(CustomLogger):
             # Non-blocking: affinity is a best-effort optimization.
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: failed to set affinity cache. model_map_key=%s error=%s",
-                model_map_key,
+                deployment_model_name,
                 e,
             )
 
