@@ -109,7 +109,14 @@ const sidebars = {
       type: "category",
       label: "AI Tools (OpenWebUI, Claude Code, etc.)",
       items: [
-        "tutorials/claude_responses_api",
+        {
+          type: "category",
+          label: "Claude Code",
+          items: [
+            "tutorials/claude_responses_api",
+            "tutorials/claude_mcp",
+          ]
+        },
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
