@@ -678,6 +678,11 @@ async def test_prepare_key_update_data():
     updated_data = await prepare_key_update_data(data, existing_key_row)
     assert updated_data["metadata"] is None
 
+    # Test duration "-1" sets expires to None (never expires)
+    data = UpdateKeyRequest(key="test_key", duration="-1")
+    updated_data = await prepare_key_update_data(data, existing_key_row)
+    assert updated_data["expires"] is None
+
 
 @pytest.mark.parametrize(
     "env_vars, expected_url",
@@ -1569,6 +1574,10 @@ async def test_health_check_not_called_when_disabled(monkeypatch):
     mock_prisma.health_check = AsyncMock()
     mock_prisma.check_view_exists = AsyncMock()
     mock_prisma._set_spend_logs_row_count_in_proxy_state = AsyncMock()
+    # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
+    mock_db = MagicMock()
+    mock_db.start_token_refresh_task = AsyncMock()
+    mock_prisma.db = mock_db
     # Mock PrismaClient constructor
     monkeypatch.setattr(
         "litellm.proxy.proxy_server.PrismaClient", lambda **kwargs: mock_prisma

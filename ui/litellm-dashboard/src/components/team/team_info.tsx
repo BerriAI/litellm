@@ -48,6 +48,7 @@ import EditLoggingSettings from "./EditLoggingSettings";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import TeamMembersComponent from "./team_member_view";
+import DurationSelect from "../common_components/DurationSelect";
 
 export interface TeamMembership {
   user_id: string;
@@ -413,6 +414,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       };
 
       updateData.max_budget = mapEmptyStringToNull(updateData.max_budget);
+      updateData.team_member_budget_duration = values.team_member_budget_duration;
 
       if (values.team_member_budget !== undefined) {
         updateData.team_member_budget = Number(values.team_member_budget);
@@ -463,6 +465,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
       delete values.agents_and_groups;
 
+      // Handle vector stores permissions
+      if (values.vector_stores && values.vector_stores.length > 0) {
+        updateData.object_permission.vector_stores = values.vector_stores;
+      }
+
       const response = await teamUpdateCall(accessToken, updateData);
 
       NotificationsManager.success("Team settings updated successfully");
@@ -503,7 +510,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             Back to Teams
           </TremorButton>
           <Title>{info.team_alias}</Title>
-          <div className="flex items-center cursor-pointer">
+          <div className="flex items-center">
             <Text className="text-gray-500 font-mono">{info.team_id}</Text>
             <Button
               type="text"
@@ -645,6 +652,8 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     budget_duration: info.budget_duration,
                     team_member_tpm_limit: info.team_member_budget_table?.tpm_limit,
                     team_member_rpm_limit: info.team_member_budget_table?.rpm_limit,
+                    team_member_budget: info.team_member_budget_table?.max_budget,
+                    team_member_budget_duration: info.team_member_budget_table?.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
                     disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
                     metadata: info.metadata
@@ -742,6 +751,13 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <NumericalInput step={0.01} precision={2} style={{ width: "100%" }} />
                   </Form.Item>
 
+                  <Form.Item label="Team Member Budget Duration" name="team_member_budget_duration">
+                    <DurationSelect
+                      onChange={(value) => form.setFieldValue("team_member_budget_duration", value)}
+                      value={form.getFieldValue("team_member_budget_duration")}
+                    />
+                  </Form.Item>
+
                   <Form.Item
                     label="Team Member Key Duration (eg: 1d, 1mo)"
                     name="team_member_key_duration"
@@ -824,7 +840,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     <Switch checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
 
-                  <Form.Item label="Vector Stores" name="vector_stores">
+                  <Form.Item label="Vector Stores" name="vector_stores" aria-label="Vector Stores">
                     <VectorStoreSelector
                       onChange={(values: string[]) => form.setFieldValue("vector_stores", values)}
                       value={form.getFieldValue("vector_stores")}
@@ -986,6 +1002,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       </Tooltip>
                     </Text>
                     <div>Max Budget: {info.team_member_budget_table?.max_budget || "No Limit"}</div>
+                    <div>Budget Duration: {info.team_member_budget_table?.budget_duration || "No Limit"}</div>
                     <div>Key Duration: {info.metadata?.team_member_key_duration || "No Limit"}</div>
                     <div>TPM Limit: {info.team_member_budget_table?.tpm_limit || "No Limit"}</div>
                     <div>RPM Limit: {info.team_member_budget_table?.rpm_limit || "No Limit"}</div>

@@ -9,8 +9,11 @@
     "lint": "next lint",
     "test": "vitest",
     "test:watch": "vitest -w",
+    "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "e2e": "playwright test --config e2e_tests/playwright.config.ts",
+    "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.54.0",
@@ -44,6 +47,8 @@
     "uuid": "^11.1.0"
   },
   "devDependencies": {
+    "@neondatabase/api-client": "^2.6.0",
+    "@playwright/test": "^1.57.0",
     "@tailwindcss/forms": "^0.5.7",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.8.0",
@@ -61,6 +66,7 @@
     "@vitest/coverage-v8": "^3.2.4",
     "@vitest/ui": "^3.2.4",
     "autoprefixer": "^10.4.17",
+    "dotenv": "^17.2.3",
     "eslint": "^8",
     "eslint-config-next": "14.2.32",
     "eslint-config-prettier": "^10.1.8",

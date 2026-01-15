@@ -85,4 +85,5 @@ MCP guardrails work with all LiteLLM-supported guardrail providers:
 - **Bedrock**: AWS Bedrock guardrails
 - **Lakera**: Content moderation
 - **Aporia**: Custom guardrails
+- **Noma**: Noma Security
 - **Custom**: Your own guardrail implementations

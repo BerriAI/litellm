@@ -1197,6 +1197,39 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def output_text(self) -> str:
+        """
+        Convenience property that aggregates all `output_text` items from the `output` list.
+
+        If no `output_text` content blocks exist, then an empty string is returned.
+
+        This matches the OpenAI SDK's Response.output_text behavior.
+        """
+        texts: List[str] = []
+        for output_item in self.output:
+            # Handle both dict and object access patterns
+            if isinstance(output_item, dict):
+                item_type = output_item.get("type")
+                content = output_item.get("content", [])
+            else:
+                item_type = getattr(output_item, "type", None)
+                content = getattr(output_item, "content", [])
+
+            if item_type == "message" and content:
+                for content_item in content:
+                    if isinstance(content_item, dict):
+                        content_type = content_item.get("type")
+                        text = content_item.get("text", "") or ""
+                    else:
+                        content_type = getattr(content_item, "type", None)
+                        text = getattr(content_item, "text", "") or ""
+
+                    if content_type == "output_text":
+                        texts.append(text)
+
+        return "".join(texts)
+
 
 class ResponsesAPIStreamEvents(str, Enum):
     """

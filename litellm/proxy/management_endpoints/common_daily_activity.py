@@ -227,6 +227,41 @@ def update_breakdown_metrics(
         )
     )
 
+    # Update endpoint breakdown
+    if record.endpoint:
+        if record.endpoint not in breakdown.endpoints:
+            breakdown.endpoints[record.endpoint] = MetricWithMetadata(
+                metrics=SpendMetrics(),
+                metadata={},
+            )
+        breakdown.endpoints[record.endpoint].metrics = update_metrics(
+            breakdown.endpoints[record.endpoint].metrics, record
+        )
+
+        # Update API key breakdown for this endpoint
+        if record.api_key not in breakdown.endpoints[record.endpoint].api_key_breakdown:
+            breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key] = (
+                KeyMetricWithMetadata(
+                    metrics=SpendMetrics(),
+                    metadata=KeyMetadata(
+                        key_alias=api_key_metadata.get(record.api_key, {}).get(
+                            "key_alias", None
+                        ),
+                        team_id=api_key_metadata.get(record.api_key, {}).get(
+                            "team_id", None
+                        ),
+                    ),
+                )
+            )
+        breakdown.endpoints[record.endpoint].api_key_breakdown[record.api_key].metrics = (
+            update_metrics(
+                breakdown.endpoints[record.endpoint]
+                .api_key_breakdown[record.api_key]
+                .metrics,
+                record,
+            )
+        )
+
     # Update api key breakdown
     if record.api_key not in breakdown.api_keys:
         breakdown.api_keys[record.api_key] = KeyMetricWithMetadata(
@@ -308,7 +343,7 @@ def _build_where_conditions(
     start_date: str,
     end_date: str,
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     exclude_entity_ids: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Build prisma where clause for daily activity queries."""
@@ -322,7 +357,10 @@ def _build_where_conditions(
     if model:
         where_conditions["model"] = model
     if api_key:
-        where_conditions["api_key"] = api_key
+        if isinstance(api_key, list):
+            where_conditions["api_key"] = {"in": api_key}
+        else:
+            where_conditions["api_key"] = api_key
 
     if entity_id is not None:
         if isinstance(entity_id, list):
@@ -410,7 +448,7 @@ async def get_daily_activity(
     start_date: Optional[str],
     end_date: Optional[str],
     model: Optional[str],
-    api_key: Optional[str],
+    api_key: Optional[Union[str, List[str]]],
     page: int,
     page_size: int,
     exclude_entity_ids: Optional[List[str]] = None,

@@ -230,6 +230,7 @@ export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
+  admin_ui_disabled: boolean;
 }
 
 export interface CredentialsResponse {
@@ -1410,12 +1411,31 @@ export const availableTeamListCall = async (accessToken: string) => {
   }
 };
 
-export const organizationListCall = async (accessToken: string) => {
+export const organizationListCall = async (
+  accessToken: string,
+  org_id: string | null = null,
+  org_alias: string | null = null,
+) => {
   /**
    * Get all organizations on proxy
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/list` : `/organization/list`;
+    const queryParams = new URLSearchParams();
+
+    if (org_id) {
+      queryParams.append("org_id", org_id.toString());
+    }
+
+    if (org_alias) {
+      queryParams.append("org_alias", org_alias.toString());
+    }
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -2687,6 +2707,7 @@ export const uiSpendLogsCall = async (
   status_filter?: string,
   model?: string,
   keyAlias?: string,
+  error_code?: string,
 ) => {
   try {
     // Construct base URL
@@ -2706,6 +2727,7 @@ export const uiSpendLogsCall = async (
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
+    if (error_code) queryParams.append("error_code", error_code);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -3247,6 +3269,7 @@ export const keyListCall = async (
   pageSize: number,
   sortBy: string | null = null,
   sortOrder: string | null = null,
+  expand: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -3291,6 +3314,11 @@ export const keyListCall = async (
     if (sortOrder) {
       queryParams.append("sort_order", sortOrder);
     }
+
+    if (expand) {
+      queryParams.append("expand", expand);
+    }
+
     queryParams.append("return_full_object", "true");
     queryParams.append("include_team_keys", "true");
     queryParams.append("include_created_by_keys", "true");
@@ -5684,6 +5712,44 @@ export const fetchMCPServers = async (accessToken: string) => {
   }
 };
 
+export const fetchMCPServerHealth = async (accessToken: string, serverIds?: string[]) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server/health` : `/v1/mcp/server/health`;
+
+    // Add server_ids query parameters if provided
+    if (serverIds && serverIds.length > 0) {
+      const params = new URLSearchParams();
+      serverIds.forEach((id) => params.append("server_ids", id));
+      url = `${url}?${params.toString()}`;
+    }
+
+    console.log("Fetching MCP server health from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP server health:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP server health:", error);
+    throw error;
+  }
+};
+
 export const fetchMCPAccessGroups = async (accessToken: string) => {
   try {
     // Construct base URL
@@ -6062,12 +6128,17 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
-export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
+export const callMCPTool = async (
+  accessToken: string,
+  serverId: string,
+  toolName: string,
+  toolArguments: Record<string, any>,
+) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/call` : `/mcp-rest/tools/call`;
 
-    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments, "for server:", serverId);
 
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -6078,6 +6149,7 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
       method: "POST",
       headers,
       body: JSON.stringify({
+        server_id: serverId,
         name: toolName,
         arguments: toolArguments,
       }),

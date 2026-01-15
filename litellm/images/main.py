@@ -2,7 +2,18 @@ import asyncio
 import contextvars
 import importlib
 from functools import partial
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Literal, Optional, Union, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Coroutine,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Union,
+    cast,
+    overload,
+)
 
 if TYPE_CHECKING:
     from litellm.images.utils import ImageEditRequestUtils
@@ -10,7 +21,7 @@ if TYPE_CHECKING:
 import httpx
 
 import litellm
-from litellm.utils import exception_type, get_litellm_params
+
 # client is imported from litellm as it's a decorator
 from litellm import client
 from litellm.constants import DEFAULT_IMAGE_ENDPOINT_MODEL
@@ -23,6 +34,7 @@ from litellm.llms.base_llm import BaseImageEditConfig, BaseImageGenerationConfig
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.custom_llm import CustomLLM
+from litellm.utils import exception_type, get_litellm_params
 
 #################### Initialize provider clients ####################
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
@@ -32,8 +44,8 @@ from litellm.main import (
     azure_chat_completions,
     base_llm_aiohttp_handler,
     base_llm_http_handler,
-    bedrock_image_generation,
     bedrock_image_edit,
+    bedrock_image_generation,
     openai_chat_completions,
     openai_image_variations,
 )
@@ -330,11 +342,36 @@ def image_generation(  # noqa: PLR0915
             azure_ad_token = optional_params.pop(
                 "azure_ad_token", None
             ) or get_secret_str("AZURE_AD_TOKEN")
+            
+            # Create azure_ad_token_provider from tenant_id, client_id, client_secret if not already provided
+            if azure_ad_token_provider is None:
+                from litellm.llms.azure.common_utils import (
+                    get_azure_ad_token_from_entra_id,
+                )
+
+                # Extract Azure AD credentials from litellm_params
+                tenant_id = litellm_params_dict.get("tenant_id")
+                client_id = litellm_params_dict.get("client_id")
+                client_secret = litellm_params_dict.get("client_secret")
+                azure_scope = litellm_params_dict.get("azure_scope") or "https://cognitiveservices.azure.com/.default"
+                
+                # Create token provider if credentials are available
+                if tenant_id and client_id and client_secret:
+                    azure_ad_token_provider = get_azure_ad_token_from_entra_id(
+                        tenant_id=tenant_id,
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        scope=azure_scope,
+                    )
 
             default_headers = {
                 "Content-Type": "application/json",
-                "api-key": api_key,
             }
+            # Only add api-key header if api_key is not None
+            # Azure AD authentication will use Authorization header instead
+            if api_key is not None:
+                default_headers["api-key"] = api_key
+            
             for k, v in default_headers.items():
                 if k not in headers:
                     headers[k] = v
@@ -367,6 +404,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
+            litellm.LlmProviders.OPENROUTER
         ):
             if image_generation_config is None:
                 raise ValueError(
@@ -399,8 +437,12 @@ def image_generation(  # noqa: PLR0915
 
             default_headers = {
                 "Content-Type": "application/json",
-                "api-key": api_key,
             }
+            # Only add api-key header if api_key is not None
+            # Azure AD authentication will use Authorization header instead
+            if api_key is not None:
+                default_headers["api-key"] = api_key
+            
             for k, v in default_headers.items():
                 if k not in headers:
                     headers[k] = v
@@ -983,6 +1025,7 @@ def __getattr__(name: str) -> Any:
     if name == "ImageEditRequestUtils":
         # Lazy load ImageEditRequestUtils to avoid heavy import from images.utils at module load time
         from .utils import ImageEditRequestUtils as _ImageEditRequestUtils
+
         # Cache it in the module's __dict__ for subsequent accesses
         module = importlib.import_module(__name__)
         module.__dict__["ImageEditRequestUtils"] = _ImageEditRequestUtils

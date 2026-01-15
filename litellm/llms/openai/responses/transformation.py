@@ -500,3 +500,69 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         response._hidden_params["headers"] = raw_response_headers
         
         return response
+
+    #########################################################
+    ########## COMPACT RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    def transform_compact_response_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        """
+        Transform the compact response API request into a URL and data
+
+        OpenAI API expects the following request
+        - POST /v1/responses/compact
+        """
+        url = f"{api_base}/compact"
+        
+        input = self._validate_input_param(input)
+        data = dict(
+            ResponsesAPIRequestParams(
+                model=model, input=input, **response_api_optional_request_params
+            )
+        )
+        
+        return url, data
+
+    def transform_compact_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        """
+        Transform the compact response API response into a ResponsesAPIResponse
+        """
+        try:
+            logging_obj.post_call(
+                original_response=raw_response.text,
+                additional_args={"complete_input_dict": {}},
+            )
+            raw_response_json = raw_response.json()
+            raw_response_json["created_at"] = _safe_convert_created_field(
+                raw_response_json["created_at"]
+            )
+        except Exception:
+            raise OpenAIError(
+                message=raw_response.text, status_code=raw_response.status_code
+            )
+        raw_response_headers = dict(raw_response.headers)
+        processed_headers = process_response_headers(raw_response_headers)
+        
+        try:
+            response = ResponsesAPIResponse(**raw_response_json)
+        except Exception:
+            verbose_logger.debug(
+                f"Error constructing ResponsesAPIResponse: {raw_response_json}, using model_construct"
+            )
+            response = ResponsesAPIResponse.model_construct(**raw_response_json)
+        
+        response._hidden_params["additional_headers"] = processed_headers
+        response._hidden_params["headers"] = raw_response_headers
+        
+        return response
