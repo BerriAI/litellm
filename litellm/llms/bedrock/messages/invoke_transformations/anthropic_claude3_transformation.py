@@ -12,7 +12,10 @@ from typing import (
 
 import httpx
 
-from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+from litellm.llms.anthropic.common_utils import (
+    AnthropicModelInfo,
+    get_anthropic_beta_from_headers,
+)
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -23,7 +26,6 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
 from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
