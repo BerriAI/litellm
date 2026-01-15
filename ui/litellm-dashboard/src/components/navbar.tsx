@@ -18,7 +18,6 @@ import {
   MenuUnfoldOutlined,
   SafetyOutlined,
   SlackOutlined,
-  StarOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
