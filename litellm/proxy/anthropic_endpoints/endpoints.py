@@ -2,16 +2,16 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm._logging import verbose_proxy_logger
+from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy.common_request_processing import (
     ProxyBaseLLMRequestProcessing,
-    create_streaming_response,
+    create_response,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
@@ -106,7 +106,7 @@ async def anthropic_response(  # noqa: PLR0915
                 )
             )
 
-            return await create_streaming_response(
+            return await create_response(
                 generator=selected_data_generator,
                 media_type="text/event-stream",
                 headers={},
@@ -221,6 +221,16 @@ async def count_tokens(
 
     except HTTPException:
         raise
+    except ProxyException as e:
+        status_code = int(e.code) if e.code and e.code.isdigit() else 500
+        detail = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=status_code,
+            raw_message=e.message,
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=detail,
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(

@@ -181,6 +181,74 @@ def test_virtual_key_llm_api_routes_allows_google_routes(route):
     assert result is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
+        "/v1beta/models/gemini-2.5-flash-exp:countTokens",
+        "/v1beta/models/custom-model-name-123:streamGenerateContent",
+        "/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
+        "/models/gemini-2.5-flash-exp:countTokens",
+        "/models/custom-model-name-123:streamGenerateContent",
+    ],
+)
+def test_google_routes_with_dynamic_model_names_recognized_as_llm_api_route(route):
+    """
+    Test that Google routes with dynamic model names (including custom names) are recognized as LLM API routes.
+    
+    This test verifies the fix for the issue where routes like:
+    /v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent
+    were incorrectly classified as "custom admin only route" instead of LLM API routes.
+    
+    The fix adds pattern matching for Google routes with placeholders like {model_name}.
+    """
+    
+    # Test that the route is recognized as an LLM API route
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+def test_google_routes_with_dynamic_model_names_accessible_to_internal_users():
+    """
+    Test that internal users can access Google routes with dynamic model names.
+    
+    This ensures that routes like /v1beta/models/{model_name}:generateContent
+    are properly accessible to internal users and not blocked as admin-only routes.
+    """
+    
+    # Create an internal user object
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    
+    # Create an internal user API key auth
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    
+    # Create a mock request
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    
+    # Test that calling Google route with dynamic model name does NOT raise an exception
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
+            request=request,
+            valid_token=valid_token,
+            request_data={"contents": [{"parts": [{"text": "test"}]}]},
+        )
+        # If no exception is raised, the test passes
+    except Exception as e:
+        pytest.fail(
+            f"Internal user should be able to access Google generateContent route. Got error: {str(e)}"
+        )
+
+
 def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
     """Test that virtual key works with multiple LiteLLMRoutes member names in allowed_routes"""
 
@@ -661,6 +729,25 @@ def test_videos_route_is_llm_api_route(route):
     """Test that video routes are recognized as LLM API routes"""
 
     # Test that all video routes are recognized as LLM API routes
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/containers",
+        "/v1/containers",
+        "/containers/container_123",
+        "/v1/containers/container_123",
+        "/containers/container_123/files",
+        "/v1/containers/container_123/files",
+        "/containers/container_123/files/file_456",
+        "/v1/containers/container_123/files/file_456",
+    ],
+)
+def test_containers_routes_are_llm_api_routes(route):
+    """Test that container routes are recognized as LLM API routes"""
+
     assert RouteChecks.is_llm_api_route(route) is True
 
 

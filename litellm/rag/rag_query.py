@@ -1,12 +1,10 @@
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Any, Dict, List, Optional, Union
 
-import litellm
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
 from litellm.types.utils import ModelResponse
 from litellm.types.vector_stores import (
     VectorStoreResultContent,
     VectorStoreSearchResponse,
-    VectorStoreSearchResult,
 )
 
 

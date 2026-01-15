@@ -113,8 +113,9 @@ export const makeA2ASendMessageRequest = async (
   onTimingData?: (timeToFirstToken: number) => void,
   onTotalLatency?: (totalLatency: number) => void,
   onA2AMetadata?: (metadata: A2ATaskMetadata) => void,
+  customBaseUrl?: string,
 ): Promise<void> => {
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/a2a/${agentId}/message/send`
     : `/a2a/${agentId}/message/send`;
@@ -242,8 +243,9 @@ export const makeA2AStreamMessageRequest = async (
   onTimingData?: (timeToFirstToken: number) => void,
   onTotalLatency?: (totalLatency: number) => void,
   onA2AMetadata?: (metadata: A2ATaskMetadata) => void,
+  customBaseUrl?: string,
 ): Promise<void> => {
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const url = proxyBaseUrl
     ? `${proxyBaseUrl}/a2a/${agentId}`
     : `/a2a/${agentId}`;

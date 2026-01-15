@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 import httpx
 
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.vector_stores import (
@@ -88,7 +89,8 @@ class VertexVectorStoreConfig(BaseVectorStoreConfig, VertexBase):
             return api_base.rstrip("/")
 
         # Vertex AI RAG API endpoint for retrieveContexts
-        return f"https://{vertex_location}-aiplatform.googleapis.com/v1/projects/{vertex_project}/locations/{vertex_location}"
+        base_url = get_vertex_base_url(vertex_location)
+        return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}"
 
     def transform_search_vector_store_request(
         self,

@@ -35,8 +35,6 @@ from litellm.rag.rag_query import RAGQuery
 from litellm.types.rag import (
     RAGIngestOptions,
     RAGIngestResponse,
-    RAGQueryRequest,
-    RAGQueryResponse,
 )
 from litellm.types.utils import ModelResponse
 from litellm.utils import client

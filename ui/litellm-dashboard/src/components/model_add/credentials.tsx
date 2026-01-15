@@ -32,7 +32,7 @@ interface CredentialsPanelProps {
 
 const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
   const { accessToken } = useAuthorized();
-  const { data: credentialsResponse, refetch: refetchCredentials } = useCredentials(accessToken);
+  const { data: credentialsResponse, refetch: refetchCredentials } = useCredentials();
   const credentialList = credentialsResponse?.credentials || [];
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);

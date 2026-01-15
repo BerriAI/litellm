@@ -323,3 +323,40 @@ class TestLoggingWorker:
         await worker.clear_queue()
 
         assert len(processed) >= 4, f"Expected 4+ tasks processed, got {len(processed)}"
+
+    @pytest.mark.asyncio
+    async def test_event_loop_change_handling(self):
+        """Test that LoggingWorker handles event loop changes correctly.
+
+        This tests the fix for GitHub issue #17813 where asyncio.Queue
+        was bound to a different event loop when using multiprocessing.
+        """
+        worker = LoggingWorker(timeout=1.0, max_queue_size=10)
+
+        # Start the worker in the current event loop
+        worker.start()
+
+        # Verify queue was created and bound to current loop
+        assert worker._queue is not None
+        assert worker._bound_loop is not None
+        original_queue = worker._queue
+
+        await worker.stop()
+
+        # Simulate a new event loop by creating a mock scenario
+        # In a real multiprocessing case, asyncio.run() creates a new loop
+        # We test the internal state detection
+
+        # Create a new worker to test the _ensure_queue logic
+        worker2 = LoggingWorker(timeout=1.0, max_queue_size=10)
+        worker2._queue = original_queue  # Pretend we have an old queue
+        worker2._bound_loop = None  # No bound loop (simulates first call)
+
+        # Calling start should create a new queue since _bound_loop != current
+        worker2.start()
+
+        # The queue should be reinitialized since bound_loop was None
+        assert worker2._queue is not None
+        assert worker2._bound_loop is not None
+
+        await worker2.stop()

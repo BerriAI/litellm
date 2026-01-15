@@ -73,8 +73,21 @@ GOOGLE_CLIENT_SECRET=
 ```shell
 MICROSOFT_CLIENT_ID="84583a4d-"
 MICROSOFT_CLIENT_SECRET="nbk8Q~"
-MICROSOFT_TENANT="5a39737
+MICROSOFT_TENANT="5a39737"
 ```
+
+**Optional: Custom Microsoft SSO Endpoints**
+
+If you need to use custom Microsoft SSO endpoints (e.g., for a custom identity provider, sovereign cloud, or proxy), you can override the default endpoints:
+
+```shell
+MICROSOFT_AUTHORIZATION_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/authorize"
+MICROSOFT_TOKEN_ENDPOINT="https://your-custom-url.com/oauth2/v2.0/token"
+MICROSOFT_USERINFO_ENDPOINT="https://your-custom-graph-api.com/v1.0/me"
+```
+
+If these are not set, the default Microsoft endpoints are used based on your tenant.
+
 - Set Redirect URI on your App Registration on https://portal.azure.com/
     - Set a redirect url = `<your proxy base url>/sso/callback`
     ```shell
@@ -97,6 +110,42 @@ To set up app roles:
 3. Use one of the supported role names above (e.g., `proxy_admin`)
 4. Assign users to these roles in your Enterprise Application
 5. When users sign in via SSO, LiteLLM will automatically assign them the corresponding role
+
+**Advanced: Custom User Attribute Mapping**
+
+For certain Microsoft Entra ID configurations, you may need to override the default user attribute field names. This is useful when your organization uses custom claims or non-standard attribute names in the SSO response.
+
+**Step 1: Debug SSO Response**
+
+First, inspect the JWT fields returned by your Microsoft SSO provider using the [SSO Debug Route](#debugging-sso-jwt-fields).
+
+1. Add `/sso/debug/callback` as a redirect URL in your Azure App Registration
+2. Navigate to `https://<proxy_base_url>/sso/debug/login`
+3. Complete the SSO flow to see the returned user attributes
+
+**Step 2: Identify Field Attribute Names**
+
+From the debug response, identify the field names used for email, display name, user ID, first name, and last name.
+
+**Step 3: Set Environment Variables**
+
+Override the default attribute names by setting these environment variables:
+
+| Environment Variable | Description | Default Value |
+|---------------------|-------------|---------------|
+| `MICROSOFT_USER_EMAIL_ATTRIBUTE` | Field name for user email | `userPrincipalName` |
+| `MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE` | Field name for display name | `displayName` |
+| `MICROSOFT_USER_ID_ATTRIBUTE` | Field name for user ID | `id` |
+| `MICROSOFT_USER_FIRST_NAME_ATTRIBUTE` | Field name for first name | `givenName` |
+| `MICROSOFT_USER_LAST_NAME_ATTRIBUTE` | Field name for last name | `surname` |
+
+**Step 4: Restart the Proxy**
+
+After setting the environment variables, restart the proxy:
+
+```bash
+litellm --config /path/to/config.yaml
+```
 
 </TabItem>
 

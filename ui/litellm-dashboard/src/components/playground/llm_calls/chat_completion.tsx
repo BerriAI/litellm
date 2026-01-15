@@ -3,6 +3,7 @@ import { ChatCompletionMessageParam } from "openai/resources/chat/completions";
 import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
+import { MCPServer } from "../../mcp_tools/types";
 
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
@@ -17,12 +18,15 @@ export async function makeOpenAIChatCompletionRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTools?: string[],
+  selectedMCPServers?: string[],
   onImageGenerated?: (imageUrl: string, model?: string) => void,
   onSearchResults?: (searchResults: VectorStoreSearchResponse[]) => void,
   temperature?: number,
   max_tokens?: number,
   onTotalLatency?: (latency: number) => void,
+  customBaseUrl?: string,
+  mcpServers?: MCPServer[],
+  mcpServerToolRestrictions?: Record<string, string[]>,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -30,7 +34,7 @@ export async function makeOpenAIChatCompletionRequest(
     console.log = function () {};
   }
   console.log("isLocal:", isLocal);
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
@@ -53,22 +57,36 @@ export async function makeOpenAIChatCompletionRequest(
     let fullResponseContent = "";
     let fullReasoningContent = "";
 
-    // Format MCP tools if selected
-    const tools =
-      selectedMCPTools && selectedMCPTools.length > 0
-        ? [
-            {
-              type: "mcp",
-              server_label: "litellm",
-              server_url: `${proxyBaseUrl}/mcp`,
-              require_approval: "never",
-              allowed_tools: selectedMCPTools,
-              headers: {
-                "x-litellm-api-key": `Bearer ${accessToken}`,
-              },
-            },
-          ]
-        : undefined;
+    // Build tools array
+    const tools: any[] = [];
+
+    // Add MCP servers if selected
+    if (selectedMCPServers && selectedMCPServers.length > 0) {
+      if (selectedMCPServers.includes("__all__")) {
+        // All MCP Servers selected
+        tools.push({
+          type: "mcp",
+          server_label: "litellm",
+          server_url: "litellm_proxy/mcp",
+          require_approval: "never",
+        });
+      } else {
+        // Individual servers selected - create one entry per server
+        selectedMCPServers.forEach((serverId) => {
+          const server = mcpServers?.find((s) => s.server_id === serverId);
+          const serverName = server?.alias || server?.server_name || serverId;
+          const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
+
+          tools.push({
+            type: "mcp",
+            server_label: "litellm",
+            server_url: `litellm_proxy/mcp/${serverName}`,
+            require_approval: "never",
+            ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
+          });
+        });
+      }
+    }
 
     // @ts-ignore
     const response = await client.chat.completions.create(
@@ -82,7 +100,7 @@ export async function makeOpenAIChatCompletionRequest(
         messages: chatHistory as ChatCompletionMessageParam[],
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
-        ...(tools ? { tools, tool_choice: "auto" } : {}),
+        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
         ...(temperature !== undefined ? { temperature } : {}),
         ...(max_tokens !== undefined ? { max_tokens } : {}),
       },

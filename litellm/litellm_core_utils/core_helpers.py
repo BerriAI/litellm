@@ -38,18 +38,18 @@ def safe_divide_seconds(
 
 
 def safe_divide(
-    numerator: Union[int, float], 
-    denominator: Union[int, float], 
-    default: Union[int, float] = 0
+    numerator: Union[int, float],
+    denominator: Union[int, float],
+    default: Union[int, float] = 0,
 ) -> Union[int, float]:
     """
     Safely divide two numbers, returning a default value if denominator is zero.
-    
+
     Args:
         numerator: The number to divide
         denominator: The number to divide by
         default: Value to return if denominator is zero (defaults to 0)
-    
+
     Returns:
         The result of numerator/denominator, or default if denominator is zero
     """
@@ -153,7 +153,8 @@ def get_metadata_variable_name_from_kwargs(
     - LiteLLM is now moving to using `litellm_metadata` for our metadata
     """
     return "litellm_metadata" if "litellm_metadata" in kwargs else "metadata"
-    
+
+
 def get_litellm_metadata_from_kwargs(kwargs: dict):
     """
     Helper to get litellm metadata from all litellm request kwargs
@@ -174,6 +175,25 @@ def get_litellm_metadata_from_kwargs(kwargs: dict):
             return metadata
 
     return {}
+
+
+def reconstruct_model_name(
+    model_name: str,
+    custom_llm_provider: Optional[str],
+    metadata: dict,
+) -> str:
+    """Reconstruct full model name with provider prefix for logging."""
+    # Check if deployment model name from router metadata is available (has original prefix)
+    deployment_model_name = metadata.get("deployment")
+    if deployment_model_name and "/" in deployment_model_name:
+        # Use the deployment model name which preserves the original provider prefix
+        return deployment_model_name
+    elif custom_llm_provider and model_name and "/" not in model_name:
+        # Only add prefix for Bedrock (not for direct Anthropic API)
+        # This ensures Bedrock models get the prefix while direct Anthropic models don't
+        if custom_llm_provider == "bedrock":
+            return f"{custom_llm_provider}/{model_name}"
+    return model_name
 
 
 # Helper functions used for OTEL logging
@@ -246,8 +266,8 @@ def safe_deep_copy(data):
     Safe Deep Copy
 
     The LiteLLM request may contain objects that cannot be pickled/deep-copied
-    (e.g., tracing spans, locks, clients). 
-    
+    (e.g., tracing spans, locks, clients).
+
     This helper deep-copies each top-level key independently; on failure keeps
     original ref
     """
@@ -306,23 +326,23 @@ def safe_deep_copy(data):
 def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     """
     Recursively filter out Exception objects and callable objects from dicts/lists.
-    
+
     This is a defensive utility to prevent deepcopy failures when exception objects
     are accidentally stored in parameter dictionaries (e.g., optional_params).
     Also filters callable objects (functions) to prevent JSON serialization errors.
     Exceptions and callables should not be stored in params - this function removes them.
-    
+
     Args:
         data: The data structure to filter (dict, list, or any other type)
         max_depth: Maximum recursion depth to prevent infinite loops
-        
+
     Returns:
         Filtered data structure with Exception and callable objects removed, or None if the
         entire input was an Exception or callable
     """
     if max_depth <= 0:
         return data
-    
+
     # Skip exception objects
     if isinstance(data, Exception):
         return None
@@ -333,7 +353,7 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     obj_type_name = type(data).__name__
     if obj_type_name in ["Logging", "LiteLLMLoggingObj"]:
         return None
-    
+
     if isinstance(data, dict):
         result: dict[str, Any] = {}
         for k, v in data.items():
@@ -352,7 +372,9 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         result_list: list[Any] = []
         for item in data:
             # Skip exception and callable items
-            if isinstance(item, Exception) or (callable(item) and not isinstance(item, type)):
+            if isinstance(item, Exception) or (
+                callable(item) and not isinstance(item, type)
+            ):
                 continue
             try:
                 filtered = filter_exceptions_from_params(item, max_depth - 1)
@@ -366,37 +388,35 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
         return data
 
 
-def filter_internal_params(data: dict, additional_internal_params: Optional[set] = None) -> dict:
+def filter_internal_params(
+    data: dict, additional_internal_params: Optional[set] = None
+) -> dict:
     """
     Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
-    
+
     This removes internal/MCP-related parameters that are used by LiteLLM internally
     but should not be included in API requests to providers.
-    
+
     Args:
         data: Dictionary of parameters to filter
         additional_internal_params: Optional set of additional internal parameter names to filter
-        
+
     Returns:
         Filtered dictionary with internal parameters removed
     """
     if not isinstance(data, dict):
         return data
-    
+
     # Known internal parameters that should never be sent to provider APIs
     internal_params = {
         "skip_mcp_handler",
         "mcp_handler_context",
         "_skip_mcp_handler",
     }
-    
+
     # Add any additional internal params if provided
     if additional_internal_params:
         internal_params.update(additional_internal_params)
-    
+
     # Filter out internal parameters
-    return {
-        k: v
-        for k, v in data.items()
-        if k not in internal_params
-    }
+    return {k: v for k, v in data.items() if k not in internal_params}

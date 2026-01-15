@@ -9,9 +9,9 @@ import httpx
 from httpx._types import RequestFiles
 
 import litellm
-
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -136,7 +136,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         if api_base:
             base_url = api_base.rstrip("/")
         else:
-            base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+            base_url = get_vertex_base_url(vertex_location)
 
         return f"{base_url}/v1/projects/{vertex_project}/locations/{vertex_location}/publishers/google/models/{model_name}:predict"
 

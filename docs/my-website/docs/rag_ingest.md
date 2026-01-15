@@ -4,8 +4,12 @@ All-in-one document ingestion pipeline: **Upload → Chunk → Embed → Vector 
 
 | Feature | Supported |
 |---------|-----------|
-| Logging | ✅ |
+| Logging | Yes |
 | Supported Providers | `openai`, `bedrock`, `vertex_ai`, `gemini` |
+
+:::tip
+After ingesting documents, use [/rag/query](./rag_query.md) to search and generate responses with your ingested content.
+:::
 
 ## Quick Start
 
@@ -82,9 +86,33 @@ curl -X POST "http://localhost:4000/v1/rag/ingest" \
 }
 ```
 
-## Query the Vector Store
+## Query with RAG
 
-After ingestion, query with `/vector_stores/{vector_store_id}/search`:
+After ingestion, use the [/rag/query](./rag_query.md) endpoint to search and generate LLM responses:
+
+```bash showLineNumbers title="RAG Query"
+curl -X POST "http://localhost:4000/v1/rag/query" \
+    -H "Authorization: Bearer sk-1234" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "What is the main topic?"}],
+        "retrieval_config": {
+            "vector_store_id": "vs_xyz789",
+            "custom_llm_provider": "openai",
+            "top_k": 5
+        }
+    }'
+```
+
+This will:
+1. Search the vector store for relevant context
+2. Prepend the context to your messages
+3. Generate an LLM response
+
+### Direct Vector Store Search
+
+Alternatively, search the vector store directly with `/vector_stores/{vector_store_id}/search`:
 
 ```bash showLineNumbers title="Search the vector store"
 curl -X POST "http://localhost:4000/v1/vector_stores/vs_xyz789/search" \

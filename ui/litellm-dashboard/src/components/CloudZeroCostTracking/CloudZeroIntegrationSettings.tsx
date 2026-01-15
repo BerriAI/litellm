@@ -1,6 +1,8 @@
 import { useCloudZeroDryRun } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroDryRun";
 import { useCloudZeroExport } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroExport";
+import { useCloudZeroDeleteSettings } from "@/app/(dashboard)/hooks/cloudzero/useCloudZeroSettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import { Alert, Button, Card, Descriptions, Divider, message, Popconfirm, Tag } from "antd";
 import { CheckCircle, Edit, Play, Trash2, Upload } from "lucide-react";
 import { useState } from "react";
@@ -15,9 +17,11 @@ interface CloudZeroIntegrationSettingsProps {
 export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: CloudZeroIntegrationSettingsProps) {
   const { accessToken } = useAuthorized();
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   const dryRunMutation = useCloudZeroDryRun(accessToken || "");
   const exportMutation = useCloudZeroExport(accessToken || "");
+  const deleteMutation = useCloudZeroDeleteSettings(accessToken || "");
 
   const handleDryRun = () => {
     if (!accessToken) return;
@@ -66,10 +70,27 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
     setIsEditModalOpen(false);
   };
 
-  const handleDelete = async () => {
-    // Note: Delete functionality is not yet implemented in the backend API
-    // This would require a DELETE endpoint at /cloudzero/settings
-    message.warning("Delete functionality is not yet available. Please contact support.");
+  const handleDeleteClick = () => {
+    setIsDeleteModalOpen(true);
+  };
+
+  const handleDeleteConfirm = () => {
+    if (!accessToken) return;
+
+    deleteMutation.mutate(undefined, {
+      onSuccess: () => {
+        message.success("CloudZero integration deleted successfully");
+        setIsDeleteModalOpen(false);
+        onSettingsUpdated();
+      },
+      onError: (error) => {
+        message.error(error?.message || "Failed to delete CloudZero integration");
+      },
+    });
+  };
+
+  const handleDeleteCancel = () => {
+    setIsDeleteModalOpen(false);
   };
 
   return (
@@ -89,19 +110,14 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
               <Button icon={<Edit size={16} />} onClick={handleEdit} className="flex items-center gap-2">
                 Edit
               </Button>
-              <Popconfirm
-                title="Delete Integration"
-                description="Delete functionality is not yet available in the API. This button is disabled."
-                okText="OK"
-                cancelText="Cancel"
-                okButtonProps={{
-                  danger: true,
-                }}
+              <Button
+                danger
+                icon={<Trash2 size={16} />}
+                onClick={handleDeleteClick}
+                className="flex items-center gap-2"
               >
-                <Button danger icon={<Trash2 size={16} />} disabled className="flex items-center gap-2">
-                  Delete
-                </Button>
-              </Popconfirm>
+                Delete
+              </Button>
             </div>
           }
           className="shadow-sm"
@@ -118,10 +134,14 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
             }}
           >
             <Descriptions.Item label="API Key (Redacted)">
-              <span className="font-mono text-gray-600">{settings.api_key_masked}</span>
+              <span className="font-mono text-gray-600">
+                {settings.api_key_masked || <span className="text-gray-400 italic">Not configured</span>}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="Connection ID">
-              <span className="font-mono text-gray-600">{settings.connection_id}</span>
+              <span className="font-mono text-gray-600">
+                {settings.connection_id || <span className="text-gray-400 italic">Not configured</span>}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="Timezone">
               {settings.timezone || <span className="text-gray-400 italic">Default (UTC)</span>}
@@ -186,6 +206,27 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
         onOk={handleEditModalOk}
         onCancel={handleEditModalCancel}
         settings={settings}
+      />
+
+      <DeleteResourceModal
+        isOpen={isDeleteModalOpen}
+        title="Delete CloudZero Integration?"
+        message="Are you sure you want to delete this CloudZero integration? All associated settings and configurations will be permanently removed."
+        resourceInformationTitle="Integration Details"
+        resourceInformation={[
+          {
+            label: "Connection ID",
+            value: settings.connection_id,
+            code: true,
+          },
+          {
+            label: "Timezone",
+            value: settings.timezone || "Default (UTC)",
+          },
+        ]}
+        onCancel={handleDeleteCancel}
+        onOk={handleDeleteConfirm}
+        confirmLoading={deleteMutation.isPending}
       />
     </>
   );

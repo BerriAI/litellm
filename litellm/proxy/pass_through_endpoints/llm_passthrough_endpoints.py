@@ -761,7 +761,6 @@ async def handle_bedrock_passthrough_router_model(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
@@ -776,6 +775,7 @@ async def handle_bedrock_count_tokens(
     - /v1/messages/count_tokens
     - /v1/messages/count-tokens
     """
+    from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
     from litellm.proxy.proxy_server import llm_router
 
@@ -822,6 +822,12 @@ async def handle_bedrock_count_tokens(
 
         return result
 
+    except BedrockError as e:
+        # Convert BedrockError to HTTPException for FastAPI
+        verbose_proxy_logger.error(f"BedrockError in handle_bedrock_count_tokens: {str(e)}")
+        raise HTTPException(
+            status_code=e.status_code, detail={"error": e.message}
+        )
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
@@ -1030,6 +1036,7 @@ async def bedrock_proxy_route(
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
         is_streaming_request=is_streaming_request,
+        _forward_headers=True
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,

@@ -17,8 +17,8 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     PromptTokensDetailsWrapper,
+    ServerToolUse,
     Usage,
-    ServerToolUse
 )
 from litellm.utils import print_verbose, token_counter
 
@@ -68,12 +68,31 @@ class ChunkProcessor:
                 return chunk["id"]
         return ""
 
+    @staticmethod
+    def _get_model_from_chunks(chunks: List[Dict[str, Any]], first_chunk_model: str) -> str:
+        """
+        Get the actual model from chunks, preferring a model that differs from the first chunk.
+
+        For Azure Model Router, the first chunk may have the request model (e.g., 'azure-model-router')
+        while subsequent chunks have the actual model (e.g., 'gpt-4.1-nano-2025-04-14').
+        This method finds the actual model for accurate cost calculation.
+        """
+        # Look for a model in chunks that differs from the first chunk's model
+        for chunk in chunks:
+            chunk_model = chunk.get("model")
+            if chunk_model and chunk_model != first_chunk_model:
+                return chunk_model
+        # Fall back to first chunk's model if no different model found
+        return first_chunk_model
+
     def build_base_response(self, chunks: List[Dict[str, Any]]) -> ModelResponse:
         chunk = self.first_chunk
         id = ChunkProcessor._get_chunk_id(chunks)
         object = chunk["object"]
         created = chunk["created"]
-        model = chunk["model"]
+        first_chunk_model = chunk["model"]
+        # Get the actual model - for Azure Model Router, this finds the real model from later chunks
+        model = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint = chunk.get("system_fingerprint", None)
 
         role = chunk["choices"][0]["delta"]["role"]

@@ -69,7 +69,7 @@ async def _get_cloudzero_settings():
     Retrieve CloudZero settings from the database with decrypted API key.
 
     Returns:
-        dict: CloudZero settings with decrypted API key
+        dict: CloudZero settings with decrypted API key, or empty dict if not configured
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -82,10 +82,16 @@ async def _get_cloudzero_settings():
     cloudzero_config = await prisma_client.db.litellm_config.find_first(
         where={"param_name": "cloudzero_settings"}
     )
-    if cloudzero_config is None:
+    if cloudzero_config is None or cloudzero_config.param_value is None:
         return {}
 
-    settings = dict(cloudzero_config.param_value)
+    # Handle both dict and JSON string cases
+    if isinstance(cloudzero_config.param_value, dict):
+        settings = cloudzero_config.param_value
+    elif isinstance(cloudzero_config.param_value, str):
+        settings = json.loads(cloudzero_config.param_value)
+    else:
+        settings = dict(cloudzero_config.param_value)
 
     # Decrypt the API key
     encrypted_api_key = settings.get("api_key")
@@ -119,6 +125,7 @@ async def get_cloudzero_settings(
 
     Returns the current CloudZero configuration with the API key masked for security.
     Only the first 4 and last 4 characters of the API key are shown.
+    Returns null/empty values when settings are not configured (consistent with other settings endpoints).
 
     Only admin users can view CloudZero settings.
     """
@@ -133,22 +140,27 @@ async def get_cloudzero_settings(
         # Get CloudZero settings using the accessor method
         settings = await _get_cloudzero_settings()
 
+        # If settings are empty, return null/empty values (consistent with other endpoints)
+        if not settings:
+            return CloudZeroSettingsView(
+                api_key_masked=None,
+                connection_id=None,
+                timezone=None,
+                status=None,
+            )
+
         # Use SensitiveDataMasker to mask the API key
         masked_settings = _sensitive_masker.mask_dict(settings)
 
         return CloudZeroSettingsView(
-            api_key_masked=masked_settings["api_key"],
-            connection_id=settings["connection_id"],
-            timezone=settings["timezone"],
+            api_key_masked=masked_settings.get("api_key"),
+            connection_id=settings.get("connection_id"),
+            timezone=settings.get("timezone"),
             status="configured",
         )
 
     except HTTPException as e:
-        if e.status_code == 400:
-            # Settings not configured
-            raise HTTPException(
-                status_code=404, detail={"error": "CloudZero settings not configured"}
-            )
+        # Re-raise HTTPExceptions as-is
         raise e
     except Exception as e:
         verbose_proxy_logger.error(f"Error retrieving CloudZero settings: {str(e)}")
@@ -499,4 +511,71 @@ async def cloudzero_export(
         raise HTTPException(
             status_code=500,
             detail={"error": f"Failed to perform CloudZero export: {str(e)}"},
+        )
+
+
+@router.delete(
+    "/cloudzero/delete",
+    tags=["CloudZero"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=CloudZeroInitResponse,
+)
+async def delete_cloudzero_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Delete CloudZero settings from the database.
+
+    This endpoint removes the CloudZero configuration (API key, connection ID, timezone)
+    from the proxy database. Only the CloudZero settings entry will be deleted;
+    other configuration values in the database will remain unchanged.
+
+    Only admin users can delete CloudZero settings.
+    """
+    # Validation
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": CommonProxyErrors.not_allowed_access.value},
+        )
+
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            raise HTTPException(
+                status_code=500,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+
+        # Check if CloudZero settings exist
+        cloudzero_config = await prisma_client.db.litellm_config.find_first(
+            where={"param_name": "cloudzero_settings"}
+        )
+
+        if cloudzero_config is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "CloudZero settings not found"},
+            )
+
+        # Delete only the CloudZero settings entry
+        # This uses a specific where clause to target only the cloudzero_settings row
+        await prisma_client.db.litellm_config.delete(
+            where={"param_name": "cloudzero_settings"}
+        )
+
+        verbose_proxy_logger.info("CloudZero settings deleted successfully")
+
+        return CloudZeroInitResponse(
+            message="CloudZero settings deleted successfully", status="success"
+        )
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        verbose_proxy_logger.error(f"Error deleting CloudZero settings: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Failed to delete CloudZero settings: {str(e)}"},
         )

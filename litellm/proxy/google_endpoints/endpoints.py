@@ -37,6 +37,11 @@ async def google_generate_content(
     if "model" not in data:
         data["model"] = model_name
     
+    # Extract generationConfig and pass it as config parameter
+    generation_config = data.pop("generationConfig", None)
+    if generation_config:
+        data["config"] = generation_config
+    
     # Add user authentication metadata for cost tracking
     data = await add_litellm_data_to_request(
         data=data,
@@ -82,6 +87,11 @@ async def google_stream_generate_content(
         data["model"] = model_name
 
     data["stream"] = True  # enforce streaming for this endpoint
+
+    # Extract generationConfig and pass it as config parameter
+    generation_config = data.pop("generationConfig", None)
+    if generation_config:
+        data["config"] = generation_config
 
     # Add user authentication metadata for cost tracking
     data = await add_litellm_data_to_request(

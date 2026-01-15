@@ -45,10 +45,10 @@ class CloudZeroExportResponse(BaseModel):
 class CloudZeroSettingsView(BaseModel):
     """Response model for viewing CloudZero settings with masked API key"""
     
-    api_key_masked: str = Field(..., description="Masked API key showing only first 4 and last 4 characters")
-    connection_id: str = Field(..., description="CloudZero connection ID for data submission")
-    timezone: str = Field(..., description="Timezone for date handling")
-    status: str = Field(..., description="Configuration status")
+    api_key_masked: Optional[str] = Field(None, description="Masked API key showing only first 4 and last 4 characters")
+    connection_id: Optional[str] = Field(None, description="CloudZero connection ID for data submission")
+    timezone: Optional[str] = Field(None, description="Timezone for date handling")
+    status: Optional[str] = Field(None, description="Configuration status")
 
 
 class CloudZeroSettingsUpdate(BaseModel):

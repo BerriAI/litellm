@@ -64,6 +64,30 @@ secret:
     - name: OpenAI model identifier text-davinci-003
       match: c489000cf6c7600cee0eefb80ad0965f82921cfb47ece880930eb7e7635cf1f1
     
+    # Base64 Basic Auth in test_pass_through_endpoints.py - test fixture, not a real secret
+    - name: Test Base64 Basic Auth header in pass_through_endpoints test
+      match: 61bac0491f395040617df7ef6d06029eac4d92a4457ac784978db80d97be1ae0
+    
+    # PostgreSQL password "postgres" in CI configs - standard test database password
+    - name: Test PostgreSQL password in CI configurations
+      match: 6e0d657eb1f0fbc40cf0b8f3c3873ef627cc9cb7c4108d1c07d979c04bc8a4bb
+    
+    # Bearer token in locustfile.py - test/example API key for load testing
+    - name: Test Bearer token in locustfile load test
+      match: 2a0abc2b0c3c1760a51ffcdf8d6b1d384cef69af740504b1cfa82dd70cdc7ff9
+    
+    # Inkeep API key in docusaurus.config.js - public documentation site key
+    - name: Inkeep API key in documentation config
+      match: c366657791bfb5fc69045ec11d49452f09a0aebbc8648f94e2469b4025e29a75
+    
+    # Langfuse credentials in test_completion.py - test credentials for integration test
+    - name: Langfuse test credentials in test_completion
+      match: c39310f68cc3d3e22f7b298bb6353c4f45759adcc37080d8b7f4e535d3cfd7f4
+    
+    # Test password "sk-1234" in e2e test fixtures - test fixture, not a real secret
+    - name: Test password in e2e test fixtures
+      match: ce32b547202e209ec1dd50107b64be4cfcf2eb15c3b4f8e9dc611ef747af634f
+    
     # === Preventive patterns for test keys (pattern-based) ===
     
     # Test API keys (124 instances across 45 files)
@@ -81,4 +105,7 @@ secret:
     # Generic test API key patterns
     - name: Test API key patterns
       match: test-api-key
+
+    - name: Short fake sk keys (1–9 digits only)
+      match: \bsk-\d{1,9}\b
 

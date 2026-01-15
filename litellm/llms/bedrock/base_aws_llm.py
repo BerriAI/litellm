@@ -74,6 +74,41 @@ class BaseAWSLLM:
             "aws_external_id",
         ]
 
+    def _get_ssl_verify(self):
+        """
+        Get SSL verification setting for boto3 clients.
+        
+        This ensures that custom CA certificates are properly used for all AWS API calls,
+        including STS and Bedrock services.
+        
+        Returns:
+            Union[bool, str]: SSL verification setting - False to disable, True to enable,
+                            or a string path to a CA bundle file
+        """
+        import litellm
+        from litellm.secret_managers.main import str_to_bool
+
+        # Check environment variable first (highest priority)
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        
+        # Convert string "False"/"True" to boolean
+        if isinstance(ssl_verify, str):
+            # Check if it's a file path
+            if os.path.exists(ssl_verify):
+                return ssl_verify
+            # Otherwise try to convert to boolean
+            ssl_verify_bool = str_to_bool(ssl_verify)
+            if ssl_verify_bool is not None:
+                ssl_verify = ssl_verify_bool
+        
+        # Check SSL_CERT_FILE environment variable for custom CA bundle
+        if ssl_verify is True or ssl_verify == "True":
+            ssl_cert_file = os.getenv("SSL_CERT_FILE")
+            if ssl_cert_file and os.path.exists(ssl_cert_file):
+                return ssl_cert_file
+        
+        return ssl_verify
+
     def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
         """
         Generate a unique cache key based on the credential arguments.
@@ -314,6 +349,12 @@ class BaseAWSLLM:
         if model.startswith("invoke/"):
             model = model.replace("invoke/", "", 1)
 
+        # Special case: Check for "nova" in model name first (before "amazon")
+        # This handles amazon.nova-* models which would otherwise match "amazon" (Titan)
+        if "nova" in model.lower():
+            if "nova" in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, "nova")
+
         _split_model = model.split(".")[0]
         if _split_model in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
             return cast(BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
@@ -323,13 +364,9 @@ class BaseAWSLLM:
         if provider is not None:
             return provider
 
-        # check if provider == "nova"
-        if "nova" in model:
-            return "nova"
-        else:
-            for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
-                if provider in model:
-                    return provider
+        for provider in get_args(BEDROCK_INVOKE_PROVIDERS_LITERAL):
+            if provider in model:
+                return provider
         return None
 
     @staticmethod
@@ -364,10 +401,14 @@ class BaseAWSLLM:
         elif provider == "qwen3" and "qwen3/" in model_id:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="qwen3"
-            ) 
+            )
         elif provider == "stability" and "stability/" in model_id:
             model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
                 model_id, spec="stability"
+            )
+        elif provider == "moonshot" and "moonshot/" in model_id:
+            model_id = BaseAWSLLM._get_model_id_from_model_with_spec(
+                model_id, spec="moonshot"
             )
         return model_id
 
@@ -412,7 +453,7 @@ class BaseAWSLLM:
         if "nova" in model.lower():
             if "nova" in get_args(BEDROCK_EMBEDDING_PROVIDERS_LITERAL):
                 return cast(BEDROCK_EMBEDDING_PROVIDERS_LITERAL, "nova")
-        
+
         # Handle regional models like us.twelvelabs.marengo-embed-2-7-v1:0
         if "." in model:
             parts = model.split(".")
@@ -563,6 +604,7 @@ class BaseAWSLLM:
                 "sts",
                 region_name=aws_region_name,
                 endpoint_url=sts_endpoint,
+                verify=self._get_ssl_verify(),
             )
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -619,7 +661,7 @@ class BaseAWSLLM:
 
         # Create an STS client without credentials
         with tracer.trace("boto3.client(sts) for manual IRSA"):
-            sts_client = boto3.client("sts", region_name=region)
+            sts_client = boto3.client("sts", region_name=region, verify=self._get_ssl_verify())
 
         # Manually assume the IRSA role with the session name
         verbose_logger.debug(
@@ -642,6 +684,7 @@ class BaseAWSLLM:
                 aws_access_key_id=irsa_creds["AccessKeyId"],
                 aws_secret_access_key=irsa_creds["SecretAccessKey"],
                 aws_session_token=irsa_creds["SessionToken"],
+                verify=self._get_ssl_verify(),
             )
 
         # Get current caller identity for debugging
@@ -680,7 +723,7 @@ class BaseAWSLLM:
 
         verbose_logger.debug("Same account role assumption, using automatic IRSA")
         with tracer.trace("boto3.client(sts) with automatic IRSA"):
-            sts_client = boto3.client("sts", region_name=region)
+            sts_client = boto3.client("sts", region_name=region, verify=self._get_ssl_verify())
 
         # Get current caller identity for debugging
         try:
@@ -803,7 +846,7 @@ class BaseAWSLLM:
         # This allows the web identity token to work automatically
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
-                sts_client = boto3.client("sts")
+                sts_client = boto3.client("sts", verify=self._get_ssl_verify())
         else:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client(
@@ -811,6 +854,7 @@ class BaseAWSLLM:
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
                     aws_session_token=aws_session_token,
+                    verify=self._get_ssl_verify(),
                 )
 
         assume_role_params = {
@@ -958,7 +1002,9 @@ class BaseAWSLLM:
         return endpoint_url, proxy_endpoint_url
 
     def _select_default_endpoint_url(
-        self, endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]], aws_region_name: str
+        self,
+        endpoint_type: Optional[Literal["runtime", "agent", "agentcore"]],
+        aws_region_name: str,
     ) -> str:
         """
         Select the default endpoint url based on the endpoint type
@@ -1186,15 +1232,20 @@ class BaseAWSLLM:
         else:
             headers = {"Content-Type": "application/json"}
 
+        aws_signature_headers = self._filter_headers_for_aws_signature(headers)
         request = AWSRequest(
             method="POST",
             url=api_base,
             data=json.dumps(request_data),
-            headers=headers,
+            headers=aws_signature_headers,
         )
         sigv4.add_auth(request)
 
         request_headers_dict = dict(request.headers)
+        # Add back original headers after signing. Only headers in SignedHeaders
+        # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
+        for header_name, header_value in headers.items():
+            request_headers_dict[header_name] = header_value
         if (
             headers is not None and "Authorization" in headers
         ):  # prevent sigv4 from overwriting the auth header

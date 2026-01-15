@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import json
 import secrets
@@ -11,11 +12,15 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB, REDACTED_BY_LITELM_STRING
-from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
+from litellm.litellm_core_utils.core_helpers import (
+    get_litellm_metadata_from_kwargs,
+    reconstruct_model_name,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload
 from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.utils import (
+    CostBreakdown,
     StandardLoggingGuardrailInformation,
     StandardLoggingMCPToolCall,
     StandardLoggingModelInformation,
@@ -56,6 +61,7 @@ def _get_spend_logs_metadata(
     model_map_information: Optional[StandardLoggingModelInformation] = None,
     cold_storage_object_key: Optional[str] = None,
     litellm_overhead_time_ms: Optional[float] = None,
+    cost_breakdown: Optional[CostBreakdown] = None,
 ) -> SpendLogsMetadata:
     if metadata is None:
         return SpendLogsMetadata(
@@ -80,6 +86,7 @@ def _get_spend_logs_metadata(
             guardrail_information=None,
             cold_storage_object_key=cold_storage_object_key,
             litellm_overhead_time_ms=None,
+            cost_breakdown=None,
         )
     verbose_proxy_logger.debug(
         "getting payload for SpendLogs, available keys in metadata: "
@@ -97,14 +104,15 @@ def _get_spend_logs_metadata(
     clean_metadata["applied_guardrails"] = applied_guardrails
     clean_metadata["batch_models"] = batch_models
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
-    clean_metadata["vector_store_request_metadata"] = (
-        _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
-    )
+    clean_metadata[
+        "vector_store_request_metadata"
+    ] = _get_vector_store_request_for_spend_logs_payload(vector_store_request_metadata)
     clean_metadata["guardrail_information"] = guardrail_information
     clean_metadata["usage_object"] = usage_object
     clean_metadata["model_map_information"] = model_map_information
     clean_metadata["cold_storage_object_key"] = cold_storage_object_key
     clean_metadata["litellm_overhead_time_ms"] = litellm_overhead_time_ms
+    clean_metadata["cost_breakdown"] = cost_breakdown
 
     return clean_metadata
 
@@ -353,6 +361,11 @@ def get_logging_payload(  # noqa: PLR0915
             else None
         ),
         litellm_overhead_time_ms=litellm_overhead_time_ms,
+        cost_breakdown=(
+            standard_logging_payload.get("cost_breakdown", None)
+            if standard_logging_payload is not None
+            else None
+        ),
     )
 
     special_usage_fields = ["completion_tokens", "prompt_tokens", "total_tokens"]
@@ -384,6 +397,9 @@ def get_logging_payload(  # noqa: PLR0915
 
     # Extract agent_id for A2A requests (set directly on model_call_details)
     agent_id: Optional[str] = kwargs.get("agent_id")
+    custom_llm_provider = kwargs.get("custom_llm_provider")
+    raw_model = cast(str, kwargs.get("model") or "")
+    model_name = reconstruct_model_name(raw_model, custom_llm_provider, metadata or {})
 
     try:
         payload: SpendLogsPayload = SpendLogsPayload(
@@ -394,7 +410,7 @@ def get_logging_payload(  # noqa: PLR0915
             startTime=_ensure_datetime_utc(start_time),
             endTime=_ensure_datetime_utc(end_time),
             completionStartTime=_ensure_datetime_utc(completion_start_time),
-            model=kwargs.get("model", "") or "",
+            model=model_name,
             user=metadata.get("user_api_key_user_id", "") or "",
             team_id=metadata.get("user_api_key_team_id", "") or "",
             organization_id=metadata.get("user_api_key_org_id") or "",
@@ -418,9 +434,11 @@ def get_logging_payload(  # noqa: PLR0915
             messages=_get_messages_for_spend_logs_payload(
                 standard_logging_payload=standard_logging_payload, metadata=metadata
             ),
-            response=_get_response_for_spend_logs_payload(standard_logging_payload),
+            response=_get_response_for_spend_logs_payload(
+                payload=standard_logging_payload, kwargs=kwargs
+            ),
             proxy_server_request=_get_proxy_server_request_for_spend_logs_payload(
-                metadata=metadata, litellm_params=litellm_params
+                metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
             ),
             session_id=_get_session_id_for_spend_log(
                 kwargs=kwargs,
@@ -440,7 +458,7 @@ def get_logging_payload(  # noqa: PLR0915
 
         # Explicitly clear large intermediate objects to reduce memory pressure
         del response_obj_dict, usage, clean_metadata, additional_usage_values
-        
+
         return payload
     except Exception as e:
         verbose_proxy_logger.exception(
@@ -627,9 +645,12 @@ def _sanitize_request_body_for_spend_logs_payload(
 def _get_proxy_server_request_for_spend_logs_payload(
     metadata: dict,
     litellm_params: dict,
+    kwargs: Optional[dict] = None,
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
+    
+    If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
         _proxy_server_request = cast(
@@ -637,6 +658,27 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
+            
+            # Apply message redaction if turn_off_message_logging is enabled
+            if kwargs is not None:
+                from litellm.litellm_core_utils.redact_messages import (
+                    perform_redaction,
+                    should_redact_message_logging,
+                )
+
+                # Build model_call_details dict to check redaction settings
+                model_call_details = {
+                    "litellm_params": litellm_params,
+                    "standard_callback_dynamic_params": kwargs.get(
+                        "standard_callback_dynamic_params"
+                    ),
+                }
+                
+                # If redaction is enabled, deep copy request body before redacting
+                if should_redact_message_logging(model_call_details=model_call_details):
+                    _request_body = copy.deepcopy(_request_body)
+                    perform_redaction(model_call_details=_request_body, result=None)
+            
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
@@ -670,6 +712,7 @@ def _get_vector_store_request_for_spend_logs_payload(
 
 def _get_response_for_spend_logs_payload(
     payload: Optional[StandardLoggingPayload],
+    kwargs: Optional[dict] = None,
 ) -> str:
     if payload is None:
         return "{}"
@@ -677,6 +720,26 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
+        
+        # Apply message redaction if turn_off_message_logging is enabled
+        if kwargs is not None:
+            from litellm.litellm_core_utils.redact_messages import (
+                perform_redaction,
+                should_redact_message_logging,
+            )
+            
+            litellm_params = kwargs.get("litellm_params", {})
+            model_call_details = {
+                "litellm_params": litellm_params,
+                "standard_callback_dynamic_params": kwargs.get(
+                    "standard_callback_dynamic_params"
+                ),
+            }
+            
+            # If redaction is enabled, deep copy response before redacting
+            if should_redact_message_logging(model_call_details=model_call_details):
+                response_obj = copy.deepcopy(response_obj)
+                response_obj = perform_redaction(model_call_details={}, result=response_obj)
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}

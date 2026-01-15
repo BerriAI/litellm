@@ -104,7 +104,6 @@ async def test_litellm_anthropic_prompt_caching_tools():
             ],
             extra_headers={
                 "anthropic-version": "2023-06-01",
-                "anthropic-beta": "prompt-caching-2024-07-31",
             },
         )
 
@@ -112,11 +111,12 @@ async def test_litellm_anthropic_prompt_caching_tools():
         print("call args=", mock_post.call_args)
 
         expected_url = "https://api.anthropic.com/v1/messages"
+        # Note: anthropic-beta header for prompt-caching is no longer required
+        # Anthropic now supports prompt caching automatically when cache_control is used
         expected_headers = {
             "accept": "application/json",
             "content-type": "application/json",
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "prompt-caching-2024-07-31",
             "x-api-key": "mock_api_key",
         }
 
@@ -285,7 +285,6 @@ async def test_anthropic_api_prompt_caching_basic():
         max_tokens=10,
         extra_headers={
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "prompt-caching-2024-07-31",
         },
     )
 
@@ -356,7 +355,6 @@ async def test_anthropic_api_prompt_caching_basic_with_cache_creation():
         max_tokens=10,
         extra_headers={
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "prompt-caching-2024-07-31",
         },
     )
 
@@ -645,7 +643,6 @@ async def test_litellm_anthropic_prompt_caching_system():
             ],
             extra_headers={
                 "anthropic-version": "2023-06-01",
-                "anthropic-beta": "prompt-caching-2024-07-31",
             },
         )
 
@@ -657,7 +654,6 @@ async def test_litellm_anthropic_prompt_caching_system():
             "accept": "application/json",
             "content-type": "application/json",
             "anthropic-version": "2023-06-01",
-            "anthropic-beta": "prompt-caching-2024-07-31",
             "x-api-key": "mock_api_key",
         }
 

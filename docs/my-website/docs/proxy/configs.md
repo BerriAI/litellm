@@ -116,7 +116,7 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
           "role": "user",
           "content": "what llm are you"
         }
-      ],
+      ]
     }
 '
 ```
@@ -576,9 +576,30 @@ custom_tokenizer:
 
 ```yaml
 general_settings: 
-  database_connection_pool_limit: 10 # sets connection pool for prisma client to postgres db (default: 10, recommended: 10-20)
+  database_connection_pool_limit: 10 # sets connection pool per worker for prisma client to postgres db (default: 10, recommended: 10-20)
   database_connection_timeout: 60 # sets a 60s timeout for any connection call to the db 
 ```
+
+**How to calculate the right value:**
+
+The connection limit is applied **per worker process**, not per instance. This means if you have multiple workers, each worker will create its own connection pool.
+
+**Formula:**
+```
+database_connection_pool_limit = MAX_DB_CONNECTIONS ÷ (number_of_instances × number_of_workers_per_instance)
+```
+
+**Example:**
+- Your database allows a maximum of **100 connections**
+- You're running **1 instance** of LiteLLM
+- Each instance has **8 workers** (set via `--num_workers 8`)
+
+Calculation: `100 ÷ (1 × 8) = 12.5`
+
+Since you shouldn't use 12.5, round down to **10** to leave a safety buffer. This means:
+- Each of the 8 workers will have a connection pool limit of 10
+- Total maximum connections: 8 workers × 10 connections = 80 connections
+- This stays safely under your database's 100 connection limit
 
 ## Extras
 

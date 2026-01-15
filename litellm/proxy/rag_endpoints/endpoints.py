@@ -1,8 +1,9 @@
 """
-RAG Ingest Endpoints for LiteLLM Proxy.
+RAG Endpoints for LiteLLM Proxy.
 
-Provides an all-in-one API for document ingestion:
-Upload -> (OCR) -> Chunk -> Embed -> Vector Store
+Provides:
+- /rag/ingest: All-in-one document ingestion pipeline (Upload -> Chunk -> Embed -> Vector Store)
+- /rag/query: RAG query pipeline (Search -> Rerank -> LLM Completion)
 """
 
 import base64
@@ -194,6 +195,148 @@ async def rag_ingest(
         raise
     except Exception as e:
         verbose_proxy_logger.exception(f"RAG Ingest failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={"error": str(e)},
+        )
+
+
+@router.post(
+    "/v1/rag/query",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["rag"],
+)
+@router.post(
+    "/rag/query",
+    dependencies=[Depends(user_api_key_auth)],
+    response_class=ORJSONResponse,
+    tags=["rag"],
+)
+async def rag_query(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    RAG Query endpoint - search vector store, optionally rerank, and generate LLM response.
+
+    This endpoint:
+    1. Extracts the query from the last user message
+    2. Searches the vector store for relevant context
+    3. Optionally reranks the results
+    4. Generates an LLM response with the retrieved context
+
+    ## Example Request:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/query" \\
+        -H "Authorization: Bearer sk-1234" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is LiteLLM?"}],
+            "retrieval_config": {
+                "vector_store_id": "vs_abc123",
+                "custom_llm_provider": "openai",
+                "top_k": 5
+            }
+        }'
+    ```
+
+    ## With Reranking:
+    ```bash
+    curl -X POST "http://localhost:4000/v1/rag/query" \\
+        -H "Authorization: Bearer sk-1234" \\
+        -H "Content-Type: application/json" \\
+        -d '{
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "What is LiteLLM?"}],
+            "retrieval_config": {
+                "vector_store_id": "vs_abc123",
+                "custom_llm_provider": "openai",
+                "top_k": 10
+            },
+            "rerank": {
+                "enabled": true,
+                "model": "cohere/rerank-english-v3.0",
+                "top_n": 3
+            }
+        }'
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        add_litellm_data_to_request,
+        general_settings,
+        llm_router,
+        proxy_config,
+        version,
+    )
+
+    try:
+        # Parse request body
+        data = await _read_request_body(request)
+
+        # Extract required fields
+        model = data.get("model")
+        messages = data.get("messages")
+        retrieval_config = data.get("retrieval_config")
+        rerank = data.get("rerank")
+        stream = data.get("stream", False)
+
+        # Validate required fields
+        if not model:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "model is required"},
+            )
+        if not messages:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "messages is required"},
+            )
+        if not retrieval_config:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "retrieval_config is required"},
+            )
+        if "vector_store_id" not in retrieval_config:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "retrieval_config must contain 'vector_store_id'"},
+            )
+
+        # Add litellm data
+        request_data: Dict[str, Any] = {}
+        request_data = await add_litellm_data_to_request(
+            data=request_data,
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_config=proxy_config,
+        )
+
+        verbose_proxy_logger.debug(
+            f"RAG Query - model: {model}, retrieval_config: {retrieval_config}"
+        )
+
+        # Call query
+        response = await litellm.aquery(
+            model=model,
+            messages=messages,
+            retrieval_config=retrieval_config,
+            rerank=rerank,
+            stream=stream,
+            router=llm_router,
+            **request_data,
+        )
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"RAG Query failed: {e}")
         raise HTTPException(
             status_code=500,
             detail={"error": str(e)},

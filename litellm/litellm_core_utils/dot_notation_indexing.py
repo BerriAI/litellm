@@ -9,6 +9,7 @@ Custom implementation with zero external dependencies.
 Supported syntax:
 - "field" - top-level field
 - "parent.child" - nested field
+- "parent\\.with\\.dots.child" - keys containing dots (escape with backslash)
 - "array[*]" - all array elements (wildcard)
 - "array[0]" - specific array element (index)
 - "array[*].field" - field in all array elements
@@ -47,6 +48,9 @@ def get_nested_value(
         'value'
         >>> get_nested_value(data, "a.b.d", "default")
         'default'
+        >>> data = {"kubernetes.io": {"namespace": "default"}}
+        >>> get_nested_value(data, "kubernetes\\.io.namespace")
+        'default'
     """
     if not key_path:
         return default
@@ -58,8 +62,11 @@ def get_nested_value(
         else key_path
     )
 
-    # Split the key path into parts
-    parts = key_path.split(".")
+    # Split the key path into parts, respecting escaped dots (\.)
+    # Use a temporary placeholder, split on unescaped dots, then restore
+    placeholder = "\x00"
+    parts = key_path.replace("\\.", placeholder).split(".")
+    parts = [p.replace(placeholder, ".") for p in parts]
 
     # Traverse through the dictionary
     current: Any = data

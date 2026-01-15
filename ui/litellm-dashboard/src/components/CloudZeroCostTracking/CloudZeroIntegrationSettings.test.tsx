@@ -1,6 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CloudZeroIntegrationSettings } from "./CloudZeroIntegrationSettings";
 import { CloudZeroSettings } from "./types";
 
@@ -67,5 +67,16 @@ describe("CloudZeroIntegrationSettings", () => {
     expect(screen.getByText("API Key (Redacted)")).toBeInTheDocument();
     expect(screen.getByText("Connection ID")).toBeInTheDocument();
     expect(screen.getByText("Timezone")).toBeInTheDocument();
+  });
+
+  it("should display the correct values from settings", () => {
+    render(
+      <QueryClientProvider client={queryClient}>
+        <CloudZeroIntegrationSettings settings={mockSettings} onSettingsUpdated={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText(mockSettings.api_key_masked)).toBeInTheDocument();
+    expect(screen.getByText(mockSettings.connection_id)).toBeInTheDocument();
   });
 });

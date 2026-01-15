@@ -1,65 +1,74 @@
-import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   Card,
-  Title,
+  Col,
+  Grid,
   Subtitle,
   Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
-  TableCell,
   TableBody,
+  TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   Text,
-  Grid,
-  Col,
+  Title,
 } from "@tremor/react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { CredentialItem, credentialListCall, CredentialsResponse } from "../networking";
 
 import { handleAddModelSubmit } from "../add_model/handle_add_model_submit";
 
 import CredentialsPanel from "@/components/model_add/credentials";
-import { getDisplayModelName } from "../view_model/model_name_display";
-import { TabPanel, TabPanels, TabGroup, TabList, Tab, Icon } from "@tremor/react";
-import { Select, SelectItem, DateRangePickerValue } from "@tremor/react";
-import UsageDatePicker from "../shared/usage_date_picker";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { FilterIcon, RefreshIcon } from "@heroicons/react/outline";
 import {
-  modelInfoCall,
-  modelCostMap,
-  healthCheckCall,
-  modelMetricsCall,
-  streamingModelMetricsCall,
-  modelExceptionsCall,
-  modelMetricsSlowResponsesCall,
-  getCallbacksCall,
-  setCallbacksCall,
-  modelSettingsCall,
+  AreaChart,
+  BarChart,
+  Button,
+  DateRangePickerValue,
+  Icon,
+  Select,
+  SelectItem,
+  Tab,
+  TabGroup,
+  TabList,
+  TabPanel,
+  TabPanels,
+} from "@tremor/react";
+import type { UploadProps } from "antd";
+import { Form, InputNumber, Popover, Typography } from "antd";
+import AddModelTab from "../add_model/add_model_tab";
+import { Team } from "../key_team_helpers/key_list";
+import ModelInfoView from "../model_info_view";
+import TimeToFirstToken from "../model_metrics/time_to_first_token";
+import {
   adminGlobalActivityExceptions,
   adminGlobalActivityExceptionsPerDeployment,
   allEndUsersCall,
+  getCallbacksCall,
+  healthCheckCall,
+  modelCostMap,
+  modelExceptionsCall,
+  modelInfoCall,
+  modelMetricsCall,
+  modelMetricsSlowResponsesCall,
+  modelSettingsCall,
+  setCallbacksCall,
+  streamingModelMetricsCall,
 } from "../networking";
-import { BarChart, AreaChart } from "@tremor/react";
-import { Popover, Form, InputNumber } from "antd";
-import { Button } from "@tremor/react";
-import { Typography } from "antd";
-import { RefreshIcon, FilterIcon } from "@heroicons/react/outline";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import type { UploadProps } from "antd";
-import TimeToFirstToken from "../model_metrics/time_to_first_token";
-import { Team } from "../key_team_helpers/key_list";
+import { getPlaceholder, getProviderModels, provider_map, Providers } from "../provider_info_helpers";
+import UsageDatePicker from "../shared/usage_date_picker";
 import TeamInfoView from "../team/team_info";
-import { Providers, provider_map, getPlaceholder, getProviderModels } from "../provider_info_helpers";
-import ModelInfoView from "../model_info_view";
-import AddModelTab from "../add_model/add_model_tab";
+import { getDisplayModelName } from "../view_model/model_name_display";
 
-import { ModelDataTable } from "../model_dashboard/table";
-import { columns } from "../molecules/models/columns";
-import PriceDataReload from "../price_data_reload";
-import HealthCheckComponent from "../model_dashboard/HealthCheckComponent";
-import PassThroughSettings from "../pass_through_settings";
-import ModelGroupAliasSettings from "../model_group_alias_settings";
 import { all_admin_roles } from "@/utils/roles";
-import { Table as TableInstance, PaginationState } from "@tanstack/react-table";
+import { PaginationState } from "@tanstack/react-table";
+import HealthCheckComponent from "../model_dashboard/HealthCheckComponent";
+import { ModelDataTable } from "../model_dashboard/table";
+import ModelGroupAliasSettings from "../model_group_alias_settings";
+import { columns } from "../molecules/models/columns";
 import NotificationsManager from "../molecules/notifications_manager";
+import PassThroughSettings from "../pass_through_settings";
+import PriceDataReload from "../price_data_reload";
 
 interface ModelDashboardProps {
   accessToken: string | null;
@@ -196,7 +205,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const tableRef = useRef<TableInstance<any>>(null);
 
   // Pagination state
   const [pagination, setPagination] = useState<PaginationState>({
@@ -942,7 +950,7 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
     );
   };
 
-  const handleOk = () => {
+  const handleOk = async () => {
     console.log("🚀 handleOk called from model dashboard!");
     console.log("Current form values:", addModelForm.getFieldsValue());
 
@@ -1013,7 +1021,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
           {selectedModelId ? (
             <ModelInfoView
               modelId={selectedModelId}
-              editModel={true}
               onClose={() => {
                 setSelectedModelId(null);
                 setEditModel(false);
@@ -1022,8 +1029,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}
-              setEditModalVisible={setEditModalVisible}
-              setSelectedModel={setSelectedModel}
               onModelUpdate={(updatedModel) => {
                 // Update the model in the modelData.data array
                 const updatedModelData = {
@@ -1319,13 +1324,11 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                             getDisplayModelName,
                             handleEditClick,
                             handleRefreshClick,
-                            setEditModel,
                             expandedRows,
                             setExpandedRows,
                           )}
                           data={paginatedData}
                           isLoading={false}
-                          table={tableRef}
                         />
                       </div>
                     </div>
@@ -1347,7 +1350,6 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                     credentials={credentialsList}
                     accessToken={accessToken}
                     userRole={userRole}
-                    premiumUser={premiumUser}
                   />
                 </TabPanel>
                 <TabPanel>

@@ -1,27 +1,37 @@
 {
-    "sample_callback": {
-        "event_types": ["llm_api_success", "llm_api_failure"],
-        "endpoint": "{{environment_variables.SAMPLE_CALLBACK_URL}}",
-        "headers": {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer {{environment_variables.SAMPLE_CALLBACK_API_KEY}}"
-        },
-        "environment_variables": ["SAMPLE_CALLBACK_URL", "SAMPLE_CALLBACK_API_KEY"]
+  "sample_callback": {
+    "event_types": ["llm_api_success", "llm_api_failure"],
+    "endpoint": "{{environment_variables.SAMPLE_CALLBACK_URL}}",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{environment_variables.SAMPLE_CALLBACK_API_KEY}}"
     },
-    "rubrik": {
-        "event_types": ["llm_api_success"],
-        "endpoint": "{{environment_variables.RUBRIK_WEBHOOK_URL}}",
-        "headers": {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer {{environment_variables.RUBRIK_API_KEY}}"
-        },
-        "environment_variables": ["RUBRIK_API_KEY", "RUBRIK_WEBHOOK_URL"]
+    "environment_variables": ["SAMPLE_CALLBACK_URL", "SAMPLE_CALLBACK_API_KEY"]
+  },
+  "rubrik": {
+    "event_types": ["llm_api_success"],
+    "endpoint": "{{environment_variables.RUBRIK_WEBHOOK_URL}}",
+    "headers": {
+      "Content-Type": "application/json",
+      "Authorization": "Bearer {{environment_variables.RUBRIK_API_KEY}}"
     },
-    "sumologic": {
-        "endpoint": "{{environment_variables.SUMOLOGIC_WEBHOOK_URL}}",
-        "headers": {
-            "Content-Type": "application/json"
-        },
-        "environment_variables": ["SUMOLOGIC_WEBHOOK_URL"]
-    }
+    "environment_variables": ["RUBRIK_API_KEY", "RUBRIK_WEBHOOK_URL"]
+  },
+  "sumologic": {
+    "endpoint": "{{environment_variables.SUMOLOGIC_WEBHOOK_URL}}",
+    "headers": {
+      "Content-Type": "application/json"
+    },
+    "environment_variables": ["SUMOLOGIC_WEBHOOK_URL"],
+    "log_format": "ndjson"
+  },
+  "qualifire_eval": {
+    "event_types": ["llm_api_success"],
+    "endpoint": "{{environment_variables.QUALIFIRE_WEBHOOK_URL}}",
+    "headers": {
+      "Content-Type": "application/json",
+      "X-Qualifire-API-Key": "{{environment_variables.QUALIFIRE_API_KEY}}"
+    },
+    "environment_variables": ["QUALIFIRE_API_KEY", "QUALIFIRE_WEBHOOK_URL"]
+  }
 }
