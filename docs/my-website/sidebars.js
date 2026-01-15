@@ -122,6 +122,7 @@ const sidebars = {
           items: [
             "tutorials/claude_responses_api",
             "tutorials/claude_mcp",
+            "tutorials/claude_non_anthropic_models",
           ]
         },
         "tutorials/cost_tracking_coding",
