@@ -41,8 +41,12 @@ def mock_embedding_async_http_handler():
 class TestHuggingFaceEmbedding:
     @pytest.fixture(autouse=True)
     def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler):
+        # Mock both sync and async versions of get_hf_task functions
         self.mock_get_task_patcher = patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
+        self.mock_get_task_async_patcher = patch("litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model", new_callable=AsyncMock)
+        
         self.mock_get_task = self.mock_get_task_patcher.start()
+        self.mock_get_task_async = self.mock_get_task_async_patcher.start()
 
         def mock_get_task_side_effect(model, task_type, api_base):
             if task_type is not None:
@@ -50,6 +54,7 @@ class TestHuggingFaceEmbedding:
             return "sentence-similarity"
 
         self.mock_get_task.side_effect = mock_get_task_side_effect
+        self.mock_get_task_async.side_effect = mock_get_task_side_effect
 
         self.model = "huggingface/BAAI/bge-m3"
         self.mock_http = mock_embedding_http_handler
@@ -59,6 +64,7 @@ class TestHuggingFaceEmbedding:
         yield
 
         self.mock_get_task_patcher.stop()
+        self.mock_get_task_async_patcher.stop()
 
     def test_input_type_preserved_in_optional_params(self):
         input_text = ["hello world"]
