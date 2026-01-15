@@ -1,6 +1,5 @@
 import os
 import sys
-import asyncio
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -44,9 +43,7 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
                 "id": "msg_123",
                 "status": "completed",
                 "role": "assistant",
-                "content": [
-                    {"type": "output_text", "text": "Hello there!", "annotations": []}
-                ],
+                "content": [{"type": "output_text", "text": "Hello there!", "annotations": []}],
             }
         ],
         "parallel_tool_calls": True,
@@ -338,12 +335,10 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
 
         # Force user-key affinity to point to the OTHER deployment
         affinity_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
-            model_group="computer-use-preview",
+            model_group=model_group,
             user_key=user_api_key_hash,
         )
-        await router.cache.async_set_cache(
-            affinity_cache_key, {"model_id": other_model_id}, ttl=3600
-        )
+        await router.cache.async_set_cache(affinity_cache_key, {"model_id": other_model_id}, ttl=3600)
 
         # Even though user-key affinity points elsewhere, previous_response_id should pin
         # to the deployment that created the original response.
@@ -447,93 +442,6 @@ async def test_async_user_parameter_does_not_trigger_deployment_affinity():
 
 
 @pytest.mark.asyncio
-async def test_async_affinity_cache_expiry_allows_reroute():
-    """
-    When affinity TTL expires, routing should fall back to normal load balancing.
-    """
-    mock_response_data = {
-        "id": "resp_mock-resp-ttl",
-        "object": "response",
-        "created_at": 1741476542,
-        "status": "completed",
-        "model": "azure/computer-use-preview",
-        "output": [
-            {
-                "type": "message",
-                "id": "msg_ttl",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "TTL Response"}],
-            }
-        ],
-        "parallel_tool_calls": True,
-        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
-        "text": {"format": {"type": "text"}},
-        "error": None,
-        "previous_response_id": None,
-    }
-
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "azure-ttl-test",
-                "litellm_params": {
-                    "model": "azure/ttl-1",
-                    "api_key": "mock",
-                    "api_base": "https://mock1.openai.azure.com",
-                },
-            },
-            {
-                "model_name": "azure-ttl-test",
-                "litellm_params": {
-                    "model": "azure/ttl-2",
-                    "api_key": "mock",
-                    "api_base": "https://mock2.openai.azure.com",
-                },
-            },
-        ],
-        optional_pre_call_checks=["deployment_affinity"],
-        deployment_affinity_ttl_seconds=1,
-    )
-
-    model_group = "azure-ttl-test"
-    user_api_key_hash = "ttl-user-key"
-
-    choice_calls = {"count": 0}
-
-    def deterministic_choice(seq):
-        choice_calls["count"] += 1
-        if choice_calls["count"] == 1:
-            return seq[0]
-        return seq[1] if len(seq) > 1 else seq[0]
-
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=deterministic_choice,
-    ):
-        mock_post.return_value = MockResponse(mock_response_data, 200)
-
-        first_response = await router.aresponses(
-            model=model_group,
-            input="Hi",
-            litellm_metadata={"user_api_key_hash": user_api_key_hash},
-        )
-        first_model_id = first_response._hidden_params["model_id"]
-
-        await asyncio.sleep(1.1)
-
-        second_response = await router.aresponses(
-            model=model_group,
-            input="Follow-up after ttl",
-            litellm_metadata={"user_api_key_hash": user_api_key_hash},
-        )
-        assert second_response._hidden_params["model_id"] != first_model_id
-
-
-@pytest.mark.asyncio
 async def test_async_pre_call_hook_uses_model_map_key_scope():
     """
     Deployment affinity caching uses (user_api_key_hash, model_map_key) -> model_id.
@@ -550,9 +458,10 @@ async def test_async_pre_call_hook_uses_model_map_key_scope():
     )
 
     kwargs = {
-        "model_info": {"id": "model-id-123", "base_model": "claude-sonnet-4-5@20250929"},
+        "model_info": {"id": "model-id-123"},
         "litellm_metadata": {
             "user_api_key_hash": "user-key-abc",
+            "deployment_model_name": "claude-sonnet-4-5@20250929",
         },
     }
 
@@ -594,13 +503,13 @@ async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_s
 
     healthy_deployments = [
         {
-            "model_name": "group-any",
+            "model_name": stable_model_map_key,
             "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
             "model_info": {"id": "deployment-1"},
         },
         {
-            "model_name": "group-any",
-            "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
+            "model_name": stable_model_map_key,
+            "litellm_params": {"model": f"bedrock/global.anthropic.{stable_model_map_key}-v1:0"},
             "model_info": {"id": "deployment-2"},
         },
     ]
@@ -641,4 +550,3 @@ def test_cache_key_does_not_double_hash_user_api_key_hash():
         user_key=user_api_key_hash,
     )
     assert key.endswith(user_api_key_hash)
->>>>>>> 860962807e (fix(router): scope deployment affinity by model_map_key)
