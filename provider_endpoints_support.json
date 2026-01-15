@@ -924,7 +924,7 @@
       "url": "https://docs.litellm.ai/docs/providers/chatgpt",
       "endpoints": {
         "chat_completions": true,
-        "messages": false,
+        "messages": true,
         "responses": true,
         "embeddings": false,
         "image_generations": false,

@@ -6,9 +6,10 @@ from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
 
 from typing_extensions import TypedDict
 
+from litellm.types.llms.openai import ResponsesAPIResponse
+
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
-    from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
@@ -41,8 +42,6 @@ class ResponsesToCompletionBridgeHandler:
         response_obj: Any,
         hidden_params: Optional[dict],
     ) -> "ResponsesAPIResponse":
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
         if isinstance(response_obj, ResponsesAPIResponse):
             response = response_obj
         elif isinstance(response_obj, dict):
@@ -65,8 +64,6 @@ class ResponsesToCompletionBridgeHandler:
     def _collect_response_from_stream(
         self, stream_iter: Any
     ) -> "ResponsesAPIResponse":
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
         for _ in stream_iter:
             pass
 
@@ -84,8 +81,6 @@ class ResponsesToCompletionBridgeHandler:
     async def _collect_response_from_stream_async(
         self, stream_iter: Any
     ) -> "ResponsesAPIResponse":
-        from litellm.types.llms.openai import ResponsesAPIResponse
-
         async for _ in stream_iter:
             pass
 
@@ -159,7 +154,6 @@ class ResponsesToCompletionBridgeHandler:
 
         from litellm import responses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-        from litellm.types.llms.openai import ResponsesAPIResponse
 
         validated_kwargs = self.validate_input_kwargs(kwargs)
         model = validated_kwargs["model"]
@@ -234,7 +228,6 @@ class ResponsesToCompletionBridgeHandler:
     ) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-        from litellm.types.llms.openai import ResponsesAPIResponse
 
         validated_kwargs = self.validate_input_kwargs(kwargs)
         model = validated_kwargs["model"]
