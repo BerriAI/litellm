@@ -884,7 +884,12 @@ router = litellm.Router(
             },
         },
     ],
-    optional_pre_call_checks=["responses_api_deployment_check"],
+    # `responses_api_deployment_check` ensures Requests with `previous_response_id`
+    # are routed to the same deployment. `deployment_affinity` adds sticky sessions
+    # for requests without `previous_response_id` (useful for implicit caching).
+    optional_pre_call_checks=["responses_api_deployment_check", "deployment_affinity"],
+    # Optional (default is 3600 seconds / 1 hour)
+    deployment_affinity_ttl_seconds=3600,
 )
 
 # Initial request
@@ -911,7 +916,10 @@ follow_up = await router.aresponses(
 
 #### 1. Setup session continuity on proxy config.yaml
 
-To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks: ["responses_api_deployment_check"]` in your proxy config.yaml.
+To enable session continuity for Responses API in your LiteLLM proxy, set `optional_pre_call_checks` in your proxy config.yaml.
+
+- `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
+- `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
 
 ```yaml showLineNumbers title="config.yaml with Session Continuity"
 model_list:
@@ -929,7 +937,11 @@ model_list:
       api_base: https://endpoint2.openai.azure.com
 
 router_settings:
-  optional_pre_call_checks: ["responses_api_deployment_check"]
+  optional_pre_call_checks:
+    - responses_api_deployment_check
+    - deployment_affinity
+  # Optional (default is 3600 seconds / 1 hour)
+  deployment_affinity_ttl_seconds: 3600
 ```
 
 #### 2. Use the OpenAI Python SDK to make requests to LiteLLM Proxy
@@ -1220,7 +1232,6 @@ Response:
   }]
 }
 ```
-
 
 
 
