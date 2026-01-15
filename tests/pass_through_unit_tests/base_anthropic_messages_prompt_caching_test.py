@@ -237,3 +237,238 @@ class BaseAnthropicMessagesPromptCachingTest(ABC):
             f"Expected cache tokens > 0 for system message caching, "
             f"but got cache_creation={cache_creation}, cache_read={cache_read}"
         )
+
+    def _parse_sse_chunks(self, chunk: bytes) -> list:
+        """
+        Parse SSE format chunks and return list of JSON objects.
+        """
+        results = []
+        chunk_str = chunk.decode("utf-8")
+        for line in chunk_str.split("\n"):
+            if line.startswith("data: "):
+                try:
+                    json_data = json.loads(line[6:])  # Skip the 'data: ' prefix
+                    results.append(json_data)
+                except json.JSONDecodeError:
+                    pass
+        return results
+
+    @pytest.mark.asyncio
+    async def test_prompt_caching_streaming_returns_cache_tokens(self):
+        """
+        E2E test: Streaming response should include cache tokens in usage.
+        
+        This validates that cache_creation_input_tokens and cache_read_input_tokens
+        are correctly returned in the streaming response's message_delta event.
+        """
+        litellm._turn_on_debug()
+        
+        messages = self.get_messages_with_cache_control()
+        
+        response = await litellm.anthropic.messages.acreate(
+            model=self.get_model(),
+            messages=messages,
+            max_tokens=100,
+            stream=True,
+        )
+        
+        # Collect all chunks and find the message_delta with usage
+        cache_creation = 0
+        cache_read = 0
+        found_usage = False
+        
+        async for chunk in response:
+            # Handle SSE format chunks (bytes)
+            if isinstance(chunk, bytes):
+                json_chunks = self._parse_sse_chunks(chunk)
+                for json_data in json_chunks:
+                    print(f"Parsed chunk: {json.dumps(json_data, indent=2, default=str)}")
+                    
+                    # Look for message_delta with usage (final chunk)
+                    if json_data.get("type") == "message_delta":
+                        usage = json_data.get("usage", {})
+                        if usage:
+                            found_usage = True
+                            cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
+                            cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+                            print(f"Found usage in message_delta: cache_creation={cache_creation}, cache_read={cache_read}")
+                    
+                    # Also check message_start for usage (Anthropic includes it there too)
+                    if json_data.get("type") == "message_start":
+                        message = json_data.get("message", {})
+                        usage = message.get("usage", {})
+                        if usage:
+                            found_usage = True
+                            cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
+                            cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+                            print(f"Found usage in message_start: cache_creation={cache_creation}, cache_read={cache_read}")
+            elif isinstance(chunk, dict):
+                print(f"Dict chunk: {json.dumps(chunk, indent=2, default=str)}")
+                # Handle dict chunks directly
+                if chunk.get("type") == "message_delta":
+                    usage = chunk.get("usage", {})
+                    if usage:
+                        found_usage = True
+                        cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+                
+                if chunk.get("type") == "message_start":
+                    message = chunk.get("message", {})
+                    usage = message.get("usage", {})
+                    if usage:
+                        found_usage = True
+                        cache_creation = max(cache_creation, usage.get("cache_creation_input_tokens", 0))
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+        
+        assert found_usage, "Expected to find usage in streaming response"
+        
+        # Should have cache tokens (either creation or read)
+        assert cache_creation > 0 or cache_read > 0, (
+            f"Expected cache_creation_input_tokens > 0 or cache_read_input_tokens > 0 in streaming response, "
+            f"but got cache_creation={cache_creation}, cache_read={cache_read}. "
+            f"This indicates cache tokens are not being passed through in streaming mode."
+        )
+
+    @pytest.mark.asyncio
+    async def test_prompt_caching_streaming_second_call_returns_cache_read(self):
+        """
+        E2E test: Second streaming call should return cache_read_input_tokens > 0.
+        """
+        litellm._turn_on_debug()
+        
+        messages = self.get_messages_with_cache_control()
+        
+        # First call - creates cache
+        response1 = await litellm.anthropic.messages.acreate(
+            model=self.get_model(),
+            messages=messages,
+            max_tokens=100,
+            stream=True,
+        )
+        
+        # Consume the first stream
+        async for chunk in response1:
+            pass
+        
+        # Second call - should read from cache
+        response2 = await litellm.anthropic.messages.acreate(
+            model=self.get_model(),
+            messages=messages,
+            max_tokens=100,
+            stream=True,
+        )
+        
+        cache_read = 0
+        async for chunk in response2:
+            # Handle SSE format chunks (bytes)
+            if isinstance(chunk, bytes):
+                json_chunks = self._parse_sse_chunks(chunk)
+                for json_data in json_chunks:
+                    print(f"Second call parsed chunk: {json.dumps(json_data, indent=2, default=str)}")
+                    
+                    if json_data.get("type") == "message_delta":
+                        usage = json_data.get("usage", {})
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+                    
+                    if json_data.get("type") == "message_start":
+                        message = json_data.get("message", {})
+                        usage = message.get("usage", {})
+                        cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+            elif isinstance(chunk, dict):
+                if chunk.get("type") == "message_delta":
+                    usage = chunk.get("usage", {})
+                    cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+                
+                if chunk.get("type") == "message_start":
+                    message = chunk.get("message", {})
+                    usage = message.get("usage", {})
+                    cache_read = max(cache_read, usage.get("cache_read_input_tokens", 0))
+        
+        assert cache_read > 0, (
+            f"Expected cache_read_input_tokens > 0 on second streaming call, "
+            f"but got {cache_read}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_prompt_caching_message_start_indicates_caching_support(self):
+        """
+        E2E test: message_start event should contain cache fields to indicate caching support.
+
+        This validates that the message_start event includes cache_creation_input_tokens
+        and cache_read_input_tokens fields (even if initialized to 0) so that clients
+        like Claude Code can detect that prompt caching is supported.
+
+        This test specifically addresses the issue where Bedrock converse API streaming
+        didn't include cache fields in message_start, causing clients to think caching
+        wasn't supported.
+        """
+        litellm._turn_on_debug()
+
+        messages = self.get_messages_with_cache_control()
+
+        response = await litellm.anthropic.messages.acreate(
+            model=self.get_model(),
+            messages=messages,
+            max_tokens=100,
+            stream=True,
+        )
+
+        # Look for message_start event and validate it has cache fields
+        message_start_found = False
+        message_start_has_cache_creation_field = False
+        message_start_has_cache_read_field = False
+
+        async for chunk in response:
+            # Handle SSE format chunks (bytes)
+            if isinstance(chunk, bytes):
+                json_chunks = self._parse_sse_chunks(chunk)
+                for json_data in json_chunks:
+                    if json_data.get("type") == "message_start":
+                        message_start_found = True
+                        message = json_data.get("message", {})
+                        usage = message.get("usage", {})
+
+                        print(f"message_start usage: {json.dumps(usage, indent=2, default=str)}")
+
+                        # Check that cache fields are present (even if 0)
+                        if "cache_creation_input_tokens" in usage:
+                            message_start_has_cache_creation_field = True
+                        if "cache_read_input_tokens" in usage:
+                            message_start_has_cache_read_field = True
+
+                        # Break after first message_start
+                        break
+            elif isinstance(chunk, dict):
+                if chunk.get("type") == "message_start":
+                    message_start_found = True
+                    message = chunk.get("message", {})
+                    usage = message.get("usage", {})
+
+                    print(f"message_start usage: {json.dumps(usage, indent=2, default=str)}")
+
+                    # Check that cache fields are present (even if 0)
+                    if "cache_creation_input_tokens" in usage:
+                        message_start_has_cache_creation_field = True
+                    if "cache_read_input_tokens" in usage:
+                        message_start_has_cache_read_field = True
+
+                    # Break after first message_start
+                    break
+
+            # Break if we found message_start
+            if message_start_found:
+                break
+
+        # Validate that message_start was found
+        assert message_start_found, "Expected to find message_start event in streaming response"
+
+        # Validate that cache fields are present in message_start
+        assert message_start_has_cache_creation_field, (
+            "Expected cache_creation_input_tokens field in message_start event. "
+            "This field should be present (even if 0) to indicate caching support to clients."
+        )
+
+        assert message_start_has_cache_read_field, (
+            "Expected cache_read_input_tokens field in message_start event. "
+            "This field should be present (even if 0) to indicate caching support to clients."
+        )
