@@ -846,7 +846,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     # Add headers to metadata for guardrails to access (fixes #17477)
     # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
-    if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):
+    if _metadata_variable_name in data and isinstance(
+        data[_metadata_variable_name], dict
+    ):
         data[_metadata_variable_name]["headers"] = _headers
 
     # check for forwardable headers
@@ -1307,6 +1309,9 @@ def move_guardrails_to_metadata(
 
     - If guardrails set on API Key metadata then sets guardrails on request metadata
     - If guardrails not set on API key, then checks request metadata
+
+    Note: We copy (not pop) guardrails from data to metadata to ensure deployment-level
+    guardrails merged by the router remain in kwargs for async_pre_call_deployment_hook.
     """
     # Check key-level guardrails
     _add_guardrails_from_key_or_team_metadata(
@@ -1319,15 +1324,23 @@ def move_guardrails_to_metadata(
     #########################################################################################
     # User's might send "guardrails" in the request body, we need to add them to the request metadata.
     # Since downstream logic requires "guardrails" to be in the request metadata
+    #
+    # IMPORTANT: We copy instead of pop to preserve guardrails in kwargs for
+    # async_pre_call_deployment_hook (custom_guardrail.py:290) which checks kwargs.get("guardrails").
+    # This is the event-based approach for deployment-level guardrails.
     #########################################################################################
     if "guardrails" in data:
-        request_body_guardrails = data.pop("guardrails")
+        request_body_guardrails = data.get("guardrails")
         if "guardrails" in data[_metadata_variable_name] and isinstance(
             data[_metadata_variable_name]["guardrails"], list
         ):
-            data[_metadata_variable_name]["guardrails"].extend(request_body_guardrails)
+            # Merge unique guardrails
+            existing = data[_metadata_variable_name]["guardrails"]
+            for g in request_body_guardrails:
+                if g not in existing:
+                    existing.append(g)
         else:
-            data[_metadata_variable_name]["guardrails"] = request_body_guardrails
+            data[_metadata_variable_name]["guardrails"] = list(request_body_guardrails)
 
     #########################################################################################
     if "guardrail_config" in data:
@@ -1342,72 +1355,6 @@ def move_guardrails_to_metadata(
             data[_metadata_variable_name][
                 "guardrail_config"
             ] = request_body_guardrail_config
-
-
-def add_deployment_guardrails_to_metadata(
-    data: dict,
-    llm_router: Optional[Router],
-    model_name: Optional[str],
-) -> None:
-    """
-    Add guardrails from deployment's litellm_params to request metadata.
-
-    This function is called BEFORE pre_call_hook runs, ensuring that
-    deployment-level guardrails are available for the guardrail check.
-
-    Fixes GitHub issue #18363: model-level guardrails configured via UI
-    or litellm_params don't take effect because they were added after
-    pre_call_hook had already run.
-
-    Args:
-        data: The request data dictionary
-        llm_router: The LiteLLM router instance
-        model_name: The model name from the request
-    """
-    if llm_router is None or not model_name:
-        return
-
-    try:
-        # Get deployments for the requested model
-        deployments = llm_router.get_model_list(model_name=model_name)
-        if not deployments:
-            return
-
-        # Get guardrails from first matching deployment's litellm_params
-        deployment_guardrails = (
-            deployments[0].get("litellm_params", {}).get("guardrails")
-        )
-        if not deployment_guardrails:
-            return
-
-        # Determine metadata variable name (metadata vs litellm_metadata)
-        _metadata_variable_name = "metadata"
-        if "litellm_metadata" in data:
-            _metadata_variable_name = "litellm_metadata"
-
-        if _metadata_variable_name not in data:
-            data[_metadata_variable_name] = {}
-
-        # Merge with existing guardrails (request-level takes precedence)
-        existing_guardrails = data[_metadata_variable_name].get("guardrails", [])
-        if existing_guardrails:
-            # Combine unique guardrails, keeping existing ones first
-            combined = list(existing_guardrails)
-            for g in deployment_guardrails:
-                if g not in combined:
-                    combined.append(g)
-            data[_metadata_variable_name]["guardrails"] = combined
-        else:
-            data[_metadata_variable_name]["guardrails"] = list(deployment_guardrails)
-
-        verbose_proxy_logger.debug(
-            f"Added deployment guardrails to metadata: {data[_metadata_variable_name].get('guardrails')}"
-        )
-    except Exception as e:
-        # Fail silently - don't break request if guardrail lookup fails
-        verbose_proxy_logger.debug(
-            f"Failed to add deployment guardrails to metadata: {e}"
-        )
 
 
 def add_provider_specific_headers_to_request(

@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 else:
     ProxyConfig = Any
 from litellm.proxy.litellm_pre_call_utils import (
-    add_deployment_guardrails_to_metadata,
     add_litellm_data_to_request,
 )
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
@@ -287,7 +286,12 @@ class ProxyBaseLLMRequestProcessing:
         hidden_params = hidden_params or {}
 
         # Extract discount and margin info from cost_breakdown if available
-        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(
+        (
+            original_cost,
+            discount_amount,
+            margin_total_amount,
+            margin_percent,
+        ) = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj
         )
 
@@ -523,14 +527,6 @@ class ProxyBaseLLMRequestProcessing:
 
         self.data["litellm_logging_obj"] = logging_obj
 
-        # Add deployment-level guardrails to metadata BEFORE pre_call_hook
-        # This fixes GitHub issue #18363 - guardrails in litellm_params weren't being applied
-        add_deployment_guardrails_to_metadata(
-            data=self.data,
-            llm_router=llm_router,
-            model_name=self.data.get("model"),
-        )
-
         self.data = await proxy_logging_obj.pre_call_hook(  # type: ignore
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
@@ -538,12 +534,12 @@ class ProxyBaseLLMRequestProcessing:
         # Apply hierarchical router_settings (Key > Team > Global)
         if llm_router is not None and proxy_config is not None:
             from litellm.proxy.proxy_server import prisma_client
-            
+
             router_settings = await proxy_config._get_hierarchical_router_settings(
                 user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,
             )
-            
+
             # If router_settings found (from key, team, or global), apply them
             # This ensures key/team settings override global settings
             if router_settings is not None and router_settings:
@@ -552,10 +548,7 @@ class ProxyBaseLLMRequestProcessing:
                 if model_list is not None:
                     # Create user_config with model_list and router_settings
                     # This creates a per-request router with the hierarchical settings
-                    user_config = {
-                        "model_list": model_list,
-                        **router_settings
-                    }
+                    user_config = {"model_list": model_list, **router_settings}
                     self.data["user_config"] = user_config
 
         if "messages" in self.data and self.data["messages"]:
@@ -1017,7 +1010,9 @@ class ProxyBaseLLMRequestProcessing:
 
     @staticmethod
     def _get_pre_call_type(
-        route_type: Literal["acompletion", "aembedding", "aresponses", "allm_passthrough_route"],
+        route_type: Literal[
+            "acompletion", "aembedding", "aresponses", "allm_passthrough_route"
+        ],
     ) -> Literal["completion", "embedding", "responses", "allm_passthrough_route"]:
         if route_type == "acompletion":
             return "completion"
