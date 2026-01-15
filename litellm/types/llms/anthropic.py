@@ -634,10 +634,13 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
+    TOOL_SEARCH_2025_10_19 = "tool-search-tool-2025-10-19"
 
 
-# Tool search beta header constant
+# Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
 ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+
+
