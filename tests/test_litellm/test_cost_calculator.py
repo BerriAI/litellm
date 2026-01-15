@@ -192,6 +192,40 @@ def test_transcription_cost_falls_back_to_duration():
     assert pytest.approx(cost, rel=1e-6) == expected_cost
 
 
+def test_transcription_cost_prefers_input_when_output_zero(monkeypatch):
+    from litellm import completion_cost
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    model_name = "custom-whisper-input-only"
+    custom_model_info = {
+        "input_cost_per_second": 0.00005,
+        "output_cost_per_second": 0.0,
+        "litellm_provider": "openai",
+        "mode": "audio_transcription",
+        "supported_endpoints": ["/v1/audio/transcriptions"],
+    }
+    monkeypatch.setattr(
+        litellm,
+        "model_cost",
+        {**litellm.model_cost, model_name: custom_model_info},
+    )
+
+    response = TranscriptionResponse(text="demo text")
+    response.duration = 300.0
+
+    cost = completion_cost(
+        completion_response=response,
+        model=model_name,
+        custom_llm_provider="openai",
+        call_type="atranscription",
+    )
+
+    expected_cost = 300.0 * 0.00005
+    assert pytest.approx(cost, rel=1e-6) == expected_cost
+
+
 def test_handle_realtime_stream_cost_calculation():
     from litellm.cost_calculator import RealtimeAPITokenUsageProcessor
 
