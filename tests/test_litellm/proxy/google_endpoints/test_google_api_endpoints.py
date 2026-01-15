@@ -392,3 +392,38 @@ def test_google_generate_content_with_image_config():
         assert "contents" in called_data
         assert len(called_data["contents"]) == 1
         assert called_data["contents"][0]["role"] == "user"
+
+def test_google_generate_content_message_extraction():
+    """Test that message extraction works correctly for Google's native contents format"""
+    from litellm.utils import _extract_text_from_google_contents
+    
+    # Test basic extraction
+    contents = [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "what is the weather on 2025-08-31 in tel-aviv?"}
+            ]
+        }
+    ]
+    
+    result = _extract_text_from_google_contents(contents)
+    assert result == "what is the weather on 2025-08-31 in tel-aviv?"
+    
+    # Test multiple parts
+    contents_multi = [
+        {
+            "role": "user",
+            "parts": [
+                {"text": "First part"},
+                {"text": "Second part"}
+            ]
+        }
+    ]
+    
+    result_multi = _extract_text_from_google_contents(contents_multi)
+    assert result_multi == "First part\nSecond part"
+    
+    # Test empty contents
+    assert _extract_text_from_google_contents([]) == ""
+    assert _extract_text_from_google_contents(None) == ""
