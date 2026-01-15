@@ -83,4 +83,16 @@
         "LiteLLM",
         "Quickstart"
     ]
+},
+{
+    "title": "OpenWebUI Quickstart",
+    "description": "This is a quickstart guide to using OpenWebUI with LiteLLM.",
+    "url": "https://docs.litellm.ai/docs/tutorials/openweb_ui",
+    "date": "2026-01-16",
+    "version": "1.0.0",
+    "tags": [
+        "OpenWebUI",
+        "LiteLLM",
+        "Quickstart"
+    ]
 }]
