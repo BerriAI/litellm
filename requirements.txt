@@ -62,7 +62,7 @@ aioboto3==13.4.0 # for async sagemaker calls
 tenacity==8.5.0  # for retrying requests, when litellm.num_retries set
 pydantic>=2.11,<3 # proxy + openai req. + mcp
 jsonschema>=4.23.0,<5.0.0 # validating json schema - aligned with openapi-core + mcp
-websockets==13.1.0 # for realtime API
+websockets==15.0.1 # for realtime API
 soundfile==0.12.1 # for audio file processing
 openapi-core==0.21.0 # for OpenAPI compliance tests
 
