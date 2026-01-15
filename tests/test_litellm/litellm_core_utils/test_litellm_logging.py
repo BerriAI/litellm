@@ -14,6 +14,7 @@ import time
 from litellm.constants import SENTRY_DENYLIST, SENTRY_PII_DENYLIST
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import set_callbacks
+from litellm.types.utils import ModelResponse
 
 
 @pytest.fixture
@@ -277,6 +278,87 @@ async def test_logging_non_streaming_request():
         litellm.callbacks = original_callbacks
 
 
+@pytest.mark.parametrize("async_flag", ["acompletion", "aresponses"])
+def test_success_handler_skips_sync_callbacks_for_async_requests(logging_obj, async_flag):
+    """Ensure sync success callbacks are skipped when async call type flags are set."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False  # simulate non-streaming request where sync callbacks would normally run
+    logging_obj.model_call_details["litellm_params"] = {async_flag: True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+
+    dummy_logger = DummyLogger()
+    dummy_logger.log_success_event = MagicMock()
+    dummy_logger.log_stream_event = MagicMock()
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[dummy_logger],
+    ):
+        logging_obj.success_handler(result=model_response)
+
+    dummy_logger.log_success_event.assert_not_called()
+    dummy_logger.log_stream_event.assert_not_called()
+
+
+@pytest.mark.parametrize("call_type", ["completion", "responses"])
+def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call_type):
+    """Ensure sync success callbacks execute when call type is sync (completion/responses)."""
+    from litellm.integrations.custom_logger import CustomLogger
+
+    class DummyLogger(CustomLogger):
+        pass
+
+    logging_obj.stream = False
+    logging_obj.call_type = call_type
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+
+    dummy_logger = DummyLogger()
+    dummy_logger.log_success_event = MagicMock()
+    dummy_logger.log_stream_event = MagicMock()
+
+    model_response = ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[
+            {
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+    with patch.object(
+        logging_obj,
+        "get_combined_callback_list",
+        return_value=[dummy_logger],
+    ):
+        logging_obj.success_handler(result=model_response)
+
+    dummy_logger.log_success_event.assert_called_once()
+    dummy_logger.log_stream_event.assert_not_called()
+
+
 def test_get_user_agent_tags():
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
@@ -391,6 +473,63 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "custom-tag" in tags
     assert "User-Agent: litellm" in tags
     assert "User-Agent: litellm/1.0.0" in tags
+
+
+def test_get_request_tags_does_not_mutate_original_tags():
+    """
+    Test that _get_request_tags does not mutate the original tags list in metadata.
+
+    This is a regression test for a bug where calling _get_request_tags multiple times
+    would cause User-Agent tags to be duplicated because the function was mutating
+    the original tags list instead of creating a copy.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create metadata with original tags
+    original_tags = ["custom-tag-1", "custom-tag-2"]
+    metadata = {"tags": original_tags}
+    litellm_params = {"metadata": metadata}
+    proxy_server_request = {
+        "headers": {
+            "user-agent": "AsyncOpenAI/Python 1.99.9",
+        }
+    }
+
+    # Call _get_request_tags multiple times (simulating multiple callbacks)
+    tags1 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+    tags2 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+    tags3 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+
+    # Verify the original tags list was NOT mutated
+    assert original_tags == ["custom-tag-1", "custom-tag-2"], (
+        f"Original tags list was mutated: {original_tags}"
+    )
+    assert metadata["tags"] == ["custom-tag-1", "custom-tag-2"], (
+        f"metadata['tags'] was mutated: {metadata['tags']}"
+    )
+
+    # Verify each returned list has exactly 2 User-Agent tags (not duplicated)
+    user_agent_count_1 = len([t for t in tags1 if t.startswith("User-Agent:")])
+    user_agent_count_2 = len([t for t in tags2 if t.startswith("User-Agent:")])
+    user_agent_count_3 = len([t for t in tags3 if t.startswith("User-Agent:")])
+
+    assert user_agent_count_1 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_1}"
+    assert user_agent_count_2 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_2}"
+    assert user_agent_count_3 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_3}"
+
+    # Verify all returned lists are independent (different objects)
+    assert tags1 is not tags2
+    assert tags2 is not tags3
+    assert tags1 is not original_tags
 
 
 def test_get_extra_header_tags():

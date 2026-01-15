@@ -55,6 +55,7 @@ const sidebars = {
         "proxy/guardrails/test_playground",
         "proxy/guardrails/litellm_content_filter",
         ...[
+          "proxy/guardrails/qualifire",
           "proxy/guardrails/aim_security",
           "proxy/guardrails/onyx_security",
           "proxy/guardrails/aporia_api",
@@ -487,6 +488,7 @@ const sidebars = {
             "mcp_control",
             "mcp_cost",
             "mcp_guardrail",
+            "mcp_troubleshoot",
           ]
         },
         "anthropic_unified",
@@ -601,6 +603,7 @@ const sidebars = {
           label: "Azure AI",
           items: [
             "providers/azure_ai",
+            "providers/azure_ai/azure_model_router",
             "providers/azure_ai_agents",
             "providers/azure_ocr",
             "providers/azure_document_intelligence",
@@ -653,12 +656,13 @@ const sidebars = {
             "providers/bedrock_writer",
             "providers/bedrock_batches",
             "providers/aws_polly",
-            "providers/bedrock_vector_store",
-          ]
-        },
-        "providers/litellm_proxy",
-        "providers/ai21",
-        "providers/aiml",
+        "providers/bedrock_vector_store",
+      ]
+    },
+    "providers/litellm_proxy",
+    "providers/abliteration",
+    "providers/ai21",
+    "providers/aiml",
         "providers/aleph_alpha",
         "providers/amazon_nova",
         "providers/anyscale",
@@ -710,6 +714,7 @@ const sidebars = {
         "providers/llamafile",
         "providers/llamagate",
         "providers/lm_studio",
+        "providers/manus",
         "providers/meta_llama",
         "providers/milvus_vector_stores",
         "providers/mistral",
@@ -967,6 +972,14 @@ const sidebars = {
       ],
     },
     "troubleshoot",
+    {
+      type: "category",
+      label: "Issue Reporting",
+      items: [
+        "troubleshoot/cpu_issues",
+        "troubleshoot/memory_issues",
+      ],
+    },
   ],
 };
 
