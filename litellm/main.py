@@ -1097,18 +1097,58 @@ def completion(  # type: ignore # noqa: PLR0915
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import (
-            handle_chat_completion_with_mcp,
+            acompletion_with_mcp,
+        )
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
         )
 
-        mcp_handler_context = locals().copy()
-        completion_callable = globals().get("acompletion")
-        mcp_result = run_async_function(
-            handle_chat_completion_with_mcp,
-            mcp_handler_context,
-            completion_callable,
-        )
-        if mcp_result is not None:
-            return mcp_result
+        # Check if MCP tools are present (following responses pattern)
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+            # Return coroutine - acompletion will await it
+            return acompletion_with_mcp(
+                model=model,
+                messages=messages,
+                functions=functions,
+                function_call=function_call,
+                timeout=timeout,
+                temperature=temperature,
+                top_p=top_p,
+                n=n,
+                stream=stream,
+                stream_options=stream_options,
+                stop=stop,
+                max_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens,
+                modalities=modalities,
+                prediction=prediction,
+                audio=audio,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+                logit_bias=logit_bias,
+                user=user,
+                response_format=response_format,
+                seed=seed,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                deployment_id=deployment_id,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
+                safety_identifier=safety_identifier,
+                service_tier=service_tier,
+                base_url=base_url,
+                api_version=api_version,
+                api_key=api_key,
+                model_list=model_list,
+                extra_headers=extra_headers,
+                thinking=thinking,
+                web_search_options=web_search_options,
+                shared_session=shared_session,
+                **kwargs,
+            )
     ######### unpacking kwargs #####################
     args = locals()
     api_base = kwargs.get("api_base", None)
