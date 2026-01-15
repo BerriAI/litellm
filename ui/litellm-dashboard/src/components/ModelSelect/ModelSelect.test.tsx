@@ -1,11 +1,10 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { renderWithProviders } from "../../../tests/test-utils";
-import { ModelSelect } from "./ModelSelect";
 import type { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
 import type { Organization } from "@/components/networking";
-import type { Team } from "@/components/key_team_helpers/key_list";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders } from "../../../tests/test-utils";
+import { ModelSelect } from "./ModelSelect";
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(),
@@ -70,8 +69,8 @@ vi.mock("antd", async (importOriginal) => {
 });
 
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
-import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
 const mockUseTeam = vi.mocked(useTeam);
