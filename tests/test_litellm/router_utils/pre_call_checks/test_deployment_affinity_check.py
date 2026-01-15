@@ -82,6 +82,8 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
                     "api_version": "mock-api-version",
                     "api_base": "https://mock-endpoint-1.openai.azure.com",
                 },
+                # Required for stable affinity scoping across multiple Azure deployments
+                "model_info": {"base_model": "computer-use-preview"},
             },
             {
                 "model_name": "azure-computer-use-preview",
@@ -91,6 +93,7 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
                     "api_version": "mock-api-version-2",
                     "api_base": "https://mock-endpoint-2.openai.azure.com",
                 },
+                "model_info": {"base_model": "computer-use-preview"},
             },
         ],
         optional_pre_call_checks=["deployment_affinity"],
@@ -131,6 +134,99 @@ async def test_async_user_key_affinity_routes_to_same_deployment():
         second_response = await router.aresponses(
             model=model_group,
             input="Follow-up question",
+            truncation="auto",
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        assert second_response._hidden_params["model_id"] == first_model_id
+
+
+@pytest.mark.asyncio
+async def test_async_user_key_affinity_routes_with_model_group_alias():
+    """
+    When Router model_group_alias is used, the requested model group (alias) can differ
+    from the internally-routed model group. Deployment affinity should still stick.
+    """
+    mock_response_data = {
+        "id": "resp_mock-resp-alias",
+        "object": "response",
+        "created_at": 1741476542,
+        "status": "completed",
+        "model": "azure/computer-use-preview",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_alias",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Alias Response"}],
+            }
+        ],
+        "parallel_tool_calls": True,
+        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
+        "text": {"format": {"type": "text"}},
+        "error": None,
+        "previous_response_id": None,
+    }
+
+    canonical_model_group = "azure-computer-use-preview"
+    alias_model_group = "azure-computer-use-preview-alias"
+    user_api_key_hash = "test-user-key-alias"
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": canonical_model_group,
+                "litellm_params": {
+                    "model": "azure/computer-use-preview-1",
+                    "api_key": "mock-api-key-1",
+                    "api_version": "mock-api-version",
+                    "api_base": "https://mock-endpoint-1.openai.azure.com",
+                },
+                "model_info": {"base_model": "computer-use-preview"},
+            },
+            {
+                "model_name": canonical_model_group,
+                "litellm_params": {
+                    "model": "azure/computer-use-preview-2",
+                    "api_key": "mock-api-key-2",
+                    "api_version": "mock-api-version-2",
+                    "api_base": "https://mock-endpoint-2.openai.azure.com",
+                },
+                "model_info": {"base_model": "computer-use-preview"},
+            },
+        ],
+        model_group_alias={alias_model_group: canonical_model_group},
+        optional_pre_call_checks=["deployment_affinity"],
+    )
+
+    choice_calls = {"count": 0}
+
+    def deterministic_choice(seq):
+        choice_calls["count"] += 1
+        if choice_calls["count"] == 1:
+            return seq[0]
+        return seq[1] if len(seq) > 1 else seq[0]
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
+        new_callable=AsyncMock,
+    ) as mock_post, patch(
+        "litellm.router_strategy.simple_shuffle.random.choice",
+        side_effect=deterministic_choice,
+    ):
+        mock_post.return_value = MockResponse(mock_response_data, 200)
+
+        first_response = await router.aresponses(
+            model=alias_model_group,
+            input="Hello",
+            truncation="auto",
+            litellm_metadata={"user_api_key_hash": user_api_key_hash},
+        )
+        first_model_id = first_response._hidden_params["model_id"]
+
+        second_response = await router.aresponses(
+            model=alias_model_group,
+            input="Follow-up",
             truncation="auto",
             litellm_metadata={"user_api_key_hash": user_api_key_hash},
         )
@@ -197,6 +293,7 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
                     "api_version": "mock-api-version",
                     "api_base": "https://mock-endpoint-1.openai.azure.com",
                 },
+                "model_info": {"base_model": "computer-use-preview"},
             },
             {
                 "model_name": "azure-computer-use-preview",
@@ -206,6 +303,7 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
                     "api_version": "mock-api-version-2",
                     "api_base": "https://mock-endpoint-2.openai.azure.com",
                 },
+                "model_info": {"base_model": "computer-use-preview"},
             },
         ],
         optional_pre_call_checks=[
@@ -240,7 +338,7 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
 
         # Force user-key affinity to point to the OTHER deployment
         affinity_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
-            model_group=model_group,
+            model_group="computer-use-preview",
             user_key=user_api_key_hash,
         )
         await router.cache.async_set_cache(
@@ -260,9 +358,10 @@ async def test_async_previous_response_id_priority_over_user_key_affinity():
 
 
 @pytest.mark.asyncio
-async def test_async_user_parameter_affinity():
+async def test_async_user_parameter_does_not_trigger_deployment_affinity():
     """
-    When 'user' is passed as a top-level parameter (SDK-style), affinity should work.
+    The OpenAI `user` parameter identifies the *end-user* (not the API key), and should
+    not be used as an affinity key.
     """
     mock_response_data = {
         "id": "resp_mock-resp-sdk",
@@ -295,6 +394,7 @@ async def test_async_user_parameter_affinity():
                     "api_key": "mock",
                     "api_base": "https://mock1.openai.azure.com",
                 },
+                "model_info": {"base_model": "sdk-test"},
             },
             {
                 "model_name": "azure-sdk-test",
@@ -303,6 +403,7 @@ async def test_async_user_parameter_affinity():
                     "api_key": "mock",
                     "api_base": "https://mock2.openai.azure.com",
                 },
+                "model_info": {"base_model": "sdk-test"},
             },
         ],
         optional_pre_call_checks=["deployment_affinity"],
@@ -328,7 +429,7 @@ async def test_async_user_parameter_affinity():
     ):
         mock_post.return_value = MockResponse(mock_response_data, 200)
 
-        # First call with 'user' parameter
+        # First call with 'user' parameter (end-user id)
         first_response = await router.aresponses(
             model=model_group,
             input="Hi",
@@ -336,13 +437,13 @@ async def test_async_user_parameter_affinity():
         )
         first_model_id = first_response._hidden_params["model_id"]
 
-        # Second call with same 'user' parameter should use affinity
+        # Second call with same 'user' parameter should NOT be pinned by affinity
         second_response = await router.aresponses(
             model=model_group,
             input="Follow-up",
             user=user_id,
         )
-        assert second_response._hidden_params["model_id"] == first_model_id
+        assert second_response._hidden_params["model_id"] != first_model_id
 
 
 @pytest.mark.asyncio
@@ -433,81 +534,111 @@ async def test_async_affinity_cache_expiry_allows_reroute():
 
 
 @pytest.mark.asyncio
-async def test_async_affinity_cache_missing_deployment_falls_back():
+async def test_async_pre_call_hook_uses_model_map_key_scope():
     """
-    If a cached model_id is not in healthy deployments, routing should ignore it.
+    Deployment affinity caching uses (user_api_key_hash, model_map_key) -> model_id.
     """
-    mock_response_data = {
-        "id": "resp_mock-resp-missing",
-        "object": "response",
-        "created_at": 1741476542,
-        "status": "completed",
-        "model": "azure/computer-use-preview",
-        "output": [
-            {
-                "type": "message",
-                "id": "msg_missing",
-                "status": "completed",
-                "role": "assistant",
-                "content": [{"type": "output_text", "text": "Missing Response"}],
-            }
-        ],
-        "parallel_tool_calls": True,
-        "usage": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10},
-        "text": {"format": {"type": "text"}},
-        "error": None,
-        "previous_response_id": None,
-    }
 
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "azure-missing-test",
-                "litellm_params": {
-                    "model": "azure/missing-1",
-                    "api_key": "mock",
-                    "api_base": "https://mock1.openai.azure.com",
-                },
-            },
-            {
-                "model_name": "azure-missing-test",
-                "litellm_params": {
-                    "model": "azure/missing-2",
-                    "api_key": "mock",
-                    "api_base": "https://mock2.openai.azure.com",
-                },
-            },
-        ],
-        optional_pre_call_checks=["deployment_affinity"],
+    cache = AsyncMock()
+    cache.async_set_cache = AsyncMock()
+
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=123,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
     )
 
-    model_group = "azure-missing-test"
-    user_api_key_hash = "missing-user-key"
+    kwargs = {
+        "model_info": {"id": "model-id-123", "base_model": "claude-sonnet-4-5@20250929"},
+        "litellm_metadata": {
+            "user_api_key_hash": "user-key-abc",
+        },
+    }
 
-    with patch(
-        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
-        new_callable=AsyncMock,
-    ) as mock_post, patch(
-        "litellm.router_strategy.simple_shuffle.random.choice",
-        side_effect=lambda seq: seq[1] if len(seq) > 1 else seq[0],
-    ):
-        mock_post.return_value = MockResponse(mock_response_data, 200)
+    await callback.async_pre_call_deployment_hook(kwargs=kwargs, call_type=None)
 
-        affinity_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
-            model_group=model_group,
-            user_key=user_api_key_hash,
-        )
-        await router.cache.async_set_cache(
-            affinity_cache_key,
-            {"model_id": "non-existent-model-id"},
-            ttl=3600,
-        )
+    expected_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+        model_group="claude-sonnet-4-5@20250929",
+        user_key="user-key-abc",
+    )
+    cache.async_set_cache.assert_called_once_with(
+        expected_cache_key,
+        {"model_id": "model-id-123"},
+        ttl=123,
+    )
 
-        response = await router.aresponses(
-            model=model_group,
-            input="Should ignore missing affinity",
-            litellm_metadata={"user_api_key_hash": user_api_key_hash},
-        )
 
-        model_ids = router.get_model_ids(model_name=model_group)
-        assert response._hidden_params["model_id"] == model_ids[1]
+@pytest.mark.asyncio
+async def test_async_filter_deployments_uses_stable_model_map_key_for_affinity_scope():
+    """
+    When a stable model-map key can be derived from the deployment set, affinity should
+    be scoped to that key (this helps stickiness across aliases).
+
+    This is intentionally tested at the callback level (not via Router), to validate the
+    cache key selection logic deterministically.
+    """
+
+    user_key = "user-key-abc"
+    stable_model_map_key = "claude-sonnet-4-5@20250929"
+
+    cache = AsyncMock()
+    cache.async_get_cache = AsyncMock()
+
+    callback = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=123,
+        enable_user_key_affinity=True,
+        enable_responses_api_affinity=False,
+    )
+
+    healthy_deployments = [
+        {
+            "model_name": "group-any",
+            "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
+            "model_info": {"id": "deployment-1"},
+        },
+        {
+            "model_name": "group-any",
+            "litellm_params": {"model": f"vertex_ai/{stable_model_map_key}"},
+            "model_info": {"id": "deployment-2"},
+        },
+    ]
+
+    expected_cache_key = DeploymentAffinityCheck.get_affinity_cache_key(
+        model_group=stable_model_map_key,
+        user_key=user_key,
+    )
+
+    async def get_cache_side_effect(*, key: str):
+        if key == expected_cache_key:
+            return {"model_id": "deployment-2"}
+        return None
+
+    cache.async_get_cache.side_effect = get_cache_side_effect
+
+    filtered = await callback.async_filter_deployments(
+        model="some-router-model-group",
+        healthy_deployments=healthy_deployments,
+        messages=None,
+        request_kwargs={"metadata": {"user_api_key_hash": user_key, "model_group": "alias-group"}},
+        parent_otel_span=None,
+    )
+
+    assert len(filtered) == 1
+    assert filtered[0]["model_info"]["id"] == "deployment-2"
+
+
+def test_cache_key_does_not_double_hash_user_api_key_hash():
+    """
+    Proxy typically provides `metadata.user_api_key_hash` as a SHA-256 hex string.
+    The affinity cache key should not hash it again.
+    """
+
+    user_api_key_hash = "b95b015b66dd02a1c14e1e0a8729211f8ee53ec962658764f4cf58546c2c68e1"
+    key = DeploymentAffinityCheck.get_affinity_cache_key(
+        model_group="any-model-group",
+        user_key=user_api_key_hash,
+    )
+    assert key.endswith(user_api_key_hash)
+>>>>>>> 860962807e (fix(router): scope deployment affinity by model_map_key)

@@ -4,8 +4,8 @@ Unified deployment affinity (session stickiness) for the Router.
 Features (independently enable-able):
 1. Responses API continuity: when a `previous_response_id` is provided, route to the
    deployment that generated the original response (highest priority).
-2. User-key affinity: map a user key -> deployment id for a TTL and re-use that
-   deployment for subsequent requests to the same model group.
+2. API-key affinity: map an API key hash -> deployment id for a TTL and re-use that
+   deployment for subsequent requests to the same model-map key.
 
 This is designed to support "implicit prompt caching" scenarios (no explicit cache_control),
 where routing to a consistent deployment is still beneficial.
@@ -51,8 +51,107 @@ class DeploymentAffinityCheck(CustomLogger):
         self.enable_responses_api_affinity = enable_responses_api_affinity
 
     @staticmethod
+    def _looks_like_sha256_hex(value: str) -> bool:
+        if len(value) != 64:
+            return False
+        try:
+            int(value, 16)
+        except Exception:
+            return False
+        return True
+
+    @staticmethod
     def _hash_user_key(user_key: str) -> str:
+        """
+        Hash user identifiers before storing them in cache keys.
+
+        This avoids putting raw API keys / user identifiers into Redis keys (and therefore
+        into logs/metrics), while keeping the cache key stable and a fixed length.
+        """
+        # If the proxy already provides a stable SHA-256 (e.g. `metadata.user_api_key_hash`),
+        # keep it as-is to avoid double-hashing and to make correlation/debugging possible.
+        if DeploymentAffinityCheck._looks_like_sha256_hex(user_key):
+            return user_key.lower()
+
         return hashlib.sha256(user_key.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _get_model_map_key_from_litellm_model_name(litellm_model_name: str) -> Optional[str]:
+        """
+        Best-effort derivation of a stable "model map key" for affinity scoping.
+
+        The intent is to align with `standard_logging_payload.model_map_information.model_map_key`,
+        which is typically the base model identifier (stable across deployments/endpoints).
+
+        Notes:
+        - When the model name is in "provider/model" format, the provider prefix is stripped.
+        - For Azure, the string after "azure/" is commonly an *Azure deployment name*, which may
+          differ across instances. If `base_model` is not explicitly set, we skip deriving a
+          model-map key from the model string to avoid generating unstable keys.
+        """
+        if not litellm_model_name:
+            return None
+
+        if "/" not in litellm_model_name:
+            return litellm_model_name
+
+        provider_prefix, remainder = litellm_model_name.split("/", 1)
+        if provider_prefix == "azure":
+            return None
+
+        return remainder
+
+    @staticmethod
+    def _get_model_map_key_from_deployment(deployment: dict) -> Optional[str]:
+        """
+        Derive a stable model-map key from a router deployment dict.
+
+        Prefer `base_model` when available (important for Azure), otherwise fall back to
+        parsing `litellm_params.model`.
+        """
+        model_info = deployment.get("model_info")
+        if isinstance(model_info, dict):
+            base_model = model_info.get("base_model")
+            if isinstance(base_model, str) and base_model:
+                return base_model
+
+        litellm_params = deployment.get("litellm_params")
+        if isinstance(litellm_params, dict):
+            base_model = litellm_params.get("base_model")
+            if isinstance(base_model, str) and base_model:
+                return base_model
+            litellm_model_name = litellm_params.get("model")
+            if isinstance(litellm_model_name, str) and litellm_model_name:
+                return DeploymentAffinityCheck._get_model_map_key_from_litellm_model_name(
+                    litellm_model_name
+                )
+
+        return None
+
+    @staticmethod
+    def _get_stable_model_map_key_from_deployments(
+        healthy_deployments: List[dict],
+    ) -> Optional[str]:
+        """
+        Only use model-map key scoping when it is stable across the deployment set.
+
+        This prevents accidentally keying on per-deployment identifiers like Azure deployment
+        names (when `base_model` is not configured).
+        """
+        if not healthy_deployments:
+            return None
+
+        keys: List[str] = []
+        for deployment in healthy_deployments:
+            key = DeploymentAffinityCheck._get_model_map_key_from_deployment(deployment)
+            if key is None:
+                return None
+            keys.append(key)
+
+        unique_keys = set(keys)
+        if len(unique_keys) != 1:
+            return None
+        return keys[0]
 
     @staticmethod
     def _shorten_for_logs(value: str, keep: int = 8) -> str:
@@ -67,32 +166,45 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _get_user_key_from_metadata_dict(metadata: dict) -> Optional[str]:
-        user_key = metadata.get("user_api_key_hash") or metadata.get("user_api_key")
+        # NOTE: affinity is keyed on the *API key hash* provided by the proxy (not the
+        # OpenAI `user` parameter, which is an end-user identifier).
+        user_key = metadata.get("user_api_key_hash")
         if user_key is None:
             return None
         return str(user_key)
 
     @staticmethod
+    def _iter_metadata_dicts(request_kwargs: dict) -> List[dict]:
+        """
+        Return all metadata dicts available on the request.
+
+        Depending on the endpoint, Router may populate `metadata` or `litellm_metadata`.
+        Users may also send one or both, so we check both (rather than using `or`).
+        """
+        metadata_dicts: List[dict] = []
+        for key in ("litellm_metadata", "metadata"):
+            md = request_kwargs.get(key)
+            if isinstance(md, dict):
+                metadata_dicts.append(md)
+        return metadata_dicts
+
+    @staticmethod
     def _get_user_key_from_request_kwargs(request_kwargs: dict) -> Optional[str]:
         """
-        Extract a stable user key from request kwargs.
+        Extract a stable affinity key from request kwargs.
 
-        Primary source (proxy): `metadata.user_api_key_hash` / `metadata.user_api_key`
-        Fallback (SDK): `user`
+        Source (proxy): `metadata.user_api_key_hash`
+
+        Note: the OpenAI `user` parameter is an end-user identifier and is intentionally
+        not used for deployment affinity.
         """
-        # 1. Check metadata (Proxy usage)
-        metadata = request_kwargs.get("litellm_metadata") or request_kwargs.get("metadata")
-        if isinstance(metadata, dict):
+        # Check metadata dicts (Proxy usage)
+        for metadata in DeploymentAffinityCheck._iter_metadata_dicts(request_kwargs):
             user_key = DeploymentAffinityCheck._get_user_key_from_metadata_dict(
                 metadata=metadata
             )
             if user_key is not None:
                 return user_key
-
-        # 2. Check top-level 'user' parameter (SDK usage)
-        user_key = request_kwargs.get("user")
-        if user_key is not None:
-            return str(user_key)
 
         return None
 
@@ -101,10 +213,11 @@ class DeploymentAffinityCheck(CustomLogger):
         healthy_deployments: List[dict], model_id: str
     ) -> Optional[dict]:
         for deployment in healthy_deployments:
-            deployment_model_id = deployment.get("model_info", {}).get("id")
-            if deployment_model_id is not None and str(deployment_model_id) == str(
-                model_id
-            ):
+            model_info = deployment.get("model_info")
+            if not isinstance(model_info, dict):
+                continue
+            deployment_model_id = model_info.get("id")
+            if deployment_model_id is not None and str(deployment_model_id) == str(model_id):
                 return deployment
         return None
 
@@ -119,9 +232,10 @@ class DeploymentAffinityCheck(CustomLogger):
         """
         Optionally filter healthy deployments based on:
         1. `previous_response_id` (Responses API continuity) [highest priority]
-        2. cached user-key deployment affinity
+        2. cached API-key deployment affinity
         """
         request_kwargs = request_kwargs or {}
+        typed_healthy_deployments = cast(List[dict], healthy_deployments)
 
         # 1) Responses API continuity (high priority)
         if self.enable_responses_api_affinity:
@@ -132,7 +246,7 @@ class DeploymentAffinityCheck(CustomLogger):
                 )
                 if responses_model_id is not None:
                     deployment = self._find_deployment_by_model_id(
-                        healthy_deployments=cast(List[dict], healthy_deployments),
+                        healthy_deployments=typed_healthy_deployments,
                         model_id=responses_model_id,
                     )
                     if deployment is not None:
@@ -144,13 +258,21 @@ class DeploymentAffinityCheck(CustomLogger):
 
         # 2) User key -> deployment affinity
         if not self.enable_user_key_affinity:
-            return cast(List[dict], healthy_deployments)
+            return typed_healthy_deployments
 
         user_key = self._get_user_key_from_request_kwargs(request_kwargs=request_kwargs)
         if user_key is None:
-            return cast(List[dict], healthy_deployments)
+            return typed_healthy_deployments
 
-        cache_key = self.get_affinity_cache_key(model_group=model, user_key=user_key)
+        stable_model_map_key = self._get_stable_model_map_key_from_deployments(
+            healthy_deployments=typed_healthy_deployments
+        )
+        if stable_model_map_key is None:
+            return typed_healthy_deployments
+
+        cache_key = self.get_affinity_cache_key(
+            model_group=stable_model_map_key, user_key=user_key
+        )
         cache_result = await self.cache.async_get_cache(key=cache_key)
 
         model_id: Optional[str] = None
@@ -161,10 +283,10 @@ class DeploymentAffinityCheck(CustomLogger):
             model_id = cache_result
 
         if not model_id:
-            return cast(List[dict], healthy_deployments)
+            return typed_healthy_deployments
 
         deployment = self._find_deployment_by_model_id(
-            healthy_deployments=cast(List[dict], healthy_deployments),
+            healthy_deployments=typed_healthy_deployments,
             model_id=model_id,
         )
         if deployment is None:
@@ -172,10 +294,10 @@ class DeploymentAffinityCheck(CustomLogger):
                 "DeploymentAffinityCheck: pinned deployment=%s not found in healthy_deployments",
                 model_id,
             )
-            return cast(List[dict], healthy_deployments)
+            return typed_healthy_deployments
 
         verbose_router_logger.debug(
-            "DeploymentAffinityCheck: user-key affinity hit -> deployment=%s user_key=%s",
+            "DeploymentAffinityCheck: api-key affinity hit -> deployment=%s user_key=%s",
             model_id,
             self._shorten_for_logs(user_key),
         )
@@ -185,7 +307,7 @@ class DeploymentAffinityCheck(CustomLogger):
         self, kwargs: Dict[str, Any], call_type: Optional[CallTypes]
     ) -> Optional[dict]:
         """
-        Persist/update the user-key -> deployment mapping for this request.
+        Persist/update the API-key -> deployment mapping for this request.
 
         Why pre-call?
         - LiteLLM runs async success callbacks via a background logging worker for performance.
@@ -198,34 +320,64 @@ class DeploymentAffinityCheck(CustomLogger):
         if user_key is None:
             return None
 
-        metadata = kwargs.get("litellm_metadata") or kwargs.get("metadata") or {}
-        if not isinstance(metadata, dict):
-            return None
+        metadata_dicts = self._iter_metadata_dicts(kwargs)
 
-        model_group = metadata.get("model_group")
-        if not model_group:
-            return None
-
-        model_info = kwargs.get("model_info") or metadata.get("model_info") or {}
+        model_info = kwargs.get("model_info")
         if not isinstance(model_info, dict):
+            model_info = None
+
+        if model_info is None:
+            for metadata in metadata_dicts:
+                maybe_model_info = metadata.get("model_info")
+                if isinstance(maybe_model_info, dict):
+                    model_info = maybe_model_info
+                    break
+
+        if model_info is None:
+            # Router sets `model_info` after selecting a deployment. If it's missing, this is
+            # likely a non-router call or a call path that doesn't support affinity.
             return None
 
         model_id = model_info.get("id")
         if not model_id:
+            verbose_router_logger.warning(
+                "DeploymentAffinityCheck: model_id missing; skipping affinity cache update."
+            )
             return None
 
-        cache_key = self.get_affinity_cache_key(
-            model_group=str(model_group), user_key=user_key
-        )
+        # Primary scope: stable model-map key (used to handle aliases that ultimately map to the same
+        # underlying base model).
+        model_map_key: Optional[str] = None
+        base_model = model_info.get("base_model")
+        if isinstance(base_model, str) and base_model:
+            model_map_key = base_model
+        else:
+            litellm_model_name = kwargs.get("model")
+            if isinstance(litellm_model_name, str) and litellm_model_name:
+                model_map_key = self._get_model_map_key_from_litellm_model_name(
+                    litellm_model_name
+                )
+
+        if not model_map_key:
+            verbose_router_logger.warning(
+                "DeploymentAffinityCheck: model_map_key missing; skipping affinity cache update. model_id=%s",
+                model_id,
+            )
+            return None
+
         try:
+            cache_key = self.get_affinity_cache_key(
+                model_group=model_map_key, user_key=user_key
+            )
             await self.cache.async_set_cache(
                 cache_key,
                 DeploymentAffinityCacheValue(model_id=str(model_id)),
                 ttl=self.ttl_seconds,
             )
+
             verbose_router_logger.debug(
-                "DeploymentAffinityCheck: set affinity mapping model_group=%s deployment=%s ttl=%s user_key=%s",
-                model_group,
+                "DeploymentAffinityCheck: set affinity mapping model_map_key=%s deployment=%s ttl=%s user_key=%s",
+                model_map_key,
                 model_id,
                 self.ttl_seconds,
                 self._shorten_for_logs(user_key),
@@ -233,8 +385,8 @@ class DeploymentAffinityCheck(CustomLogger):
         except Exception as e:
             # Non-blocking: affinity is a best-effort optimization.
             verbose_router_logger.debug(
-                "DeploymentAffinityCheck: failed to set cache key=%s: %s",
-                cache_key,
+                "DeploymentAffinityCheck: failed to set affinity cache. model_map_key=%s error=%s",
+                model_map_key,
                 e,
             )
 

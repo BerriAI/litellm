@@ -921,6 +921,12 @@ To enable session continuity for Responses API in your LiteLLM proxy, set `optio
 - `responses_api_deployment_check`: high priority routing when `previous_response_id` is provided
 - `deployment_affinity`: sticky sessions based on user key (applies even without `previous_response_id`)
 
+Notes:
+- User-key affinity is keyed on `metadata.user_api_key_hash` (the API key hash). The OpenAI `user` request parameter is an end-user identifier and is intentionally not used for deployment affinity.
+- `user_api_key_hash` is already SHA-256, and is used as-is (no double hashing).
+- Affinity is scoped by a stable model identifier (the model-map key, e.g. `model_map_information.model_map_key`) so model aliases map to the same stickiness bucket.
+- The mapping TTL is controlled by `deployment_affinity_ttl_seconds` (configured on Router init / proxy startup).
+
 ```yaml showLineNumbers title="config.yaml with Session Continuity"
 model_list:
   - model_name: azure-gpt4-turbo
@@ -1232,10 +1238,6 @@ Response:
   }]
 }
 ```
-
-
-
-
 
 
 
