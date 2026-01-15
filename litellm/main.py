@@ -1095,6 +1095,9 @@ def completion(  # type: ignore # noqa: PLR0915
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
 
+    ######### unpacking kwargs #####################
+    args = locals()
+
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import (
@@ -1154,8 +1157,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 shared_session=shared_session,
                 **kwargs,
             )
-    ######### unpacking kwargs #####################
-    args = locals()
     api_base = kwargs.get("api_base", None)
     mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
