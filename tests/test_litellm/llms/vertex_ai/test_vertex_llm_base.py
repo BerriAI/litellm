@@ -1048,3 +1048,88 @@ class TestVertexBase:
             MockCredentials.from_info.assert_called_once_with(json_obj)
             mock_creds.with_scopes.assert_called_once_with(scopes)
             assert result == "scoped_creds"
+
+    @patch("google.oauth2.credentials.Credentials")
+    def test_credentials_from_oauth2_token(self, mock_creds_class):
+        vertex_base = VertexBase()
+        token = "fake-oauth2-token"
+        mock_creds = MagicMock()
+        mock_creds_class.return_value = mock_creds
+
+        result = vertex_base._credentials_from_oauth2_token(token)
+
+        mock_creds_class.assert_called_once_with(token=token)
+        assert result == mock_creds
+
+    @patch("google.oauth2.credentials.Credentials")
+    def test_credentials_from_oauth2_dict(self, mock_creds_class):
+        vertex_base = VertexBase()
+        oauth2_dict = {
+            "access_token": "fake-access-token",
+            "refresh_token": "fake-refresh-token",
+            "client_id": "fake-client-id",
+            "client_secret": "fake-client-secret",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+        mock_creds = MagicMock()
+        mock_creds_class.return_value = mock_creds
+
+        result = vertex_base._credentials_from_oauth2_dict(oauth2_dict, scopes)
+
+        mock_creds_class.assert_called_once_with(
+            token="fake-access-token",
+            refresh_token="fake-refresh-token",
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id="fake-client-id",
+            client_secret="fake-client-secret",
+            scopes=scopes,
+        )
+        assert result == mock_creds
+
+    @patch("google.oauth2.credentials.Credentials")
+    def test_load_auth_oauth2_token(self, mock_creds_class):
+        vertex_base = VertexBase()
+        token = "fake-oauth2-token"
+        mock_creds = MagicMock()
+        mock_creds.quota_project_id = None
+        mock_creds.project_id = None
+        mock_creds_class.return_value = mock_creds
+
+        with patch.object(vertex_base, "refresh_auth") as mock_refresh:
+            creds, project_id = vertex_base.load_auth(credentials=token, project_id="test-project")
+
+        mock_creds_class.assert_called_once_with(token=token)
+        mock_refresh.assert_called_once_with(mock_creds)
+        assert creds == mock_creds
+        assert project_id == "test-project"
+
+    @patch("google.oauth2.credentials.Credentials")
+    def test_load_auth_oauth2_dict(self, mock_creds_class):
+        vertex_base = VertexBase()
+        oauth2_dict = {
+            "access_token": "fake-access-token",
+            "refresh_token": "fake-refresh-token",
+            "client_id": "fake-client-id",
+            "client_secret": "fake-client-secret",
+            "token_uri": "https://oauth2.googleapis.com/token",
+        }
+        mock_creds = MagicMock()
+        mock_creds.quota_project_id = None
+        mock_creds.project_id = "test-project"
+        mock_creds_class.return_value = mock_creds
+
+        with patch.object(vertex_base, "refresh_auth") as mock_refresh:
+            creds, project_id = vertex_base.load_auth(credentials=oauth2_dict, project_id=None)
+
+        mock_creds_class.assert_called_once_with(
+            token="fake-access-token",
+            refresh_token="fake-refresh-token",
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id="fake-client-id",
+            client_secret="fake-client-secret",
+            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+        )
+        mock_refresh.assert_called_once_with(mock_creds)
+        assert creds == mock_creds
+        assert project_id == "test-project"

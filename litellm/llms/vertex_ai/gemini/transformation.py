@@ -474,7 +474,9 @@ def _transform_request_body(
     custom_llm_provider: Literal["vertex_ai", "vertex_ai_beta", "gemini"],
     litellm_params: dict,
     cached_content: Optional[str],
-) -> RequestBody:
+    api_base: Optional[str] = None,
+    vertex_project: Optional[str] = None,
+) -> Union[RequestBody, GeminiCodeAssistRequestBody]:
     """
     Common transformation logic across sync + async Gemini /generateContent calls.
     """
@@ -560,7 +562,10 @@ def _transform_request_body(
     except Exception as e:
         raise e
 
-    return data
+    if api_base == "https://cloudcode-pa.googleapis.com/v1internal" and vertex_project is not None:
+        return GeminiCodeAssistRequestBody(model=model, project=vertex_project, request=data)
+    else:
+        return data
 
 
 def sync_transform_request_body(
@@ -612,6 +617,8 @@ def sync_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
+        api_base=api_base,
+        vertex_project=vertex_project,
     )
 
 
@@ -663,6 +670,8 @@ async def async_transform_request_body(
         litellm_params=litellm_params,
         cached_content=cached_content,
         optional_params=optional_params,
+        api_base=api_base,
+        vertex_project=vertex_project,
     )
 
 
