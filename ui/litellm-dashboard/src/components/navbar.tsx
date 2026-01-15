@@ -11,11 +11,13 @@ import {
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import {
   CrownOutlined,
+  GithubOutlined,
   LogoutOutlined,
   MailOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
   SafetyOutlined,
+  SlackOutlined,
   StarOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -212,6 +214,7 @@ const Navbar: React.FC<NavbarProps> = ({
               href="https://www.litellm.ai/support"
               target="_blank"
               rel="noopener noreferrer"
+              icon={<SlackOutlined />}
               className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
             >
               Join Slack
@@ -221,7 +224,7 @@ const Navbar: React.FC<NavbarProps> = ({
               target="_blank"
               rel="noopener noreferrer"
               className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
-              icon={<StarOutlined />}
+              icon={<GithubOutlined />}
             >
               Star us on GitHub
             </Button>
