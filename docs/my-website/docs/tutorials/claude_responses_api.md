@@ -142,7 +142,7 @@ Common issues and solutions:
 - Ensure the model name in Claude Code matches exactly with your `config.yaml`
 - Check LiteLLM logs for detailed error messages
 
-## Using Multiple Models
+## Using Bedrock/Vertex AI/Azure Foundry Models
 
 Expand your configuration to support multiple providers and models:
 
@@ -151,25 +151,6 @@ Expand your configuration to support multiple providers and models:
 
 ```yaml
 model_list:
-  # OpenAI models
-  - model_name: codex-mini
-    litellm_params:  
-      model: openai/codex-mini
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
-
-  - model_name: o3-pro
-    litellm_params:
-      model: openai/o3-pro
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
-
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
-
   # Anthropic models
   - model_name: claude-3-5-sonnet-20241022
     litellm_params:
@@ -189,6 +170,24 @@ model_list:
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: us-east-1
 
+  # Azure Foundry
+  - model_name: claude-4-azure
+    litellm_params:
+      model: azure_ai/claude-opus-4-1
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE # https://my-resource.services.ai.azure.com/anthropic
+
+  # Google Vertex AI
+  - model_name: anthropic-vertex
+    litellm_params:
+      model: vertex_ai/claude-haiku-4-5@20251001
+      vertex_ai_project: "my-test-project"
+      vertex_ai_location: "us-east-1"
+      vertex_credentials: os.environ/VERTEX_FILE_PATH_ENV_VAR # os.environ["VERTEX_FILE_PATH_ENV_VAR"] = "/path/to/service_account.json" 
+
+
+
+
 litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 ```
@@ -204,6 +203,12 @@ claude --model claude-3-5-haiku-20241022
 
 # Use Bedrock deployment
 claude --model claude-bedrock
+
+# Use Azure Foundry deployment
+claude --model claude-4-azure
+
+# Use Vertex AI deployment
+claude --model anthropic-vertex
 ```
 
 </TabItem>

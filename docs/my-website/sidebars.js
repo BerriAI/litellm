@@ -108,7 +108,14 @@ const sidebars = {
     {
       type: "category",
       label: "AI Tools (OpenWebUI, Claude Code, etc.)",
+      link: {
+        type: "generated-index",
+        title: "AI Tools",
+        description: "Integrate LiteLLM with AI tools like OpenWebUI, Claude Code, and more",
+        slug: "/ai_tools"
+      },
       items: [
+        "tutorials/openweb_ui",
         {
           type: "category",
           label: "Claude Code",
@@ -122,8 +129,7 @@ const sidebars = {
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
-        "tutorials/openai_codex",
-        "tutorials/openweb_ui"
+        "tutorials/openai_codex"
       ]
     },
 
@@ -869,10 +875,11 @@ const sidebars = {
       type: "category",
       label: "Tutorials",
       items: [
-        "tutorials/openweb_ui",
-        "tutorials/openai_codex",
-        "tutorials/litellm_gemini_cli",
-        "tutorials/litellm_qwen_code_cli",
+        {
+          type: "link",
+          label: "AI Coding Tools (OpenWebUI, Claude Code, Gemini CLI, OpenAI Codex, etc.)",
+          href: "/docs/ai_tools",
+        },
         "tutorials/anthropic_file_usage",
         "tutorials/default_team_self_serve",
         "tutorials/msft_sso",
@@ -882,7 +889,6 @@ const sidebars = {
         "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
-        "tutorials/claude_responses_api",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
