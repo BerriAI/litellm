@@ -1,6 +1,6 @@
-import { describe, it, expect } from "vitest";
-import { splitWildcardModels, type GroupedModels } from "./modelUtils";
 import type { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
+import { describe, expect, it } from "vitest";
+import { splitWildcardModels } from "./modelUtils";
 
 describe("splitWildcardModels", () => {
   it("should return empty arrays when given empty array", () => {
