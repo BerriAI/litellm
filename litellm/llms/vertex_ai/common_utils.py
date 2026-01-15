@@ -474,7 +474,9 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
 
     # Handle empty items objects
     process_items(parameters)
-    add_object_type(parameters)
+    # Pass is_function_parameter=True when processing function parameters (add_property_ordering=False)
+    # For response schemas (add_property_ordering=True), nested schemas should remove type when properties is empty
+    add_object_type(parameters, is_function_parameter=not add_property_ordering)
     # Postprocessing
     # Filter out fields that don't exist in Schema
 
@@ -654,7 +656,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
         convert_anyof_null_to_nullable(items, depth=depth + 1)
 
 
-def add_object_type(schema):
+def add_object_type(schema, is_function_parameter: bool = False):
     # Gemini requires all function parameters to be type OBJECT
     # Handle case where schema has no properties and no type (e.g. tools with no arguments)
     if "type" not in schema and "anyOf" not in schema and "oneOf" not in schema and "allOf" not in schema:
@@ -665,26 +667,38 @@ def add_object_type(schema):
         if "required" in schema and schema["required"] is None:
             schema.pop("required", None)
         # Gemini doesn't accept empty properties for object types
-        # If properties is empty, remove it and the type field
+        # If properties is empty:
+        # - For function declaration parameters: keep type: "object" (Vertex AI requires it)
+        # - For nested schemas (response schemas): remove type (as per Vertex AI response schema requirements)
         if not properties:
             schema.pop("properties", None)
-            schema.pop("type", None)
+            if is_function_parameter:
+                # Keep type: "object" - Vertex AI requires it for function declaration parameters
+                # even when properties is empty (see: https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling)
+                if "type" not in schema:
+                    schema["type"] = "object"
+            else:
+                # For nested schemas in response schemas, remove type when properties is empty
+                schema.pop("type", None)
             schema.pop("required", None)
         else:
             schema["type"] = "object"
             for name, value in properties.items():
-                add_object_type(value)
+                # Nested properties are not function parameters
+                add_object_type(value, is_function_parameter=False)
 
     items = schema.get("items", None)
     if items is not None:
-        add_object_type(items)
+        # Items are nested, not function parameters
+        add_object_type(items, is_function_parameter=False)
 
     for key in ["anyOf", "oneOf", "allOf"]:
         values = schema.get(key, None)
         if values is not None and isinstance(values, list):
             for value in values:
                 if isinstance(value, dict):
-                    add_object_type(value)
+                    # Nested schemas in anyOf/oneOf/allOf are not function parameters
+                    add_object_type(value, is_function_parameter=False)
 
 
 def strip_field(schema, field_name: str):
