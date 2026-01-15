@@ -750,63 +750,6 @@ def _remove_thought_signatures_from_messages(
     return processed_messages
 
 
-def _extract_text_from_google_contents(contents: Any) -> str:
-    """
-    Extract text content from Google's native 'contents' field for logging purposes.
-
-    Google's native format uses a nested structure:
-    "contents": [
-        {
-            "role": "user",
-            "parts": [
-                {"text": "message text here"}
-            ]
-        }
-    ]
-
-    This function extracts and concatenates all text from all parts in all contents.
-
-    Args:
-        contents: The contents field from Google's native format request
-
-    Returns:
-        Concatenated text from all parts, or empty string if extraction fails
-    """
-    if not contents:
-        return ""
-
-    try:
-        # Handle if contents is not a list
-        if not isinstance(contents, list):
-            return ""
-
-        extracted_texts = []
-
-        for content_item in contents:
-            # Each content item should be a dict with 'parts'
-            if not isinstance(content_item, dict):
-                continue
-
-            parts = content_item.get("parts", [])
-            if not isinstance(parts, list):
-                continue
-
-            # Extract text from each part
-            for part in parts:
-                if isinstance(part, dict) and "text" in part:
-                    text = part.get("text")
-                    if text and isinstance(text, str):
-                        extracted_texts.append(text)
-
-        # Concatenate all extracted texts with newlines
-        return "\n".join(extracted_texts) if extracted_texts else ""
-
-    except Exception as e:
-        # Log the error but don't fail - return empty string to allow fallback
-        verbose_logger.debug(f"Error extracting text from Google contents: {str(e)}")
-        return ""
-
-
 def function_setup(  # noqa: PLR0915
     original_function: str, rules_obj, start_time, *args, **kwargs
 ):  # just run once to check if user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
@@ -1132,13 +1075,36 @@ def function_setup(  # noqa: PLR0915
             or call_type == CallTypes.generate_content_stream.value
             or call_type == CallTypes.agenerate_content_stream.value
         ):
-            # Google GenAI native format - contents is the second positional arg (after model)
-            # or can be in kwargs
-            contents_param = args[1] if len(args) > 1 else kwargs.get("contents")
-            messages = (
-                _extract_text_from_google_contents(contents_param)
-                or "default-message-value"
-            )
+            try:
+                from litellm.google_genai.adapters.transformation import (
+                    GoogleGenAIAdapter,
+                )
+                from litellm.litellm_core_utils.prompt_templates.common_utils import (
+                    get_last_user_message,
+                )
+
+                contents_param = args[1] if len(args) > 1 else kwargs.get("contents")
+                model_param = args[0] if len(args) > 0 else kwargs.get("model", "")
+
+                if contents_param:
+                    adapter = GoogleGenAIAdapter()
+                    transformed = adapter.translate_generate_content_to_completion(
+                        model=model_param,
+                        contents=contents_param,
+                        config=kwargs.get("config"),
+                    )
+                    transformed_messages = transformed.get("messages", [])
+                    messages = (
+                        get_last_user_message(transformed_messages)
+                        or "default-message-value"
+                    )
+                else:
+                    messages = "default-message-value"
+            except Exception as e:
+                verbose_logger.debug(
+                    f"Error extracting messages from Google contents: {str(e)}"
+                )
+                messages = "default-message-value"
         else:
             messages = "default-message-value"
         stream = False
