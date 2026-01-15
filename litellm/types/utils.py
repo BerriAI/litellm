@@ -364,6 +364,11 @@ class CallTypes(str, Enum):
     asend_message = "asend_message"
     send_message = "send_message"
 
+    #########################################################
+    # Claude Code Call Types
+    #########################################################
+    acreate_skill = "acreate_skill"
+
 
 CallTypesLiteral = Literal[
     "embedding",
@@ -420,6 +425,7 @@ CallTypesLiteral = Literal[
     "send_message",
     "aresponses",
     "responses",
+    "acreate_skill",
 ]
 
 # Mapping of API routes to their corresponding call types
