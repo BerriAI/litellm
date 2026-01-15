@@ -1,15 +1,11 @@
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Claude MCP Quickstart
+# Use Claude Code with MCPs
 
 This tutorial shows how to connect MCP servers to Claude Code via LiteLLM Proxy.
 
-:::info 
-
-This tutorial is based on [Anthropic's official LiteLLM configuration documentation](https://docs.anthropic.com/en/docs/claude-code/llm-gateway#litellm-configuration). This integration allows you to use any LiteLLM supported model through Claude Code with centralized authentication, usage tracking, and cost controls.
-
-:::
+Note: LiteLLM supports OAuth for MCP servers as well. [Learn more](https://docs.litellm.ai/docs/mcp#mcp-oauth)
 
 ## Connecting MCP Servers
 
@@ -95,4 +91,3 @@ d. Start Oauth flow via Claude Code
 e. Once completed, you should see this success message:
 
 <img src={require('../../img/oauth_2_success.png').default} alt="OAuth 2.0 Success" style={{ width: '500px', height: 'auto' }} />
-

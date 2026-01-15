@@ -20,4 +20,17 @@
         "LiteLLM",
         "MCP"
     ]
+}, 
+{
+    "title": "Claude Code with Non-Anthropic Models",
+    "description": "This is a guide to using Claude Code with non-Anthropic models via LiteLLM Proxy.",
+    "url": "https://docs.litellm.ai/docs/tutorials/claude_non_anthropic_models",
+    "date": "2026-01-16",
+    "version": "1.0.0",
+    "tags": [
+        "Claude Code",
+        "LiteLLM",
+        "OpenAI",
+        "Gemini"
+    ]
 }]
