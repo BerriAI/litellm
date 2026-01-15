@@ -895,11 +895,27 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         #########################################################
         ########## 1. Make parallel Bedrock API requests ##########
         #########################################################
+        # Import asyncio for parallel execution
+        import asyncio
+
+        # Prepare input messages (with optional filtering for latest role message)
+        input_filter = self._prepare_guardrail_messages_for_role(messages=new_messages)
+        input_messages = input_filter.payload_messages or new_messages
+
+        # Create tasks for parallel execution of both INPUT and OUTPUT validation
+        input_task = self.make_bedrock_api_request(
+            source="INPUT",
+            messages=input_messages,
+            request_data=data,
+        )
+        output_task = self.make_bedrock_api_request(
+            source="OUTPUT", response=response, request_data=data
+        )
+
+        # Execute both requests in parallel
         output_content_bedrock: Optional[Union[BedrockGuardrailResponse, str]] = None
         try:
-            output_content_bedrock = await self.make_bedrock_api_request(
-                source="OUTPUT", response=response, request_data=data
-            )
+            _, output_content_bedrock = await asyncio.gather(input_task, output_task)
         except GuardrailInterventionNormalStringError as e:
             output_content_bedrock = e.message
 
