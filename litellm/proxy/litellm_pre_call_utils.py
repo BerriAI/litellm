@@ -1331,6 +1331,8 @@ def move_guardrails_to_metadata(
     #########################################################################################
     if "guardrails" in data:
         request_body_guardrails = data.get("guardrails")
+        if request_body_guardrails is None:
+            return
         if "guardrails" in data[_metadata_variable_name] and isinstance(
             data[_metadata_variable_name]["guardrails"], list
         ):
