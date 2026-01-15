@@ -1,4 +1,4 @@
-{
+[{
     "title": "Claude Code Quickstart",
     "description": "This is a quickstart guide to using Claude Code with LiteLLM.",
     "url": "https://docs.litellm.ai/docs/tutorials/claude_responses_api",
@@ -6,7 +6,18 @@
     "version": "1.0.0",
     "tags": [
         "Claude Code",
-        "LiteLLM",
-        "Quickstart"
+        "LiteLLM"
     ]
-}
+},
+{
+    "title": "Claude Code with MCPs",
+    "description": "This is a guide to using Claude Code with MCPs via LiteLLM Proxy.",
+    "url": "https://docs.litellm.ai/docs/tutorials/claude_mcp",
+    "date": "2026-01-15",
+    "version": "1.0.0",
+    "tags": [
+        "Claude Code",
+        "LiteLLM",
+        "MCP"
+    ]
+}]
