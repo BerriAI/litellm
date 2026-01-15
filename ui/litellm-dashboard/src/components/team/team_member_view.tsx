@@ -17,6 +17,9 @@ import { Tooltip } from "antd";
 import { TeamData } from "./team_info";
 import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import { isUserTeamAdminForSingleTeam, isProxyAdminRole } from "@/utils/roles";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TeamMembersComponentProps {
   teamData: TeamData;
@@ -35,6 +38,7 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
   setIsEditMemberModalVisible,
   setIsAddMemberModalVisible,
 }) => {
+  console.log("Team data", teamData);
   // Helper function to convert scientific notation to normal decimal format
   const formatNumber = (value: number | null): string => {
     if (value === null || value === undefined) return "0";
@@ -86,6 +90,12 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
     const limits = [rpmText, tpmText].filter(Boolean);
     return limits.length > 0 ? limits.join(" / ") : "No Limits";
   };
+
+  const { data: uiSettingsData } = useUISettings();
+  const { userId, userRole } = useAuthorized();
+  const disableTeamAdminDeleteTeamUser = Boolean(uiSettingsData?.values?.disable_team_admin_delete_team_user);
+  const isUserTeamAdmin = isUserTeamAdminForSingleTeam(teamData.team_info.members_with_roles, userId || "");
+  const isProxyAdmin = isProxyAdminRole(userRole || "");
 
   return (
     <div className="space-y-4">
@@ -161,12 +171,14 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                           }}
                           className="cursor-pointer hover:text-blue-600"
                         />
-                        <Icon
-                          icon={TrashIcon}
-                          size="sm"
-                          onClick={() => handleMemberDelete(member)}
-                          className="cursor-pointer hover:text-red-600"
-                        />
+                        {(isProxyAdmin || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)) && (
+                          <Icon
+                            icon={TrashIcon}
+                            size="sm"
+                            onClick={() => handleMemberDelete(member)}
+                            className="cursor-pointer hover:text-red-600"
+                          />
+                        )}
                       </div>
                     )}
                   </TableCell>
