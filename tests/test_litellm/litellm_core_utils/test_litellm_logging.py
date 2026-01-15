@@ -197,6 +197,53 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
+    """Ensure Logfire logger uses LOGFIRE_BASE_URL to build the OTLP HTTP endpoint (/v1/traces)."""
+
+    # Required env vars for Logfire integration
+    monkeypatch.setenv("LOGFIRE_TOKEN", "test-token")
+    monkeypatch.setenv("LOGFIRE_BASE_URL", "https://logfire-api-custom.pydantic.dev")  # no trailing slash on purpose
+
+    # Import after env vars are set (important if module-level caching exists)
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.integrations.opentelemetry import OpenTelemetry  # logger class
+
+    logging_module._in_memory_loggers.clear()
+
+    try:
+        # Instantiate via the same mechanism LiteLLM uses for callbacks=["logfire"]
+        logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="logfire",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        # Sanity: we got the right logger type and it is cached
+        assert type(logger) is OpenTelemetry
+        assert any(type(cb) is OpenTelemetry for cb in logging_module._in_memory_loggers)
+
+        # Core regression check: base URL env var should influence the exporter endpoint.
+        #
+        # OpenTelemetry integration has historically stored config on the instance.
+        # We defensively check a few common attribute names to avoid brittle coupling.
+        cfg = (
+            getattr(logger, "otel_config", None)
+            or getattr(logger, "config", None)
+            or getattr(logger, "_otel_config", None)
+        )
+        assert cfg is not None, "Expected OpenTelemetry logger to keep an otel config on the instance"
+
+        endpoint = getattr(cfg, "endpoint", None) or getattr(cfg, "otlp_endpoint", None)
+        assert endpoint is not None, "Expected otel config to expose the OTLP endpoint"
+
+        assert endpoint == "https://logfire-api-custom.pydantic.dev/v1/traces"
+
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.asyncio
 async def test_logging_result_for_bridge_calls(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.
