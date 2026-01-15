@@ -202,8 +202,6 @@ class OpenRouterImageGenerationConfig(BaseImageGenerationConfig):
             completion_tokens_details = usage_data.get("completion_tokens_details", {})
             image_tokens = completion_tokens_details.get("image_tokens", 0)
             
-            text_tokens = prompt_tokens + (completion_tokens - image_tokens)
-            
             model_response.usage = ImageUsage(
                 input_tokens=prompt_tokens,
                 input_tokens_details=ImageUsageInputTokensDetails(
