@@ -3743,10 +3743,10 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 OpenTelemetry,
                 OpenTelemetryConfig,
             )
-
+            logfire_base_url = os.getenv("LOGFIRE_BASE_URL", "https://logfire-api.pydantic.dev")
             otel_config = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint="https://logfire-api.pydantic.dev/v1/traces",
+                endpoint = f"{logfire_base_url.rstrip('/')}/v1/traces",
                 headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
             )
             for callback in _in_memory_loggers:
