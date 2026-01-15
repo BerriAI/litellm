@@ -28,6 +28,7 @@ from typing import (
     Callable,
     Coroutine,
     Dict,
+    Iterable,
     List,
     Literal,
     Mapping,
@@ -1102,11 +1103,15 @@ def completion(  # type: ignore # noqa: PLR0915
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
         )
+        from litellm.types.llms.openai import ToolParam
 
         # Check if MCP tools are present (following responses pattern)
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools):
+        # Cast tools to Optional[Iterable[ToolParam]] for type checking
+        tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools_for_mcp):
             # Return coroutine - acompletion will await it
-            return acompletion_with_mcp(
+            # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
+            return acompletion_with_mcp(  # type: ignore[return-value]
                 model=model,
                 messages=messages,
                 functions=functions,
