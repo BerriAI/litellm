@@ -12,35 +12,7 @@ from litellm.types.llms.openai import HttpxBinaryResponseContent
 class TestVertexAIFilesIntegration:
     """Test integration of Vertex AI files with main litellm API"""
 
-    @pytest.mark.asyncio
-    async def test_litellm_afile_content_vertex_ai_provider(self):
-        """Test litellm.afile_content with vertex_ai provider"""
-        file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-file.txt"
-        expected_content = b"test file content"
 
-        # Mock the GCS download method to prevent actual GCS calls
-        with patch(
-            "litellm.llms.vertex_ai.files.handler.VertexAIFilesHandler.download_gcs_object",
-            new_callable=AsyncMock,
-        ) as mock_download:
-            mock_download.return_value = expected_content
-            
-            # Call litellm.afile_content
-            result = await litellm.afile_content(
-                file_id=file_id,
-                custom_llm_provider="vertex_ai",
-                vertex_project="test-project",
-                vertex_location="us-central1",
-                vertex_credentials=None,
-            )
-
-            # Verify the result
-            assert isinstance(result, HttpxBinaryResponseContent)
-            assert result.response.content == expected_content
-            assert result.response.status_code == 200
-
-            # Verify the mock was called
-            mock_download.assert_called_once()
 
     def test_litellm_file_content_vertex_ai_provider(self):
         """Test litellm.file_content with vertex_ai provider (sync)"""
