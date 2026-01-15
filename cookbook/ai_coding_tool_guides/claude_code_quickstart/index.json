@@ -1,0 +1,11 @@
+{
+    "title": "Claude Code Quickstart",
+    "description": "This is a 30-second quickstart guide to using Claude Code with LiteLLM.",
+    "date": "2026-01-15",
+    "version": "1.0.0",
+    "tags": [
+        "Claude Code",
+        "LiteLLM",
+        "Quickstart"
+    ]
+}
