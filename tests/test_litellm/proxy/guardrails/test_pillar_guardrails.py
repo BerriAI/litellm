@@ -49,11 +49,13 @@ def setup_and_teardown():
     Standard LiteLLM fixture that reloads litellm before every function
     to speed up testing by removing callbacks being chained.
     """
-    import importlib
     import asyncio
+    import sys
 
-    # Reload litellm to ensure clean state
-    importlib.reload(litellm)
+    # Only reload if litellm is already in sys.modules
+    if "litellm" in sys.modules:
+        import importlib
+        importlib.reload(litellm)
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()

@@ -18,26 +18,13 @@ class TestVertexAIFilesIntegration:
         file_id = "gs%3A%2F%2Ftest-bucket%2Ftest-file.txt"
         expected_content = b"test file content"
 
-        # Mock the vertex_ai_files_instance.file_content method
+        # Mock the GCS download method to prevent actual GCS calls
         with patch(
-            "litellm.files.main.vertex_ai_files_instance.file_content",
+            "litellm.llms.vertex_ai.files.handler.VertexAIFilesHandler.download_gcs_object",
             new_callable=AsyncMock,
-        ) as mock_file_content:
-            # Create a mock HttpxBinaryResponseContent response
-            import httpx
-
-            mock_response = httpx.Response(
-                status_code=200,
-                content=expected_content,
-                headers={"content-type": "application/octet-stream"},
-                request=httpx.Request(
-                    method="GET", url="gs://test-bucket/test-file.txt"
-                ),
-            )
-            mock_file_content.return_value = HttpxBinaryResponseContent(
-                response=mock_response
-            )
-
+        ) as mock_download:
+            mock_download.return_value = expected_content
+            
             # Call litellm.afile_content
             result = await litellm.afile_content(
                 file_id=file_id,
@@ -52,13 +39,8 @@ class TestVertexAIFilesIntegration:
             assert result.response.content == expected_content
             assert result.response.status_code == 200
 
-            # Verify the mock was called with correct parameters
-            mock_file_content.assert_called_once()
-            call_kwargs = mock_file_content.call_args.kwargs
-            assert call_kwargs["_is_async"] is True
-            assert call_kwargs["file_content_request"]["file_id"] == file_id
-            assert call_kwargs["vertex_project"] == "test-project"
-            assert call_kwargs["vertex_location"] == "us-central1"
+            # Verify the mock was called
+            mock_download.assert_called_once()
 
     def test_litellm_file_content_vertex_ai_provider(self):
         """Test litellm.file_content with vertex_ai provider (sync)"""

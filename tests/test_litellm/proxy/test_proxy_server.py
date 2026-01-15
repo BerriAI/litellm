@@ -55,7 +55,7 @@ example_embedding_result = {
 
 def mock_patch_aembedding():
     return mock.patch(
-        "litellm.proxy.proxy_server.llm_router.aembedding",
+        "litellm.aembedding",
         return_value=example_embedding_result,
     )
 
@@ -694,7 +694,7 @@ def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
         # Assert that aembedding was called, and that input was not modified
         mock_aembedding.assert_called_once()
         call_args, call_kwargs = mock_aembedding.call_args
-        assert call_kwargs["model"] == "vllm_embed_model"
+        assert call_kwargs["model"] == "hosted_vllm/embed_model"  # Model name is transformed by router
         assert call_kwargs["input"] == [[2046, 13269, 158208]]
 
         assert response.status_code == 200
