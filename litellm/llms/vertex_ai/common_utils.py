@@ -1,4 +1,5 @@
 import re
+from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
@@ -617,7 +618,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     if anyof is not None:
         contains_null = False
         for atype in anyof:
-            if atype == {"type": "null"}:
+            if isinstance(atype, dict) and atype.get("type") == "null":
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
@@ -735,7 +736,20 @@ def _convert_schema_types(schema, depth=0):
         type_val = schema["type"]
         if isinstance(type_val, list) and len(type_val) > 1:
             # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
-            schema["anyOf"] = [{"type": t} for t in type_val if isinstance(t, str)]
+            # Preserve other schema fields by copying them into each non-null anyOf item.
+            base_schema = {k: v for k, v in schema.items() if k not in {"type", "anyOf"}}
+            any_of: List[Dict[str, Any]] = []
+            for t in type_val:
+                if not isinstance(t, str):
+                    continue
+                if t == "null":
+                    # Keep null entry minimal so we can strip it later.
+                    any_of.append({"type": "null"})
+                    continue
+                item_schema = deepcopy(base_schema)
+                item_schema["type"] = t
+                any_of.append(item_schema)
+            schema["anyOf"] = any_of
             schema.pop("type")
         elif isinstance(type_val, list) and len(type_val) == 1:
             schema["type"] = type_val[0]
