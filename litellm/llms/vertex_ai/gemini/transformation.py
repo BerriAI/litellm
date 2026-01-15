@@ -583,7 +583,7 @@ def sync_transform_request_body(
     vertex_project: Optional[str],
     vertex_location: Optional[str],
     vertex_auth_header: Optional[str],
-) -> RequestBody:
+) -> Union[RequestBody, GeminiCodeAssistRequestBody]:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
@@ -637,7 +637,7 @@ async def async_transform_request_body(
     vertex_project: Optional[str],
     vertex_location: Optional[str],
     vertex_auth_header: Optional[str],
-) -> RequestBody:
+) -> Union[RequestBody, GeminiCodeAssistRequestBody]:
     from ..context_caching.vertex_ai_context_caching import ContextCachingEndpoints
 
     context_caching_endpoints = ContextCachingEndpoints()
