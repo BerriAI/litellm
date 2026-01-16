@@ -2563,7 +2563,7 @@ def _transform_verification_tokens_to_deleted_records(
         if org_id_value is not None:
             record["organization_id"] = org_id_value
 
-        for json_field in ["aliases", "config", "permissions", "metadata", "model_spend", "model_max_budget"]:
+        for json_field in ["aliases", "config", "permissions", "metadata", "model_spend", "model_max_budget", "router_settings"]:
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
 
