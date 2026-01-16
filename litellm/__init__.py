@@ -137,6 +137,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "focus",
     "posthog",
     "levo",
+    "anthropic_web_search_hook",
 ]
 cold_storage_custom_logger: Optional[_custom_logger_compatible_callbacks_literal] = None
 logged_real_time_event_types: Optional[Union[List[str], Literal["*"]]] = None

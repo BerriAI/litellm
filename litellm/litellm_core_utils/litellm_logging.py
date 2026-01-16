@@ -3911,6 +3911,17 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             anthropic_cache_control_hook = AnthropicCacheControlHook()
             _in_memory_loggers.append(anthropic_cache_control_hook)
             return anthropic_cache_control_hook  # type: ignore
+        elif logging_integration == "anthropic_web_search_hook":
+            from litellm.integrations.anthropic_web_search_hook import (
+                AnthropicWebSearchHook,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AnthropicWebSearchHook):
+                    return callback
+            anthropic_web_search_hook = AnthropicWebSearchHook(llm_router=llm_router)
+            _in_memory_loggers.append(anthropic_web_search_hook)
+            return anthropic_web_search_hook  # type: ignore
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
                 VectorStorePreCallHook,
@@ -4179,6 +4190,14 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
         elif logging_integration == "anthropic_cache_control_hook":
             for callback in _in_memory_loggers:
                 if isinstance(callback, AnthropicCacheControlHook):
+                    return callback
+        elif logging_integration == "anthropic_web_search_hook":
+            from litellm.integrations.anthropic_web_search_hook import (
+                AnthropicWebSearchHook,
+            )
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, AnthropicWebSearchHook):
                     return callback
         elif logging_integration == "vector_store_pre_call_hook":
             from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
