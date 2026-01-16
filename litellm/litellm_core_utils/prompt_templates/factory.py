@@ -2174,7 +2174,7 @@ def _is_orphaned_tool_result(
     
     if not found_matching_tool_call:
         verbose_logger.debug(
-            f"_is_orphaned_tool_result: Found orphaned tool result with tool_call_id={tool_call_id}"
+            "_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id"
         )
         return True
     
