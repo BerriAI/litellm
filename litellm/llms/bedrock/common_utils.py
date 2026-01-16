@@ -425,6 +425,15 @@ def strip_bedrock_routing_prefix(model: str) -> str:
     return model
 
 
+def strip_bedrock_throughput_suffix(model: str) -> str:
+    """ Strip throughput tier suffixes from Bedrock model names. """
+    import re
+
+    # Pattern matches model:version:throughput where throughput is like 51k, 18k, etc.
+    # Keep the model:version part, strip the :throughput suffix
+    return re.sub(r"(:\d+):\d+k$", r"\1", model)
+
+
 def get_bedrock_base_model(model: str) -> str:
     """
     Get the base model from the given model name.
@@ -432,9 +441,11 @@ def get_bedrock_base_model(model: str) -> str:
     Handle model names like:
     - "us.meta.llama3-2-11b-instruct-v1:0" -> "meta.llama3-2-11b-instruct-v1"
     - "bedrock/converse/model" -> "model"
+    - "anthropic.claude-3-5-sonnet-20241022-v2:0:51k" -> "anthropic.claude-3-5-sonnet-20241022-v2:0"
     """
     model = strip_bedrock_routing_prefix(model)
     model = extract_model_name_from_bedrock_arn(model)
+    model = strip_bedrock_throughput_suffix(model)
 
     potential_region = model.split(".", 1)[0]
     alt_potential_region = model.split("/", 1)[0]
