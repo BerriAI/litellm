@@ -92,19 +92,18 @@ graph TD
     end
 
     subgraph "Infrastructure"
-        Redis["Redis<br/>(rate limits, caching, spend queue)"]
+        DualCache["DualCache<br/>(in-memory + Redis)"]
         Postgres["PostgreSQL<br/>(keys, teams, spend logs)"]
     end
 
     Client --> Endpoint
     Endpoint --> Auth
-    Auth --> Redis
+    Auth --> DualCache
+    DualCache -.->|cache miss| Postgres
     Auth --> PreCall
     PreCall --> RouteRequest
     RouteRequest --> Router
     Router --> Main
-    Main --> Redis
-    Main --> Postgres
     Main --> Client
 ```
 
@@ -149,19 +148,25 @@ The AI Gateway uses external infrastructure for persistence and caching:
 
 ```mermaid
 graph LR
-    subgraph "AI Gateway"
-        Proxy["proxy/proxy_server.py"]
-        DBWriter["proxy/db/db_spend_update_writer.py<br/>DBSpendUpdateWriter"]
-        Cache["proxy/utils.py<br/>InternalUsageCache"]
-        CostCallback["proxy/hooks/proxy_track_cost_callback.py<br/>_ProxyDBLogger"]
-        Scheduler["APScheduler<br/>ProxyStartupEvent.initialize_scheduled_background_jobs()"]
+    subgraph "AI Gateway (proxy/)"
+        Proxy["proxy_server.py"]
+        Auth["auth/user_api_key_auth.py"]
+        DBWriter["db/db_spend_update_writer.py<br/>DBSpendUpdateWriter"]
+        InternalCache["utils.py<br/>InternalUsageCache"]
+        CostCallback["hooks/proxy_track_cost_callback.py<br/>_ProxyDBLogger"]
+        Scheduler["APScheduler<br/>ProxyStartupEvent"]
+    end
+
+    subgraph "SDK (litellm/)"
+        LLMCache["caching/caching_handler.py<br/>LLMCachingHandler"]
+        CacheClass["caching/caching.py<br/>Cache"]
     end
 
     subgraph "Redis (caching/redis_cache.py)"
         RateLimit["Rate Limit Counters"]
         SpendQueue["Spend Increment Queue"]
-        KeyCache["API Key Cache (DualCache)"]
-        ResponseCache["LLM Response Cache"]
+        KeyCache["API Key Cache"]
+        LLMResponseCache["LLM Response Cache"]
     end
 
     subgraph "PostgreSQL (proxy/schema.prisma)"
@@ -171,24 +176,25 @@ graph LR
         Users["LiteLLM_UserTable"]
     end
 
-    Proxy --> Cache
-    Cache --> RateLimit
-    Cache --> KeyCache
-    Cache --> ResponseCache
+    Auth --> InternalCache
+    InternalCache --> KeyCache
+    InternalCache -.->|cache miss| Keys
+    InternalCache --> RateLimit
+    LLMCache --> CacheClass
+    CacheClass --> LLMResponseCache
     CostCallback --> DBWriter
     DBWriter --> SpendQueue
     DBWriter --> SpendLogs
-    Proxy --> Keys
-    Proxy --> Teams
     Scheduler --> SpendLogs
     Scheduler --> Keys
 ```
 
 | Component | Purpose | Key Files/Classes |
 |-----------|---------|-------------------|
-| **Redis** | Rate limiting, caching, spend queuing | `caching/redis_cache.py` (`RedisCache`), `caching/dual_cache.py` (`DualCache`) |
+| **Redis** | Rate limiting, API key caching, LLM response caching, spend queuing | `caching/redis_cache.py` (`RedisCache`), `caching/dual_cache.py` (`DualCache`) |
 | **PostgreSQL** | API keys, teams, users, spend logs | `proxy/utils.py` (`PrismaClient`), `proxy/schema.prisma` |
-| **InternalUsageCache** | In-memory + Redis cache abstraction | `proxy/utils.py` (`InternalUsageCache`) |
+| **InternalUsageCache** | Proxy-level cache for rate limits + API keys (in-memory + Redis) | `proxy/utils.py` (`InternalUsageCache`) |
+| **LLMCachingHandler** | SDK-level LLM response/embedding caching | `caching/caching_handler.py` (`LLMCachingHandler`), `caching/caching.py` (`Cache`) |
 | **DBSpendUpdateWriter** | Batches spend updates to reduce DB writes | `proxy/db/db_spend_update_writer.py` (`DBSpendUpdateWriter`) |
 | **Cost Tracking** | Calculates and logs response costs | `proxy/hooks/proxy_track_cost_callback.py` (`_ProxyDBLogger`) |
 
