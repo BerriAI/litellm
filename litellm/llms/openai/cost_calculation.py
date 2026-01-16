@@ -105,25 +105,21 @@ def cost_per_second(
     prompt_cost = 0.0
     completion_cost = 0.0
     ## Speech / Audio cost calculation
-    if (
-        "output_cost_per_second" in model_info
-        and model_info["output_cost_per_second"] is not None
-    ):
+    output_cost_per_second = model_info.get("output_cost_per_second")
+    input_cost_per_second = model_info.get("input_cost_per_second")
+
+    if output_cost_per_second is not None and output_cost_per_second > 0:
         verbose_logger.debug(
-            f"For model={model} - output_cost_per_second: {model_info.get('output_cost_per_second')}; duration: {duration}"
+            f"For model={model} - output_cost_per_second: {output_cost_per_second}; duration: {duration}"
         )
         ## COST PER SECOND ##
-        completion_cost = model_info["output_cost_per_second"] * duration
-    elif (
-        "input_cost_per_second" in model_info
-        and model_info["input_cost_per_second"] is not None
-    ):
+        completion_cost = output_cost_per_second * duration
+    if input_cost_per_second is not None and input_cost_per_second > 0:
         verbose_logger.debug(
-            f"For model={model} - input_cost_per_second: {model_info.get('input_cost_per_second')}; duration: {duration}"
+            f"For model={model} - input_cost_per_second: {input_cost_per_second}; duration: {duration}"
         )
         ## COST PER SECOND ##
-        prompt_cost = model_info["input_cost_per_second"] * duration
-        completion_cost = 0.0
+        prompt_cost = input_cost_per_second * duration
 
     return prompt_cost, completion_cost
 
