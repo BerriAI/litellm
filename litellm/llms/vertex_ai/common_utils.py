@@ -735,12 +735,7 @@ def _convert_schema_types(schema, depth=0):
     if "type" in schema:
         type_val = schema["type"]
         if isinstance(type_val, list) and len(type_val) > 1:
-            # Convert type arrays to anyOf format
-            # For object types, we need to move object-specific fields into the anyOf item
-            # For primitive types, we only include the type field
-            
-            # Fields that should stay at parent level (metadata)
-            metadata_fields = {"description", "title", "default", "examples"}
+            # Convert type arrays to anyOf format            
             # Fields that are specific to object/array types and should move into anyOf
             type_specific_fields = {"properties", "required", "additionalProperties", "items", "minItems", "maxItems", "minProperties", "maxProperties"}
             
