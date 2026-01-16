@@ -87,7 +87,7 @@ class BaseAWSLLM:
         """
         import litellm
         from litellm.secret_managers.main import str_to_bool
-        
+
         # Check environment variable first (highest priority)
         ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
         
@@ -1232,15 +1232,20 @@ class BaseAWSLLM:
         else:
             headers = {"Content-Type": "application/json"}
 
+        aws_signature_headers = self._filter_headers_for_aws_signature(headers)
         request = AWSRequest(
             method="POST",
             url=api_base,
             data=json.dumps(request_data),
-            headers=headers,
+            headers=aws_signature_headers,
         )
         sigv4.add_auth(request)
 
         request_headers_dict = dict(request.headers)
+        # Add back original headers after signing. Only headers in SignedHeaders
+        # are integrity-protected; forwarded headers (x-forwarded-*) must remain unsigned.
+        for header_name, header_value in headers.items():
+            request_headers_dict[header_name] = header_value
         if (
             headers is not None and "Authorization" in headers
         ):  # prevent sigv4 from overwriting the auth header

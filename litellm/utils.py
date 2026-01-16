@@ -1640,6 +1640,37 @@ def client(original_function):  # noqa: PLR0915
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return original_function(*args, **kwargs)
+            elif call_type == CallTypes.responses.value:
+                num_retries = (
+                    kwargs.get("num_retries", None) or litellm.num_retries or None
+                )
+                if kwargs.get("retry_policy", None):
+                    get_num_retries_from_retry_policy = getattr(sys.modules[__name__], 'get_num_retries_from_retry_policy')
+                    reset_retry_policy = getattr(sys.modules[__name__], 'reset_retry_policy')
+                    num_retries = get_num_retries_from_retry_policy(
+                        exception=e,
+                        retry_policy=kwargs.get("retry_policy"),
+                    )
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
+                litellm.num_retries = (
+                    None  # set retries to None to prevent infinite loops
+                )
+
+                _is_litellm_router_call = "model_group" in kwargs.get(
+                    "metadata", {}
+                )  # check if call from litellm.router/proxy
+                if (
+                    num_retries and not _is_litellm_router_call
+                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+                    if (
+                        isinstance(e, openai.APIError)
+                        or isinstance(e, openai.Timeout)
+                        or isinstance(e, openai.APIConnectionError)
+                    ):
+                        kwargs["num_retries"] = num_retries
+                        return litellm.responses_with_retries(*args, **kwargs)
             traceback_exception = traceback.format_exc()
             end_time = datetime.datetime.now()
 
@@ -1899,12 +1930,36 @@ def client(original_function):  # noqa: PLR0915
                     isinstance(e, litellm.exceptions.ContextWindowExceededError)
                     and context_window_fallback_dict
                     and model in context_window_fallback_dict
+                    and not _is_litellm_router_call
                 ):
                     if len(args) > 0:
                         args[0] = context_window_fallback_dict[model]  # type: ignore
                     else:
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
+            elif call_type == CallTypes.aresponses.value:
+                _is_litellm_router_call = "model_group" in kwargs.get(
+                    "metadata", {}
+                )  # check if call from litellm.router/proxy
+
+                if (
+                    num_retries and not _is_litellm_router_call
+                ):  # only enter this if call is not from litellm router/proxy. router has it's own logic for retrying
+                    try:
+                        litellm.num_retries = (
+                            None  # set retries to None to prevent infinite loops
+                        )
+                        kwargs["num_retries"] = num_retries
+                        kwargs["original_function"] = original_function
+                        if isinstance(
+                            e, openai.RateLimitError
+                        ):  # rate limiting specific error
+                            kwargs["retry_strategy"] = "exponential_backoff_retry"
+                        elif isinstance(e, openai.APIError):  # generic api error
+                            kwargs["retry_strategy"] = "constant_retry"
+                        return await litellm.aresponses_with_retries(*args, **kwargs)
+                    except Exception:
+                        pass
 
             setattr(
                 e, "num_retries", num_retries
@@ -5062,42 +5117,42 @@ def _handle_new_key_with_scan(
 def _get_model_cost_key(potential_key: str) -> Optional[str]:
     """
     Get the actual key from model_cost, with case-insensitive fallback.
-
-    Returns the key if found (exact match preferred, then case-insensitive), or None if not found.
+    
+    WARNING: Only O(1) lookup operations are acceptable. O(n) lookups will cause severe
+    CPU overhead. This function is called frequently during router operations.
+    
+    ALLOWED HELPER FUNCTIONS (conditionally called, O(n) operations are acceptable):
+    - _rebuild_model_cost_lowercase_map: Rebuilds the lookup map (only when map is None)
+    - _handle_stale_map_entry_rebuild: Rebuilds map when stale entry detected (rare case)
+    
+    If you need to add a new helper function with O(n) operations that is conditionally
+    called and confirmed not to cause performance issues, add it to the allowed_helpers
+    list in: tests/code_coverage_tests/check_get_model_cost_key_performance.py
     """
     global _model_cost_lowercase_map
     
-    # Try exact match first (most common case, O(1))
+    # Exact match (O(1))
     if potential_key in litellm.model_cost:
         return potential_key
 
-    # Fallback to case-insensitive match using O(1) lookup map
+    # Case-insensitive lookup via map (O(1))
     if _model_cost_lowercase_map is None:
         _model_cost_lowercase_map = _rebuild_model_cost_lowercase_map()
     
     potential_key_lower = potential_key.lower()
     matched_key = _model_cost_lowercase_map.get(potential_key_lower)
     
-    # Verify the matched key still exists in model_cost (defense against stale cache)
-    # This handles cases where model_cost is modified directly (e.g., model_cost.pop())
+    # Verify key exists (O(1) - handles model_cost.pop() case)
     if matched_key is not None and matched_key in litellm.model_cost:
         return matched_key
     
-    # If matched_key exists in _model_cost_lowercase_map but not in model_cost, the map is stale (key was popped)
-    # Rebuild _model_cost_lowercase_map to remove stale entries and keep it in sync
+    # Rebuild map if stale entry detected (O(n) rebuild, but only when stale entry found)
     if matched_key is not None:
         matched_key = _handle_stale_map_entry_rebuild(potential_key_lower)
         if matched_key is not None:
             return matched_key
     
-    # Fallback: if _model_cost_lowercase_map lookup failed, check if a new key was added without invalidating the map
-    # This handles cases where litellm.model_cost[key] = value was done directly
-    matched_key = _handle_new_key_with_scan(potential_key_lower)
-    if matched_key is not None:
-        return matched_key
-    
     return None
-
 
 
 def _get_model_info_from_model_cost(key: str) -> dict:
@@ -5127,6 +5182,11 @@ def _check_provider_match(model_info: dict, custom_llm_provider: Optional[str]) 
         elif (
             custom_llm_provider == "litellm_proxy"
         ):  # litellm_proxy is a special case, it's not a provider, it's a proxy for the provider
+            return True
+        elif custom_llm_provider == "azure_ai" and model_info["litellm_provider"] in ("azure", "openai"):
+            # Azure AI also works with azure models 
+            # as a last attempt if the model is not on Azure AI, Azure then fallback to OpenAI cost 
+            # tracking the cost is better than attributing 0 cost to it.
             return True
         else:
             return False
@@ -8294,6 +8354,12 @@ class ProviderConfigManager:
             )
 
             return get_vertex_ai_image_generation_config(model)
+        elif LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.image_generation import (
+                get_openrouter_image_generation_config,
+            )
+
+            return get_openrouter_image_generation_config(model)
         return None
 
     @staticmethod

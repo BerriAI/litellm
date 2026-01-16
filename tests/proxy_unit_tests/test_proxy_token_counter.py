@@ -2,29 +2,41 @@
 # 1. Generate a Key, and use it to make a call
 
 
-import sys, os
+import json
+import logging
+import os
+import sys
+import tempfile
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import httpx
+import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
-import os
 
 # this file is to test litellm/proxy
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
-import pytest, logging
+
+from fastapi import HTTPException, Request
+
 import litellm
-from litellm.proxy.proxy_server import token_counter
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
+from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
+from litellm.proxy._types import ProxyException, TokenCountRequest
+from litellm.proxy.anthropic_endpoints.endpoints import (
+    count_tokens as anthropic_count_tokens,
+)
+from litellm.proxy.proxy_server import token_counter
+from litellm.types.utils import TokenCountResponse
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
-
-from litellm.proxy._types import TokenCountRequest
-import json, tempfile
-
-
-from litellm import Router
 
 
 def get_vertex_ai_creds_json() -> dict:
@@ -840,3 +852,410 @@ def test_vertex_ai_partner_models_token_counting_endpoint(vertex_location):
         assert endpoint.startswith("https://aiplatform.googleapis.com")
     else:
         assert endpoint.startswith(f"https://{vertex_location}-aiplatform.googleapis.com")
+
+
+@pytest.mark.asyncio
+async def test_bedrock_token_counter_error_propagation_bedrock_error():
+    """
+    Test that BedrockTokenCounter properly returns error response when BedrockError is raised.
+    Verifies that the status code and error message are preserved.
+    """
+    counter = BedrockTokenCounter()
+
+    # Mock the handler to raise BedrockError with specific status code
+    with patch.object(
+        counter, "count_tokens", wraps=counter.count_tokens
+    ) as mock_count:
+        # We need to patch at the handler level
+        with patch(
+            "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
+        ) as MockHandler:
+            mock_handler_instance = MockHandler.return_value
+            mock_handler_instance.handle_count_tokens_request = AsyncMock(
+                side_effect=BedrockError(
+                    status_code=429, message="Rate limit exceeded"
+                )
+            )
+
+            result = await counter.count_tokens(
+                model_to_use="anthropic.claude-3-sonnet",
+                messages=[{"role": "user", "content": "hello"}],
+                contents=None,
+                deployment={"litellm_params": {}},
+                request_model="bedrock/anthropic.claude-3-sonnet",
+            )
+
+            assert result is not None
+            assert result.error is True
+            assert result.status_code == 429
+            assert "Rate limit exceeded" in result.error_message
+            assert result.tokenizer_type == "bedrock_api"
+            assert result.total_tokens == 0
+
+
+@pytest.mark.asyncio
+async def test_bedrock_token_counter_error_propagation_generic_exception():
+    """
+    Test that BedrockTokenCounter returns error response with 500 status for generic exceptions.
+    """
+    counter = BedrockTokenCounter()
+
+    with patch(
+        "litellm.llms.bedrock.count_tokens.bedrock_token_counter.BedrockCountTokensHandler"
+    ) as MockHandler:
+        mock_handler_instance = MockHandler.return_value
+        mock_handler_instance.handle_count_tokens_request = AsyncMock(
+            side_effect=Exception("Unexpected error")
+        )
+
+        result = await counter.count_tokens(
+            model_to_use="anthropic.claude-3-sonnet",
+            messages=[{"role": "user", "content": "hello"}],
+            contents=None,
+            deployment={"litellm_params": {}},
+            request_model="bedrock/anthropic.claude-3-sonnet",
+        )
+
+        assert result is not None
+        assert result.error is True
+        assert result.status_code == 500
+        assert "Unexpected error" in result.error_message
+
+
+@pytest.mark.asyncio
+async def test_bedrock_handler_httpx_error_status_code_propagation():
+    """
+    Test that BedrockCountTokensHandler properly extracts status code from httpx.HTTPStatusError.
+    """
+    handler = BedrockCountTokensHandler()
+
+    # Create a mock httpx response with 403 status
+    mock_response = MagicMock()
+    mock_response.status_code = 403
+    mock_response.text = "Forbidden - Invalid credentials"
+
+    # Create HTTPStatusError
+    http_error = httpx.HTTPStatusError(
+        message="Client error '403 Forbidden'",
+        request=MagicMock(),
+        response=mock_response,
+    )
+
+    with patch.object(handler, "validate_count_tokens_request"):
+        with patch.object(handler, "_get_aws_region_name", return_value="us-west-2"):
+            with patch.object(
+                handler, "transform_anthropic_to_bedrock_count_tokens", return_value={}
+            ):
+                with patch.object(
+                    handler,
+                    "get_bedrock_count_tokens_endpoint",
+                    return_value="https://example.com",
+                ):
+                    with patch.object(handler, "_sign_request", return_value=({}, "{}")):
+                        with patch(
+                            "litellm.llms.bedrock.count_tokens.handler.get_async_httpx_client"
+                        ) as mock_client:
+                            mock_async_client = AsyncMock()
+                            mock_async_client.post = AsyncMock(side_effect=http_error)
+                            mock_client.return_value = mock_async_client
+
+                            with pytest.raises(BedrockError) as exc_info:
+                                await handler.handle_count_tokens_request(
+                                    request_data={
+                                        "model": "test",
+                                        "messages": [
+                                            {"role": "user", "content": "hello"}
+                                        ],
+                                    },
+                                    litellm_params={},
+                                    resolved_model="anthropic.claude-3-sonnet",
+                                )
+
+                            assert exc_info.value.status_code == 403
+                            # Message should be the raw response text
+                            assert exc_info.value.message == "Forbidden - Invalid credentials"
+
+
+@pytest.mark.asyncio
+async def test_proxy_token_counter_error_raises_exception_when_disabled():
+    """
+    Test that proxy token_counter raises ProxyException when disable_token_counter=True
+    and provider returns an error response.
+    """
+    # Create error response
+    error_response = TokenCountResponse(
+        total_tokens=0,
+        request_model="bedrock/anthropic.claude-3-sonnet",
+        model_used="anthropic.claude-3-sonnet",
+        tokenizer_type="bedrock_api",
+        error=True,
+        error_message="Rate limit exceeded",
+        status_code=429,
+    )
+
+    # Create mock router that returns a deployment
+    mock_deployment = {
+        "litellm_params": {
+            "model": "bedrock/anthropic.claude-3-sonnet",
+        },
+        "model_info": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+
+    setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
+
+    # Save original value and function
+    original_disable = litellm.disable_token_counter
+    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
+
+    try:
+        litellm.disable_token_counter = True
+
+        # Create a mock counter that returns an error response
+        mock_counter = MagicMock(spec=BedrockTokenCounter)
+        mock_counter.should_use_token_counting_api.return_value = True
+        mock_counter.count_tokens = AsyncMock(return_value=error_response)
+
+        # Replace the function directly
+        def mock_get_provider_token_counter(deployment, model_to_use):
+            return (mock_counter, "anthropic.claude-3-sonnet", "bedrock")
+
+        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
+
+        with pytest.raises(ProxyException) as exc_info:
+            await token_counter(
+                request=TokenCountRequest(
+                    model="claude-bedrock",
+                    messages=[{"role": "user", "content": "hello"}],
+                ),
+                call_endpoint=True,
+            )
+
+        assert exc_info.value.code == "429"
+        assert "Rate limit exceeded" in exc_info.value.message
+    finally:
+        litellm.disable_token_counter = original_disable
+        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
+
+
+@pytest.mark.asyncio
+async def test_proxy_token_counter_error_falls_back_when_enabled():
+    """
+    Test that proxy token_counter falls back to local tokenizer when disable_token_counter=False
+    and provider returns an error response.
+    """
+    # Create error response
+    error_response = TokenCountResponse(
+        total_tokens=0,
+        request_model="bedrock/anthropic.claude-3-sonnet",
+        model_used="anthropic.claude-3-sonnet",
+        tokenizer_type="bedrock_api",
+        error=True,
+        error_message="Rate limit exceeded",
+        status_code=429,
+    )
+
+    # Create mock router that returns a deployment
+    mock_deployment = {
+        "litellm_params": {
+            "model": "bedrock/anthropic.claude-3-sonnet",
+        },
+        "model_info": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.async_get_available_deployment = AsyncMock(return_value=mock_deployment)
+
+    setattr(litellm.proxy.proxy_server, "llm_router", mock_router)
+
+    # Save original value and function
+    original_disable = litellm.disable_token_counter
+    original_get_provider_token_counter = litellm.proxy.proxy_server._get_provider_token_counter
+
+    try:
+        litellm.disable_token_counter = False
+
+        # Create a mock counter that returns an error response
+        mock_counter = MagicMock(spec=BedrockTokenCounter)
+        mock_counter.should_use_token_counting_api.return_value = True
+        mock_counter.count_tokens = AsyncMock(return_value=error_response)
+
+        # Replace the function directly
+        def mock_get_provider_token_counter(deployment, model_to_use):
+            return (mock_counter, "anthropic.claude-3-sonnet", "bedrock")
+
+        litellm.proxy.proxy_server._get_provider_token_counter = mock_get_provider_token_counter
+
+        # Should not raise, should fall back to local tokenizer
+        result = await token_counter(
+            request=TokenCountRequest(
+                model="claude-bedrock",
+                messages=[{"role": "user", "content": "hello"}],
+            ),
+            call_endpoint=True,
+        )
+
+        # Should have used the fallback tokenizer
+        assert result.error is False
+        assert result.total_tokens > 0
+        assert result.tokenizer_type != "bedrock_api"
+    finally:
+        litellm.disable_token_counter = original_disable
+        litellm.proxy.proxy_server._get_provider_token_counter = original_get_provider_token_counter
+
+
+@pytest.mark.asyncio
+async def test_anthropic_endpoint_returns_anthropic_error_format():
+    """
+    Test that /v1/messages/count_tokens returns errors in Anthropic format.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    # Mock request object
+    mock_request = MagicMock(spec=Request)
+    mock_request_data = {
+        "model": "claude-bedrock",
+        "messages": [{"role": "user", "content": "Hello!"}],
+    }
+
+    async def mock_read_request_body(request):
+        return mock_request_data
+
+    mock_user_api_key_dict = MagicMock()
+
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+
+    original_token_counter = proxy_server.token_counter
+
+    # Mock token_counter to raise ProxyException with Bedrock-style error
+    async def mock_token_counter_error(request, call_endpoint=False):
+        raise ProxyException(
+            message='{"detail":{"message":"Input is too long for requested model."}}',
+            type="token_counting_error",
+            param="model",
+            code=400,
+        )
+
+    proxy_server.token_counter = mock_token_counter_error
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+
+        # Verify HTTP status code is correct
+        assert exc_info.value.status_code == 400
+
+        # Verify error is in Anthropic format
+        detail = exc_info.value.detail
+        assert detail["type"] == "error"
+        assert detail["error"]["type"] == "invalid_request_error"
+        assert detail["error"]["message"] == "Input is too long for requested model."
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body
+        proxy_server.token_counter = original_token_counter
+
+
+@pytest.mark.asyncio
+async def test_anthropic_endpoint_403_permission_error_format():
+    """
+    Test that 403 errors are returned as permission_error in Anthropic format.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request_data = {
+        "model": "claude-bedrock",
+        "messages": [{"role": "user", "content": "Hello!"}],
+    }
+
+    async def mock_read_request_body(request):
+        return mock_request_data
+
+    mock_user_api_key_dict = MagicMock()
+
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+
+    original_token_counter = proxy_server.token_counter
+
+    # Mock token_counter to raise ProxyException with 403 error
+    async def mock_token_counter_error(request, call_endpoint=False):
+        raise ProxyException(
+            message='{"Message":"Bearer Token has expired"}',
+            type="token_counting_error",
+            param="model",
+            code=403,
+        )
+
+    proxy_server.token_counter = mock_token_counter_error
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 403
+
+        detail = exc_info.value.detail
+        assert detail["type"] == "error"
+        assert detail["error"]["type"] == "permission_error"
+        assert detail["error"]["message"] == "Bearer Token has expired"
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body
+        proxy_server.token_counter = original_token_counter
+
+
+@pytest.mark.asyncio
+async def test_anthropic_endpoint_429_rate_limit_error_format():
+    """
+    Test that 429 errors are returned as rate_limit_error in Anthropic format.
+    """
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+    import litellm.proxy.proxy_server as proxy_server
+
+    mock_request = MagicMock(spec=Request)
+    mock_request_data = {
+        "model": "claude-bedrock",
+        "messages": [{"role": "user", "content": "Hello!"}],
+    }
+
+    async def mock_read_request_body(request):
+        return mock_request_data
+
+    mock_user_api_key_dict = MagicMock()
+
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+
+    original_token_counter = proxy_server.token_counter
+
+    # Mock token_counter to raise ProxyException with 429 error
+    async def mock_token_counter_error(request, call_endpoint=False):
+        raise ProxyException(
+            message="Rate limit exceeded",
+            type="token_counting_error",
+            param="model",
+            code=429,
+        )
+
+    proxy_server.token_counter = mock_token_counter_error
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await anthropic_count_tokens(mock_request, mock_user_api_key_dict)
+
+        assert exc_info.value.status_code == 429
+
+        detail = exc_info.value.detail
+        assert detail["type"] == "error"
+        assert detail["error"]["type"] == "rate_limit_error"
+        assert detail["error"]["message"] == "Rate limit exceeded"
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body
+        proxy_server.token_counter = original_token_counter
+
+

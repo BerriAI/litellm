@@ -1229,6 +1229,7 @@ class Router:
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         model_name = None
+        deployment = None
         try:
             # pick the one that is available (lowest TPM/RPM)
             deployment = self.get_available_deployment(
@@ -1291,6 +1292,9 @@ class Router:
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[31m Exception {str(e)}\033[0m"
             )
+            # Set per-deployment num_retries on exception for retry logic
+            if deployment is not None:
+                self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
 
     # fmt: off
@@ -1404,6 +1408,15 @@ class Router:
                 async for item in model_response:
                     yield item
             except MidStreamFallbackError as e:
+                # Check if fallbacks are disabled by user
+                if initial_kwargs.get("disable_fallbacks", False):
+                    verbose_router_logger.info(
+                        "Mid stream fallback disabled by user, re-raising original error"
+                    )
+                    if e.original_exception is not None:
+                        raise e.original_exception
+                    raise e
+
                 from litellm.main import stream_chunk_builder
 
                 complete_response_object = stream_chunk_builder(
@@ -1501,7 +1514,7 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
-    async def _acompletion(
+    async def _acompletion(  # noqa: PLR0915
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper,]:
         """
@@ -1511,6 +1524,7 @@ class Router:
         - in the semaphore,  make a check against it's local rpm before running
         """
         model_name = None
+        deployment = None
         _timeout_debug_deployment_dict = (
             {}
         )  # this is a temporary dict to debug timeout issues
@@ -1639,6 +1653,9 @@ class Router:
                 "litellm_params", {}
             ).get("timeout", None)
             e.message += f"\n\nDeployment Info: request_timeout: {deployment_request_timeout_param}\ntimeout: {deployment_timeout_param}"
+            # Set per-deployment num_retries on exception for retry logic
+            if deployment is not None:
+                self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
         except Exception as e:
             verbose_router_logger.info(
@@ -1646,6 +1663,9 @@ class Router:
             )
             if model_name is not None:
                 self.fail_calls[model_name] += 1
+            # Set per-deployment num_retries on exception for retry logic
+            if deployment is not None:
+                self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
 
     def _update_kwargs_before_fallbacks(
@@ -1668,6 +1688,24 @@ class Router:
         kwargs.setdefault(metadata_variable_name, {}).update(
             {"model_group": model, "model_group_alias": model_group_alias}
         )
+
+    def _set_deployment_num_retries_on_exception(
+        self, exception: Exception, deployment: dict
+    ) -> None:
+        """
+        Set num_retries from deployment litellm_params on the exception.
+
+        This allows the retry logic in async_function_with_retries to use
+        per-deployment retry settings instead of the global setting.
+        """
+        # Only set if exception doesn't already have num_retries
+        if hasattr(exception, "num_retries") and exception.num_retries is not None:  # type: ignore
+            return
+
+        litellm_params = deployment.get("litellm_params", {})
+        dep_num_retries = litellm_params.get("num_retries")
+        if dep_num_retries is not None and isinstance(dep_num_retries, int):
+            exception.num_retries = dep_num_retries  # type: ignore
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"

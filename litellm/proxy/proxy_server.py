@@ -887,6 +887,10 @@ def get_openapi_schema():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+    
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -909,6 +913,10 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
+    
+    # Fix Swagger UI execute path error when server_root_path is set
+    if server_root_path:
+        openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
     app.openapi_schema = openapi_schema
     return app.openapi_schema
@@ -2468,7 +2476,12 @@ class ProxyConfig:
                         raise Exception(
                             f"Invalid value set for upperbound_key_generate_params - value={value}"
                         )
-
+                elif key == "json_logs" and value is True:
+                    litellm.json_logs = True
+                    litellm._turn_on_json()
+                    verbose_proxy_logger.debug(
+                        f"{blue_color_code} Enabled JSON logging via config{reset_color_code}"
+                    )
                 else:
                     verbose_proxy_logger.debug(
                         f"{blue_color_code} setting litellm.{key}={value}{reset_color_code}"
@@ -7108,8 +7121,32 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             #########################################################
             # Transfrom the Response to the well known format
             #########################################################
-            if result is not None:
+            if result is not None and result.error is True:
+                # If disable_token_counter is enabled, raise HTTP error
+                if litellm.disable_token_counter is True:
+                    raise ProxyException(
+                        message=result.error_message or "Token counting failed",
+                        type="token_counting_error",
+                        param="model",
+                        code=result.status_code or 500,
+                    )
+                # Otherwise, log warning and fall back to local counter
+                verbose_proxy_logger.warning(
+                    f"Provider token counting failed ({result.status_code}): {result.error_message}. "
+                    "Falling back to local tokenizer."
+                )
+            elif result is not None:
+                # Success - return the result (only if not None)
                 return result
+
+    # Check if token counter is disabled before fallback
+    if litellm.disable_token_counter is True:
+        raise ProxyException(
+            message="Token counting is disabled and no provider API result available",
+            type="token_counting_disabled",
+            param="model",
+            code=503,
+        )
 
     # Default LiteLLM token counting
     custom_tokenizer: Optional[CustomHuggingfaceTokenizer] = None

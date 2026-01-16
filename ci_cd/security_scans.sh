@@ -129,11 +129,14 @@ run_grype_scans() {
         "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
         "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
         "CVE-2025-60876" # BusyBox wget HTTP request splitting - no fix available in Chainguard Wolfi base image
+        "CVE-2026-0861" # Wolfi glibc still flagged even on 2.42-r5; upstream patched build unavailable yet
         "CVE-2010-4756" # glibc glob DoS - awaiting patched Wolfi glibc build
         "CVE-2019-1010022" # glibc stack guard bypass - awaiting patched Wolfi glibc build
         "CVE-2019-1010023" # glibc ldd remap issue - awaiting patched Wolfi glibc build
         "CVE-2019-1010024" # glibc ASLR mitigation bypass - awaiting patched Wolfi glibc build
         "CVE-2019-1010025" # glibc pthread heap address leak - awaiting patched Wolfi glibc build
+        "CVE-2026-22184" # zlib untgz buffer overflow - untgz unused + no fixed Wolfi build yet
+        "GHSA-58pv-8j8x-9vj2" # jaraco.context path traversal - setuptools vendored only (v5.3.0), not used in application code (using v6.1.0+)
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

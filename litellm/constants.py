@@ -1073,6 +1073,13 @@ LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
+
+# Standard headers that are always checked for customer/end-user ID (no configuration required)
+# These headers work out-of-the-box for tools like Claude Code that support custom headers
+STANDARD_CUSTOMER_ID_HEADERS = [
+    "x-litellm-customer-id",
+    "x-litellm-end-user-id",
+]
 MAX_SPENDLOG_ROWS_TO_QUERY = int(
     os.getenv("MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000)
 )  # if spendLogs has more than 1M rows, do not query the DB
