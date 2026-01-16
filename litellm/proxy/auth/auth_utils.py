@@ -7,6 +7,7 @@ from fastapi import HTTPException, Request, status
 
 from litellm import Router, provider_list
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import STANDARD_CUSTOMER_ID_HEADERS
 from litellm.proxy._types import *
 from litellm.types.router import CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS
 
@@ -561,6 +562,32 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
             return header_name
     return None
 
+def _get_customer_id_from_standard_headers(
+    request_headers: Optional[dict],
+) -> Optional[str]:
+    """
+    Check standard customer ID headers for a customer/end-user ID.
+
+    This enables tools like Claude Code to pass customer IDs via ANTHROPIC_CUSTOM_HEADERS.
+    No configuration required - these headers are always checked.
+
+    Args:
+        request_headers: The request headers dict
+
+    Returns:
+        The customer ID if found in standard headers, None otherwise
+    """
+    if request_headers is None:
+        return None
+
+    for standard_header in STANDARD_CUSTOMER_ID_HEADERS:
+        for header_name, header_value in request_headers.items():
+            if header_name.lower() == standard_header.lower():
+                user_id_str = str(header_value) if header_value is not None else ""
+                if user_id_str.strip():
+                    return user_id_str
+    return None
+
 
 def get_end_user_id_from_request_body(
     request_body: dict, request_headers: Optional[dict] = None
@@ -569,7 +596,12 @@ def get_end_user_id_from_request_body(
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
-    # Check 1 : Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
+    # Check 1: Standard customer ID headers (always checked, no configuration required)
+    customer_id = _get_customer_id_from_standard_headers(request_headers=request_headers)
+    if customer_id is not None:
+        return customer_id
+
+    # Check 2: Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
@@ -602,19 +634,19 @@ def get_end_user_id_from_request_body(
                     if user_id_str.strip():
                         return user_id_str
 
-    # Check 2: 'user' field in request_body (commonly OpenAI)
+    # Check 3: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:
         user_from_body_user_field = request_body["user"]
         return str(user_from_body_user_field)
 
-    # Check 3: 'litellm_metadata.user' in request_body (commonly Anthropic)
+    # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
     litellm_metadata = request_body.get("litellm_metadata")
     if isinstance(litellm_metadata, dict):
         user_from_litellm_metadata = litellm_metadata.get("user")
         if user_from_litellm_metadata is not None:
             return str(user_from_litellm_metadata)
 
-    # Check 4: 'metadata.user_id' in request_body (another common pattern)
+    # Check 5: 'metadata.user_id' in request_body (another common pattern)
     metadata_dict = request_body.get("metadata")
     if isinstance(metadata_dict, dict):
         user_id_from_metadata_field = metadata_dict.get("user_id")

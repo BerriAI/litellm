@@ -744,6 +744,7 @@ router_settings:
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
 | LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
+| LOGFIRE_BASE_URL | Base URL for Logfire logging service (useful for self hosted deployments)
 | LOGGING_WORKER_CONCURRENCY | Maximum number of concurrent coroutine slots for the logging worker on the asyncio event loop. Default is 100. Setting too high will flood the event loop with logging tasks which will lower the overall latency of the requests.
 | LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. Default is 50,000
 | LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. Default is 20.0
@@ -771,10 +772,18 @@ router_settings:
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
 | MISTRAL_API_BASE | Base URL for Mistral API. Default is https://api.mistral.ai
 | MISTRAL_API_KEY | API key for Mistral API
+| MICROSOFT_AUTHORIZATION_ENDPOINT | Custom authorization endpoint URL for Microsoft SSO (overrides default Microsoft OAuth authorization endpoint)
 | MICROSOFT_CLIENT_ID | Client ID for Microsoft services
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
-| MICROSOFT_TENANT | Tenant ID for Microsoft Azure
 | MICROSOFT_SERVICE_PRINCIPAL_ID | Service Principal ID for Microsoft Enterprise Application. (This is an advanced feature if you want litellm to auto-assign members to Litellm Teams based on their Microsoft Entra ID Groups)
+| MICROSOFT_TENANT | Tenant ID for Microsoft Azure
+| MICROSOFT_TOKEN_ENDPOINT | Custom token endpoint URL for Microsoft SSO (overrides default Microsoft OAuth token endpoint)
+| MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE | Field name for user display name in Microsoft SSO response. Default is `displayName`
+| MICROSOFT_USER_EMAIL_ATTRIBUTE | Field name for user email in Microsoft SSO response. Default is `userPrincipalName`
+| MICROSOFT_USER_FIRST_NAME_ATTRIBUTE | Field name for user first name in Microsoft SSO response. Default is `givenName`
+| MICROSOFT_USER_ID_ATTRIBUTE | Field name for user ID in Microsoft SSO response. Default is `id`
+| MICROSOFT_USER_LAST_NAME_ATTRIBUTE | Field name for user last name in Microsoft SSO response. Default is `surname`
+| MICROSOFT_USERINFO_ENDPOINT | Custom userinfo endpoint URL for Microsoft SSO (overrides default Microsoft Graph userinfo endpoint)
 | NO_DOCS | Flag to disable Swagger UI documentation
 | NO_REDOC | Flag to disable Redoc documentation
 | NO_PROXY | List of addresses to bypass proxy

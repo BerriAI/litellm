@@ -1535,9 +1535,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 f"usageMetadata not found in completion_response. Got={completion_response}"
             )
         cached_tokens: Optional[int] = None
-        audio_tokens: Optional[int] = None
-        text_tokens: Optional[int] = None
-        image_tokens: Optional[int] = None
+        # Separate variables for prompt tokens by modality
+        prompt_audio_tokens: Optional[int] = None
+        prompt_image_tokens: Optional[int] = None
+        prompt_text_tokens: Optional[int] = None
         prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         reasoning_tokens: Optional[int] = None
         response_tokens: Optional[int] = None
@@ -1556,6 +1557,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     response_tokens_details.text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "AUDIO":
                     response_tokens_details.audio_tokens = detail.get("tokenCount", 0)
+
         #########################################################
 
         ## CANDIDATES TOKEN DETAILS (e.g., for image generation models) ##
@@ -1579,22 +1581,49 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             if response_tokens_details is None:
                 response_tokens_details = CompletionTokensDetailsWrapper()
             if response_tokens_details.text_tokens is None:
-                image_tokens = response_tokens_details.image_tokens or 0
-                audio_tokens_candidate = response_tokens_details.audio_tokens or 0
+                completion_image_tokens = response_tokens_details.image_tokens or 0
+                completion_audio_tokens = response_tokens_details.audio_tokens or 0
                 calculated_text_tokens = (
-                    candidates_token_count - image_tokens - audio_tokens_candidate
+                    candidates_token_count - completion_image_tokens - completion_audio_tokens
                 )
                 response_tokens_details.text_tokens = calculated_text_tokens
         #########################################################
 
+        ## Parse promptTokensDetails (total tokens by modality, includes cached + non-cached)
         if "promptTokensDetails" in usage_metadata:
             for detail in usage_metadata["promptTokensDetails"]:
                 if detail["modality"] == "AUDIO":
-                    audio_tokens = detail.get("tokenCount", 0)
+                    prompt_audio_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "TEXT":
-                    text_tokens = detail.get("tokenCount", 0)
+                    prompt_text_tokens = detail.get("tokenCount", 0)
                 elif detail["modality"] == "IMAGE":
-                    image_tokens = detail.get("tokenCount", 0)
+                    prompt_image_tokens = detail.get("tokenCount", 0)
+
+        ## Parse cacheTokensDetails (breakdown of cached tokens by modality)
+        ## When explicit caching is used, Gemini provides this field to show which modalities were cached
+        cached_text_tokens: Optional[int] = None
+        cached_audio_tokens: Optional[int] = None
+        cached_image_tokens: Optional[int] = None
+
+        if "cacheTokensDetails" in usage_metadata:
+            for detail in usage_metadata["cacheTokensDetails"]:
+                if detail["modality"] == "AUDIO":
+                    cached_audio_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "TEXT":
+                    cached_text_tokens = detail.get("tokenCount", 0)
+                elif detail["modality"] == "IMAGE":
+                    cached_image_tokens = detail.get("tokenCount", 0)
+
+        ## Calculate non-cached tokens by subtracting cached from total (per modality)
+        ## This is necessary because promptTokensDetails includes both cached and non-cached tokens
+        ## See: https://github.com/BerriAI/litellm/issues/18750
+        if cached_text_tokens is not None and prompt_text_tokens is not None:
+            prompt_text_tokens = prompt_text_tokens - cached_text_tokens
+        if cached_audio_tokens is not None and prompt_audio_tokens is not None:
+            prompt_audio_tokens = prompt_audio_tokens - cached_audio_tokens
+        if cached_image_tokens is not None and prompt_image_tokens is not None:
+            prompt_image_tokens = prompt_image_tokens - cached_image_tokens
+
         if "thoughtsTokenCount" in usage_metadata:
             reasoning_tokens = usage_metadata["thoughtsTokenCount"]
             # Also add reasoning tokens to response_tokens_details
@@ -1602,20 +1631,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 response_tokens_details = CompletionTokensDetailsWrapper()
             response_tokens_details.reasoning_tokens = reasoning_tokens
 
-        ## adjust 'text_tokens' to subtract cached tokens
-        if (
-            (audio_tokens is None or audio_tokens == 0)
-            and text_tokens is not None
-            and text_tokens > 0
-            and cached_tokens is not None
-        ):
-            text_tokens = text_tokens - cached_tokens
-
         prompt_tokens_details = PromptTokensDetailsWrapper(
             cached_tokens=cached_tokens,
-            audio_tokens=audio_tokens,
-            text_tokens=text_tokens,
-            image_tokens=image_tokens,
+            audio_tokens=prompt_audio_tokens,
+            text_tokens=prompt_text_tokens,
+            image_tokens=prompt_image_tokens,
         )
 
         completion_tokens = response_tokens or completion_response["usageMetadata"].get(
@@ -1632,6 +1652,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             completion_tokens=completion_tokens,
             total_tokens=usage_metadata.get("totalTokenCount", 0),
             prompt_tokens_details=prompt_tokens_details,
+            cache_read_input_tokens=cached_tokens,
             reasoning_tokens=reasoning_tokens,
             completion_tokens_details=response_tokens_details,
         )

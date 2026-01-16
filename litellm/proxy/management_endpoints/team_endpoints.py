@@ -3601,7 +3601,7 @@ async def get_team_daily_activity(
                         },
                     )
 
-    ## Fetch team aliases
+    ## Fetch team aliases and check team admin status
     where_condition = {}
     if team_ids_list:
         where_condition["team_id"] = {"in": list(team_ids_list)}
@@ -3611,6 +3611,36 @@ async def get_team_daily_activity(
     team_alias_metadata = {
         t.team_id: {"team_alias": t.team_alias} for t in team_aliases
     }
+
+    # Check if user is team admin for any requested teams
+    # If not, filter by user's API keys
+    user_api_keys: Optional[List[str]] = None
+    if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
+        # Check if user is team admin for any of the teams
+        is_team_admin_for_any = False
+        for team_alias in team_aliases:
+            team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
+            if _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                is_team_admin_for_any = True
+                break
+
+        # If user is not a team admin for any team, filter by their API keys
+        if not is_team_admin_for_any:
+            # Get all API keys for this user
+            user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+            user_api_keys = [key.token for key in user_keys if key.token]
+            # If user has no API keys, return empty result
+            if not user_api_keys:
+                user_api_keys = [""]  # Use empty string to ensure no matches
+
+    # If api_key parameter is provided, use it; otherwise use user_api_keys if set
+    final_api_key_filter: Optional[Union[str, List[str]]] = api_key
+    if final_api_key_filter is None and user_api_keys is not None:
+        final_api_key_filter = user_api_keys
 
     return await get_daily_activity(
         prisma_client=prisma_client,
@@ -3622,7 +3652,7 @@ async def get_team_daily_activity(
         start_date=start_date,
         end_date=end_date,
         model=model,
-        api_key=api_key,
+        api_key=final_api_key_filter,
         page=page,
         page_size=page_size,
     )

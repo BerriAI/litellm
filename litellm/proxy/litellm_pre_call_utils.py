@@ -846,7 +846,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     # Add headers to metadata for guardrails to access (fixes #17477)
     # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
-    if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):
+    if _metadata_variable_name in data and isinstance(
+        data[_metadata_variable_name], dict
+    ):
         data[_metadata_variable_name]["headers"] = _headers
 
     # check for forwardable headers
@@ -999,6 +1001,13 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     data[_metadata_variable_name][
         "user_api_key_model_max_budget"
     ] = user_api_key_dict.model_max_budget
+
+    # User spend, budget - used by prometheus.py
+    # Follow same pattern as team and API key budgets
+    data[_metadata_variable_name]["user_api_key_user_spend"] = user_api_key_dict.user_spend
+    data[_metadata_variable_name][
+        "user_api_key_user_max_budget"
+    ] = user_api_key_dict.user_max_budget
 
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
@@ -1307,6 +1316,9 @@ def move_guardrails_to_metadata(
 
     - If guardrails set on API Key metadata then sets guardrails on request metadata
     - If guardrails not set on API key, then checks request metadata
+
+    Note: We copy (not pop) guardrails from data to metadata to ensure deployment-level
+    guardrails merged by the router remain in kwargs for async_pre_call_deployment_hook.
     """
     # Check key-level guardrails
     _add_guardrails_from_key_or_team_metadata(
@@ -1319,15 +1331,25 @@ def move_guardrails_to_metadata(
     #########################################################################################
     # User's might send "guardrails" in the request body, we need to add them to the request metadata.
     # Since downstream logic requires "guardrails" to be in the request metadata
+    #
+    # IMPORTANT: We copy instead of pop to preserve guardrails in kwargs for
+    # async_pre_call_deployment_hook (custom_guardrail.py:290) which checks kwargs.get("guardrails").
+    # This is the event-based approach for deployment-level guardrails.
     #########################################################################################
     if "guardrails" in data:
-        request_body_guardrails = data.pop("guardrails")
+        request_body_guardrails = data.get("guardrails")
+        if request_body_guardrails is None:
+            return
         if "guardrails" in data[_metadata_variable_name] and isinstance(
             data[_metadata_variable_name]["guardrails"], list
         ):
-            data[_metadata_variable_name]["guardrails"].extend(request_body_guardrails)
+            # Merge unique guardrails
+            existing = data[_metadata_variable_name]["guardrails"]
+            for g in request_body_guardrails:
+                if g not in existing:
+                    existing.append(g)
         else:
-            data[_metadata_variable_name]["guardrails"] = request_body_guardrails
+            data[_metadata_variable_name]["guardrails"] = list(request_body_guardrails)
 
     #########################################################################################
     if "guardrail_config" in data:

@@ -28,6 +28,7 @@ from typing import (
     Callable,
     Coroutine,
     Dict,
+    Iterable,
     List,
     Literal,
     Mapping,
@@ -1094,23 +1095,68 @@ def completion(  # type: ignore # noqa: PLR0915
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
 
+    ######### unpacking kwargs #####################
+    args = locals()
+
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import (
-            handle_chat_completion_with_mcp,
+            acompletion_with_mcp,
         )
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+        from litellm.types.llms.openai import ToolParam
 
-        mcp_handler_context = locals().copy()
-        completion_callable = globals().get("acompletion")
-        mcp_result = run_async_function(
-            handle_chat_completion_with_mcp,
-            mcp_handler_context,
-            completion_callable,
-        )
-        if mcp_result is not None:
-            return mcp_result
-    ######### unpacking kwargs #####################
-    args = locals()
+        # Check if MCP tools are present (following responses pattern)
+        # Cast tools to Optional[Iterable[ToolParam]] for type checking
+        tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools_for_mcp):
+            # Return coroutine - acompletion will await it
+            # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
+            return acompletion_with_mcp(  # type: ignore[return-value]
+                model=model,
+                messages=messages,
+                functions=functions,
+                function_call=function_call,
+                timeout=timeout,
+                temperature=temperature,
+                top_p=top_p,
+                n=n,
+                stream=stream,
+                stream_options=stream_options,
+                stop=stop,
+                max_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens,
+                modalities=modalities,
+                prediction=prediction,
+                audio=audio,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+                logit_bias=logit_bias,
+                user=user,
+                response_format=response_format,
+                seed=seed,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                deployment_id=deployment_id,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
+                safety_identifier=safety_identifier,
+                service_tier=service_tier,
+                base_url=base_url,
+                api_version=api_version,
+                api_key=api_key,
+                model_list=model_list,
+                extra_headers=extra_headers,
+                thinking=thinking,
+                web_search_options=web_search_options,
+                shared_session=shared_session,
+                **kwargs,
+            )
     api_base = kwargs.get("api_base", None)
     mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
@@ -4227,6 +4273,71 @@ async def acompletion_with_retries(*args, **kwargs):
     return await retryer(original_function, *args, **kwargs)
 
 
+def responses_with_retries(*args, **kwargs):
+    """
+    Executes a litellm.responses() with retries
+    """
+    try:
+        import tenacity
+    except Exception as e:
+        raise Exception(
+            f"tenacity import failed please run `pip install tenacity`. Error{e}"
+        )
+
+    from litellm.responses.main import responses
+
+    num_retries = kwargs.pop("num_retries", 3)
+    # reset retries in .responses()
+    kwargs["max_retries"] = 0
+    kwargs["num_retries"] = 0
+    retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop(
+        "retry_strategy", "constant_retry"
+    )  # type: ignore
+    original_function = kwargs.pop("original_function", responses)
+    if retry_strategy == "exponential_backoff_retry":
+        retryer = tenacity.Retrying(
+            wait=tenacity.wait_exponential(multiplier=1, max=10),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
+    else:
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries), reraise=True
+        )
+    return retryer(original_function, *args, **kwargs)
+
+
+async def aresponses_with_retries(*args, **kwargs):
+    """
+    Executes a litellm.aresponses() with retries
+    """
+    try:
+        import tenacity
+    except Exception as e:
+        raise Exception(
+            f"tenacity import failed please run `pip install tenacity`. Error{e}"
+        )
+
+    from litellm.responses.main import aresponses
+
+    num_retries = kwargs.pop("num_retries", 3)
+    kwargs["max_retries"] = 0
+    kwargs["num_retries"] = 0
+    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    original_function = kwargs.pop("original_function", aresponses)
+    if retry_strategy == "exponential_backoff_retry":
+        retryer = tenacity.AsyncRetrying(
+            wait=tenacity.wait_exponential(multiplier=1, max=10),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
+    else:
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries), reraise=True
+        )
+    return await retryer(original_function, *args, **kwargs)
+
+
 ### EMBEDDING ENDPOINTS ####################
 @client
 async def aembedding(*args, **kwargs) -> EmbeddingResponse:
@@ -4587,8 +4698,8 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("OPENAI_API_KEY")
             )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
             
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
@@ -4656,8 +4767,8 @@ def embedding(  # noqa: PLR0915
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
 
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
@@ -4681,9 +4792,9 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_key
             )
 
-            if extra_headers is not None and isinstance(extra_headers, dict):
-                headers = extra_headers
-            else:
+            # Use the merged headers variable (already merged at the top of the function)
+            # Don't overwrite it with just extra_headers
+            if headers is None:
                 headers = {}
 
             response = base_llm_http_handler.embedding(
@@ -5647,11 +5758,9 @@ def text_completion(  # noqa: PLR0915
         )
         and isinstance(prompt, list)
         and len(prompt) > 0
-        and isinstance(prompt[0], list)
+        and (isinstance(prompt[0], list) or isinstance(prompt[0], int))
     ):
-        verbose_logger.warning(
-            msg="List of lists being passed. If this is for tokens, then it might not work across all models."
-        )
+        # Support for token IDs as prompt (list of integers or list of lists of integers)
         messages = [{"role": "user", "content": prompt}]  # type: ignore
     else:
         raise Exception(

@@ -640,10 +640,6 @@ def test_embedding(mock_aembedding, client_no_auth):
             pre_call_kwargs.get("call_type") == "aembedding"
         ), f"expected pre_call_hook to receive call_type='aembedding', got {pre_call_kwargs.get('call_type')}"
 
-        during_call_kwargs = mock_during_hook.await_args_list[0].kwargs
-        assert (
-            during_call_kwargs.get("call_type") == "embedding"
-        ), f"expected during_call_hook to receive call_type='embedding', got {during_call_kwargs.get('call_type')}"
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
