@@ -3233,21 +3233,17 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
+                arguments_dict = json.loads(arguments) if arguments else {}
+                # Ensure arguments_dict is always a dict (Bedrock requires toolUse.input to be an object)
+                # When some providers return arguments: '""' (JSON-encoded empty string), json.loads returns ""
+                if not isinstance(arguments_dict, dict):
+                    arguments_dict = {}
                 if not arguments or not arguments.strip():
-                    arguments_input = {}
+                    arguments_dict = {}
                 else:
-                    # Try to parse the arguments JSON
-                    try:
-                        arguments_input = json.loads(arguments)
-                    except json.JSONDecodeError as e:
-                        verbose_logger.warning(
-                            f"Malformed JSON in tool call arguments for tool '{name}': {str(e)}. "
-                            f"Storing as raw string to allow conversation to continue."
-                        )
-                        arguments_input = arguments
-                
+                    arguments_dict = json.loads(arguments)
                 bedrock_tool = BedrockToolUseBlock(
-                    input=arguments_input, name=name, toolUseId=id
+                    input=arguments_dict, name=name, toolUseId=id
                 )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
