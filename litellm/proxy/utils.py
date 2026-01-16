@@ -749,6 +749,8 @@ class ProxyLogging:
         response: MCPPreCallResponseObject,
         original_request: MCPPreCallRequestObject,
     ) -> Dict[str, Any]:
+
+    
         """
         Parse the response from the pre_mcp_tool_call_hook
 
