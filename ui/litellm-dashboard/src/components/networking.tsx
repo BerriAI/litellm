@@ -6818,7 +6818,13 @@ export const searchToolQueryCall = async (
 };
 
 // New endpoint functions for DAU, WAU, MAU
-export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?: string, tagFilters?: string[]) => {
+export const tagDauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[],
+  custom_llm_provider?: string,
+) => {
   /**
    * Get Daily Active Users (DAU) for last 7 days ending on endDate
    */
@@ -6837,6 +6843,7 @@ export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?:
         end_date: formatDate(endDate),
         tag_filters: hasTagFilters ? tagFilters : undefined,
         tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
+        custom_llm_provider: custom_llm_provider || undefined,
       },
     });
   } catch (error) {
@@ -6845,7 +6852,13 @@ export const tagDauCall = async (accessToken: string, endDate: Date, tagFilter?:
   }
 };
 
-export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?: string, tagFilters?: string[]) => {
+export const tagWauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[],
+  custom_llm_provider?: string,
+) => {
   /**
    * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
    */
@@ -6864,6 +6877,7 @@ export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?:
         end_date: formatDate(endDate),
         tag_filters: hasTagFilters ? tagFilters : undefined,
         tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
+        custom_llm_provider: custom_llm_provider || undefined,
       },
     });
   } catch (error) {
@@ -6872,7 +6886,13 @@ export const tagWauCall = async (accessToken: string, endDate: Date, tagFilter?:
   }
 };
 
-export const tagMauCall = async (accessToken: string, endDate: Date, tagFilter?: string, tagFilters?: string[]) => {
+export const tagMauCall = async (
+  accessToken: string,
+  endDate: Date,
+  tagFilter?: string,
+  tagFilters?: string[],
+  custom_llm_provider?: string,
+) => {
   /**
    * Get Monthly Active Users (MAU) for last 7 months ending on endDate
    */
@@ -6891,6 +6911,7 @@ export const tagMauCall = async (accessToken: string, endDate: Date, tagFilter?:
         end_date: formatDate(endDate),
         tag_filters: hasTagFilters ? tagFilters : undefined,
         tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
+        custom_llm_provider: custom_llm_provider || undefined,
       },
     });
   } catch (error) {
@@ -6917,6 +6938,7 @@ export const userAgentSummaryCall = async (
   startTime: Date,
   endTime: Date,
   tagFilters?: string[],
+  custom_llm_provider?: string,
 ) => {
   /**
    * Get user agent summary statistics
@@ -6935,6 +6957,7 @@ export const userAgentSummaryCall = async (
         start_date: formatDate(startTime),
         end_date: formatDate(endTime),
         tag_filters: tagFilters && tagFilters.length > 0 ? tagFilters : undefined,
+        custom_llm_provider: custom_llm_provider || undefined,
       },
     });
   } catch (error) {
@@ -6963,6 +6986,28 @@ export const perUserAnalyticsCall = async (
     });
   } catch (error) {
     console.error("Failed to fetch per-user analytics:", error);
+    throw error;
+  }
+};
+
+export const leaderboardCall = async (
+  accessToken: string,
+  limit?: number,
+  custom_llm_provider?: string,
+) => {
+  /**
+   * Get top active users by request count in the last 7 days
+   */
+  try {
+    return await apiClient.get(`/user/analytics/leaderboard`, {
+      accessToken,
+      query: {
+        limit: limit ? limit.toString() : undefined,
+        custom_llm_provider: custom_llm_provider || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch leaderboard:", error);
     throw error;
   }
 };
