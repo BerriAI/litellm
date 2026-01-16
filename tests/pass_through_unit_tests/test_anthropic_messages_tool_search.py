@@ -74,7 +74,7 @@ class TestBedrockInvokeToolSearch(BaseAnthropicMessagesToolSearchTest):
     Uses the bedrock/invoke/ prefix which routes through the native
     Anthropic Messages API format on Bedrock.
     
-    Beta header: tool-search-tool-2025-10-19
+    Beta header: advanced-tool-use-2025-11-20 (passed via extra_headers)
     
     Note: Tool search on Bedrock is only supported on Claude Opus 4.5.
     """
