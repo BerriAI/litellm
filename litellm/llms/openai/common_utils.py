@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     _DEFAULT_TTL_FOR_HTTPX_CLIENTS,
@@ -208,17 +209,24 @@ class BaseOpenAILLM:
         from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
         try:
+            # Get SSL config and include in params for proper cache key
+            ssl_config = get_ssl_configuration()
+            params = {"ssl_verify": ssl_config} if ssl_config is not None else None
+
             # Get a cached AsyncHTTPHandler which manages the httpx.AsyncClient
             cached_handler = get_async_httpx_client(
                 llm_provider="openai",  # Cache key includes provider
-                params=None,  # Use default params with SSL config
+                params=params,  # Include SSL config in cache key
                 shared_session=shared_session,
             )
             # Return the underlying httpx client from the handler
             return cached_handler.client
-        except Exception:
-            # Fallback to creating a client directly if caching fails
+        except (ImportError, AttributeError, KeyError) as e:
+            # Fallback to creating a client directly if caching system unavailable
             # This preserves backwards compatibility
+            verbose_logger.debug(
+                f"Client caching unavailable ({type(e).__name__}), using direct client creation"
+            )
             ssl_config = get_ssl_configuration()
             return httpx.AsyncClient(
                 verify=ssl_config,
@@ -241,12 +249,19 @@ class BaseOpenAILLM:
         from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
         try:
+            # Get SSL config and include in params for proper cache key
+            ssl_config = get_ssl_configuration()
+            params = {"ssl_verify": ssl_config} if ssl_config is not None else None
+
             # Get a cached HTTPHandler which manages the httpx.Client
-            cached_handler = _get_httpx_client(params=None)
+            cached_handler = _get_httpx_client(params=params)
             # Return the underlying httpx client from the handler
             return cached_handler.client
-        except Exception:
-            # Fallback to creating a client directly if caching fails
+        except (ImportError, AttributeError, KeyError) as e:
+            # Fallback to creating a client directly if caching system unavailable
+            verbose_logger.debug(
+                f"Client caching unavailable ({type(e).__name__}), using direct client creation"
+            )
             ssl_config = get_ssl_configuration()
             return httpx.Client(
                 verify=ssl_config,
