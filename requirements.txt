@@ -10,7 +10,7 @@ uvicorn==0.31.1 # server dep
 gunicorn==23.0.0 # server dep
 fastuuid==0.13.5 # for uuid4
 uvloop==0.21.0 # uvicorn dep, gives us much better performance under load
-boto3==1.40.15 # aws bedrock/sagemaker calls
+boto3==1.40.61 # aws bedrock/sagemaker calls
 redis==5.2.1 # redis caching
 prisma==0.11.0 # for db
 nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)

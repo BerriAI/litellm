@@ -525,21 +525,21 @@ files = [
 
 [[package]]
 name = "boto3"
-version = "1.40.15"
+version = "1.40.61"
 description = "The AWS SDK for Python"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "boto3-1.40.15-py3-none-any.whl", hash = "sha256:52b8aa78c9906c4e49dcec6817c041df33c9825073bf66e7df8fc00afbe47b4b"},
-    {file = "boto3-1.40.15.tar.gz", hash = "sha256:271b379ce5ad35ca82f1009e917528a182eed0e2de197ccffb0c51acadec5c79"},
+    {file = "boto3-1.40.61-py3-none-any.whl", hash = "sha256:6b9c57b2a922b5d8c17766e29ed792586a818098efe84def27c8f582b33f898c"},
+    {file = "boto3-1.40.61.tar.gz", hash = "sha256:d6c56277251adf6c2bdd25249feae625abe4966831676689ff23b4694dea5b12"},
 ]
 
 [package.dependencies]
-botocore = ">=1.40.15,<1.41.0"
+botocore = ">=1.40.61,<1.41.0"
 jmespath = ">=0.7.1,<2.0.0"
-s3transfer = ">=0.13.0,<0.14.0"
+s3transfer = ">=0.14.0,<0.15.0"
 
 [package.extras]
 crt = ["botocore[crt] (>=1.21.0,<2.0a0)"]
@@ -2375,7 +2375,7 @@ description = "WSGI HTTP Server for UNIX"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "python_version >= \"3.10\" and platform_system != \"Windows\" and (extra == \"proxy\" or extra == \"mlflow\") or extra == \"proxy\""
+markers = "extra == \"proxy\" or (extra == \"mlflow\" or extra == \"proxy\") and platform_system != \"Windows\" and python_version >= \"3.10\""
 files = [
     {file = "gunicorn-23.0.0-py3-none-any.whl", hash = "sha256:ec400d38950de4dfd418cff8328b2c8faed0edb0d517d3394e457c317908ca4d"},
     {file = "gunicorn-23.0.0.tar.gz", hash = "sha256:f014447a0101dc57e294f6c18ca6b40227a4c90e9bdb586042628030cba004ec"},
@@ -3433,8 +3433,8 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=1.23.3", markers = "python_version >= \"3.11\""},
+    {version = ">1.20"},
     {version = ">=1.21.2", markers = "python_version >= \"3.10\""},
-    {version = ">1.20", markers = "python_version < \"3.10\""},
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
 ]
 
@@ -6255,15 +6255,15 @@ files = [
 
 [[package]]
 name = "s3transfer"
-version = "0.13.1"
+version = "0.14.0"
 description = "An Amazon S3 Transfer Manager"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "s3transfer-0.13.1-py3-none-any.whl", hash = "sha256:a981aa7429be23fe6dfc13e80e4020057cbab622b08c0315288758d67cabc724"},
-    {file = "s3transfer-0.13.1.tar.gz", hash = "sha256:c3fdba22ba1bd367922f27ec8032d6a1cf5f10c934fb5d68cf60fd5a23d936cf"},
+    {file = "s3transfer-0.14.0-py3-none-any.whl", hash = "sha256:ea3b790c7077558ed1f02a3072fb3cb992bbbd253392f4b6e9e8976941c7d456"},
+    {file = "s3transfer-0.14.0.tar.gz", hash = "sha256:eff12264e7c8b4985074ccce27a3b38a485bb7f7422cc8046fee9be4983e4125"},
 ]
 
 [package.dependencies]
@@ -7201,7 +7201,7 @@ files = [
     {file = "tomli-2.3.0-py3-none-any.whl", hash = "sha256:e95b1af3c5b07d9e643909b5abbec77cd9f1217e6d0bca72b0234736b9fb1f1b"},
     {file = "tomli-2.3.0.tar.gz", hash = "sha256:64be704a875d2a59753d80ee8a533c3fe183e3f06807ff7dc2232938ccb01549"},
 ]
-markers = {main = "python_version == \"3.10\" and (extra == \"utils\" or extra == \"mlflow\") or extra == \"utils\" and python_version == \"3.9\"", dev = "python_version < \"3.11\"", proxy-dev = "python_version < \"3.11\""}
+markers = {main = "extra == \"utils\" and python_version == \"3.9\" or python_version == \"3.10\" and (extra == \"utils\" or extra == \"mlflow\")", dev = "python_version < \"3.11\"", proxy-dev = "python_version < \"3.11\""}
 
 [[package]]
 name = "tomlkit"
@@ -7981,4 +7981,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "a0d4bdda2742911291e79bab30faaaede14463f738c239425afcfe0f6b886d55"
+content-hash = "f391c702cf58ef2ba7641acdc3ae13d7c8e672faede68c0a624bd2ba0fb46b12"
