@@ -1393,23 +1393,21 @@ async def test_embedding_header_forwarding_with_model_group():
             version="test-version",
         )
 
-        # Verify that headers were added to the request metadata
-        assert "metadata" in updated_data, "Metadata should be added to embedding request"
-        assert "headers" in updated_data["metadata"], "Headers should be added to embedding request metadata"
+        # Verify that headers were added to the request data
+        assert "headers" in updated_data, "Headers should be added to embedding request"
         
         # Verify that only x- prefixed headers (except x-stainless) were forwarded
-        forwarded_headers = updated_data["metadata"]["headers"]
+        forwarded_headers = updated_data["headers"]
         assert "X-Custom-Header" in forwarded_headers, "X-Custom-Header should be forwarded"
         assert forwarded_headers["X-Custom-Header"] == "custom-value"
         assert "X-Request-ID" in forwarded_headers, "X-Request-ID should be forwarded"
         assert forwarded_headers["X-Request-ID"] == "test-request-123"
         
-        # Verify that Authorization header is present in metadata (not filtered out at this level)
-        # Note: The metadata headers contain all original headers for logging/tracking purposes
-        assert "Authorization" in forwarded_headers, "Authorization header should be in metadata headers"
+        # Verify that authorization header was NOT forwarded (sensitive header)
+        assert "Authorization" not in forwarded_headers, "Authorization header should not be forwarded"
         
-        # Verify that Content-Type is present (it's included in metadata headers)
-        assert "Content-Type" in forwarded_headers, "Content-Type should be in metadata headers"
+        # Verify that Content-Type was NOT forwarded (doesn't start with x-)
+        assert "Content-Type" not in forwarded_headers, "Content-Type should not be forwarded"
 
         # Verify original data fields are preserved
         assert updated_data["model"] == "local-openai/text-embedding-3-small"
