@@ -154,6 +154,7 @@ model LiteLLM_DeletedTeamTable {
     blocked                 Boolean  @default(false)
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
+    router_settings  Json? @default("{}")
     team_member_permissions String[] @default([])
     model_id                Int?     // id for LiteLLM_ModelTable -> stores team-level model aliases
     
@@ -328,6 +329,7 @@ model LiteLLM_DeletedVerificationToken {
     allowed_routes          String[] @default([])
     model_spend             Json     @default("{}")
     model_max_budget        Json     @default("{}")
+    router_settings  Json? @default("{}")
     budget_id               String?
     organization_id         String?
     object_permission_id    String?

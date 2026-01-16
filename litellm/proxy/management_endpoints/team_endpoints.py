@@ -2539,7 +2539,7 @@ def _transform_teams_to_deleted_records(
         )
         record = deleted_record.model_dump()
 
-        for json_field in ["members_with_roles", "metadata", "model_spend", "model_max_budget"]:
+        for json_field in ["members_with_roles", "metadata", "model_spend", "model_max_budget", "router_settings"]:
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
 
