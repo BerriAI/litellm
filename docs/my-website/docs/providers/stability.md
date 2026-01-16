@@ -416,7 +416,6 @@ response = image_edit(
     image=open("original_image.png", "rb"),
     mask=open("mask_image.png", "rb"),
     prompt="Add flowers in the masked area",
-    size="1024x1024",
 )
 print(response)
 ```

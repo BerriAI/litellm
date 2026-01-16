@@ -14,11 +14,11 @@ from httpx._types import RequestFiles
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
     STABILITY_EDIT_ENDPOINTS,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 from litellm.utils import get_model_info
 
@@ -170,7 +170,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
@@ -186,9 +186,12 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         # Populate multipart form-data as separate text fields (data) and files.
         # Stability expects prompt/output_format/etc. as normal form fields, not file parts.
         data: Dict[str, Any] = {
-            "prompt": prompt,
             "output_format": "png",  # Default to PNG
         }
+        
+        # Add prompt only if provided (some Stability endpoints don't require it)
+        if prompt is not None:
+            data["prompt"] = prompt
         # Handle image parameter - could be a single file or list
         image_file = image[0] if isinstance(image, list) else image  # type: ignore
         files: Dict[str, Any] = {"image": image_file}
