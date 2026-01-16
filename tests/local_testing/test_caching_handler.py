@@ -17,7 +17,7 @@ import random
 import pytest
 
 import litellm
-from litellm import aembedding, completion, embedding
+from litellm import aembedding, completion, embedding, aresponses, responses
 from litellm.caching.caching import Cache
 
 from unittest.mock import AsyncMock, patch, MagicMock
@@ -32,6 +32,7 @@ from litellm.types.utils import (
     TranscriptionResponse,
     Embedding,
 )
+from litellm.types.llms.openai import ResponsesAPIResponse
 from datetime import timedelta, datetime
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm._logging import verbose_logger
@@ -503,3 +504,459 @@ def test_extract_model_from_cached_results():
     # Test with empty list
     model_name = caching_handler._extract_model_from_cached_results([])
     assert model_name is None
+
+
+@pytest.mark.asyncio
+async def test_async_responses_api_caching():
+    """
+    Test that responses API calls are properly cached and retrieved.
+    This verifies the full cache lifecycle for ResponsesAPIResponse objects.
+    """
+    # Setup cache
+    setup_cache()
+    
+    caching_handler = LLMCachingHandler(
+        original_function=aresponses, request_kwargs={}, start_time=datetime.now()
+    )
+
+    # Create a mock ResponsesAPIResponse
+    original_model = "gpt-4o"
+    responses_api_response = ResponsesAPIResponse(
+        id="resp_test123",
+        created_at=int(time.time()),
+        status="completed",
+        model=original_model,
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_123",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "This is a test response from the responses API.",
+                        "annotations": []
+                    }
+                ]
+            }
+        ]
+    )
+
+    # Mock logging object
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.aresponses.value,
+        model=original_model,
+        messages=[],  # Responses API uses input, not messages
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+
+    # Test parameters
+    kwargs = {
+        "model": original_model,
+        "input": "Tell me a short story",
+        "max_output_tokens": 100,
+        "caching": True
+    }
+
+    # Step 1: Cache the responses API response
+    await caching_handler.async_set_cache(
+        result=responses_api_response,
+        original_function=aresponses,
+        kwargs=kwargs
+    )
+
+    await asyncio.sleep(0.5)
+
+    # Step 2: Retrieve from cache
+    cached_response = await caching_handler._async_get_cache(
+        model=original_model,
+        original_function=aresponses,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.aresponses.value,
+        kwargs=kwargs,
+    )
+
+    # Step 3: Verify the response is properly cached and retrieved
+    assert cached_response.cached_result is not None
+    assert isinstance(cached_response.cached_result, ResponsesAPIResponse)
+    assert cached_response.cached_result.id == responses_api_response.id
+    assert cached_response.cached_result.model == original_model
+    assert cached_response.cached_result.status == "completed"
+    assert len(cached_response.cached_result.output) == 1
+    
+    # Verify cache hit flag is set
+    assert cached_response.cached_result._hidden_params["cache_hit"] == True
+
+
+def test_sync_responses_api_caching():
+    """
+    Test that synchronous responses API calls are properly cached and retrieved.
+    """
+    # Setup cache
+    setup_cache()
+    
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+
+    # Create a mock ResponsesAPIResponse
+    original_model = "gpt-4o"
+    responses_api_response = ResponsesAPIResponse(
+        id="resp_sync_test456",
+        created_at=int(time.time()),
+        status="completed",
+        model=original_model,
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_456",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Sync response test.",
+                        "annotations": []
+                    }
+                ]
+            }
+        ]
+    )
+
+    # Mock logging object
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.responses.value,
+        model=original_model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+
+    # Test parameters
+    kwargs = {
+        "model": original_model,
+        "input": "Tell me another story",
+        "max_output_tokens": 100,
+        "caching": True
+    }
+
+    # Step 1: Cache the responses API response
+    caching_handler.sync_set_cache(
+        result=responses_api_response,
+        kwargs=kwargs
+    )
+
+    time.sleep(0.5)
+
+    # Step 2: Retrieve from cache
+    cached_response = caching_handler._sync_get_cache(
+        model=original_model,
+        original_function=responses,
+        logging_obj=logging_obj,
+        start_time=datetime.now(),
+        call_type=CallTypes.responses.value,
+        kwargs=kwargs,
+    )
+
+    # Step 3: Verify the response is properly cached and retrieved
+    assert cached_response.cached_result is not None
+    assert isinstance(cached_response.cached_result, ResponsesAPIResponse)
+    assert cached_response.cached_result.id == responses_api_response.id
+    assert cached_response.cached_result.model == original_model
+    assert cached_response.cached_result.status == "completed"
+    
+    # Verify cache hit flag is set
+    assert cached_response.cached_result._hidden_params["cache_hit"] == True
+
+
+def test_convert_cached_responses_api_result_to_model_response():
+    """
+    Test that cached ResponsesAPIResponse results are properly converted back
+    to ResponsesAPIResponse objects with correct structure.
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=responses, request_kwargs={}, start_time=datetime.now()
+    )
+    
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.responses.value,
+        model="gpt-4o",
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+
+    # Simulate cached result as a dictionary
+    cached_result = {
+        "id": "resp_convert_test789",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": "gpt-4o",
+        "object": "response",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_789",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Conversion test response.",
+                        "annotations": []
+                    }
+                ]
+            }
+        ]
+    }
+
+    # Convert cached result to ResponsesAPIResponse
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=CallTypes.responses.value,
+        kwargs={"model": "gpt-4o", "input": "test"},
+        logging_obj=logging_obj,
+        model="gpt-4o",
+        args=(),
+    )
+
+    # Verify conversion
+    assert isinstance(result, ResponsesAPIResponse)
+    assert result.id == "resp_convert_test789"
+    assert result.model == "gpt-4o"
+    assert result.status == "completed"
+    assert len(result.output) == 1
+
+
+@pytest.mark.asyncio
+async def test_responses_api_cache_with_different_inputs():
+    """
+    Test that different inputs to the responses API result in different cache keys.
+    This ensures cache isolation between different requests.
+    """
+    # Setup cache
+    setup_cache()
+    
+    caching_handler = LLMCachingHandler(
+        original_function=aresponses, request_kwargs={}, start_time=datetime.now()
+    )
+
+    original_model = "gpt-4o"
+
+    # First request
+    response_1 = ResponsesAPIResponse(
+        id="resp_1",
+        created_at=int(time.time()),
+        status="completed",
+        model=original_model,
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Response 1", "annotations": []}]
+            }
+        ]
+    )
+
+    kwargs_1 = {
+        "model": original_model,
+        "input": "First unique input",
+        "caching": True
+    }
+
+    await caching_handler.async_set_cache(
+        result=response_1,
+        original_function=aresponses,
+        kwargs=kwargs_1
+    )
+
+    # Second request with different input
+    response_2 = ResponsesAPIResponse(
+        id="resp_2",
+        created_at=int(time.time()),
+        status="completed",
+        model=original_model,
+        object="response",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_2",
+                "status": "completed",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Response 2", "annotations": []}]
+            }
+        ]
+    )
+
+    kwargs_2 = {
+        "model": original_model,
+        "input": "Second unique input",
+        "caching": True
+    }
+
+    await caching_handler.async_set_cache(
+        result=response_2,
+        original_function=aresponses,
+        kwargs=kwargs_2
+    )
+
+    await asyncio.sleep(0.5)
+
+    # Retrieve both from cache
+    logging_obj_1 = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.aresponses.value,
+        model=original_model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+
+    logging_obj_2 = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=CallTypes.aresponses.value,
+        model=original_model,
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+
+    cached_1 = await caching_handler._async_get_cache(
+        model=original_model,
+        original_function=aresponses,
+        logging_obj=logging_obj_1,
+        start_time=datetime.now(),
+        call_type=CallTypes.aresponses.value,
+        kwargs=kwargs_1,
+    )
+
+    cached_2 = await caching_handler._async_get_cache(
+        model=original_model,
+        original_function=aresponses,
+        logging_obj=logging_obj_2,
+        start_time=datetime.now(),
+        call_type=CallTypes.aresponses.value,
+        kwargs=kwargs_2,
+    )
+
+    # Verify each input gets its own cached response
+    assert cached_1.cached_result is not None
+    assert cached_2.cached_result is not None
+    assert cached_1.cached_result.id == "resp_1"
+    assert cached_2.cached_result.id == "resp_2"
+    
+    # Access output content properly (could be dict or object)
+    output_1 = cached_1.cached_result.output[0]
+    if isinstance(output_1, dict):
+        text_1 = output_1["content"][0]["text"]
+    else:
+        text_1 = output_1.content[0].text if hasattr(output_1.content[0], 'text') else output_1.content[0]["text"]
+    
+    output_2 = cached_2.cached_result.output[0]
+    if isinstance(output_2, dict):
+        text_2 = output_2["content"][0]["text"]
+    else:
+        text_2 = output_2.content[0].text if hasattr(output_2.content[0], 'text') else output_2.content[0]["text"]
+    
+    assert text_1 == "Response 1"
+    assert text_2 == "Response 2"
+
+
+@pytest.mark.parametrize(
+    "call_type, cached_result, expected_type",
+    [
+        (
+            CallTypes.responses.value,
+            {
+                "id": "resp_param_test",
+                "created_at": 1234567890,
+                "status": "completed",
+                "model": "gpt-4o",
+                "object": "response",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_param",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Test", "annotations": []}
+                        ]
+                    }
+                ]
+            },
+            ResponsesAPIResponse,
+        ),
+        (
+            CallTypes.aresponses.value,
+            {
+                "id": "resp_async_param_test",
+                "created_at": 1234567890,
+                "status": "completed",
+                "model": "gpt-4o",
+                "object": "response",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_async_param",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "Async Test", "annotations": []}
+                        ]
+                    }
+                ]
+            },
+            ResponsesAPIResponse,
+        ),
+    ],
+)
+def test_convert_cached_responses_result_parameterized(
+    call_type, cached_result, expected_type
+):
+    """
+    Parameterized test to verify both sync and async responses API cached results
+    are converted to the correct ResponsesAPIResponse type.
+    """
+    caching_handler = LLMCachingHandler(
+        original_function=lambda: None, request_kwargs={}, start_time=datetime.now()
+    )
+    logging_obj = LiteLLMLogging(
+        litellm_call_id=str(datetime.now()),
+        call_type=call_type,
+        model="gpt-4o",
+        messages=[],
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result=cached_result,
+        call_type=call_type,
+        kwargs={},
+        logging_obj=logging_obj,
+        model="gpt-4o",
+        args=(),
+    )
+
+    assert isinstance(result, expected_type)
+    assert result is not None
+    assert result.id == cached_result["id"]
+    assert result.status == cached_result["status"]

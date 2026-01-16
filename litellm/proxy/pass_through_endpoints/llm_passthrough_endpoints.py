@@ -761,7 +761,6 @@ async def handle_bedrock_passthrough_router_model(
             proxy_logging_obj=proxy_logging_obj,
         )
 
-
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
