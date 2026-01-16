@@ -154,6 +154,7 @@ graph LR
         DBWriter["proxy/db/db_spend_update_writer.py<br/>DBSpendUpdateWriter"]
         Cache["proxy/utils.py<br/>InternalUsageCache"]
         CostCallback["proxy/hooks/proxy_track_cost_callback.py<br/>_ProxyDBLogger"]
+        Scheduler["APScheduler<br/>ProxyStartupEvent.initialize_scheduled_background_jobs()"]
     end
 
     subgraph "Redis (caching/redis_cache.py)"
@@ -179,6 +180,8 @@ graph LR
     DBWriter --> SpendLogs
     Proxy --> Keys
     Proxy --> Teams
+    Scheduler --> SpendLogs
+    Scheduler --> Keys
 ```
 
 | Component | Purpose | Key Files/Classes |
@@ -189,12 +192,28 @@ graph LR
 | **DBSpendUpdateWriter** | Batches spend updates to reduce DB writes | `proxy/db/db_spend_update_writer.py` (`DBSpendUpdateWriter`) |
 | **Cost Tracking** | Calculates and logs response costs | `proxy/hooks/proxy_track_cost_callback.py` (`_ProxyDBLogger`) |
 
+**Background Jobs** (APScheduler, initialized in `proxy/proxy_server.py` → `ProxyStartupEvent.initialize_scheduled_background_jobs()`):
+
+| Job | Interval | Purpose | Key Files |
+|-----|----------|---------|-----------|
+| `update_spend` | 60s | Batch write spend logs to PostgreSQL | `proxy/db/db_spend_update_writer.py` |
+| `reset_budget` | 10-12min | Reset budgets for keys/users/teams | `proxy/management_helpers/budget_reset_job.py` |
+| `add_deployment` | 10s | Sync new model deployments from DB | `proxy/proxy_server.py` (`ProxyConfig`) |
+| `cleanup_old_spend_logs` | cron/interval | Delete old spend logs | `proxy/management_helpers/spend_log_cleanup.py` |
+| `check_batch_cost` | 30min | Calculate costs for batch jobs | `proxy/management_helpers/check_batch_cost_job.py` |
+| `check_responses_cost` | 30min | Calculate costs for responses API | `proxy/management_helpers/check_responses_cost_job.py` |
+| `process_rotations` | 1hr | Auto-rotate API keys | `proxy/management_helpers/key_rotation_manager.py` |
+| `_run_background_health_check` | continuous | Health check model deployments | `proxy/proxy_server.py` |
+| `send_weekly_spend_report` | weekly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
+| `send_monthly_spend_report` | monthly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
+
 **Cost Attribution Flow:**
 1. `litellm.completion_cost()` (`cost_calculator.py`) calculates cost from token usage × model pricing
 2. Cost is added to response headers (`x-litellm-response-cost`) via `proxy/common_request_processing.py`
 3. `_ProxyDBLogger.async_log_success_event()` triggers spend tracking
 4. `DBSpendUpdateWriter.update_database()` queues spend increments
 5. `update_cache()` in `proxy/proxy_server.py` updates Redis for real-time budget enforcement
+6. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
 
 ---
 
