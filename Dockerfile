@@ -71,7 +71,7 @@ RUN sed -i 's/\r$//' docker/install_auto_router.sh && chmod +x docker/install_au
 
 # Force patched jaraco.context version (GHSA-58pv-8j8x-9vj2)
 # Must be after install_auto_router.sh as aurelio-sdk may downgrade jaraco.context
-RUN pip install --no-cache-dir 'jaraco.context>=6.1.0'
+RUN pip install --no-cache-dir --upgrade 'jaraco.context>=6.1.0'
 
 # Generate prisma client
 RUN prisma generate
