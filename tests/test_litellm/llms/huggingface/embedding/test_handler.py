@@ -41,12 +41,8 @@ def mock_embedding_async_http_handler():
 class TestHuggingFaceEmbedding:
     @pytest.fixture(autouse=True)
     def setup(self, mock_embedding_http_handler, mock_embedding_async_http_handler):
-        # Mock both sync and async versions of get_hf_task functions
         self.mock_get_task_patcher = patch("litellm.llms.huggingface.embedding.handler.get_hf_task_embedding_for_model")
-        self.mock_get_task_async_patcher = patch("litellm.llms.huggingface.embedding.handler.async_get_hf_task_embedding_for_model", new_callable=AsyncMock)
-        
         self.mock_get_task = self.mock_get_task_patcher.start()
-        self.mock_get_task_async = self.mock_get_task_async_patcher.start()
 
         def mock_get_task_side_effect(model, task_type, api_base):
             if task_type is not None:
@@ -54,7 +50,6 @@ class TestHuggingFaceEmbedding:
             return "sentence-similarity"
 
         self.mock_get_task.side_effect = mock_get_task_side_effect
-        self.mock_get_task_async.side_effect = mock_get_task_side_effect
 
         self.model = "huggingface/BAAI/bge-m3"
         self.mock_http = mock_embedding_http_handler
@@ -64,7 +59,6 @@ class TestHuggingFaceEmbedding:
         yield
 
         self.mock_get_task_patcher.stop()
-        self.mock_get_task_async_patcher.stop()
 
     def test_input_type_preserved_in_optional_params(self):
         input_text = ["hello world"]
@@ -87,3 +81,31 @@ class TestHuggingFaceEmbedding:
         # Should NOT have sentence-similarity format
         assert "source_sentence" not in str(request_data)
         assert "sentences" not in str(request_data)
+
+    def test_embedding_with_sentence_similarity_task(self):
+        """Test embedding when task type is sentence-similarity (requires 2+ sentences)"""
+
+        similarity_response = {
+            "similarities": [[0, 0.9], [1, 0.8]]
+        }
+
+        self.mock_http.return_value.json.return_value = similarity_response
+
+        # Test with 2+ sentences (required for sentence-similarity)
+        input_text = ["This is the source sentence", "This is sentence one", "This is sentence two"]
+
+        response = litellm.embedding(
+            model=self.model,
+            input=input_text,
+            # Use the model's natural task type (sentence-similarity)
+        )
+
+        self.mock_http.assert_called_once()
+        post_call_args = self.mock_http.call_args
+        request_data = json.loads(post_call_args[1]["data"])
+
+        assert "inputs" in request_data
+        assert "source_sentence" in request_data["inputs"]
+        assert "sentences" in request_data["inputs"]
+        assert request_data["inputs"]["source_sentence"] == input_text[0]
+        assert request_data["inputs"]["sentences"] == input_text[1:]
