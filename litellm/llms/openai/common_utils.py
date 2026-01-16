@@ -203,30 +203,52 @@ class BaseOpenAILLM:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
-        # Get unified SSL configuration
-        ssl_config = get_ssl_configuration()
+        # Use the global cached client system to prevent memory leaks (issue #14540)
+        # This routes through get_async_httpx_client() which provides TTL-based caching
+        from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 
-        return httpx.AsyncClient(
-            verify=ssl_config,
-            transport=AsyncHTTPHandler._create_async_transport(
-                ssl_context=ssl_config
-                if isinstance(ssl_config, ssl.SSLContext)
-                else None,
-                ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+        try:
+            # Get a cached AsyncHTTPHandler which manages the httpx.AsyncClient
+            cached_handler = get_async_httpx_client(
+                llm_provider="openai",  # Cache key includes provider
+                params=None,  # Use default params with SSL config
                 shared_session=shared_session,
-            ),
-            follow_redirects=True,
-        )
+            )
+            # Return the underlying httpx client from the handler
+            return cached_handler.client
+        except Exception:
+            # Fallback to creating a client directly if caching fails
+            # This preserves backwards compatibility
+            ssl_config = get_ssl_configuration()
+            return httpx.AsyncClient(
+                verify=ssl_config,
+                transport=AsyncHTTPHandler._create_async_transport(
+                    ssl_context=ssl_config
+                    if isinstance(ssl_config, ssl.SSLContext)
+                    else None,
+                    ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
+                    shared_session=shared_session,
+                ),
+                follow_redirects=True,
+            )
 
     @staticmethod
     def _get_sync_http_client() -> Optional[httpx.Client]:
         if litellm.client_session is not None:
             return litellm.client_session
 
-        # Get unified SSL configuration
-        ssl_config = get_ssl_configuration()
+        # Use the global cached client system to prevent memory leaks (issue #14540)
+        from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
-        return httpx.Client(
-            verify=ssl_config,
-            follow_redirects=True,
-        )
+        try:
+            # Get a cached HTTPHandler which manages the httpx.Client
+            cached_handler = _get_httpx_client(params=None)
+            # Return the underlying httpx client from the handler
+            return cached_handler.client
+        except Exception:
+            # Fallback to creating a client directly if caching fails
+            ssl_config = get_ssl_configuration()
+            return httpx.Client(
+                verify=ssl_config,
+                follow_redirects=True,
+            )
