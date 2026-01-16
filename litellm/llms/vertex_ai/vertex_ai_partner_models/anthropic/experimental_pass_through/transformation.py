@@ -58,7 +58,7 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         
         # Add beta headers for Vertex AI
         tools = optional_params.get("tools", [])
-        beta_values = set()
+        beta_values: set[str] = set()
         
         # Get existing beta headers if any
         existing_beta = headers.get("anthropic-beta")
