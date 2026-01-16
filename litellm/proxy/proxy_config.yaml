@@ -37,6 +37,12 @@ model_list:
     model_info:
       litellm_provider: bedrock_converse
       mode: chat
+  - model_name: azure-claude-opus-4-5
+    litellm_params:
+      model: azure_ai/claude-opus-4-5
+      api_base: https://krish-mh44t553-eastus2.services.ai.azure.com
+      api_key: os.environ/AZURE_ANTHROPIC_API_KEY
+
 
 general_settings:
   store_prompts_in_spend_logs: true
