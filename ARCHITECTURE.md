@@ -31,11 +31,12 @@ sequenceDiagram
     participant Redis as Redis Cache
     participant Hooks as proxy/hooks/
     participant Router as router.py
-    participant Main as main.py
+    participant Main as main.py + utils.py
     participant Handler as llms/custom_httpx/llm_http_handler.py
     participant Transform as llms/{provider}/chat/transformation.py
     participant Provider as LLM Provider API
-    participant CostCalc as litellm.completion_cost()
+    participant CostCalc as cost_calculator.py
+    participant LoggingObj as litellm_logging.py
     participant DBWriter as db/db_spend_update_writer.py
     participant Postgres as PostgreSQL
 
@@ -53,16 +54,25 @@ sequenceDiagram
     Handler->>Provider: HTTP Request
     Provider-->>Handler: Response
     Handler->>Transform: ProviderConfig.transform_response()
+    Transform-->>Handler: ModelResponse
+    Handler-->>Main: ModelResponse
     
-    %% Response Flow with Cost Attribution
-    Handler->>CostCalc: Calculate response cost (tokens × price)
-    CostCalc-->>Handler: response_cost
-    Handler->>Hooks: async_log_success_event()
+    %% Cost Attribution (in utils.py wrapper)
+    Main->>LoggingObj: update_response_metadata()
+    LoggingObj->>CostCalc: _response_cost_calculator()
+    CostCalc->>CostCalc: completion_cost(tokens × price)
+    CostCalc-->>LoggingObj: response_cost
+    LoggingObj-->>Main: Set response._hidden_params["response_cost"]
+    Main-->>ProxyServer: ModelResponse (with cost in _hidden_params)
+    
+    %% Response Headers + Async Logging
+    ProxyServer->>ProxyServer: Extract cost from hidden_params
+    ProxyServer->>LoggingObj: async_success_handler()
+    LoggingObj->>Hooks: async_log_success_event()
     Hooks->>DBWriter: update_database(response_cost)
     DBWriter->>Redis: Queue spend increment
     DBWriter->>Postgres: Batch write spend logs (async)
-    Hooks->>Redis: update_cache(token, response_cost)
-    Handler-->>Client: ModelResponse + x-litellm-response-cost header
+    ProxyServer-->>Client: ModelResponse + x-litellm-response-cost header
 ```
 
 ### Proxy Components
@@ -221,12 +231,14 @@ graph LR
 | `send_monthly_spend_report` | monthly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
 
 **Cost Attribution Flow:**
-1. `litellm.completion_cost()` (`cost_calculator.py`) calculates cost from token usage × model pricing
-2. Cost is added to response headers (`x-litellm-response-cost`) via `proxy/common_request_processing.py`
-3. `_ProxyDBLogger.async_log_success_event()` triggers spend tracking
-4. `DBSpendUpdateWriter.update_database()` queues spend increments
-5. `update_cache()` in `proxy/proxy_server.py` updates Redis for real-time budget enforcement
-6. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
+1. LLM response returns to `utils.py` wrapper after `litellm.acompletion()` completes
+2. `update_response_metadata()` (`llm_response_utils/response_metadata.py`) is called
+3. `logging_obj._response_cost_calculator()` (`litellm_logging.py`) calculates cost via `litellm.completion_cost()` (`cost_calculator.py`)
+4. Cost is stored in `response._hidden_params["response_cost"]`
+5. `proxy/common_request_processing.py` extracts cost from `hidden_params` and adds to response headers (`x-litellm-response-cost`)
+6. `logging_obj.async_success_handler()` triggers callbacks including `_ProxyDBLogger.async_log_success_event()`
+7. `DBSpendUpdateWriter.update_database()` queues spend increments to Redis
+8. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
 
 ---
 
