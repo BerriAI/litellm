@@ -858,6 +858,7 @@ const sidebars = {
         "proxy/load_balancing",
         "proxy/provider_budget_routing",
         "proxy/reliability",
+        "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
         "wildcard_routing"
