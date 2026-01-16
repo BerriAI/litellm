@@ -34,6 +34,7 @@ import { Organization, organizationCreateCall, organizationDeleteCall, organizat
 import OrganizationInfoView from "./organization/organization_view";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
+import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -473,18 +474,12 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
             <TextInput placeholder="" />
           </Form.Item>
           <Form.Item label="Models" name="models">
-            <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-              <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                All Proxy Models
-              </Select2.Option>
-              {userModels &&
-                userModels.length > 0 &&
-                userModels.map((model) => (
-                  <Select2.Option key={model} value={model}>
-                    {getModelDisplayName(model)}
-                  </Select2.Option>
-                ))}
-            </Select2>
+            <ModelSelect
+              showAllProxyModelsOverride
+              includeSpecialOptions
+              value={form.getFieldValue("models")}
+              onChange={(values) => form.setFieldValue("models", values)}
+            />
           </Form.Item>
 
           <Form.Item label="Max Budget (USD)" name="max_budget">

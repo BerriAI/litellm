@@ -129,8 +129,31 @@ const ConditionalPublicModelName: React.FC = () => {
           <TextInput
             value={text}
             onChange={(e) => {
+              const newValue = e.target.value;
               const newMappings = [...form.getFieldValue("model_mappings")];
-              newMappings[index].public_name = e.target.value;
+
+              // Check conditions for Anthropic -1m suffix handling
+              const isAnthropic = selectedProvider === Providers.Anthropic;
+              const endsWith1m = newValue.endsWith("-1m");
+              const litellmParams = form.getFieldValue("litellm_extra_params");
+              const isLitellmParamsEmpty = !litellmParams || litellmParams.trim() === "";
+
+              let finalPublicName = newValue;
+
+              if (isAnthropic && endsWith1m && isLitellmParamsEmpty) {
+                // Set litellm params with extra_headers
+                const litellmParamsValue = JSON.stringify(
+                  { extra_headers: { "anthropic-beta": "context-1m-2025-08-07" } },
+                  null,
+                  2,
+                );
+                form.setFieldValue("litellm_extra_params", litellmParamsValue);
+
+                // Remove -1m suffix from public_name
+                finalPublicName = newValue.slice(0, -3); // Remove "-1m" (3 characters)
+              }
+
+              newMappings[index].public_name = finalPublicName;
               form.setFieldValue("model_mappings", newMappings);
             }}
           />
