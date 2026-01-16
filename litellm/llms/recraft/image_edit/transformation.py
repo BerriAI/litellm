@@ -101,7 +101,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
@@ -113,6 +113,9 @@ class RecraftImageEditConfig(BaseImageEditConfig):
 
         https://www.recraft.ai/docs#image-to-image
         """
+        
+        if prompt is None:
+            raise ValueError("Recraft image edit requires a prompt.")
         
         request_body: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
             model=model,
