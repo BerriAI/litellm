@@ -13,6 +13,8 @@ import gc
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add litellm to path
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -133,7 +135,7 @@ def test_new_event_loop_atexit():
     try:
         current_loop = asyncio.get_running_loop()
         print("Warning: Found running loop - can't test atexit scenario accurately")
-        return True  # Skip test if loop is running
+        pytest.skip("Cannot test atexit scenario when event loop is running")
     except RuntimeError:
         pass  # Good - no running loop
 
@@ -145,16 +147,8 @@ def test_new_event_loop_atexit():
     try:
         new_loop.run_until_complete(close_litellm_async_clients())
         print("✅ Successfully ran cleanup with fresh event loop")
-        result = True
-    except Exception as e:
-        print(f"❌ FAILED to run cleanup: {e}")
-        import traceback
-        traceback.print_exc()
-        result = False
     finally:
         new_loop.close()
-
-    return result
 
 
 async def main():
