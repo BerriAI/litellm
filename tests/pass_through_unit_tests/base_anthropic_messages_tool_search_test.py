@@ -96,7 +96,11 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
     
     Subclasses must implement:
     - get_model(): Returns the model string to use for tests
+    
+    Tests pass the anthropic-beta header via extra_headers to validate
+    that the header is correctly forwarded to downstream providers.
     """
+
 
     @abstractmethod
     def get_model(self) -> str:
@@ -110,6 +114,15 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         """
         pass
 
+    def get_extra_headers(self) -> Dict[str, str]:
+        """
+        Returns extra headers to pass with the request.
+        Includes the anthropic-beta header for tool search.
+
+        This is what claude code forwards, simulate the same behavior here.
+        """
+        return {"anthropic-beta": "advanced-tool-use-2025-11-20"}
+
     def get_tools_with_tool_search(self) -> List[Dict[str, Any]]:
         """
         Returns tools list with tool search tool and deferred tools.
@@ -121,8 +134,8 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
         """
         E2E test: Basic tool search request should succeed.
         
-        This validates that the tool search beta header is being sent correctly
-        and the request doesn't error out.
+        This validates that the tool search beta header is being passed via
+        extra_headers and forwarded correctly to the downstream provider.
         """
         litellm._turn_on_debug()
         
@@ -139,6 +152,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             messages=messages,
             tools=tools,
             max_tokens=1024,
+            extra_headers=self.get_extra_headers(),
         )
         
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
@@ -174,6 +188,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             messages=messages,
             tools=tools,
             max_tokens=1024,
+            extra_headers=self.get_extra_headers(),
         )
         
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
@@ -211,6 +226,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             tools=tools,
             max_tokens=1024,
             stream=True,
+            extra_headers=self.get_extra_headers(),
         )
         
         # Collect all chunks
@@ -260,6 +276,7 @@ class BaseAnthropicMessagesToolSearchTest(ABC):
             messages=messages,
             tools=tools,
             max_tokens=1024,
+            extra_headers=self.get_extra_headers(),
         )
         
         print(f"Response: {json.dumps(response, indent=2, default=str)}")
