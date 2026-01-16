@@ -1791,6 +1791,10 @@ async def delete_key_fn(
         if prisma_client is None:
             raise Exception("Not connected to DB!")
 
+        # Normalize litellm_changed_by: if it's a Header object or not a string, convert to None
+        if litellm_changed_by is not None and not isinstance(litellm_changed_by, str):
+            litellm_changed_by = None
+
         ## only allow user to delete keys they own
         verbose_proxy_logger.debug(
             f"user_api_key_dict.user_role: {user_api_key_dict.user_role}"
@@ -2475,7 +2479,7 @@ async def delete_verification_tokens(
             if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
                 authorized_keys = _keys_being_deleted
             else:
-                authorized_keys: List[LiteLLM_VerificationToken] = []
+                authorized_keys = []
                 for key in _keys_being_deleted:
                     if await can_modify_verification_token(
                         key_info=key,

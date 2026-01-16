@@ -89,7 +89,7 @@ from litellm.proxy.management_helpers.utils import (
     add_new_member,
     management_endpoint_wrapper,
 )
-from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy, jsonify_object
+from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
