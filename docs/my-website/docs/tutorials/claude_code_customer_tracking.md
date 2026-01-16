@@ -43,15 +43,6 @@ export ANTHROPIC_API_KEY=sk-1234
 export ANTHROPIC_CUSTOM_HEADERS="x-litellm-tags: project:acme,env:prod,team:backend"
 ```
 
-## Option 3: Track by Both
-
-Combine customer and tag tracking by passing multiple headers separated by a comma.
-
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:4000
-export ANTHROPIC_API_KEY=sk-1234
-export ANTHROPIC_CUSTOM_HEADERS="x-litellm-customer-id: ishaan,x-litellm-tags: project:acme"
-```
 
 ## Quick Start
 
