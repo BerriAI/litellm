@@ -103,6 +103,7 @@ graph TD
     Auth --> PreCall
     PreCall --> RouteRequest
     RouteRequest --> Router
+    Router --> DualCache
     Router --> Main
     Main --> Client
 ```
@@ -158,6 +159,7 @@ graph LR
     end
 
     subgraph "SDK (litellm/)"
+        Router["router.py<br/>Router.cache (DualCache)"]
         LLMCache["caching/caching_handler.py<br/>LLMCachingHandler"]
         CacheClass["caching/caching.py<br/>Cache"]
     end
@@ -166,6 +168,8 @@ graph LR
         RateLimit["Rate Limit Counters"]
         SpendQueue["Spend Increment Queue"]
         KeyCache["API Key Cache"]
+        TPM_RPM["TPM/RPM Tracking"]
+        Cooldowns["Deployment Cooldowns"]
         LLMResponseCache["LLM Response Cache"]
     end
 
@@ -180,6 +184,8 @@ graph LR
     InternalCache --> KeyCache
     InternalCache -.->|cache miss| Keys
     InternalCache --> RateLimit
+    Router --> TPM_RPM
+    Router --> Cooldowns
     LLMCache --> CacheClass
     CacheClass --> LLMResponseCache
     CostCallback --> DBWriter
@@ -191,9 +197,10 @@ graph LR
 
 | Component | Purpose | Key Files/Classes |
 |-----------|---------|-------------------|
-| **Redis** | Rate limiting, API key caching, LLM response caching, spend queuing | `caching/redis_cache.py` (`RedisCache`), `caching/dual_cache.py` (`DualCache`) |
+| **Redis** | Rate limiting, API key caching, TPM/RPM tracking, cooldowns, LLM response caching, spend queuing | `caching/redis_cache.py` (`RedisCache`), `caching/dual_cache.py` (`DualCache`) |
 | **PostgreSQL** | API keys, teams, users, spend logs | `proxy/utils.py` (`PrismaClient`), `proxy/schema.prisma` |
 | **InternalUsageCache** | Proxy-level cache for rate limits + API keys (in-memory + Redis) | `proxy/utils.py` (`InternalUsageCache`) |
+| **Router.cache** | TPM/RPM tracking, deployment cooldowns, client caching (in-memory + Redis) | `router.py` (`Router.cache: DualCache`) |
 | **LLMCachingHandler** | SDK-level LLM response/embedding caching | `caching/caching_handler.py` (`LLMCachingHandler`), `caching/caching.py` (`Cache`) |
 | **DBSpendUpdateWriter** | Batches spend updates to reduce DB writes | `proxy/db/db_spend_update_writer.py` (`DBSpendUpdateWriter`) |
 | **Cost Tracking** | Calculates and logs response costs | `proxy/hooks/proxy_track_cost_callback.py` (`_ProxyDBLogger`) |
