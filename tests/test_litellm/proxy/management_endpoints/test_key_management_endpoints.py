@@ -31,13 +31,9 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_team_key_limits,
     _common_key_generation_helper,
     _list_key_helper,
-    _persist_deleted_verification_tokens,
-    _save_deleted_verification_token_records,
-    _transform_verification_tokens_to_deleted_records,
     can_modify_verification_token,
     check_org_key_model_specific_limits,
     check_team_key_model_specific_limits,
-    delete_verification_tokens,
     generate_key_helper_fn,
     prepare_key_update_data,
     validate_key_team_change,
@@ -2732,364 +2728,64 @@ def test_check_org_key_model_specific_limits_org_model_tpm_overallocation():
     )
 
 
-def test_transform_verification_tokens_to_deleted_records():
-    from datetime import datetime, timezone
-
-    user_api_key_dict = UserAPIKeyAuth(
-        user_id="user-123",
-        api_key="sk-test",
-        user_role=LitellmUserRoles.PROXY_ADMIN.value,
-    )
-
-    key1 = LiteLLM_VerificationToken(
-        token="hashed-token-1",
-        user_id="user-123",
-        team_id="team-456",
-        key_alias="test-key-1",
-        spend=100.0,
-        max_budget=1000.0,
-        models=["gpt-4"],
-        aliases={},
-        config={},
-        permissions={},
-        metadata={"test": "value"},
-        model_max_budget={},
-        model_spend={},
-        soft_budget_cooldown=False,
-        allowed_routes=[],
-    )
-
-    key2 = LiteLLM_VerificationToken(
-        token="hashed-token-2",
-        user_id="user-789",
-        team_id=None,
-        key_alias="test-key-2",
-        spend=50.0,
-        max_budget=500.0,
-        models=["gpt-3.5-turbo"],
-        aliases={"alias": "model"},
-        config={"config": "value"},
-        permissions={"permission": True},
-        metadata={},
-        model_max_budget={"gpt-4": {"budget_limit": 100.0}},
-        model_spend={},
-        soft_budget_cooldown=False,
-        allowed_routes=[],
-    )
-
-    records = _transform_verification_tokens_to_deleted_records(
-        keys=[key1, key2],
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by="admin-user",
-    )
-
-    assert len(records) == 2
-    assert all("deleted_at" in record for record in records)
-    assert all("deleted_by" in record for record in records)
-    assert all("deleted_by_api_key" in record for record in records)
-    assert all("litellm_changed_by" in record for record in records)
-    assert all(record["deleted_by"] == "user-123" for record in records)
-    assert all(record["deleted_by_api_key"] == user_api_key_dict.api_key for record in records)
-    assert all(record["litellm_changed_by"] == "admin-user" for record in records)
-
-    record1 = records[0]
-    assert record1["token"] == "hashed-token-1"
-    assert record1["user_id"] == "user-123"
-    assert record1["team_id"] == "team-456"
-    assert isinstance(record1["aliases"], str)
-    assert isinstance(record1["config"], str)
-    assert isinstance(record1["permissions"], str)
-    assert isinstance(record1["metadata"], str)
-    assert "litellm_budget_table" not in record1
-    assert "litellm_organization_table" not in record1
-    assert "object_permission" not in record1
-    assert "id" not in record1
-
-    record2 = records[1]
-    assert record2["token"] == "hashed-token-2"
-    assert isinstance(record2["model_max_budget"], str)
-
-
-def test_transform_verification_tokens_to_deleted_records_empty_list():
-    user_api_key_dict = UserAPIKeyAuth(
-        user_id="user-123",
-        api_key="sk-test",
-        user_role=LitellmUserRoles.PROXY_ADMIN.value,
-    )
-
-    records = _transform_verification_tokens_to_deleted_records(
-        keys=[],
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    assert records == []
-
-
-@pytest.mark.asyncio
-async def test_save_deleted_verification_token_records():
-    mock_prisma_client = AsyncMock()
-    mock_create_many = AsyncMock()
-    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
-        mock_create_many
-    )
-
-    records = [
-        {
-            "token": "hashed-token-1",
-            "user_id": "user-123",
-            "deleted_at": "2024-01-01T00:00:00Z",
-            "deleted_by": "admin",
-        },
-        {
-            "token": "hashed-token-2",
-            "user_id": "user-456",
-            "deleted_at": "2024-01-01T00:00:00Z",
-            "deleted_by": "admin",
-        },
-    ]
-
-    await _save_deleted_verification_token_records(
-        records=records, prisma_client=mock_prisma_client
-    )
-
-    mock_create_many.assert_called_once_with(data=records)
-
-
-@pytest.mark.asyncio
-async def test_save_deleted_verification_token_records_empty_list():
-    mock_prisma_client = AsyncMock()
-    mock_create_many = AsyncMock()
-    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
-        mock_create_many
-    )
-
-    await _save_deleted_verification_token_records(
-        records=[], prisma_client=mock_prisma_client
-    )
-
-    mock_create_many.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_persist_deleted_verification_tokens():
-    mock_prisma_client = AsyncMock()
-    mock_create_many = AsyncMock()
-    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
-        mock_create_many
-    )
-
-    user_api_key_dict = UserAPIKeyAuth(
-        user_id="user-123",
-        api_key="sk-test",
-        user_role=LitellmUserRoles.PROXY_ADMIN.value,
-    )
-
-    key = LiteLLM_VerificationToken(
-        token="hashed-token-1",
-        user_id="user-123",
-        team_id="team-456",
-        key_alias="test-key",
-        spend=100.0,
-        max_budget=1000.0,
-        models=["gpt-4"],
-        aliases={},
-        config={},
-        permissions={},
-        metadata={},
-        model_max_budget={},
-        model_spend={},
-        soft_budget_cooldown=False,
-        allowed_routes=[],
-    )
-
-    await _persist_deleted_verification_tokens(
-        keys=[key],
-        prisma_client=mock_prisma_client,
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by="admin-user",
-    )
-
-    mock_create_many.assert_called_once()
-    call_args = mock_create_many.call_args
-    assert "data" in call_args.kwargs
-    records = call_args.kwargs["data"]
-    assert len(records) == 1
-    assert records[0]["token"] == "hashed-token-1"
-    assert records[0]["deleted_by"] == "user-123"
-    assert records[0]["litellm_changed_by"] == "admin-user"
-
-
-@pytest.mark.asyncio
-async def test_delete_verification_tokens_persists_deleted_keys(monkeypatch):
-    mock_prisma_client = AsyncMock()
-    mock_user_api_key_cache = MagicMock()
-
-    user_api_key_dict = UserAPIKeyAuth(
-        user_id="admin-user",
-        api_key="sk-admin",
-        user_role=LitellmUserRoles.PROXY_ADMIN.value,
-    )
-
-    key1 = LiteLLM_VerificationToken(
-        token="hashed-token-1",
-        user_id="user-123",
-        team_id="team-456",
-        key_alias="test-key-1",
-        spend=100.0,
-        max_budget=1000.0,
-        models=["gpt-4"],
-        aliases={},
-        config={},
-        permissions={},
-        metadata={},
-        model_max_budget={},
-        model_spend={},
-        soft_budget_cooldown=False,
-        allowed_routes=[],
-    )
-
-    key2 = LiteLLM_VerificationToken(
-        token="hashed-token-2",
-        user_id="user-789",
-        team_id=None,
-        key_alias="test-key-2",
-        spend=50.0,
-        max_budget=500.0,
-        models=["gpt-3.5-turbo"],
-        aliases={},
-        config={},
-        permissions={},
-        metadata={},
-        model_max_budget={},
-        model_spend={},
-        soft_budget_cooldown=False,
-        allowed_routes=[],
-    )
-
-    mock_find_many = AsyncMock(return_value=[key1, key2])
-    mock_prisma_client.db.litellm_verificationtoken.find_many = mock_find_many
-
-    # delete_data returns {"deleted_keys": ...} from utils.py line 3049
-    # The function at line 2410 assigns it to deleted_tokens
-    # Then at line 2444 returns {"deleted_keys": deleted_tokens}
-    # So if delete_data returns {"deleted_keys": list}, then result would be nested
-    # But looking at the error, it seems like delete_data might return just the list
-    # Or the code extracts it. Let's return the list directly since that's what the test expects
-    mock_delete_data = AsyncMock(return_value=["hashed-token-1", "hashed-token-2"])
-    mock_prisma_client.delete_data = mock_delete_data
-    
-    # Mock cache delete_cache method
-    mock_user_api_key_cache.delete_cache = MagicMock()
-
-    mock_create_many = AsyncMock()
-    mock_prisma_client.db.litellm_deletedverificationtoken.create_many = (
-        mock_create_many
-    )
-
-    def mock_hash_token(token):
-        return token if not token.startswith("sk-") else f"hashed-{token}"
-
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints._hash_token_if_needed",
-        mock_hash_token,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.hash_token",
-        mock_hash_token,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.prisma_client",
-        mock_prisma_client,
-    )
-
-    result, deleted_keys = await delete_verification_tokens(
-        tokens=["sk-token-1", "sk-token-2"],
-        user_api_key_cache=mock_user_api_key_cache,
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by="admin-user",
-    )
-
-    mock_create_many.assert_called_once()
-    call_args = mock_create_many.call_args
-    assert "data" in call_args.kwargs
-    records = call_args.kwargs["data"]
-    assert len(records) == 2
-    assert all(record["deleted_by"] == "admin-user" for record in records)
-    assert all(record["litellm_changed_by"] == "admin-user" for record in records)
-    # delete_data returns the list directly, which gets wrapped in {"deleted_keys": ...}
-    assert isinstance(result["deleted_keys"], list)
-    assert set(result["deleted_keys"]) == {"hashed-token-1", "hashed-token-2"}
-    assert len(deleted_keys) == 2
-
-
-@pytest.mark.asyncio
-async def test_delete_key_fn_persists_deleted_keys(monkeypatch):
-    from litellm.proxy._types import KeyRequest
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        delete_key_fn,
-        delete_verification_tokens,
-    )
-
-    mock_prisma_client = AsyncMock()
-    mock_user_api_key_cache = MagicMock()
-
-    user_api_key_dict = UserAPIKeyAuth(
-        user_id="admin-user",
-        api_key="sk-admin",
-        user_role=LitellmUserRoles.PROXY_ADMIN.value,
-    )
-
-    key1 = LiteLLM_VerificationToken(
-        token="hashed-token-1",
-        user_id="user-123",
-        team_id="team-456",
-        key_alias="test-key-1",
-        spend=100.0,
-        max_budget=1000.0,
-        models=["gpt-4"],
-        aliases={},
-        config={},
-        permissions={},
-        metadata={},
-        model_max_budget={},
-        model_spend={},
-        soft_budget_cooldown=False,
-        allowed_routes=[],
-    )
-
-    async def mock_delete_verification_tokens(*args, **kwargs):
-        return ({"deleted_keys": ["sk-token-1"]}, [key1])
-
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.delete_verification_tokens",
-        mock_delete_verification_tokens,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.prisma_client",
-        mock_prisma_client,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.proxy_server.user_api_key_cache",
-        mock_user_api_key_cache,
-    )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.key_management_endpoints.KeyManagementEventHooks.async_key_deleted_hook",
-        AsyncMock(),
-    )
-
-    data = KeyRequest(keys=["sk-token-1"])
-
-    result = await delete_key_fn(
-        data=data,
-        user_api_key_dict=user_api_key_dict,
-        litellm_changed_by="admin-user",
-    )
-
-    assert result["deleted_keys"] == ["sk-token-1"]
-
-
 @pytest.mark.asyncio
 async def test_can_delete_verification_token_proxy_admin_team_key(monkeypatch):
+    """Test that proxy admin can delete any team key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id="test-team-123",
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_proxy_admin_personal_key(monkeypatch):
+    """Test that proxy admin can delete any personal key."""
+    key_info = LiteLLM_VerificationToken(
+        token="test-token",
+        user_id="other-user",
+        team_id=None,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin-user",
+        api_key="sk-admin",
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_user_api_key_cache = MagicMock()
+
+    result = await can_modify_verification_token(
+        key_info=key_info,
+        user_api_key_cache=mock_user_api_key_cache,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_can_delete_verification_token_team_admin_own_team(monkeypatch):
     """Test that team admin can delete team keys from their own team."""
     key_info = LiteLLM_VerificationToken(
         token="test-token",
