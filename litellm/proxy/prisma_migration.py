@@ -26,5 +26,3 @@ if exit_code != 0:
     verbose_proxy_logger.error(
         f"'prisma generate' stderr: {result.stderr}"
     )  # Log stderr
-
-sys.exit(exit_code)
