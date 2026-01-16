@@ -562,6 +562,14 @@ def get_customer_user_header_from_mapping(user_id_mapping) -> Optional[str]:
     return None
 
 
+# Standard headers that are always checked for customer/end-user ID (no configuration required)
+# These headers work out-of-the-box for tools like Claude Code that support custom headers
+STANDARD_CUSTOMER_ID_HEADERS = [
+    "x-litellm-customer-id",
+    "x-litellm-end-user-id",
+]
+
+
 def get_end_user_id_from_request_body(
     request_body: dict, request_headers: Optional[dict] = None
 ) -> Optional[str]:
@@ -569,7 +577,19 @@ def get_end_user_id_from_request_body(
     # and to ensure it's fetched at runtime.
     from litellm.proxy.proxy_server import general_settings
 
-    # Check 1 : Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
+    # Check 1: Standard customer ID headers (always checked, no configuration required)
+    # This enables tools like Claude Code to pass customer IDs via ANTHROPIC_CUSTOM_HEADERS
+    if request_headers is not None:
+        for standard_header in STANDARD_CUSTOMER_ID_HEADERS:
+            for header_name, header_value in request_headers.items():
+                if header_name.lower() == standard_header.lower():
+                    user_id_str = (
+                        str(header_value) if header_value is not None else ""
+                    )
+                    if user_id_str.strip():
+                        return user_id_str
+
+    # Check 2: Follow the user header mappings feature, if not found, then check for deprecated user_header_name (only if request_headers is provided)
     # User query: "system not respecting user_header_name property"
     # This implies the key in general_settings is 'user_header_name'.
     if request_headers is not None:
@@ -602,19 +622,19 @@ def get_end_user_id_from_request_body(
                     if user_id_str.strip():
                         return user_id_str
 
-    # Check 2: 'user' field in request_body (commonly OpenAI)
+    # Check 3: 'user' field in request_body (commonly OpenAI)
     if "user" in request_body and request_body["user"] is not None:
         user_from_body_user_field = request_body["user"]
         return str(user_from_body_user_field)
 
-    # Check 3: 'litellm_metadata.user' in request_body (commonly Anthropic)
+    # Check 4: 'litellm_metadata.user' in request_body (commonly Anthropic)
     litellm_metadata = request_body.get("litellm_metadata")
     if isinstance(litellm_metadata, dict):
         user_from_litellm_metadata = litellm_metadata.get("user")
         if user_from_litellm_metadata is not None:
             return str(user_from_litellm_metadata)
 
-    # Check 4: 'metadata.user_id' in request_body (another common pattern)
+    # Check 5: 'metadata.user_id' in request_body (another common pattern)
     metadata_dict = request_body.get("metadata")
     if isinstance(metadata_dict, dict):
         user_id_from_metadata_field = metadata_dict.get("user_id")

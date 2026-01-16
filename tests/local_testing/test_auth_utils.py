@@ -260,6 +260,81 @@ def test_get_model_from_request(request_data, expected_model):
     assert model == ["gpt-3.5-turbo", "gpt-4o-mini-general-deployment"]
 
 
+@pytest.mark.parametrize(
+    "headers, request_body, expected_user_id",
+    [
+        # Test 1: x-litellm-customer-id header takes precedence over body
+        (
+            {"x-litellm-customer-id": "customer-from-header"},
+            {"user": "body-user-456"},
+            "customer-from-header"
+        ),
+        # Test 2: x-litellm-end-user-id header works as alternative
+        (
+            {"x-litellm-end-user-id": "end-user-from-header"},
+            {"user": "body-user-456"},
+            "end-user-from-header"
+        ),
+        # Test 3: x-litellm-customer-id takes precedence over x-litellm-end-user-id
+        (
+            {
+                "x-litellm-customer-id": "customer-id",
+                "x-litellm-end-user-id": "end-user-id"
+            },
+            {"user": "body-user-456"},
+            "customer-id"
+        ),
+        # Test 4: Standard headers work with case-insensitive matching
+        (
+            {"X-LiteLLM-Customer-ID": "customer-uppercase"},
+            {"user": "body-user-456"},
+            "customer-uppercase"
+        ),
+        # Test 5: Empty standard header falls back to body
+        (
+            {"x-litellm-customer-id": ""},
+            {"user": "body-user-456"},
+            "body-user-456"
+        ),
+        # Test 6: Standard header works without any body user
+        (
+            {"x-litellm-customer-id": "header-only-customer"},
+            {"model": "gpt-4"},
+            "header-only-customer"
+        ),
+        # Test 7: No standard header present, falls back to body
+        (
+            {"x-other-header": "some-value"},
+            {"user": "body-user-456"},
+            "body-user-456"
+        ),
+    ]
+)
+def test_get_end_user_id_from_standard_customer_headers(
+    headers, request_body, expected_user_id
+):
+    """
+    Test that standard customer ID headers (x-litellm-customer-id, x-litellm-end-user-id)
+    work without any configuration. This enables tools like Claude Code to pass customer
+    IDs via ANTHROPIC_CUSTOM_HEADERS.
+    """
+    from litellm.proxy.auth.auth_utils import get_end_user_id_from_request_body
+    from unittest.mock import patch
+
+    # Mock general_settings with no user_header_name configured
+    with patch('litellm.proxy.proxy_server.general_settings', {}):
+        end_user_id = get_end_user_id_from_request_body(request_body, headers)
+        assert end_user_id == expected_user_id
+
+
+def test_standard_customer_headers_constant():
+    """Test that the standard customer ID headers constant is defined correctly."""
+    from litellm.proxy.auth.auth_utils import STANDARD_CUSTOMER_ID_HEADERS
+
+    assert "x-litellm-customer-id" in STANDARD_CUSTOMER_ID_HEADERS
+    assert "x-litellm-end-user-id" in STANDARD_CUSTOMER_ID_HEADERS
+
+
 def test_get_customer_user_header_from_mapping_returns_customer_header():
     from litellm.proxy.auth.auth_utils import get_customer_user_header_from_mapping
 
