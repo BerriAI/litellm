@@ -1,16 +1,14 @@
-import { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
-
 export interface GroupedModels {
-  wildcard: ProxyModel[];
-  regular: ProxyModel[];
+  wildcard: string[];
+  regular: string[];
 }
 
-export const splitWildcardModels = (models: ProxyModel[]): GroupedModels => {
-  const wildcard: ProxyModel[] = [];
-  const regular: ProxyModel[] = [];
+export const splitWildcardModels = (models: string[]): GroupedModels => {
+  const wildcard: string[] = [];
+  const regular: string[] = [];
 
   for (const model of models) {
-    if (model.id.endsWith("/*")) {
+    if (model.endsWith("/*")) {
       wildcard.push(model);
     } else {
       regular.push(model);

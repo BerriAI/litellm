@@ -1,3 +1,4 @@
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
   getGuardrailsList,
@@ -12,6 +13,7 @@ import {
 } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import {
@@ -34,11 +36,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { getModelDisplayName, unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
 import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -48,7 +52,6 @@ import EditLoggingSettings from "./EditLoggingSettings";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import TeamMembersComponent from "./team_member_view";
-import DurationSelect from "../common_components/DurationSelect";
 
 export interface TeamMembership {
   user_id: string;
@@ -173,8 +176,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [organization, setOrganization] = useState<Organization | null>(null);
-
-  console.log("userModels in team info", userModels);
+  const { userRole } = useAuthorized();
 
   const canEditTeam = is_team_admin || is_proxy_admin;
 
@@ -696,47 +698,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="models"
                     rules={[{ required: true, message: "Please select at least one model" }]}
                   >
-                    <Select mode="multiple" placeholder="Select models">
-                      {(() => {
-                        let shouldShowAllProxyModels = false;
-
-                        if (organization) {
-                          // Team is in an organization
-                          if (organization.models.length === 0 || organization.models.includes("all-proxy-models")) {
-                            // Organization has empty array [] or "all-proxy-models"
-                            shouldShowAllProxyModels = true;
-                          }
-                          // Otherwise (organization has specific models), don't show "all-proxy-models"
-                        } else {
-                          // Team is not in an organization
-                          shouldShowAllProxyModels = is_proxy_admin || userModels.includes("all-proxy-models");
-                        }
-
-                        return shouldShowAllProxyModels ? (
-                          <Select.Option key="all-proxy-models" value="all-proxy-models">
-                            All Proxy Models
-                          </Select.Option>
-                        ) : null;
-                      })()}
-                      {(() => {
-                        // Show "no-default-models" option if:
-                        // 1. Team is not in an organization, OR
-                        // 2. Team is in an organization and organization's models include "no-default-models"
-                        const shouldShowNoDefaultModels =
-                          !organization || organization.models.includes("no-default-models");
-
-                        return shouldShowNoDefaultModels ? (
-                          <Select.Option key="no-default-models" value="no-default-models">
-                            No Default Models
-                          </Select.Option>
-                        ) : null;
-                      })()}
-                      {Array.from(new Set(modelsToPick)).map((model, idx) => (
-                        <Select.Option key={idx} value={model}>
-                          {getModelDisplayName(model)}
-                        </Select.Option>
-                      ))}
-                    </Select>
+                    <ModelSelect
+                      value={form.getFieldValue("models") || []}
+                      onChange={(values) => form.setFieldValue("models", values)}
+                      teamID={teamId}
+                      organizationID={teamData?.team_info?.organization_id || undefined}
+                      options={{
+                        includeSpecialOptions: true,
+                        includeUserModels: !teamData?.team_info?.organization_id,
+                        showAllProxyModelsOverride: isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
+                      }}
+                      context="team"
+                      dataTestId="models-select"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
