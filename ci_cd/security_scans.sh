@@ -134,6 +134,7 @@ run_grype_scans() {
         "CVE-2019-1010023" # glibc ldd remap issue - awaiting patched Wolfi glibc build
         "CVE-2019-1010024" # glibc ASLR mitigation bypass - awaiting patched Wolfi glibc build
         "CVE-2019-1010025" # glibc pthread heap address leak - awaiting patched Wolfi glibc build
+        "CVE-2026-22184" # zlib untgz buffer overflow - untgz unused + no fixed Wolfi build yet
     )
 
     # Build JSON array of allowlisted CVE IDs for jq
