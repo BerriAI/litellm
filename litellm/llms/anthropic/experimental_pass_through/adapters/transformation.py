@@ -182,6 +182,7 @@ class LiteLLMAnthropicMessagesAdapter:
                 AnthopicMessagesAssistantMessageParam,
             ]
         ],
+        model: Optional[str] = None,
     ) -> List:
         new_messages: List[AllMessageValues] = []
         for m in messages:
@@ -204,6 +205,11 @@ class LiteLLMAnthropicMessagesAdapter:
                             text_obj = ChatCompletionTextObject(
                                 type="text", text=content.get("text", "")
                             )
+                            # Preserve cache_control if present (for prompt caching)
+                            # Only for Anthropic models that support prompt caching
+                            cache_control = content.get("cache_control")
+                            if cache_control and model and self.is_anthropic_claude_model(model):
+                                text_obj["cache_control"] = cache_control  # type: ignore
                             new_user_content_list.append(text_obj)
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
@@ -572,7 +578,8 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_message_request["messages"],
         )
         new_messages = self.translate_anthropic_messages_to_openai(
-            messages=messages_list
+            messages=messages_list,
+            model=anthropic_message_request.get("model"),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
         if "system" in anthropic_message_request:
@@ -778,6 +785,12 @@ class LiteLLMAnthropicMessagesAdapter:
             input_tokens=usage.prompt_tokens or 0,
             output_tokens=usage.completion_tokens or 0,
         )
+        # Add cache tokens if available (for prompt caching support)
+        if hasattr(usage, "_cache_creation_input_tokens") and usage._cache_creation_input_tokens > 0:
+            anthropic_usage["cache_creation_input_tokens"] = usage._cache_creation_input_tokens
+        if hasattr(usage, "_cache_read_input_tokens") and usage._cache_read_input_tokens > 0:
+            anthropic_usage["cache_read_input_tokens"] = usage._cache_read_input_tokens
+
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
             type="message",
@@ -925,6 +938,11 @@ class LiteLLMAnthropicMessagesAdapter:
                     input_tokens=litellm_usage_chunk.prompt_tokens or 0,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
                 )
+                # Add cache tokens if available (for prompt caching support)
+                if hasattr(litellm_usage_chunk, "_cache_creation_input_tokens") and litellm_usage_chunk._cache_creation_input_tokens > 0:
+                    usage_delta["cache_creation_input_tokens"] = litellm_usage_chunk._cache_creation_input_tokens
+                if hasattr(litellm_usage_chunk, "_cache_read_input_tokens") and litellm_usage_chunk._cache_read_input_tokens > 0:
+                    usage_delta["cache_read_input_tokens"] = litellm_usage_chunk._cache_read_input_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             return MessageBlockDelta(

@@ -2,14 +2,28 @@
 Integration tests for responses API background cost tracking
 """
 
-import asyncio
 import os
+import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
-from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+sys.path.insert(0, os.path.abspath("../../.."))
+
+# Import litellm first to ensure it's in sys.modules before enterprise imports
+import litellm  # noqa: E402
+
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse  # noqa: E402
+
+# Now import enterprise modules
+try:
+    from litellm_enterprise.proxy.common_utils.check_responses_cost import (  # noqa: E402
+        CheckResponsesCost,
+    )
+except ImportError as e:
+    # Skip all tests in this module if enterprise module is not available
+    pytest.skip(f"Enterprise module not available: {e}", allow_module_level=True)
 
 
 class TestResponsesBackgroundCostTracking:
@@ -284,10 +298,6 @@ class TestCheckResponsesCost:
         self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test CheckResponsesCost initialization"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-            CheckResponsesCost,
-        )
-
         checker = CheckResponsesCost(
             proxy_logging_obj=mock_proxy_logging_obj,
             prisma_client=mock_prisma_client,
@@ -303,10 +313,6 @@ class TestCheckResponsesCost:
         self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling when there are no jobs"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-            CheckResponsesCost,
-        )
-
         # Mock find_many to return empty list
         mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
             return_value=[]
@@ -334,10 +340,6 @@ class TestCheckResponsesCost:
         self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling with a completed job"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-            CheckResponsesCost,
-        )
-
         # Create a mock job
         mock_job = MagicMock()
         mock_job.id = "job-123"
@@ -391,10 +393,6 @@ class TestCheckResponsesCost:
         self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling with a failed job"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-            CheckResponsesCost,
-        )
-
         # Create a mock job
         mock_job = MagicMock()
         mock_job.id = "job-456"
@@ -435,10 +433,6 @@ class TestCheckResponsesCost:
         self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test polling with a job still in progress"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-            CheckResponsesCost,
-        )
-
         # Create a mock job
         mock_job = MagicMock()
         mock_job.id = "job-789"
@@ -479,10 +473,6 @@ class TestCheckResponsesCost:
         self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
     ):
         """Test that errors when querying responses are handled gracefully"""
-        from litellm_enterprise.proxy.common_utils.check_responses_cost import (
-            CheckResponsesCost,
-        )
-
         # Create a mock job
         mock_job = MagicMock()
         mock_job.id = "job-error"
