@@ -49,7 +49,9 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import (
+    add_litellm_data_to_request,
+)
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 

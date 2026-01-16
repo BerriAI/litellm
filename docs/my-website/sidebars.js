@@ -121,6 +121,7 @@ const sidebars = {
           label: "Claude Code",
           items: [
             "tutorials/claude_responses_api",
+            "tutorials/claude_code_customer_tracking",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
           ]
@@ -821,6 +822,7 @@ const sidebars = {
         "completion/knowledgebase",
         "guides/code_interpreter",
         "completion/message_trimming",
+        "completion/message_sanitization",
         "completion/model_alias",
         "completion/mock_requests",
         "completion/predict_outputs",
@@ -857,6 +859,7 @@ const sidebars = {
         "proxy/load_balancing",
         "proxy/provider_budget_routing",
         "proxy/reliability",
+        "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
         "wildcard_routing"

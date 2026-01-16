@@ -20,6 +20,7 @@ vi.mock("@/utils/roles", () => ({
 
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 
 describe("TeamMembersComponent", () => {
   const mockHandleMemberDelete = vi.fn();
@@ -161,5 +162,32 @@ describe("TeamMembersComponent", () => {
     );
 
     expect(screen.getByText("Add Member")).toBeInTheDocument();
+  });
+
+  it("should show delete button for proxy admin when canEditTeam is true", () => {
+    vi.mocked(isProxyAdminRole).mockReturnValue(true);
+    vi.mocked(isUserTeamAdminForSingleTeam).mockReturnValue(false);
+
+    const { container } = renderWithProviders(
+      <TeamMembersComponent
+        teamData={mockTeamData}
+        canEditTeam={true}
+        handleMemberDelete={mockHandleMemberDelete}
+        setSelectedEditMember={mockSetSelectedEditMember}
+        setIsEditMemberModalVisible={mockSetIsEditMemberModalVisible}
+        setIsAddMemberModalVisible={mockSetIsAddMemberModalVisible}
+      />,
+    );
+
+    // Verify that action buttons are rendered when canEditTeam is true
+    // For proxy admin, both edit and delete buttons should be visible
+    // Check for clickable icon elements (Tremor Icon components with cursor-pointer class)
+    const clickableIcons = container.querySelectorAll('[class*="cursor-pointer"]');
+    // Should have at least 4 icons: 2 edit buttons + 2 delete buttons for 2 members
+    expect(clickableIcons.length).toBeGreaterThanOrEqual(4);
+
+    // Verify members are rendered
+    expect(screen.getAllByText("user1@test.com").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("user2@test.com").length).toBeGreaterThan(0);
   });
 });
