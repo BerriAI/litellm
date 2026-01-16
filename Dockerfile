@@ -35,6 +35,10 @@ RUN pip install dist/*.whl
 # install dependencies as wheels
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
 
+# Remove old jaraco.context wheels and create correct version (GHSA-58pv-8j8x-9vj2)
+RUN rm -f /wheels/jaraco.context-*.whl /wheels/jaraco_context-*.whl
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ 'jaraco.context>=6.1.0'
+
 # ensure pyjwt is used, not jwt
 RUN pip uninstall jwt -y
 RUN pip uninstall PyJWT -y
@@ -71,7 +75,8 @@ RUN sed -i 's/\r$//' docker/install_auto_router.sh && chmod +x docker/install_au
 
 # Force patched jaraco.context version (GHSA-58pv-8j8x-9vj2)
 # Must be after install_auto_router.sh as aurelio-sdk may downgrade jaraco.context
-RUN pip install --no-cache-dir --upgrade 'jaraco.context>=6.1.0'
+# Using --force-reinstall --no-deps to ensure the correct version is installed
+RUN pip install --no-cache-dir --upgrade --force-reinstall --no-deps 'jaraco.context>=6.1.0'
 
 # Generate prisma client
 RUN prisma generate
