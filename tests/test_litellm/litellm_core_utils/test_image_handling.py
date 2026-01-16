@@ -126,12 +126,15 @@ def test_image_within_size_limit(monkeypatch):
 
 def test_image_size_limit_disabled(monkeypatch):
     """
-    Test that setting MAX_IMAGE_URL_DOWNLOAD_SIZE_MB to 0 disables size checking.
+    Test that setting MAX_IMAGE_URL_DOWNLOAD_SIZE_MB to 0 disables all image URL downloads.
     """
     import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
 
-    monkeypatch.setattr(litellm, "module_level_client", LargeImageClient(size_mb=100))
+    monkeypatch.setattr(litellm, "module_level_client", SmallImageClient())
     monkeypatch.setattr(image_handling, "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB", 0)
 
-    result = convert_url_to_base64("https://example.com/large-image.jpg")
-    assert result.startswith("data:image/jpeg;base64,")
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        convert_url_to_base64("https://example.com/image.jpg")
+    
+    assert "Image URL download is disabled" in str(excinfo.value)
+    assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)
