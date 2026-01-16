@@ -166,6 +166,10 @@ async def get_daily_active_users(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -202,11 +206,16 @@ async def get_daily_active_users(
         start_dt = end_dt - timedelta(days=MAX_DAYS)
         start_date = start_dt.strftime("%Y-%m-%d")
 
-        # Build SQL query with optional tag filter(s)
+        # Build SQL query with optional tag filter(s) and custom_llm_provider filter
         where_clause = (
             "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         )
         params = [start_date, end_date]
+
+        # Add custom_llm_provider filter if provided
+        if custom_llm_provider:
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -221,7 +230,7 @@ async def get_daily_active_users(
             params.append(f"%{tag_filter}%")
 
         sql_query = f"""
-        SELECT 
+        SELECT
             dts.tag,
             dts.date,
             COUNT(DISTINCT vt.user_id) as active_users
@@ -264,6 +273,10 @@ async def get_weekly_active_users(
     tag_filters: Optional[List[str]] = Query(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
+    ),
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -308,11 +321,16 @@ async def get_weekly_active_users(
         )  # MAX_WEEKS weeks * 7 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
 
-        # Build SQL query with optional tag filter(s)
+        # Build SQL query with optional tag filter(s) and custom_llm_provider filter
         where_clause = (
             "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         )
         params = [start_date, end_date]
+
+        # Add custom_llm_provider filter if provided
+        if custom_llm_provider:
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -394,6 +412,10 @@ async def get_monthly_active_users(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -437,11 +459,16 @@ async def get_monthly_active_users(
         )  # MAX_MONTHS months * 30 days - 1
         start_date = start_dt.strftime("%Y-%m-%d")
 
-        # Build SQL query with optional tag filter(s)
+        # Build SQL query with optional tag filter(s) and custom_llm_provider filter
         where_clause = (
             "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         )
         params = [start_date, end_date]
+
+        # Add custom_llm_provider filter if provided
+        if custom_llm_provider:
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -523,6 +550,10 @@ async def get_tag_summary(
         default=None,
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -550,9 +581,14 @@ async def get_tag_summary(
         datetime.strptime(start_date, "%Y-%m-%d")
         datetime.strptime(end_date, "%Y-%m-%d")
 
-        # Build SQL query with optional tag filter(s)
+        # Build SQL query with optional tag filter(s) and custom_llm_provider filter
         where_clause = "WHERE dts.date >= $1 AND dts.date <= $2"
         params = [start_date, end_date]
+
+        # Add custom_llm_provider filter if provided
+        if custom_llm_provider:
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -772,4 +808,132 @@ async def get_per_user_analytics(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to fetch per-user analytics: {str(e)}",
+        )
+
+
+class LeaderboardUser(BaseModel):
+    """User entry in the leaderboard"""
+    user_id: str
+    user_email: Optional[str] = None
+    request_count: int
+
+
+class LeaderboardResponse(BaseModel):
+    """Response for user leaderboard"""
+    results: List[LeaderboardUser]
+
+
+@router.get(
+    "/user/analytics/leaderboard",
+    response_model=LeaderboardResponse,
+    tags=["user agent analytics"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_user_leaderboard(
+    limit: int = Query(default=10, ge=1, le=100, description="Maximum number of users to return"),
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get top active users by request count in the last 7 days.
+
+    Returns a leaderboard of users sorted by their total request count.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Database not connected",
+        )
+
+    try:
+        # Calculate date range (last 7 days)
+        from datetime import timezone
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_date = end_dt.strftime("%Y-%m-%d")
+        start_dt = end_dt - timedelta(days=7)
+        start_date = start_dt.strftime("%Y-%m-%d")
+
+        # Build where clause with date range
+        where_clause: Dict[str, Any] = {
+            "date": {"gte": start_date, "lte": end_date},
+        }
+
+        # Add custom_llm_provider filter if provided
+        if custom_llm_provider:
+            where_clause["custom_llm_provider"] = custom_llm_provider
+
+        # Get all tag records in the date range
+        tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
+            where=where_clause
+        )
+
+        if not tag_records:
+            return LeaderboardResponse(results=[])
+
+        # Aggregate request count by api_key (filtering out null api_keys)
+        api_key_counts: Dict[str, int] = {}
+        for record in tag_records:
+            if record.api_key:
+                api_key_counts[record.api_key] = api_key_counts.get(record.api_key, 0) + (record.api_requests or 0)
+
+        # Get unique api_keys
+        api_keys = list(api_key_counts.keys())
+
+        # Lookup user_id for each api_key
+        api_key_records = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"token": {"in": api_keys}}
+        )
+
+        # Create mapping from api_key to user_id
+        api_key_to_user_id = {
+            record.token: record.user_id
+            for record in api_key_records
+            if record.user_id
+        }
+
+        # Get user emails for the user_ids
+        user_ids = list(set(api_key_to_user_id.values()))
+        user_records = await prisma_client.db.litellm_usertable.find_many(
+            where={"user_id": {"in": user_ids}}
+        )
+
+        # Create mapping from user_id to user_email
+        user_id_to_email = {
+            record.user_id: record.user_email
+            for record in user_records
+        }
+
+        # Aggregate request counts by user_id (summing across api_keys)
+        user_counts: Dict[str, int] = {}
+        for api_key, count in api_key_counts.items():
+            if api_key in api_key_to_user_id:
+                user_id = api_key_to_user_id[api_key]
+                user_counts[user_id] = user_counts.get(user_id, 0) + count
+
+        # Build leaderboard entries
+        leaderboard_entries: List[LeaderboardUser] = []
+        for user_id, request_count in user_counts.items():
+            leaderboard_entries.append(
+                LeaderboardUser(
+                    user_id=user_id,
+                    user_email=user_id_to_email.get(user_id),
+                    request_count=request_count,
+                )
+            )
+
+        # Sort by request count (descending) and apply limit
+        leaderboard_entries.sort(key=lambda x: x.request_count, reverse=True)
+        leaderboard_entries = leaderboard_entries[:limit]
+
+        return LeaderboardResponse(results=leaderboard_entries)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch leaderboard: {str(e)}",
         )
