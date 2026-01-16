@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_ssl_configuration,
 )
+from litellm.types.utils import LlmProviders
 
 
 class OpenAIError(BaseLLMException):
@@ -215,7 +216,7 @@ class BaseOpenAILLM:
 
             # Get a cached AsyncHTTPHandler which manages the httpx.AsyncClient
             cached_handler = get_async_httpx_client(
-                llm_provider="openai",  # Cache key includes provider
+                llm_provider=LlmProviders.OPENAI,  # Cache key includes provider
                 params=params,  # Include SSL config in cache key
                 shared_session=shared_session,
             )
