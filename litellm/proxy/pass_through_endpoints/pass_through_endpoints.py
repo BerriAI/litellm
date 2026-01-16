@@ -49,6 +49,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import sanitize_metadata_for_logging
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.secret_managers.main import get_secret_str
@@ -504,7 +505,9 @@ class HttpPassThroughEndpointHelpers(BasePassthroughUtils):
                     if user_api_key_dict.budget_reset_at
                     else None
                 ),
-                user_api_key_auth_metadata=user_api_key_dict.metadata,
+                user_api_key_auth_metadata=sanitize_metadata_for_logging(
+                    user_api_key_dict.metadata
+                ),
             )
         )
 
