@@ -1395,16 +1395,9 @@ class AmazonConverseConfig(BaseConfig):
                 response_tool_name = get_bedrock_tool_name(
                     response_tool_name=_response_tool_name
                 )
-                tool_input = content["toolUse"]["input"]
-                if isinstance(tool_input, str):
-                    arguments_str = tool_input
-                else:
-                    # Otherwise, serialize it to JSON
-                    arguments_str = json.dumps(tool_input)
-                
                 _function_chunk = ChatCompletionToolCallFunctionChunk(
                     name=response_tool_name,
-                    arguments=arguments_str,
+                    arguments=json.dumps(content["toolUse"]["input"]),
                 )
 
                 _tool_response_chunk = ChatCompletionToolCallChunk(
