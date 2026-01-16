@@ -1,5 +1,12 @@
 name: CARTO - Deploy Docker Image (CI)
 on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag to build (e.g., v1.79.1-carto.1.1.0). Leave empty for SHA-based tags.'
+        required: false
+        type: string
+        default: ''
   push:
     branches:
       - carto/main
@@ -42,6 +49,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Checkout the release tag if provided, otherwise use default (branch that triggered the workflow)
+          ref: ${{ github.event.inputs.release_tag || github.ref }}
 
       - name: Log in to the Container registry
         uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
@@ -54,22 +64,36 @@ jobs:
         id: tag-config
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+          RELEASE_TAG="${{ github.event.inputs.release_tag }}"
 
-          # Always tag with SHA
           echo "tags<<EOF" >> $GITHUB_OUTPUT
-          echo "type=raw,value=${SHORT_SHA}" >> $GITHUB_OUTPUT
 
-          # On push to carto/main: add carto-main-latest
-          if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/carto/main" ]]; then
-            echo "type=raw,value=carto-main-latest" >> $GITHUB_OUTPUT
-          fi
+          # If release tag provided (manual dispatch with version)
+          if [[ -n "$RELEASE_TAG" ]]; then
+            echo "Building with release tags for: ${RELEASE_TAG}"
+            echo "type=raw,value=${RELEASE_TAG}" >> $GITHUB_OUTPUT
+            echo "type=raw,value=carto-stable" >> $GITHUB_OUTPUT
+            # Extract upstream version from tag (e.g., v1.79.1-carto.1.1.0 -> 1.79.1)
+            UPSTREAM_VERSION=$(echo "$RELEASE_TAG" | sed -E 's/v([0-9]+\.[0-9]+\.[0-9]+)-carto\..*/\1/')
+            if [[ -n "$UPSTREAM_VERSION" ]]; then
+              echo "type=raw,value=carto-v${UPSTREAM_VERSION}-latest" >> $GITHUB_OUTPUT
+            fi
+          else
+            # Default behavior: SHA-based tags
+            echo "type=raw,value=${SHORT_SHA}" >> $GITHUB_OUTPUT
 
-          # On PR: add branch name tag
-          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
-            BRANCH_NAME="${{ github.head_ref }}"
-            # Sanitize branch name for Docker tag (replace / and _ with -)
-            BRANCH_TAG=$(echo "${BRANCH_NAME}" | sed 's/[/_]/-/g')
-            echo "type=raw,value=${BRANCH_TAG}" >> $GITHUB_OUTPUT
+            # On push to carto/main: add carto-main-latest
+            if [[ "${{ github.event_name }}" == "push" && "${{ github.ref }}" == "refs/heads/carto/main" ]]; then
+              echo "type=raw,value=carto-main-latest" >> $GITHUB_OUTPUT
+            fi
+
+            # On PR: add branch name tag
+            if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+              BRANCH_NAME="${{ github.head_ref }}"
+              # Sanitize branch name for Docker tag (replace / and _ with -)
+              BRANCH_TAG=$(echo "${BRANCH_NAME}" | sed 's/[/_]/-/g')
+              echo "type=raw,value=${BRANCH_TAG}" >> $GITHUB_OUTPUT
+            fi
           fi
 
           echo "EOF" >> $GITHUB_OUTPUT

@@ -262,14 +262,14 @@ class LiteLLMCompletionResponsesConfig:
             return litellm_completion_request
 
         # PATCH: Fallback to existing enterprise/database logic
-        verbose_logger.debug(f"Enterprise handler available: {_ENTERPRISE_ResponsesSessionHandler is not None}")
-        if _ENTERPRISE_ResponsesSessionHandler is not None:
+        verbose_logger.debug(f"Enterprise handler available: {ResponsesSessionHandler is not None}")
+        if ResponsesSessionHandler is not None:
             chat_completion_session = ChatCompletionSession(
                 messages=[], litellm_session_id=None
             )
             if previous_response_id:
                 verbose_logger.debug("Calling enterprise session handler...")
-                chat_completion_session = await _ENTERPRISE_ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
+                chat_completion_session = await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
                     previous_response_id=previous_response_id
                 )
                 verbose_logger.debug(f"Enterprise: Loaded {len(chat_completion_session.get('messages', []))} session messages (before filtering)")

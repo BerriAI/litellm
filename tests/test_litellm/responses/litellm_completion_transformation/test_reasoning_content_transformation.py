@@ -264,8 +264,8 @@ class TestReasoningContentFinalResponse:
         assert reasoning_items[0].content[0].text == "Reasoning for first answer"
 
 
-def test_streaming_chunk_id_raw():
-    """Test that streaming chunk IDs are raw (not encoded) to match OpenAI format"""
+def test_streaming_chunk_id_encoded():
+    """Test that streaming chunk IDs are encoded for Redis session consistency (CARTO fork behavior)"""
     chunk = ModelResponseStream(
         id="chunk-123",
         created=1234567890,
@@ -291,6 +291,7 @@ def test_streaming_chunk_id_raw():
 
     result = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk)
 
-    # Streaming chunk IDs should be raw (like OpenAI's msg_xxx format)
-    assert result.item_id == "chunk-123"  # Should be raw, not encoded
-    assert not result.item_id.startswith("resp_")  # Should NOT have resp_ prefix
+    # CARTO fork: Streaming chunk IDs are encoded for Redis session consistency
+    # This differs from upstream which uses raw IDs
+    assert result.item_id.startswith("resp_")  # Should have resp_ prefix (encoded)
+    assert "chunk-123" not in result.item_id  # Original ID should be encoded, not raw
