@@ -1,4 +1,3 @@
-import type { ProxyModel } from "@/app/(dashboard)/hooks/models/useModels";
 import { describe, expect, it } from "vitest";
 import { splitWildcardModels } from "./modelUtils";
 
@@ -9,29 +8,21 @@ describe("splitWildcardModels", () => {
   });
 
   it("should split models into wildcard and regular groups", () => {
-    const models: ProxyModel[] = [
-      { id: "gpt-4", object: "model", created: 1234567890, owned_by: "openai" },
-      { id: "openai/*", object: "model", created: 1234567890, owned_by: "openai" },
-      { id: "claude-3", object: "model", created: 1234567890, owned_by: "anthropic" },
-      { id: "anthropic/*", object: "model", created: 1234567890, owned_by: "anthropic" },
-    ];
+    const models: string[] = ["gpt-4", "openai/*", "claude-3", "anthropic/*"];
 
     const result = splitWildcardModels(models);
 
     expect(result.wildcard).toHaveLength(2);
-    expect(result.wildcard[0].id).toBe("openai/*");
-    expect(result.wildcard[1].id).toBe("anthropic/*");
+    expect(result.wildcard[0]).toBe("openai/*");
+    expect(result.wildcard[1]).toBe("anthropic/*");
 
     expect(result.regular).toHaveLength(2);
-    expect(result.regular[0].id).toBe("gpt-4");
-    expect(result.regular[1].id).toBe("claude-3");
+    expect(result.regular[0]).toBe("gpt-4");
+    expect(result.regular[1]).toBe("claude-3");
   });
 
   it("should return only wildcard models when all models are wildcard", () => {
-    const models: ProxyModel[] = [
-      { id: "openai/*", object: "model", created: 1234567890, owned_by: "openai" },
-      { id: "anthropic/*", object: "model", created: 1234567890, owned_by: "anthropic" },
-    ];
+    const models: string[] = ["openai/*", "anthropic/*"];
 
     const result = splitWildcardModels(models);
 
@@ -40,10 +31,7 @@ describe("splitWildcardModels", () => {
   });
 
   it("should return only regular models when no models are wildcard", () => {
-    const models: ProxyModel[] = [
-      { id: "gpt-4", object: "model", created: 1234567890, owned_by: "openai" },
-      { id: "claude-3", object: "model", created: 1234567890, owned_by: "anthropic" },
-    ];
+    const models: string[] = ["gpt-4", "claude-3"];
 
     const result = splitWildcardModels(models);
 
@@ -52,16 +40,12 @@ describe("splitWildcardModels", () => {
   });
 
   it("should correctly identify wildcard models ending with /*", () => {
-    const models: ProxyModel[] = [
-      { id: "provider/*", object: "model", created: 1234567890, owned_by: "provider" },
-      { id: "not-wildcard", object: "model", created: 1234567890, owned_by: "provider" },
-      { id: "also-not/*/wildcard", object: "model", created: 1234567890, owned_by: "provider" },
-    ];
+    const models: string[] = ["provider/*", "not-wildcard", "also-not/*/wildcard"];
 
     const result = splitWildcardModels(models);
 
     expect(result.wildcard).toHaveLength(1);
-    expect(result.wildcard[0].id).toBe("provider/*");
+    expect(result.wildcard[0]).toBe("provider/*");
     expect(result.regular).toHaveLength(2);
   });
 });

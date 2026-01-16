@@ -29,12 +29,12 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { ModelSelect } from "./ModelSelect/ModelSelect";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, organizationCreateCall, organizationDeleteCall, organizationListCall } from "./networking";
 import OrganizationInfoView from "./organization/organization_view";
 import NumericalInput from "./shared/numerical_input";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
-import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 interface OrganizationsTableProps {
   organizations: Organization[];
@@ -475,10 +475,10 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
           </Form.Item>
           <Form.Item label="Models" name="models">
             <ModelSelect
-              showAllProxyModelsOverride
-              includeSpecialOptions
+              options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
               value={form.getFieldValue("models")}
               onChange={(values) => form.setFieldValue("models", values)}
+              context="organization"
             />
           </Form.Item>
 
