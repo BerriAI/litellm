@@ -55,7 +55,7 @@ example_embedding_result = {
 
 def mock_patch_aembedding():
     return mock.patch(
-        "litellm.aembedding",
+        "litellm.proxy.proxy_server.llm_router.aembedding",
         return_value=example_embedding_result,
     )
 
@@ -666,6 +666,43 @@ def test_team_info_masking():
     print("Got exception: {}".format(exc_info.value))
     assert "secret-test-key" not in str(exc_info.value)
     assert "public-test-key" not in str(exc_info.value)
+
+
+@mock_patch_aembedding()
+def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
+    """
+    Test to bypass decoding input as array of tokens for selected providers
+
+    Ref: https://github.com/BerriAI/litellm/issues/10113
+    """
+    try:
+        test_data = {
+            "model": "vllm_embed_model",
+            "input": [[2046, 13269, 158208]],
+        }
+
+        response = client_no_auth.post("/v1/embeddings", json=test_data)
+
+        # DEPRECATED - mock_aembedding.assert_called_once_with is too strict, and will fail when new kwargs are added to embeddings
+        # mock_aembedding.assert_called_once_with(
+        #     model="vllm_embed_model",
+        #     input=[[2046, 13269, 158208]],
+        #     metadata=mock.ANY,
+        #     proxy_server_request=mock.ANY,
+        #     secret_fields=mock.ANY,
+        # )
+        # Assert that aembedding was called, and that input was not modified
+        mock_aembedding.assert_called_once()
+        call_args, call_kwargs = mock_aembedding.call_args
+        assert call_kwargs["model"] == "vllm_embed_model"
+        assert call_kwargs["input"] == [[2046, 13269, 158208]]
+
+        assert response.status_code == 200
+        result = response.json()
+        print(len(result["data"][0]["embedding"]))
+        assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
+    except Exception as e:
+        pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
 
 @pytest.mark.asyncio
