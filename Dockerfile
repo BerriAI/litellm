@@ -61,6 +61,9 @@ COPY --from=builder /wheels/ /wheels/
 # Install the built wheel using pip; again using a wildcard if it's the only file
 RUN pip install *.whl /wheels/* --no-index --find-links=/wheels/ && rm -f *.whl && rm -rf /wheels
 
+# Force patched jaraco.context version (GHSA-58pv-8j8x-9vj2)
+RUN pip install --no-cache-dir 'jaraco.context==6.1.0'
+
 # Remove test files and keys from dependencies
 RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
     find /usr/lib -type d -path "*/tornado/test" -delete
