@@ -26,7 +26,7 @@ def _process_image_response(response: Response, url: str) -> str:
     content_length = response.headers.get("Content-Length")
     if content_length is not None:
         size_mb = int(content_length) / (1024 * 1024)
-        if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB > 0 and size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
+        if size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
             raise litellm.ImageFetchError(
                 f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
             )
@@ -36,7 +36,7 @@ def _process_image_response(response: Response, url: str) -> str:
     # Check actual size after download if Content-Length was not available
     if content_length is None:
         size_mb = len(image_bytes) / (1024 * 1024)
-        if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB > 0 and size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
+        if size_mb > MAX_IMAGE_URL_DOWNLOAD_SIZE_MB:
             raise litellm.ImageFetchError(
                 f"Error: Image size ({size_mb:.2f}MB) exceeds maximum allowed size ({MAX_IMAGE_URL_DOWNLOAD_SIZE_MB}MB). url={url}"
             )
@@ -67,6 +67,12 @@ def _process_image_response(response: Response, url: str) -> str:
 
 
 async def async_convert_url_to_base64(url: str) -> str:
+    # If MAX_IMAGE_URL_DOWNLOAD_SIZE_MB is 0, block all image downloads
+    if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
+        raise litellm.ImageFetchError(
+            f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
+        )
+
     cached_result = in_memory_cache.get_cache(url)
     if cached_result:
         return cached_result
@@ -86,6 +92,12 @@ async def async_convert_url_to_base64(url: str) -> str:
 
 
 def convert_url_to_base64(url: str) -> str:
+    # If MAX_IMAGE_URL_DOWNLOAD_SIZE_MB is 0, block all image downloads
+    if MAX_IMAGE_URL_DOWNLOAD_SIZE_MB == 0:
+        raise litellm.ImageFetchError(
+            f"Error: Image URL download is disabled (MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0). url={url}"
+        )
+
     cached_result = in_memory_cache.get_cache(url)
     if cached_result:
         return cached_result
