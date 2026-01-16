@@ -18,6 +18,7 @@ from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLog
 from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
@@ -93,6 +94,7 @@ class CustomLoggerRegistry:
         "bitbucket": BitBucketPromptManager,
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
+        "focus": FocusLogger,
         "posthog": PostHogLogger,
     }
 

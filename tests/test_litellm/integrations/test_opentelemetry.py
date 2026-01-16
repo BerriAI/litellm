@@ -1869,3 +1869,237 @@ class TestOpenTelemetryExternalSpan(unittest.TestCase):
             parent_span_finished.attributes,
             "Parent span should have model attribute from LiteLLM even on failure"
         )
+
+
+class TestOpenTelemetrySemanticConventions138(unittest.TestCase):
+    """
+    Test suite for OpenTelemetry 1.38 Semantic Conventions compliance.
+    
+    These tests verify that LiteLLM emits span attributes following the 
+    OpenTelemetry GenAI semantic conventions v1.38, including:
+    - gen_ai.input.messages (JSON string with parts array)
+    - gen_ai.output.messages (JSON string with parts array)
+    - gen_ai.usage.input_tokens / output_tokens (new naming)
+    - gen_ai.response.finish_reasons (JSON array)
+    
+    See: https://github.com/BerriAI/litellm/issues/17794
+    """
+
+    def test_input_messages_uses_parts_structure(self):
+        """
+        Test that gen_ai.input.messages uses the OTEL 1.38 parts array structure.
+        
+        Expected format:
+        [{"role": "user", "parts": [{"type": "text", "content": "Hello"}]}]
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello world"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hi there!"},
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Find the call that set gen_ai.input.messages
+        input_messages_calls = [
+            call for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == "gen_ai.input.messages"
+        ]
+        self.assertEqual(len(input_messages_calls), 1, "Should have exactly one gen_ai.input.messages attribute")
+        
+        input_messages_value = input_messages_calls[0][0][1]
+        parsed = json.loads(input_messages_value)
+        
+        # Verify structure
+        self.assertIsInstance(parsed, list)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["role"], "user")
+        self.assertIn("parts", parsed[0])
+        self.assertEqual(parsed[0]["parts"][0]["type"], "text")
+        self.assertEqual(parsed[0]["parts"][0]["content"], "Hello world")
+
+    def test_output_messages_uses_parts_structure(self):
+        """
+        Test that gen_ai.output.messages uses the OTEL 1.38 parts array structure.
+        
+        Expected format:
+        [{"role": "assistant", "parts": [{"type": "text", "content": "Hi!"}], "finish_reason": "stop"}]
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [
+                {
+                    "finish_reason": "stop",
+                    "message": {"role": "assistant", "content": "Hello back!"},
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Find the call that set gen_ai.output.messages
+        output_messages_calls = [
+            call for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == "gen_ai.output.messages"
+        ]
+        self.assertEqual(len(output_messages_calls), 1, "Should have exactly one gen_ai.output.messages attribute")
+        
+        output_messages_value = output_messages_calls[0][0][1]
+        parsed = json.loads(output_messages_value)
+        
+        # Verify structure
+        self.assertIsInstance(parsed, list)
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(parsed[0]["role"], "assistant")
+        self.assertIn("parts", parsed[0])
+        self.assertEqual(parsed[0]["parts"][0]["type"], "text")
+        self.assertEqual(parsed[0]["parts"][0]["content"], "Hello back!")
+        self.assertEqual(parsed[0]["finish_reason"], "stop")
+
+    def test_usage_tokens_use_new_naming_convention(self):
+        """
+        Test that token usage uses the OTEL 1.38 naming convention:
+        - gen_ai.usage.input_tokens (not prompt_tokens)
+        - gen_ai.usage.output_tokens (not completion_tokens)
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 50, "total_tokens": 150},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Verify new naming convention is used
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.input_tokens", 100)
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.output_tokens", 50)
+        mock_span.set_attribute.assert_any_call("gen_ai.usage.total_tokens", 150)
+
+    def test_finish_reasons_is_json_array(self):
+        """
+        Test that gen_ai.response.finish_reasons is a proper JSON array.
+        
+        Expected: '["stop"]' (not "['stop']")
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [
+                {"finish_reason": "stop", "message": {"role": "assistant", "content": "Hi"}},
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        # Find the call that set gen_ai.response.finish_reasons
+        finish_reasons_calls = [
+            call for call in mock_span.set_attribute.call_args_list
+            if call[0][0] == "gen_ai.response.finish_reasons"
+        ]
+        self.assertEqual(len(finish_reasons_calls), 1, "Should have exactly one gen_ai.response.finish_reasons attribute")
+        
+        finish_reasons_value = finish_reasons_calls[0][0][1]
+        
+        # Verify it's valid JSON (not Python repr)
+        parsed = json.loads(finish_reasons_value)
+        self.assertEqual(parsed, ["stop"])
+
+    def test_operation_name_is_chat_for_completion(self):
+        """
+        Test that gen_ai.operation.name is 'chat' for completion calls.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call("gen_ai.operation.name", "chat")

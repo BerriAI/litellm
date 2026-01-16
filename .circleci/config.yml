@@ -144,8 +144,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -260,8 +260,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -367,8 +367,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -637,8 +637,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -759,8 +759,8 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -865,8 +865,8 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -972,8 +972,8 @@ jobs:
             pip install "google-cloud-aiplatform==1.43.0"
             pip install "google-genai==1.22.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install lunary==0.2.5
             pip install "azure-identity==1.16.1"
@@ -1198,7 +1198,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
-            pip install "boto3==1.36.0"
+            pip install "boto3==1.40.61"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1879,7 +1879,7 @@ jobs:
             pip install aiohttp
             pip install openai
             pip install click
-            pip install "boto3==1.36.0"
+            pip install "boto3==1.40.61"
             pip install jinja2
             pip install "tokenizers==0.20.0"
             pip install "uvloop==0.21.0"
@@ -1959,6 +1959,18 @@ jobs:
           command: |
             kind create cluster --name litellm-test
 
+      - run:
+          name: Build Docker image for helm tests
+          command: |
+            IMAGE_TAG=${CIRCLE_SHA1:-ci}
+            docker build -t litellm-ci:${IMAGE_TAG} -f docker/Dockerfile.database .
+
+      - run:
+          name: Load Docker image into Kind
+          command: |
+            IMAGE_TAG=${CIRCLE_SHA1:-ci}
+            kind load docker-image litellm-ci:${IMAGE_TAG} --name litellm-test
+
       # Run helm lint
       - run:
           name: Run helm lint
@@ -1969,7 +1981,11 @@ jobs:
       - run:
           name: Run helm tests
           command: |
-            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml
+            IMAGE_TAG=${CIRCLE_SHA1:-ci}
+            helm install litellm ./deploy/charts/litellm-helm -f ./deploy/charts/litellm-helm/ci/test-values.yaml \
+              --set image.repository=litellm-ci \
+              --set image.tag=${IMAGE_TAG} \
+              --set image.pullPolicy=Never
             # Wait for pod to be ready
             echo "Waiting 30 seconds for pod to be ready..."
             sleep 30
@@ -2020,6 +2036,7 @@ jobs:
       - run: python ./tests/code_coverage_tests/info_log_check.py
       - run: python ./tests/code_coverage_tests/test_ban_set_verbose.py
       - run: python ./tests/code_coverage_tests/code_qa_check_tests.py
+      - run: python ./tests/code_coverage_tests/check_get_model_cost_key_performance.py
       - run: python ./tests/code_coverage_tests/test_proxy_types_import.py
       - run: python ./tests/code_coverage_tests/callback_manager_test.py
       - run: python ./tests/code_coverage_tests/recursive_detector.py
@@ -2102,10 +2119,11 @@ jobs:
           name: Check container logs for expected message
           command: |
             echo "=== Printing Full Container Startup Logs ==="
-            docker logs my-app
+            LOG_OUTPUT="$(docker logs my-app 2>&1)"
+            printf '%s\n' "$LOG_OUTPUT"
             echo "=== End of Full Container Startup Logs ==="
 
-            if docker logs my-app 2>&1 | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
+            if printf '%s\n' "$LOG_OUTPUT" | grep -q "prisma schema out of sync with db. Consider running these sql_commands to sync the two"; then
               echo "Expected message found in logs. Test passed."
             else
               echo "Expected message not found in logs. Test failed."
@@ -2158,8 +2176,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -2298,8 +2316,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install "langchain_mcp_adapters==0.0.5"
             pip install "langfuse>=2.0.0"
@@ -2444,8 +2462,8 @@ jobs:
             pip install "google-generativeai==0.3.2"
             pip install "google-cloud-aiplatform==1.43.0"
             pip install pyarrow
-            pip install "boto3==1.36.0"
-            pip install "aioboto3==13.4.0"
+            pip install "boto3==1.40.61"
+            pip install "aioboto3==15.5.0"
             pip install langchain
             pip install "langfuse>=2.0.0"
             pip install "logfire==0.29.0"
@@ -3100,7 +3118,7 @@ jobs:
             pip install "pytest==7.3.1"
             pip install "pytest-mock==3.12.0"
             pip install "pytest-asyncio==0.21.1"
-            pip install "boto3==1.36.0"
+            pip install "boto3==1.40.61"
             pip install "mypy==1.18.2"
             pip install pyarrow
             pip install numpydoc
@@ -3558,11 +3576,33 @@ jobs:
           command: |
             npx playwright install
       - run:
+          name: Install Neon CLI
+          command: |
+            npm i -g neonctl
+      - run:
+          name: Create Neon branch
+          command: |
+            export EXPIRES_AT=$(date -u -d "+3 hours" +"%Y-%m-%dT%H:%M:%SZ")
+            echo "Expires at: $EXPIRES_AT"
+            neon branches create \
+              --project-id $NEON_PROJECT_ID \
+              --name preview/commit-${CIRCLE_SHA1:0:7} \
+              --expires-at $EXPIRES_AT \
+              --parent br-fancy-paper-ad1olsb3 \
+              --api-key $NEON_API_KEY || true
+      - run:
           name: Run Docker container
           command: |
+            E2E_UI_TEST_DATABASE_URL=$(neon connection-string \
+              --project-id $NEON_PROJECT_ID \
+              --api-key $NEON_API_KEY \
+              --branch preview/commit-${CIRCLE_SHA1:0:7} \
+              --database-name yuneng-trial-db \
+              --role neondb_owner)
+            echo $E2E_UI_TEST_DATABASE_URL
             docker run -d \
               -p 4000:4000 \
-              -e DATABASE_URL=$SMALL_DATABASE_URL \
+              -e DATABASE_URL=$E2E_UI_TEST_DATABASE_URL \
               -e LITELLM_MASTER_KEY="sk-1234" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e UI_USERNAME="admin" \
@@ -3792,6 +3832,7 @@ workflows:
                 - main
                 - /litellm_.*/
       - e2e_ui_testing:
+          context: e2e_ui_tests
           requires:
             - ui_build
             - build_docker_database_image

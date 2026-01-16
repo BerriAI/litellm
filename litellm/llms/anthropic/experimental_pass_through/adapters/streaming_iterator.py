@@ -2,11 +2,11 @@
 ## Translates OpenAI call to Anthropic `/v1/messages` format
 import json
 import traceback
-from litellm._uuid import uuid
 from collections import deque
 from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
 
 from litellm import verbose_logger
+from litellm._uuid import uuid
 from litellm.types.llms.anthropic import UsageDelta
 from litellm.types.utils import AdapterCompletionStreamWrapper
 
@@ -48,6 +48,27 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         super().__init__(completion_stream)
         self.model = model
 
+    def _create_initial_usage_delta(self) -> UsageDelta:
+        """
+        Create the initial UsageDelta for the message_start event.
+
+        Initializes cache token fields (cache_creation_input_tokens, cache_read_input_tokens)
+        to 0 to indicate to clients (like Claude Code) that prompt caching is supported.
+
+        The actual cache token values will be provided in the message_delta event at the
+        end of the stream, since Bedrock Converse API only returns usage data in the final
+        response chunk.
+
+        Returns:
+            UsageDelta with all token counts initialized to 0.
+        """
+        return UsageDelta(
+            input_tokens=0,
+            output_tokens=0,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+        )
+
     def __next__(self):
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
@@ -64,7 +85,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         "model": self.model,
                         "stop_reason": None,
                         "stop_sequence": None,
-                        "usage": UsageDelta(input_tokens=0, output_tokens=0),
+                        "usage": self._create_initial_usage_delta(),
                     },
                 }
             if self.sent_content_block_start is False:
@@ -169,7 +190,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                             "model": self.model,
                             "stop_reason": None,
                             "stop_sequence": None,
-                            "usage": UsageDelta(input_tokens=0, output_tokens=0),
+                            "usage": self._create_initial_usage_delta(),
                         },
                     }
                 )
@@ -211,10 +232,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                         merged_chunk["delta"] = {}
 
                     # Add usage to the held chunk
-                    merged_chunk["usage"] = {
+                    usage_dict: UsageDelta = {
                         "input_tokens": chunk.usage.prompt_tokens or 0,
                         "output_tokens": chunk.usage.completion_tokens or 0,
                     }
+                    # Add cache tokens if available (for prompt caching support)
+                    if hasattr(chunk.usage, "_cache_creation_input_tokens") and chunk.usage._cache_creation_input_tokens > 0:
+                        usage_dict["cache_creation_input_tokens"] = chunk.usage._cache_creation_input_tokens
+                    if hasattr(chunk.usage, "_cache_read_input_tokens") and chunk.usage._cache_read_input_tokens > 0:
+                        usage_dict["cache_read_input_tokens"] = chunk.usage._cache_read_input_tokens
+                    merged_chunk["usage"] = usage_dict
 
                     # Queue the merged chunk and reset
                     self.chunk_queue.append(merged_chunk)

@@ -146,6 +146,7 @@ router_settings:
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
   disable_cooldowns: True                  # bool - Disable cooldowns for all models 
   enable_tag_filtering: True                # bool - Use tag based routing for requests
+  tag_filtering_match_any: True             # bool - Tag matching behavior (only when enable_tag_filtering=true). `true`: match if deployment has ANY requested tag; `false`: match only if deployment has ALL requested tags
   retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
     "TimeoutErrorRetries": 3,
@@ -293,6 +294,7 @@ router_settings:
   cooldown_time: 30 # (in seconds) how long to cooldown model if fails/min > allowed_fails
   disable_cooldowns: True                  # bool - Disable cooldowns for all models
   enable_tag_filtering: True                # bool - Use tag based routing for requests
+  tag_filtering_match_any: True             # bool - Tag matching behavior (only when enable_tag_filtering=true). `true`: match if deployment has ANY requested tag; `false`: match only if deployment has ALL requested tags
   retry_policy: {                          # Dict[str, int]: retry policy for different types of exceptions
     "AuthenticationErrorRetries": 3,
     "TimeoutErrorRetries": 3,
@@ -322,6 +324,7 @@ router_settings:
 | content_policy_fallbacks | array of objects | Specifies fallback models for content policy violations. [More information here](reliability) |
 | fallbacks | array of objects | Specifies fallback models for all types of errors. [More information here](reliability) |
 | enable_tag_filtering | boolean | If true, uses tag based routing for requests [Tag Based Routing](tag_routing) |
+| tag_filtering_match_any | boolean | Tag matching behavior (only when enable_tag_filtering=true). `true`: match if deployment has ANY requested tag; `false`: match only if deployment has ALL requested tags |
 | cooldown_time | integer | The duration (in seconds) to cooldown a model if it exceeds the allowed failures. |
 | disable_cooldowns | boolean | If true, disables cooldowns for all models. [More information here](reliability) |
 | retry_policy | object | Specifies the number of retries for different types of exceptions. [More information here](reliability) |
@@ -578,6 +581,18 @@ router_settings:
 | FIREWORKS_AI_56_B_MOE | Size parameter for Fireworks AI 56B MOE model. Default is 56
 | FIREWORKS_AI_80_B | Size parameter for Fireworks AI 80B model. Default is 80
 | FIREWORKS_AI_176_B_MOE | Size parameter for Fireworks AI 176B MOE model. Default is 176
+| FOCUS_PROVIDER | Destination provider for Focus exports (e.g., `s3`). Defaults to `s3`.
+| FOCUS_FORMAT | Output format for Focus exports. Defaults to `parquet`.
+| FOCUS_FREQUENCY | Frequency for scheduled Focus exports (`hourly`, `daily`, or `interval`). Defaults to `hourly`.
+| FOCUS_CRON_OFFSET | Minute offset used when scheduling hourly/daily Focus exports. Defaults to `5` minutes.
+| FOCUS_INTERVAL_SECONDS | Interval (in seconds) for Focus exports when `frequency` is `interval`.
+| FOCUS_PREFIX | Object key prefix (or folder) used when uploading Focus export files. Defaults to `focus_exports`.
+| FOCUS_S3_BUCKET_NAME | S3 bucket to upload Focus export files when using the S3 destination.
+| FOCUS_S3_REGION_NAME | AWS region for the Focus export S3 bucket.
+| FOCUS_S3_ENDPOINT_URL | Custom endpoint for the Focus export S3 client (optional; useful for S3-compatible storage).
+| FOCUS_S3_ACCESS_KEY | AWS access key ID used by the Focus export S3 client.
+| FOCUS_S3_SECRET_KEY | AWS secret access key used by the Focus export S3 client.
+| FOCUS_S3_SESSION_TOKEN | AWS session token used by the Focus export S3 client (optional).
 | FUNCTION_DEFINITION_TOKEN_COUNT | Token count for function definitions. Default is 9
 | GALILEO_BASE_URL | Base URL for Galileo platform
 | GALILEO_PASSWORD | Password for Galileo authentication
@@ -729,6 +744,7 @@ router_settings:
 | LITELLM_PRINT_STANDARD_LOGGING_PAYLOAD | If true, prints the standard logging payload to the console - useful for debugging
 | LITELM_ENVIRONMENT | Environment for LiteLLM Instance. This is currently only logged to DeepEval to determine the environment for DeepEval integration.
 | LOGFIRE_TOKEN | Token for Logfire logging service
+| LOGFIRE_BASE_URL | Base URL for Logfire logging service (useful for self hosted deployments)
 | LOGGING_WORKER_CONCURRENCY | Maximum number of concurrent coroutine slots for the logging worker on the asyncio event loop. Default is 100. Setting too high will flood the event loop with logging tasks which will lower the overall latency of the requests.
 | LOGGING_WORKER_MAX_QUEUE_SIZE | Maximum size of the logging worker queue. When the queue is full, the worker aggressively clears tasks to make room instead of dropping logs. Default is 50,000
 | LOGGING_WORKER_MAX_TIME_PER_COROUTINE | Maximum time in seconds allowed for each coroutine in the logging worker before timing out. Default is 20.0
@@ -756,10 +772,18 @@ router_settings:
 | MINIMUM_PROMPT_CACHE_TOKEN_COUNT | Minimum token count for caching a prompt. Default is 1024
 | MISTRAL_API_BASE | Base URL for Mistral API. Default is https://api.mistral.ai
 | MISTRAL_API_KEY | API key for Mistral API
+| MICROSOFT_AUTHORIZATION_ENDPOINT | Custom authorization endpoint URL for Microsoft SSO (overrides default Microsoft OAuth authorization endpoint)
 | MICROSOFT_CLIENT_ID | Client ID for Microsoft services
 | MICROSOFT_CLIENT_SECRET | Client secret for Microsoft services
-| MICROSOFT_TENANT | Tenant ID for Microsoft Azure
 | MICROSOFT_SERVICE_PRINCIPAL_ID | Service Principal ID for Microsoft Enterprise Application. (This is an advanced feature if you want litellm to auto-assign members to Litellm Teams based on their Microsoft Entra ID Groups)
+| MICROSOFT_TENANT | Tenant ID for Microsoft Azure
+| MICROSOFT_TOKEN_ENDPOINT | Custom token endpoint URL for Microsoft SSO (overrides default Microsoft OAuth token endpoint)
+| MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE | Field name for user display name in Microsoft SSO response. Default is `displayName`
+| MICROSOFT_USER_EMAIL_ATTRIBUTE | Field name for user email in Microsoft SSO response. Default is `userPrincipalName`
+| MICROSOFT_USER_FIRST_NAME_ATTRIBUTE | Field name for user first name in Microsoft SSO response. Default is `givenName`
+| MICROSOFT_USER_ID_ATTRIBUTE | Field name for user ID in Microsoft SSO response. Default is `id`
+| MICROSOFT_USER_LAST_NAME_ATTRIBUTE | Field name for user last name in Microsoft SSO response. Default is `surname`
+| MICROSOFT_USERINFO_ENDPOINT | Custom userinfo endpoint URL for Microsoft SSO (overrides default Microsoft Graph userinfo endpoint)
 | NO_DOCS | Flag to disable Swagger UI documentation
 | NO_REDOC | Flag to disable Redoc documentation
 | NO_PROXY | List of addresses to bypass proxy

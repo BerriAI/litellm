@@ -21,18 +21,18 @@ Supported models:
 API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html
 """
 
-import json
 import base64
+import json
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import httpx
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 from litellm.utils import get_model_info
 
@@ -153,7 +153,7 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
@@ -164,6 +164,9 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         Returns the request body dict that will be JSON-encoded by the handler.
         """
+        if prompt is None:
+            raise ValueError("Bedrock Stability image edit requires a prompt.")
+        
         # Build Bedrock Stability request
         data: Dict[str, Any] = {
             "prompt": prompt,

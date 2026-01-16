@@ -68,6 +68,8 @@ def _convert_detail_to_media_resolution_enum(
 ) -> Optional[Dict[str, str]]:
     if detail == "low":
         return {"level": "MEDIA_RESOLUTION_LOW"}
+    elif detail == "medium":
+        return {"level": "MEDIA_RESOLUTION_MEDIUM"}
     elif detail == "high":
         return {"level": "MEDIA_RESOLUTION_HIGH"}
     return None
@@ -115,7 +117,7 @@ def _process_gemini_image(
             and (image_type := format or _get_image_mime_type_from_url(image_url))
             is not None
         ):
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
+            file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
             
             if media_resolution_enum is not None and model is not None:

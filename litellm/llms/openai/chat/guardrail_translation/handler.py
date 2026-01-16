@@ -83,6 +83,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["structured_messages"] = (
                     messages  # pass the openai /chat/completions messages to the guardrail, as-is
                 )
+            # Pass tools (function definitions) to the guardrail
+            tools = data.get("tools")
+            if tools:
+                inputs["tools"] = tools
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -358,7 +362,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if has_stream_ended:
             # convert to model response
             model_response = cast(
-                ModelResponse, stream_chunk_builder(chunks=responses_so_far)
+                ModelResponse, stream_chunk_builder(chunks=responses_so_far, logging_obj=litellm_logging_obj)
             )
             # run process_output_response
             await self.process_output_response(

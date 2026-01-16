@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", message=".*conflict with protected namespace.*
 warnings.filterwarnings(
     "ignore", message=".*Accessing the.*attribute on the instance is deprecated.*"
 )
-### INIT VARIABLES #######################
+### INIT VARIABLES #########################
 import threading
 import os
 from typing import (
@@ -134,6 +134,7 @@ _custom_logger_compatible_callbacks_literal = Literal[
     "bitbucket",
     "gitlab",
     "cloudzero",
+    "focus",
     "posthog",
     "levo",
 ]
@@ -1343,6 +1344,7 @@ if TYPE_CHECKING:
     from .llms.bedrock.chat.invoke_transformations.amazon_llama_transformation import AmazonLlamaConfig as AmazonLlamaConfig
     from .llms.bedrock.chat.invoke_transformations.amazon_deepseek_transformation import AmazonDeepSeekR1Config as AmazonDeepSeekR1Config
     from .llms.bedrock.chat.invoke_transformations.amazon_mistral_transformation import AmazonMistralConfig as AmazonMistralConfig
+    from .llms.bedrock.chat.invoke_transformations.amazon_moonshot_transformation import AmazonMoonshotConfig as AmazonMoonshotConfig
     from .llms.bedrock.chat.invoke_transformations.amazon_titan_transformation import AmazonTitanConfig as AmazonTitanConfig
     from .llms.bedrock.chat.invoke_transformations.amazon_twelvelabs_pegasus_transformation import AmazonTwelveLabsPegasusConfig as AmazonTwelveLabsPegasusConfig
     from .llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig as AmazonInvokeConfig
@@ -1372,6 +1374,7 @@ if TYPE_CHECKING:
     from .llms.azure.responses.o_series_transformation import AzureOpenAIOSeriesResponsesAPIConfig as AzureOpenAIOSeriesResponsesAPIConfig
     from .llms.xai.responses.transformation import XAIResponsesAPIConfig as XAIResponsesAPIConfig
     from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
+    from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig

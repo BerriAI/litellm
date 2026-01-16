@@ -909,6 +909,7 @@ BEDROCK_INVOKE_PROVIDERS_LITERAL = Literal[
     "twelvelabs",
     "openai",
     "stability",
+    "moonshot",
 ]
 
 BEDROCK_EMBEDDING_PROVIDERS_LITERAL = Literal[
@@ -1072,6 +1073,13 @@ LITELLM_TRUNCATED_PAYLOAD_FIELD = "litellm_truncated"
 
 ########################### LiteLLM Proxy Specific Constants ###########################
 ########################################################################################
+
+# Standard headers that are always checked for customer/end-user ID (no configuration required)
+# These headers work out-of-the-box for tools like Claude Code that support custom headers
+STANDARD_CUSTOMER_ID_HEADERS = [
+    "x-litellm-customer-id",
+    "x-litellm-end-user-id",
+]
 MAX_SPENDLOG_ROWS_TO_QUERY = int(
     os.getenv("MAX_SPENDLOG_ROWS_TO_QUERY", 1_000_000)
 )  # if spendLogs has more than 1M rows, do not query the DB
@@ -1284,3 +1292,20 @@ COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
 ########################### RAG Text Splitter Constants ###########################
 DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
+
+########################### Microsoft SSO Constants ###########################
+MICROSOFT_USER_EMAIL_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_EMAIL_ATTRIBUTE", "userPrincipalName")
+)
+MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "displayName")
+)
+MICROSOFT_USER_ID_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_ID_ATTRIBUTE", "id")
+)
+MICROSOFT_USER_FIRST_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "givenName")
+)
+MICROSOFT_USER_LAST_NAME_ATTRIBUTE = str(
+    os.getenv("MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "surname")
+)

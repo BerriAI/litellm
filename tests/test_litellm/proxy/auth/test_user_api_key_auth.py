@@ -338,6 +338,17 @@ async def test_proxy_admin_expired_key_from_cache():
                 f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"
             )
             
+            # Verify that the param field does NOT leak the full API key (Issue #18731)
+            # The param should be abbreviated like "sk-...XXXX" not the full plaintext key
+            assert exc_info.value.param is not None, "Exception should have 'param' attribute"
+            assert exc_info.value.param != api_key, (
+                f"SECURITY: Full API key should NOT be in param field! "
+                f"Got: {exc_info.value.param}, Expected abbreviated format like 'sk-...XXXX'"
+            )
+            assert exc_info.value.param.startswith("sk-..."), (
+                f"Param should be abbreviated to 'sk-...XXXX' format. Got: {exc_info.value.param}"
+            )
+            
             # Verify that cache deletion was called
             mock_delete_cache.assert_called_once()
             call_args = mock_delete_cache.call_args
@@ -347,3 +358,61 @@ async def test_proxy_admin_expired_key_from_cache():
         finally:
             # Clean up - restore original values if needed
             pass
+
+
+
+@pytest.mark.asyncio
+async def test_return_user_api_key_auth_obj_user_spend_and_budget():
+    """
+    Test that _return_user_api_key_auth_obj correctly sets user_spend and user_max_budget
+    from user_obj attributes.
+    """
+    from datetime import datetime
+    
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import _return_user_api_key_auth_obj
+    
+    user_obj = type(
+        "LiteLLM_UserTable",
+        (),
+        {
+            "tpm_limit": 1000,
+            "rpm_limit": 100,
+            "user_email": "test@example.com",
+            "spend": 250.0,
+            "max_budget": 1000.0,
+            "user_role": "internal_user",
+        },
+    )
+    
+    api_key = "sk-test-key"
+    valid_token_dict = {
+        "user_id": "test-user",
+        "org_id": "test-org",
+    }
+    route = "/chat/completions"
+    start_time = datetime.now()
+    
+    mock_service_logger = MagicMock()
+    mock_service_logger.async_service_success_hook = AsyncMock()
+    
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_service_logger_obj",
+        new=mock_service_logger,
+    ):
+        result = await _return_user_api_key_auth_obj(
+            user_obj=user_obj,
+            api_key=api_key,
+            parent_otel_span=None,
+            valid_token_dict=valid_token_dict,
+            route=route,
+            start_time=start_time,
+            user_role=None,
+        )
+    
+    assert isinstance(result, UserAPIKeyAuth)
+    assert result.user_spend == 250.0
+    assert result.user_max_budget == 1000.0
+    assert result.user_tpm_limit == 1000
+    assert result.user_rpm_limit == 100
+    assert result.user_email == "test@example.com"

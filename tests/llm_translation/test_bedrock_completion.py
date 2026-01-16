@@ -2835,6 +2835,34 @@ def test_bedrock_invoke_provider():
         )
         == "nova"
     )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-pro-v1:0")
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-lite-v1:0"
+        )
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-micro-v1:0"
+        )
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-premier-v1:0"
+        )
+        == "nova"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "amazon.nova-2-lite-v1:0"
+        )
+        == "nova"
+    )
 
 
 def test_bedrock_description_param():
@@ -3322,7 +3350,8 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
         mock_callback.assert_called_once()
         print(mock_callback.call_args.kwargs.keys())
         assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
-        assert mock_callback.call_args.kwargs["kwargs"]["response_cost"] > 0
+        response_cost = mock_callback.call_args.kwargs["kwargs"]["response_cost"]
+        assert response_cost is not None and response_cost > 0
         assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
 
 
@@ -3488,7 +3517,9 @@ def test_bedrock_openai_imported_model():
         url = mock_post.call_args.kwargs["url"]
         print(f"URL: {url}")
         assert "bedrock-runtime.us-east-1.amazonaws.com" in url
-        assert "arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy" in url
+        assert (
+            "arn:aws:bedrock:us-east-1:117159858402:imported-model/m4gc1mrfuddy" in url
+        )
         assert "/invoke" in url
 
         # Validate request body follows OpenAI format
@@ -3517,7 +3548,9 @@ def test_bedrock_openai_imported_model():
         # Check image_url content
         assert user_msg["content"][1]["type"] == "image_url"
         assert "image_url" in user_msg["content"][1]
-        assert user_msg["content"][1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        assert user_msg["content"][1]["image_url"]["url"].startswith(
+            "data:image/jpeg;base64,"
+        )
 
         assert user_msg["content"][2]["type"] == "image_url"
         assert "image_url" in user_msg["content"][2]
@@ -3526,21 +3559,67 @@ def test_bedrock_openai_imported_model():
         assert request_body["max_tokens"] == 300
         assert request_body["temperature"] == 0.5
 
+
+def test_bedrock_nova_provider_detection():
+    """
+    Test that Nova models are correctly detected even when prefixed with "amazon."
+    Regression test for issue #17910 where models like "amazon.nova-pro-v1:0"
+    were incorrectly identified as "amazon" (Titan) instead of "nova".
+    """
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    # Test various Nova model formats
+    nova_test_cases = [
+        ("us.amazon.nova-pro-v1:0", "nova"),
+        ("us.amazon.nova-lite-v1:0", "nova"),
+        ("us.amazon.nova-micro-v1:0", "nova"),
+        ("amazon.nova-pro-v1:0", "nova"),
+        ("amazon.nova-lite-v1:0", "nova"),
+        ("amazon.nova-micro-v1:0", "nova"),
+        ("amazon.nova-premier-v1:0", "nova"),
+        ("amazon.nova-2-lite-v1:0", "nova"),
+        ("bedrock/amazon.nova-pro-v1:0", "nova"),
+        ("bedrock/invoke/amazon.nova-pro-v1:0", "nova"),
+        ("amazon.Nova-pro-v1:0", "nova"),
+        ("amazon.NOVA-pro-v1:0", "nova"),
+    ]
+
+    for model, expected in nova_test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert (
+            provider == expected
+        ), f"Failed for model: {model}, expected: {expected}, got: {provider}"
+
+    # Verify that Amazon Titan models still return "amazon"
+    titan_test_cases = [
+        ("amazon.titan-text-express-v1", "amazon"),
+        ("us.amazon.titan-text-lite-v1", "amazon"),
+    ]
+
+    for model, expected in titan_test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert (
+            provider == expected
+        ), f"Failed for model: {model}, expected: {expected}, got: {provider}"
+
+
 def test_bedrock_openai_provider_detection():
     """
     Test that the OpenAI provider is correctly detected from model strings.
     """
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-    
+
     # Test various OpenAI model formats
     test_cases = [
         "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123",
         "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/xyz789",
     ]
-    
+
     for model in test_cases:
         provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
-        assert provider == "openai", f"Failed for model: {model}, got provider: {provider}"
+        assert (
+            provider == "openai"
+        ), f"Failed for model: {model}, got provider: {provider}"
         print(f"✓ Provider detection works for: {model}")
 
 
@@ -3549,16 +3628,16 @@ def test_bedrock_openai_model_id_extraction():
     Test that the model ID (ARN) is correctly extracted and encoded for OpenAI models.
     """
     from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-    
-    model = "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
-    provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
-    
-    model_id = BaseAWSLLM.get_bedrock_model_id(
-        model=model,
-        provider=provider,
-        optional_params={}
+
+    model = (
+        "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
     )
-    
+    provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+
+    model_id = BaseAWSLLM.get_bedrock_model_id(
+        model=model, provider=provider, optional_params={}
+    )
+
     # The ARN should be double URL encoded
     assert "arn" in model_id
     assert "imported-model" in model_id
@@ -3570,20 +3649,17 @@ def test_bedrock_openai_convert_messages_to_prompt():
     Test that convert_messages_to_prompt returns empty string for OpenAI models.
     """
     from litellm.llms.bedrock.chat.invoke_handler import BedrockLLM
-    
+
     bedrock_llm = BedrockLLM()
     messages = [
         {"role": "system", "content": "You are helpful"},
-        {"role": "user", "content": "Hello"}
+        {"role": "user", "content": "Hello"},
     ]
-    
+
     prompt, chat_history = bedrock_llm.convert_messages_to_prompt(
-        model="test-model",
-        messages=messages,
-        provider="openai",
-        custom_prompt_dict={}
+        model="test-model", messages=messages, provider="openai", custom_prompt_dict={}
     )
-    
+
     # OpenAI models use messages directly, no prompt conversion
     assert prompt == ""
     assert chat_history is None
@@ -3598,37 +3674,33 @@ def test_bedrock_openai_response_parsing():
     from litellm import ModelResponse
     from unittest.mock import Mock
     import json
-    
+
     bedrock_llm = BedrockLLM()
-    
+
     # Mock OpenAI-style response
     openai_response = {
         "choices": [
             {
                 "message": {
                     "content": "The capital of France is Paris.",
-                    "role": "assistant"
+                    "role": "assistant",
                 },
                 "finish_reason": "stop",
-                "index": 0
+                "index": 0,
             }
         ],
-        "usage": {
-            "prompt_tokens": 10,
-            "completion_tokens": 8,
-            "total_tokens": 18
-        }
+        "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
     }
-    
+
     mock_response = Mock()
     mock_response.json.return_value = openai_response
     mock_response.text = json.dumps(openai_response)
     mock_response.status_code = 200
     mock_response.headers = {}
-    
+
     model_response = ModelResponse()
     mock_logging = Mock()
-    
+
     result = bedrock_llm.process_response(
         model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
         response=mock_response,
@@ -3640,18 +3712,18 @@ def test_bedrock_openai_response_parsing():
         data={},
         messages=[{"role": "user", "content": "What is the capital of France?"}],
         print_verbose=lambda x: None,
-        encoding=None
+        encoding=None,
     )
-    
+
     # Verify response content
     assert result.choices[0].message.content == "The capital of France is Paris."
     assert result.choices[0].finish_reason == "stop"
-    
+
     # Verify usage
     assert result.usage.prompt_tokens == 10
     assert result.usage.completion_tokens == 8
     assert result.usage.total_tokens == 18
-    
+
     print("✓ OpenAI response parsing works correctly")
 
 
@@ -3659,45 +3731,47 @@ def test_bedrock_openai_request_transformation():
     """
     Test that the request is correctly transformed for OpenAI models.
     """
-    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import AmazonInvokeConfig
-    
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+        AmazonInvokeConfig,
+    )
+
     config = AmazonInvokeConfig()
-    
+
     model = "openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
     messages = [
         {"role": "system", "content": "You are helpful"},
-        {"role": "user", "content": "Hello"}
+        {"role": "user", "content": "Hello"},
     ]
-    
+
     optional_params = {
         "max_tokens": 100,
         "temperature": 0.7,
         "top_p": 0.9,
-        "stream": False
+        "stream": False,
     }
-    
+
     litellm_params = {}
     headers = {}
-    
-    with patch.object(config, 'get_bedrock_invoke_provider', return_value="openai"):
+
+    with patch.object(config, "get_bedrock_invoke_provider", return_value="openai"):
         result = config.transform_request(
             model=model,
             messages=messages,
             optional_params=optional_params.copy(),
             litellm_params=litellm_params,
-            headers=headers
+            headers=headers,
         )
-    
+
     # Verify the request uses messages format (not prompt)
     assert "messages" in result
     assert len(result["messages"]) == 2
     assert result["messages"][0]["role"] == "system"
     assert result["messages"][1]["role"] == "user"
-    
+
     # Verify parameters are included
     assert "max_tokens" in result
     assert "temperature" in result
-    
+
     print("✓ Request transformation works correctly")
 
 
@@ -3705,20 +3779,22 @@ def test_bedrock_openai_parameter_filtering():
     """
     Test that only supported OpenAI parameters are included in the request.
     """
-    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import AmazonBedrockOpenAIConfig
-    
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
     config = AmazonBedrockOpenAIConfig()
     model = "test-model"
-    
+
     supported_params = config.get_supported_openai_params(model=model)
-    
+
     # Verify common OpenAI parameters are supported
     assert "max_tokens" in supported_params
     assert "temperature" in supported_params
     assert "top_p" in supported_params
     assert "stream" in supported_params
     assert "stop" in supported_params
-    
+
     print(f"✓ Parameter filtering supports: {len(supported_params)} parameters")
     print(f"  Supported params: {supported_params}")
 
@@ -3728,12 +3804,12 @@ def test_bedrock_openai_route_detection():
     Test that the OpenAI route is correctly detected.
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
-    
+
     test_cases = [
         ("openai/arn:aws:bedrock:us-east-1:123:imported-model/test", "openai"),
         ("bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test", "openai"),
     ]
-    
+
     for model, expected_route in test_cases:
         route = BedrockModelInfo.get_bedrock_route(model)
         assert route == expected_route, f"Failed for model: {model}, got route: {route}"
@@ -3745,15 +3821,30 @@ def test_bedrock_openai_explicit_route_check():
     Test the explicit OpenAI route checker helper method.
     """
     from litellm.llms.bedrock.common_utils import BedrockModelInfo
-    
+
     # Test with openai/ prefix
-    assert BedrockModelInfo._explicit_openai_route("openai/arn:aws:bedrock:us-east-1:123:imported-model/test") is True
-    assert BedrockModelInfo._explicit_openai_route("bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test") is True
-    
+    assert (
+        BedrockModelInfo._explicit_openai_route(
+            "openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
+        )
+        is True
+    )
+    assert (
+        BedrockModelInfo._explicit_openai_route(
+            "bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
+        )
+        is True
+    )
+
     # Test without openai/ prefix
     assert BedrockModelInfo._explicit_openai_route("anthropic.claude-3-sonnet") is False
-    assert BedrockModelInfo._explicit_openai_route("arn:aws:bedrock:us-east-1:123:imported-model/test") is False
-    
+    assert (
+        BedrockModelInfo._explicit_openai_route(
+            "arn:aws:bedrock:us-east-1:123:imported-model/test"
+        )
+        is False
+    )
+
     print("✓ Explicit route check works correctly")
 
 
@@ -3761,16 +3852,18 @@ def test_bedrock_openai_config_initialization():
     """
     Test that AmazonBedrockOpenAIConfig can be properly initialized.
     """
-    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import AmazonBedrockOpenAIConfig
-    
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
     config = AmazonBedrockOpenAIConfig()
-    
+
     # Verify it has the necessary methods
-    assert hasattr(config, 'get_supported_openai_params')
-    assert hasattr(config, 'transform_request')
-    assert hasattr(config, 'transform_response')
-    assert hasattr(config, 'map_openai_params')
-    
+    assert hasattr(config, "get_supported_openai_params")
+    assert hasattr(config, "transform_request")
+    assert hasattr(config, "transform_response")
+    assert hasattr(config, "map_openai_params")
+
     print("✓ AmazonBedrockOpenAIConfig initializes correctly")
 
 
@@ -3779,9 +3872,9 @@ def test_bedrock_openai_multiple_message_types():
     Test that various message content types are handled correctly.
     """
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
-    
+
     client = HTTPHandler()
-    
+
     # Test with mixed content types
     messages = [
         {"role": "system", "content": "You are helpful"},
@@ -3790,11 +3883,14 @@ def test_bedrock_openai_multiple_message_types():
             "role": "user",
             "content": [
                 {"type": "text", "text": "Complex message with text"},
-                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,iVBORw0KGg"}}
-            ]
-        }
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/jpeg;base64,iVBORw0KGg"},
+                },
+            ],
+        },
     ]
-    
+
     with patch.object(client, "post") as mock_post:
         try:
             response = completion(
@@ -3805,18 +3901,18 @@ def test_bedrock_openai_multiple_message_types():
             )
         except Exception as e:
             pass
-        
+
         # Verify the request was made
         if mock_post.called:
             request_body = json.loads(mock_post.call_args.kwargs["data"])
-            
+
             # Verify messages are preserved
             assert "messages" in request_body
             assert len(request_body["messages"]) == 3
-            
+
             # Verify mixed content is handled
             assert isinstance(request_body["messages"][2]["content"], list)
-            
+
             print("✓ Multiple message types handled correctly")
 
 
@@ -3829,18 +3925,18 @@ def test_bedrock_openai_error_handling():
     from litellm.llms.bedrock.common_utils import BedrockError
     from unittest.mock import Mock
     import json
-    
+
     bedrock_llm = BedrockLLM()
-    
+
     # Mock error response
     mock_response = Mock()
     mock_response.json.side_effect = Exception("Invalid JSON")
     mock_response.text = "Invalid response"
     mock_response.status_code = 422
-    
+
     model_response = ModelResponse()
     mock_logging = Mock()
-    
+
     with pytest.raises(BedrockError) as exc_info:
         bedrock_llm.process_response(
             model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
@@ -3853,8 +3949,162 @@ def test_bedrock_openai_error_handling():
             data={},
             messages=[],
             print_verbose=lambda x: None,
-            encoding=None
+            encoding=None,
         )
-    
+
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
+
+
+def test_bedrock_malformed_tool_json_handling():
+    """
+    Test that Bedrock handles malformed JSON in tool call arguments gracefully.
+    
+    This test covers the issue where:
+    1. LLM generates malformed JSON in tool call arguments
+    2. Subsequent requests with conversation history should not crash
+    3. The toolUse.input field should handle any JSON value type per boto3 spec
+    
+    Related issue: https://github.com/BerriAI/litellm/issues/[issue_number]
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _convert_to_bedrock_tool_call_invoke,
+    )
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.llms.bedrock import ContentBlock
+    
+    # Test 1: Malformed JSON in tool call arguments
+    malformed_tool_calls = [
+        {
+            "id": "call_123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Paris", "invalid_json',  # Malformed JSON
+            },
+        }
+    ]
+    
+    # Should not raise an exception, but store as raw string
+    result = _convert_to_bedrock_tool_call_invoke(malformed_tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    # The malformed JSON should be stored as a string
+    assert isinstance(result[0]["toolUse"]["input"], str)
+    assert result[0]["toolUse"]["input"] == '{"location": "Paris", "invalid_json'
+    print("✓ Malformed JSON stored as raw string")
+    
+    # Test 2: Valid JSON should still work normally
+    valid_tool_calls = [
+        {
+            "id": "call_456",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "London"}',
+            },
+        }
+    ]
+    
+    result = _convert_to_bedrock_tool_call_invoke(valid_tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    assert isinstance(result[0]["toolUse"]["input"], dict)
+    assert result[0]["toolUse"]["input"] == {"location": "London"}
+    print("✓ Valid JSON parsed correctly")
+    
+    # Test 3: Empty arguments should create empty dict
+    empty_tool_calls = [
+        {
+            "id": "call_789",
+            "type": "function",
+            "function": {
+                "name": "no_args_function",
+                "arguments": "",
+            },
+        }
+    ]
+    
+    result = _convert_to_bedrock_tool_call_invoke(empty_tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+    print("✓ Empty arguments handled correctly")
+    
+    # Test 4: Bedrock to OpenAI conversion handles string input
+    converse_config = AmazonConverseConfig()
+    content_blocks = [
+        ContentBlock(
+            toolUse={
+                "name": "get_weather",
+                "toolUseId": "call_123",
+                "input": '{"location": "Paris", "invalid_json',  # String input (malformed)
+            }
+        )
+    ]
+    
+    content_str, tools, reasoning = converse_config._translate_message_content(
+        content_blocks
+    )
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "get_weather"
+    # Should return the string as-is
+    assert tools[0]["function"]["arguments"] == '{"location": "Paris", "invalid_json'
+    print("✓ Bedrock to OpenAI conversion handles string input")
+    
+    # Test 5: Bedrock to OpenAI conversion handles dict input
+    content_blocks_dict = [
+        ContentBlock(
+            toolUse={
+                "name": "get_weather",
+                "toolUseId": "call_456",
+                "input": {"location": "London"},  # Dict input (normal case)
+            }
+        )
+    ]
+    
+    content_str, tools, reasoning = converse_config._translate_message_content(
+        content_blocks_dict
+    )
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "get_weather"
+    # Should serialize dict to JSON string
+    assert tools[0]["function"]["arguments"] == '{"location": "London"}'
+    print("✓ Bedrock to OpenAI conversion handles dict input")
+    
+    # Test 6: Round-trip conversion with malformed JSON
+    # Test that we can convert OpenAI -> Bedrock -> OpenAI with malformed JSON
+    malformed_tool_calls_roundtrip = [
+        {
+            "id": "call_999",
+            "type": "function",
+            "function": {
+                "name": "test_function",
+                "arguments": '{"key": "value", "broken',  # Malformed
+            },
+        }
+    ]
+    
+    # Step 1: OpenAI to Bedrock (should store as string)
+    bedrock_blocks = _convert_to_bedrock_tool_call_invoke(malformed_tool_calls_roundtrip)
+    assert isinstance(bedrock_blocks[0]["toolUse"]["input"], str)
+    
+    # Step 2: Bedrock back to OpenAI (should preserve the string)
+    content_blocks_roundtrip = [
+        ContentBlock(
+            toolUse={
+                "name": bedrock_blocks[0]["toolUse"]["name"],
+                "toolUseId": bedrock_blocks[0]["toolUse"]["toolUseId"],
+                "input": bedrock_blocks[0]["toolUse"]["input"],
+            }
+        )
+    ]
+    
+    content_str, tools_roundtrip, reasoning = converse_config._translate_message_content(
+        content_blocks_roundtrip
+    )
+    
+    # Should preserve the malformed JSON string through the round trip
+    assert tools_roundtrip[0]["function"]["arguments"] == '{"key": "value", "broken'
+    print("✓ Round-trip conversion preserves malformed JSON")
+    
+    print("✓ All malformed JSON handling tests passed")

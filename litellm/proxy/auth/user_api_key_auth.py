@@ -138,7 +138,7 @@ def _apply_budget_limits_to_end_user_params(
 ) -> None:
     """
     Helper function to apply budget limits to end user parameters.
-    
+
     Args:
         end_user_params: Dictionary to update with budget parameters
         budget_info: Budget table object containing limits
@@ -146,16 +146,14 @@ def _apply_budget_limits_to_end_user_params(
     """
     if budget_info.tpm_limit is not None:
         end_user_params["end_user_tpm_limit"] = budget_info.tpm_limit
-    
+
     if budget_info.rpm_limit is not None:
         end_user_params["end_user_rpm_limit"] = budget_info.rpm_limit
-    
+
     if budget_info.max_budget is not None:
         end_user_params["end_user_max_budget"] = budget_info.max_budget
-    
-    verbose_proxy_logger.debug(
-        f"Applied budget limits to end user {end_user_id}"
-    )
+
+    verbose_proxy_logger.debug(f"Applied budget limits to end user {end_user_id}")
 
 
 async def user_api_key_auth_websocket(websocket: WebSocket):
@@ -170,12 +168,10 @@ async def user_api_key_auth_websocket(websocket: WebSocket):
 
     model = query_params.get("model")
 
-    
     async def return_body():
         return _realtime_request_body(model)
-    
-    request.body = return_body  # type: ignore
 
+    request.body = return_body  # type: ignore
 
     authorization = websocket.headers.get("authorization")
     # If no Authorization header, try the api-key header
@@ -586,7 +582,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         if team_membership is not None
                         else None
                     ),
-                    team_metadata=team_object.metadata if team_object is not None else None,
+                    team_metadata=team_object.metadata
+                    if team_object is not None
+                    else None,
                 )
                 # run through common checks
                 _ = await common_checks(
@@ -669,9 +667,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     route=route,
                 )
                 if _end_user_object is not None:
-                    end_user_params["allowed_model_region"] = (
-                        _end_user_object.allowed_model_region
-                    )
+                    end_user_params[
+                        "allowed_model_region"
+                    ] = _end_user_object.allowed_model_region
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -753,7 +751,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
                         code=400,
-                        param=api_key,
+                        param=abbreviate_api_key(api_key=api_key),
                     )
             valid_token = update_valid_token_with_end_user_params(
                 valid_token=valid_token, end_user_params=end_user_params
@@ -994,7 +992,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
-
                 if prisma_client is not None:
                     _cache_key = f"{valid_token.team_id}_{valid_token.user_id}"
 
@@ -1055,7 +1052,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         message=f"Authentication Error - Expired Key. Key Expiry time {expiry_time} and current time {current_time}",
                         type=ProxyErrorTypes.expired_key,
                         code=400,
-                        param=api_key,
+                        param=abbreviate_api_key(api_key=api_key),
                     )
 
             # Check 4. Token Spend is under budget
@@ -1216,8 +1213,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         )
 
 
-
-
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
@@ -1308,6 +1303,8 @@ async def _return_user_api_key_auth_obj(
             user_tpm_limit=user_obj.tpm_limit,
             user_rpm_limit=user_obj.rpm_limit,
             user_email=user_obj.user_email,
+            user_spend=getattr(user_obj, "spend", None),
+            user_max_budget=getattr(user_obj, "max_budget", None),
         )
     if user_obj is not None and _is_user_proxy_admin(user_obj=user_obj):
         user_api_key_kwargs.update(
