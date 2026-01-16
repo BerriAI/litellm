@@ -1231,30 +1231,18 @@ async def test_acompletion_streaming_disable_fallbacks_midstream():
             return self
 
         async def __anext__(self):
-            if self.index == self.error_after_index:
-                raise self.error
             if self.index >= len(self.items):
                 raise StopAsyncIteration
+            if self.index == self.error_after_index:
+                raise self.error
             item = self.items[self.index]
             self.index += 1
             self.chunks.append(item)
             return item
 
-    # Create properly structured mock chunks using ModelResponse
-    from litellm.types.utils import Delta, ModelResponse, StreamingChoices
-
-    mock_chunk = ModelResponse(
-        id="chatcmpl-123",
-        choices=[
-            StreamingChoices(
-                index=0, delta=Delta(content="Hello", role="assistant"), finish_reason=None
-            )
-        ],
-        created=1234567890,
-        model="gpt-4",
-        object="chat.completion.chunk",
-    )
-    mock_chunks = [mock_chunk]
+    mock_chunks = [
+        MagicMock(choices=[MagicMock(delta=MagicMock(content="Hello"))]),
+    ]
 
     mock_error_response = AsyncIteratorWithError(
         mock_chunks, 1, error_with_original
