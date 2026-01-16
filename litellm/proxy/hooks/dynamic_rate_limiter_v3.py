@@ -114,25 +114,25 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     ) -> Optional[str]:
         """
         Get priority from user_api_key_dict.
-        
+
         Checks team metadata first (takes precedence), then falls back to key metadata.
-        
+
         Args:
             user_api_key_dict: User authentication info
-            
+
         Returns:
             Priority string if found, None otherwise
         """
         priority: Optional[str] = None
-        
+
         # Check team metadata first (takes precedence)
         if user_api_key_dict.team_metadata is not None:
             priority = user_api_key_dict.team_metadata.get("priority", None)
-        
+
         # Fall back to key metadata
         if priority is None:
             priority = user_api_key_dict.metadata.get("priority", None)
-            
+
         return priority
 
     def _normalize_priority_weights(
@@ -299,10 +299,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         """
         descriptors: List[RateLimitDescriptor] = []
 
+        if litellm.priority_reservation is None:
+            return descriptors
+
         # Get model group info
-        model_group_info: Optional[ModelGroupInfo] = (
-            self.llm_router.get_model_group_info(model_group=model)
-        )
+        model_group_info: Optional[
+            ModelGroupInfo
+        ] = self.llm_router.get_model_group_info(model_group=model)
         if model_group_info is None:
             return descriptors
 
@@ -577,9 +580,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         )
 
         # Get model configuration
-        model_group_info: Optional[ModelGroupInfo] = (
-            self.llm_router.get_model_group_info(model_group=model)
-        )
+        model_group_info: Optional[
+            ModelGroupInfo
+        ] = self.llm_router.get_model_group_info(model_group=model)
         if model_group_info is None:
             verbose_proxy_logger.debug(
                 f"No model group info for {model}, allowing request"
@@ -703,7 +706,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
             # Get priority from user_api_key_auth_metadata in standard_logging_metadata
             # This is where user_api_key_dict.metadata is stored during pre-call
-            user_api_key_auth_metadata = standard_logging_metadata.get("user_api_key_auth_metadata") or {}
+            user_api_key_auth_metadata = (
+                standard_logging_metadata.get("user_api_key_auth_metadata") or {}
+            )
             key_priority: Optional[str] = user_api_key_auth_metadata.get("priority")
 
             # Get total tokens from response
@@ -775,7 +780,9 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
                 # Only log 'priority' if it's known safe; otherwise, redact.
                 SAFE_PRIORITIES = {"low", "medium", "high", "default"}
-                logged_priority = key_priority if key_priority in SAFE_PRIORITIES else "REDACTED"
+                logged_priority = (
+                    key_priority if key_priority in SAFE_PRIORITIES else "REDACTED"
+                )
                 verbose_proxy_logger.debug(
                     f"[Dynamic Rate Limiter] Incremented tokens by {total_tokens} for "
                     f"model={model_group}, priority={logged_priority}"

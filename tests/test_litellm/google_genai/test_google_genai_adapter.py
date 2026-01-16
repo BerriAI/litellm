@@ -422,7 +422,7 @@ def test_streaming_tool_calls_transformation():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -454,7 +454,7 @@ def test_streaming_tool_calls_transformation():
         delta=mock_delta
     )
     
-    mock_response = ModelResponse(
+    mock_response = ModelResponseStream(
         id="test-streaming",
         choices=[mock_choice],
         created=1234567890,
@@ -493,7 +493,7 @@ def test_streaming_partial_tool_calls_accumulation():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -543,7 +543,7 @@ def test_streaming_partial_tool_calls_accumulation():
             delta=mock_delta
         )
         
-        mock_response = ModelResponse(
+        mock_response = ModelResponseStream(
             id="test-streaming",
             choices=[mock_choice],
             created=1234567890,
@@ -595,7 +595,7 @@ def test_streaming_multiple_partial_tool_calls():
         ChatCompletionDeltaToolCall,
         Delta,
         Function,
-        ModelResponse,
+        ModelResponseStream,
         StreamingChoices,
     )
     
@@ -642,7 +642,7 @@ def test_streaming_multiple_partial_tool_calls():
             delta=mock_delta
         )
         
-        mock_response = ModelResponse(
+        mock_response = ModelResponseStream(
             id="test-streaming",
             choices=[mock_choice],
             created=1234567890,

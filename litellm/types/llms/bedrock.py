@@ -62,7 +62,7 @@ class ToolResultBlock(TypedDict, total=False):
 
 
 class ToolUseBlock(TypedDict):
-    input: dict
+    input: Any  # Per boto3 spec: document type can be dict, list, int, float, str, bool, or None
     name: str
     toolUseId: str
 
