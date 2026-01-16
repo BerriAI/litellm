@@ -1,25 +1,24 @@
-import React from "react";
+import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Member } from "@/components/networking";
+import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
+import { InfoCircleOutlined } from "@ant-design/icons";
 import {
   Card,
   Table,
-  TableHead,
-  TableRow,
-  TableHeaderCell,
   TableBody,
   TableCell,
+  TableHead,
+  TableHeaderCell,
+  TableRow,
   Text,
-  Icon,
   Button as TremorButton,
 } from "@tremor/react";
-import { InfoCircleOutlined } from "@ant-design/icons";
 import { Tooltip } from "antd";
+import React from "react";
+import TableIconActionButton from "../common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { TeamData } from "./team_info";
-import { PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
-import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
-import { isUserTeamAdminForSingleTeam, isProxyAdminRole } from "@/utils/roles";
-import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 interface TeamMembersComponentProps {
   teamData: TeamData;
@@ -154,9 +153,9 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                   <TableCell className="sticky right-0 bg-white z-10 border-l border-gray-200">
                     {canEditTeam && (
                       <div className="flex gap-2">
-                        <Icon
-                          icon={PencilAltIcon}
-                          size="sm"
+                        <TableIconActionButton
+                          variant="Edit"
+                          tooltipText="Edit member"
                           onClick={() => {
                             // Get budget and rate limit data from team membership
                             const membership = teamData.team_memberships.find((tm) => tm.user_id === member.user_id);
@@ -169,14 +168,12 @@ const TeamMembersComponent: React.FC<TeamMembersComponentProps> = ({
                             setSelectedEditMember(enhancedMember);
                             setIsEditMemberModalVisible(true);
                           }}
-                          className="cursor-pointer hover:text-blue-600"
                         />
                         {(isProxyAdmin || (isUserTeamAdmin && !disableTeamAdminDeleteTeamUser)) && (
-                          <Icon
-                            icon={TrashIcon}
-                            size="sm"
+                          <TableIconActionButton
+                            variant="Delete"
+                            tooltipText="Delete member"
                             onClick={() => handleMemberDelete(member)}
-                            className="cursor-pointer hover:text-red-600"
                           />
                         )}
                       </div>
