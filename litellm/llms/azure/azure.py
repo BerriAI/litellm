@@ -679,13 +679,13 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             #    This completely eliminates "Unclosed connection" warnings during high load.
             try:
                 response = raw_response.parse()
-                stringified_response = response.model_dump()
             except json.JSONDecodeError as json_error:
                 raise AzureOpenAIError(
                     status_code=raw_response.status_code or 500,
                     message=f"Failed to parse raw Azure embedding response: {str(json_error)}"
                 ) from json_error
             
+            stringified_response = response.model_dump()
 
             ## LOGGING
             logging_obj.post_call(
