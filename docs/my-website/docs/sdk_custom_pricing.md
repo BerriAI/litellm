@@ -2,7 +2,10 @@
 
 Register custom pricing for sagemaker completion model. 
 
-For cost per second pricing, you **just** need to register `input_cost_per_second`. 
+For cost per second pricing, register `input_cost_per_second`. If your provider
+charges for audio output duration (e.g., TTS), also set `output_cost_per_second`.
+Values of `0` are treated as not billable, so `output_cost_per_second: 0` will
+not override `input_cost_per_second`.
 
 ```python
 # !pip install boto3 
