@@ -440,6 +440,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "asearch",
             "avector_store_create",
             "avector_store_search",
+            "acreate_skill",
         ]
     ],
 )
