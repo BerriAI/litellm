@@ -4339,6 +4339,38 @@ class StandardLoggingPayloadSetup:
         return messages
 
     @staticmethod
+    def merge_litellm_metadata(litellm_params: dict) -> dict:
+        """
+        Merge both litellm_metadata and metadata from litellm_params.
+        
+        litellm_metadata contains model-related fields, metadata contains user API key fields.
+        We need both for complete standard logging payload.
+        
+        Args:
+            litellm_params: Dictionary containing metadata and litellm_metadata
+            
+        Returns:
+            dict: Merged metadata with user API key fields taking precedence
+        """
+        merged_metadata: dict = {}
+        
+        # Start with metadata (user API key fields) - but skip non-serializable objects
+        if litellm_params.get("metadata") and isinstance(litellm_params.get("metadata"), dict):
+            for key, value in litellm_params["metadata"].items():
+                # Skip non-serializable objects like UserAPIKeyAuth
+                if key == "user_api_key_auth":
+                    continue
+                merged_metadata[key] = value
+        
+        # Then merge litellm_metadata (model-related fields) - this will NOT overwrite existing keys
+        if litellm_params.get("litellm_metadata") and isinstance(litellm_params.get("litellm_metadata"), dict):
+            for key, value in litellm_params["litellm_metadata"].items():
+                if key not in merged_metadata:  # Don't overwrite existing keys from metadata
+                    merged_metadata[key] = value
+        
+        return merged_metadata
+
+    @staticmethod
     def get_standard_logging_metadata(
         metadata: Optional[Dict[str, Any]],
         litellm_params: Optional[dict] = None,
@@ -4926,11 +4958,8 @@ def get_standard_logging_object_payload(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
 
-        metadata: dict = (
-            litellm_params.get("litellm_metadata")
-            or litellm_params.get("metadata", None)
-            or {}
-        )
+        # Merge both litellm_metadata and metadata to get complete metadata
+        metadata: dict = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
 
         completion_start_time = kwargs.get("completion_start_time", end_time)
         call_type = kwargs.get("call_type")
