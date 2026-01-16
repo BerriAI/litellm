@@ -48,8 +48,9 @@ FROM $LITELLM_RUNTIME_IMAGE AS runtime
 # Ensure runtime stage runs as root
 USER root
 
-# Install runtime dependencies
-RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile
+# Install runtime dependencies and upgrade vulnerable packages
+RUN apk add --no-cache bash openssl tzdata nodejs npm python3 py3-pip libsndfile && \
+    apk upgrade --no-cache zlib busybox || true
 
 WORKDIR /app
 # Copy the current directory contents into the container at /app
