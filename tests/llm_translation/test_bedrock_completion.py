@@ -3954,3 +3954,157 @@ def test_bedrock_openai_error_handling():
 
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
+
+
+def test_bedrock_malformed_tool_json_handling():
+    """
+    Test that Bedrock handles malformed JSON in tool call arguments gracefully.
+    
+    This test covers the issue where:
+    1. LLM generates malformed JSON in tool call arguments
+    2. Subsequent requests with conversation history should not crash
+    3. The toolUse.input field should handle any JSON value type per boto3 spec
+    
+    Related issue: https://github.com/BerriAI/litellm/issues/[issue_number]
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _convert_to_bedrock_tool_call_invoke,
+    )
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.llms.bedrock import ContentBlock
+    
+    # Test 1: Malformed JSON in tool call arguments
+    malformed_tool_calls = [
+        {
+            "id": "call_123",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "Paris", "invalid_json',  # Malformed JSON
+            },
+        }
+    ]
+    
+    # Should not raise an exception, but store as raw string
+    result = _convert_to_bedrock_tool_call_invoke(malformed_tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    # The malformed JSON should be stored as a string
+    assert isinstance(result[0]["toolUse"]["input"], str)
+    assert result[0]["toolUse"]["input"] == '{"location": "Paris", "invalid_json'
+    print("✓ Malformed JSON stored as raw string")
+    
+    # Test 2: Valid JSON should still work normally
+    valid_tool_calls = [
+        {
+            "id": "call_456",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": '{"location": "London"}',
+            },
+        }
+    ]
+    
+    result = _convert_to_bedrock_tool_call_invoke(valid_tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["name"] == "get_weather"
+    assert isinstance(result[0]["toolUse"]["input"], dict)
+    assert result[0]["toolUse"]["input"] == {"location": "London"}
+    print("✓ Valid JSON parsed correctly")
+    
+    # Test 3: Empty arguments should create empty dict
+    empty_tool_calls = [
+        {
+            "id": "call_789",
+            "type": "function",
+            "function": {
+                "name": "no_args_function",
+                "arguments": "",
+            },
+        }
+    ]
+    
+    result = _convert_to_bedrock_tool_call_invoke(empty_tool_calls)
+    assert len(result) == 1
+    assert result[0]["toolUse"]["input"] == {}
+    print("✓ Empty arguments handled correctly")
+    
+    # Test 4: Bedrock to OpenAI conversion handles string input
+    converse_config = AmazonConverseConfig()
+    content_blocks = [
+        ContentBlock(
+            toolUse={
+                "name": "get_weather",
+                "toolUseId": "call_123",
+                "input": '{"location": "Paris", "invalid_json',  # String input (malformed)
+            }
+        )
+    ]
+    
+    content_str, tools, reasoning = converse_config._translate_message_content(
+        content_blocks
+    )
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "get_weather"
+    # Should return the string as-is
+    assert tools[0]["function"]["arguments"] == '{"location": "Paris", "invalid_json'
+    print("✓ Bedrock to OpenAI conversion handles string input")
+    
+    # Test 5: Bedrock to OpenAI conversion handles dict input
+    content_blocks_dict = [
+        ContentBlock(
+            toolUse={
+                "name": "get_weather",
+                "toolUseId": "call_456",
+                "input": {"location": "London"},  # Dict input (normal case)
+            }
+        )
+    ]
+    
+    content_str, tools, reasoning = converse_config._translate_message_content(
+        content_blocks_dict
+    )
+    assert len(tools) == 1
+    assert tools[0]["function"]["name"] == "get_weather"
+    # Should serialize dict to JSON string
+    assert tools[0]["function"]["arguments"] == '{"location": "London"}'
+    print("✓ Bedrock to OpenAI conversion handles dict input")
+    
+    # Test 6: Round-trip conversion with malformed JSON
+    # Test that we can convert OpenAI -> Bedrock -> OpenAI with malformed JSON
+    malformed_tool_calls_roundtrip = [
+        {
+            "id": "call_999",
+            "type": "function",
+            "function": {
+                "name": "test_function",
+                "arguments": '{"key": "value", "broken',  # Malformed
+            },
+        }
+    ]
+    
+    # Step 1: OpenAI to Bedrock (should store as string)
+    bedrock_blocks = _convert_to_bedrock_tool_call_invoke(malformed_tool_calls_roundtrip)
+    assert isinstance(bedrock_blocks[0]["toolUse"]["input"], str)
+    
+    # Step 2: Bedrock back to OpenAI (should preserve the string)
+    content_blocks_roundtrip = [
+        ContentBlock(
+            toolUse={
+                "name": bedrock_blocks[0]["toolUse"]["name"],
+                "toolUseId": bedrock_blocks[0]["toolUse"]["toolUseId"],
+                "input": bedrock_blocks[0]["toolUse"]["input"],
+            }
+        )
+    ]
+    
+    content_str, tools_roundtrip, reasoning = converse_config._translate_message_content(
+        content_blocks_roundtrip
+    )
+    
+    # Should preserve the malformed JSON string through the round trip
+    assert tools_roundtrip[0]["function"]["arguments"] == '{"key": "value", "broken'
+    print("✓ Round-trip conversion preserves malformed JSON")
+    
+    print("✓ All malformed JSON handling tests passed")
