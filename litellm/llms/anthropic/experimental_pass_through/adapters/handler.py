@@ -92,7 +92,13 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 "include_usage": True,
             }
 
-        excluded_keys = {"anthropic_messages"}
+        excluded_keys = {
+            "anthropic_messages",
+            "_tool_search_config",  # Internal: tool search hook config
+            "_deferred_tools",  # Internal: deferred tools for tool search
+            "_tool_search_iteration",  # Internal: iteration counter
+            "_original_tools",  # Internal: original tools list
+        }
         extra_kwargs = extra_kwargs or {}
         for key, value in extra_kwargs.items():
             if (
