@@ -132,7 +132,7 @@ class ChunkProcessor:
         )
         return response
 
-    def get_combined_tool_content( #noqa: PLR0915
+    def get_combined_tool_content( # noqa: PLR0915
         self, tool_call_chunks: List[Dict[str, Any]]
     ) -> List[ChatCompletionMessageToolCall]:
         tool_calls_list: List[ChatCompletionMessageToolCall] = []
