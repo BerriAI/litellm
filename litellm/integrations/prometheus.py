@@ -52,7 +52,7 @@ def _get_cached_end_user_id_for_cost_tracking():
 
 class PrometheusLogger(CustomLogger):
     # Class variables or attributes
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         **kwargs,
     ):
