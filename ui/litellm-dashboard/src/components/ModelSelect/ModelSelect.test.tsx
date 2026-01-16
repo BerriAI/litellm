@@ -192,7 +192,12 @@ describe("ModelSelect", () => {
     } as any);
 
     renderWithProviders(
-      <ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" options={{ includeSpecialOptions: true }} />,
+      <ModelSelect
+        onChange={mockOnChange}
+        context="organization"
+        organizationID="org-1"
+        options={{ includeSpecialOptions: true }}
+      />,
     );
 
     await waitFor(() => {
@@ -392,9 +397,7 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
-    renderWithProviders(
-      <ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" />,
-    );
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" />);
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
@@ -426,9 +429,7 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
-    renderWithProviders(
-      <ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" />,
-    );
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" />);
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
@@ -510,9 +511,7 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
-    renderWithProviders(
-      <ModelSelect onChange={mockOnChange} context="user" options={{ includeUserModels: true }} />,
-    );
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="user" options={{ includeUserModels: true }} />);
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
@@ -555,9 +554,7 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
-    renderWithProviders(
-      <ModelSelect onChange={mockOnChange} context="team" teamID="team-1" organizationID="org-1" />,
-    );
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="team" teamID="team-1" organizationID="org-1" />);
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
