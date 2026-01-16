@@ -1,8 +1,9 @@
 import time
 import uuid
-from typing import List, Optional, Union, cast
+from typing import Dict, List, Optional, Set, Union, cast
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.main import stream_chunk_builder
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -16,6 +17,8 @@ from litellm.types.llms.openai import (
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
     ContentPartDonePartReasoningText,
+    FunctionCallArgumentsDeltaEvent,
+    FunctionCallArgumentsDoneEvent,
     OutputItemAddedEvent,
     OutputItemDoneEvent,
     OutputTextDeltaEvent,
@@ -81,6 +84,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             Union[ModelResponse, TextCompletionResponse]
         ] = None
         self.final_text: str = ""
+        # Tool call streaming state tracking
+        self.accumulated_tool_calls: Dict[int, Dict] = {}  # index -> tool call data
+        self.sent_function_call_output_item_events: Set[int] = set()  # track which output items were sent
+        self.pending_function_call_events: List[BaseLiteLLMOpenAIResponseObject] = []  # queue of events to emit
+        self.pending_function_call_done_events: List[BaseLiteLLMOpenAIResponseObject] = []  # done events to emit at end
+        self.stream_ended: bool = False  # true when underlying stream has ended
 
     def _encode_chunk_id(self, chunk_id: str) -> str:
         """
@@ -357,18 +366,16 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 result = self.return_default_initial_events()
                 if result:
                     return result
-                # Get the next chunk from the stream
-                try:
-                    chunk = await self.litellm_custom_stream_wrapper.__anext__()
-                    self.collected_chat_completion_chunks.append(chunk)
-                    response_api_chunk = (
-                        self._transform_chat_completion_chunk_to_response_api_chunk(
-                            chunk
-                        )
-                    )
-                    if response_api_chunk:
-                        return response_api_chunk
-                except StopAsyncIteration:
+
+                # If stream has ended, emit pending events in order:
+                # 1. Function call done events
+                # 2. Response completed event
+                if self.stream_ended:
+                    # First, emit any pending function call done events
+                    if self.pending_function_call_done_events:
+                        return self.pending_function_call_done_events.pop(0)
+
+                    # Then emit response completed event
                     self.finished = True
                     response_completed_event = self._emit_response_completed_event()
                     if response_completed_event:
@@ -377,6 +384,28 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         return response_completed_event
                     else:
                         raise StopAsyncIteration
+
+                # Get the next chunk from the stream
+                try:
+                    chunk = await self.litellm_custom_stream_wrapper.__anext__()
+                    verbose_logger.debug(f"ResponsesAPI streaming received chunk: {chunk}")
+                    self.collected_chat_completion_chunks.append(chunk)
+                    verbose_logger.debug(f"ResponsesAPI total collected chunks: {len(self.collected_chat_completion_chunks)}")
+                    response_api_chunk = (
+                        self._transform_chat_completion_chunk_to_response_api_chunk(
+                            chunk
+                        )
+                    )
+                    verbose_logger.debug(f"ResponsesAPI transformed chunk: {response_api_chunk}")
+                    if response_api_chunk:
+                        return response_api_chunk
+                except StopAsyncIteration:
+                    # Stream has ended - prepare done events for tool calls
+                    verbose_logger.debug(f"ResponsesAPI stream ended. Total collected chunks: {len(self.collected_chat_completion_chunks)}")
+                    self.stream_ended = True
+                    if self.accumulated_tool_calls:
+                        self.pending_function_call_done_events = self._emit_function_call_done_events()
+                    # Continue the loop to emit done events
 
         except Exception as e:
             # Handle HTTP errors
@@ -397,11 +426,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             while True:
                 if self.finished is True:
                     raise StopIteration
-                # Get the next chunk from the stream
 
                 result = self.return_default_initial_events()
                 if result:
                     return result
+
+                # If stream has ended, emit pending events in order:
+                # 1. Function call done events
+                # 2. Response completed event
+                if self.stream_ended:
+                    # First, emit any pending function call done events
+                    if self.pending_function_call_done_events:
+                        return self.pending_function_call_done_events.pop(0)
+
+                    # Then proceed to common done event logic
+                    return self.common_done_event_logic(sync_mode=True)
+
+                # Get the next chunk from the stream
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
                     self.collected_chat_completion_chunks.append(chunk)
@@ -413,7 +454,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if response_api_chunk:
                         return response_api_chunk
                 except StopIteration:
-                    return self.common_done_event_logic(sync_mode=True)
+                    # Stream has ended - prepare done events for tool calls
+                    self.stream_ended = True
+                    if self.accumulated_tool_calls:
+                        self.pending_function_call_done_events = self._emit_function_call_done_events()
+                    # Continue the loop to emit done events
         except Exception as e:
             # Handle HTTP errors
             self.finished = True
@@ -452,7 +497,22 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             annotation_index=idx,
                             annotation=annotation_dict,
                         )
-                        self._pending_annotation_events.append(event)        
+                        self._pending_annotation_events.append(event)
+
+        # Priority 0.5: Handle tool calls (before text content)
+        # Tool calls are more important than text because when a model calls tools,
+        # it typically sends empty content but has tool_calls in the delta
+        if chunk.choices and hasattr(chunk.choices[0].delta, "tool_calls"):
+            tool_calls = chunk.choices[0].delta.tool_calls
+            if tool_calls:
+                tool_call_event = self._handle_tool_call_delta(chunk, tool_calls)
+                if tool_call_event:
+                    return tool_call_event
+
+        # Priority 0.6: If we have pending function call events, emit the next one
+        if self.pending_function_call_events:
+            return self.pending_function_call_events.pop(0)
+
         # Priority 1: Handle reasoning content (highest priority)
         if (
             chunk.choices
@@ -503,11 +563,144 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         chat_completion_delta: ChatCompletionDelta = choice.delta
         return chat_completion_delta.content or ""
 
+    def _handle_tool_call_delta(
+        self, chunk: ModelResponseStream, tool_calls: List
+    ) -> Optional[BaseLiteLLMOpenAIResponseObject]:
+        """
+        Handle tool call deltas from streaming chunks.
+
+        This method:
+        1. Tracks tool calls by their index
+        2. Emits OutputItemAddedEvent when a new tool call is first seen
+        3. Emits FunctionCallArgumentsDeltaEvent for argument chunks
+        4. Queues additional events if multiple tool calls in one chunk
+
+        Returns the first event to emit (additional events are queued in pending_function_call_events)
+        """
+        events_to_emit: List[BaseLiteLLMOpenAIResponseObject] = []
+        encoded_chunk_id = self._encode_chunk_id(chunk.id)
+
+        for tool_call in tool_calls:
+            # Handle both dict and object formats
+            if isinstance(tool_call, dict):
+                tc_index = tool_call.get("index", 0)
+                tc_id = tool_call.get("id")
+                tc_function = tool_call.get("function", {})
+                tc_name = tc_function.get("name") if isinstance(tc_function, dict) else getattr(tc_function, "name", None)
+                tc_arguments = tc_function.get("arguments", "") if isinstance(tc_function, dict) else getattr(tc_function, "arguments", "")
+            else:
+                tc_index = getattr(tool_call, "index", 0)
+                tc_id = getattr(tool_call, "id", None)
+                tc_function = getattr(tool_call, "function", None)
+                tc_name = getattr(tc_function, "name", None) if tc_function else None
+                tc_arguments = getattr(tc_function, "arguments", "") if tc_function else ""
+
+            # Initialize tracking for new tool call
+            if tc_index not in self.accumulated_tool_calls:
+                self.accumulated_tool_calls[tc_index] = {
+                    "id": tc_id or f"call_{tc_index}",
+                    "name": tc_name or "",
+                    "arguments": "",
+                    "output_index": tc_index + 1,  # output_index 0 is typically the message
+                }
+
+            # Update with new data from this chunk
+            if tc_id:
+                self.accumulated_tool_calls[tc_index]["id"] = tc_id
+            if tc_name:
+                self.accumulated_tool_calls[tc_index]["name"] = tc_name
+            if tc_arguments:
+                self.accumulated_tool_calls[tc_index]["arguments"] += tc_arguments
+
+            tool_call_data = self.accumulated_tool_calls[tc_index]
+            output_index = tool_call_data["output_index"]
+            item_id = f"fc_{tool_call_data['id']}"
+
+            # Emit OutputItemAddedEvent for new function calls (first time we see this index)
+            if tc_index not in self.sent_function_call_output_item_events:
+                self.sent_function_call_output_item_events.add(tc_index)
+                output_item_event = OutputItemAddedEvent(
+                    type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                    output_index=output_index,
+                    item=BaseLiteLLMOpenAIResponseObject(
+                        **{
+                            "id": item_id,
+                            "type": "function_call",
+                            "status": "in_progress",
+                            "call_id": tool_call_data["id"],
+                            "name": tool_call_data["name"],
+                            "arguments": "",
+                        }
+                    ),
+                )
+                events_to_emit.append(output_item_event)
+
+            # Emit FunctionCallArgumentsDeltaEvent for argument chunks
+            if tc_arguments:
+                arguments_delta_event = FunctionCallArgumentsDeltaEvent(
+                    type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+                    item_id=item_id,
+                    output_index=output_index,
+                    delta=tc_arguments,
+                )
+                events_to_emit.append(arguments_delta_event)
+
+        # Queue additional events and return the first one
+        if events_to_emit:
+            first_event = events_to_emit.pop(0)
+            self.pending_function_call_events.extend(events_to_emit)
+            return first_event
+
+        return None
+
+    def _emit_function_call_done_events(self) -> List[BaseLiteLLMOpenAIResponseObject]:
+        """
+        Create FunctionCallArgumentsDoneEvent and OutputItemDoneEvent for all accumulated tool calls.
+        Called at the end of streaming to finalize tool call events.
+        """
+        done_events: List[BaseLiteLLMOpenAIResponseObject] = []
+
+        for tc_index, tool_call_data in self.accumulated_tool_calls.items():
+            item_id = f"fc_{tool_call_data['id']}"
+            output_index = tool_call_data["output_index"]
+
+            # Emit FunctionCallArgumentsDoneEvent
+            done_events.append(FunctionCallArgumentsDoneEvent(
+                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DONE,
+                item_id=item_id,
+                output_index=output_index,
+                arguments=tool_call_data["arguments"],
+            ))
+
+            # Emit OutputItemDoneEvent for the function call
+            done_events.append(OutputItemDoneEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                output_index=output_index,
+                sequence_number=tc_index + 1,
+                item=BaseLiteLLMOpenAIResponseObject(
+                    **{
+                        "id": item_id,
+                        "type": "function_call",
+                        "status": "completed",
+                        "call_id": tool_call_data["id"],
+                        "name": tool_call_data["name"],
+                        "arguments": tool_call_data["arguments"],
+                    }
+                ),
+            ))
+
+        return done_events
+
     def _emit_response_completed_event(self) -> Optional[ResponseCompletedEvent]:
+        verbose_logger.debug(f"ResponsesAPI _emit_response_completed_event called with {len(self.collected_chat_completion_chunks)} chunks")
+        verbose_logger.debug(f"ResponsesAPI collected_chat_completion_chunks: {self.collected_chat_completion_chunks}")
         litellm_model_response: Optional[
             Union[ModelResponse, TextCompletionResponse]
         ] = stream_chunk_builder(chunks=self.collected_chat_completion_chunks)
+        verbose_logger.debug(f"ResponsesAPI stream_chunk_builder result: {litellm_model_response}")
         if litellm_model_response and isinstance(litellm_model_response, ModelResponse):
+            verbose_logger.debug(f"ResponsesAPI litellm_model_response.choices: {litellm_model_response.choices}")
+            verbose_logger.debug(f"ResponsesAPI litellm_model_response.usage: {litellm_model_response.usage}")
             # Add cost to usage object if include_cost_in_streaming_usage is True
             if (
                 litellm.include_cost_in_streaming_usage

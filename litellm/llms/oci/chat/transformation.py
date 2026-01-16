@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import httpx
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -603,17 +604,22 @@ class OCIChatConfig(BaseConfig):
             )
         else:
             # Use generic format for other vendors
+            oci_messages = adapt_messages_to_generic_oci_standard(messages)
+            verbose_logger.debug(f"OCI transform_request - vendor: {vendor}, messages count: {len(messages)}")
+            verbose_logger.debug(f"OCI transform_request - oci_messages: {[m.model_dump() for m in oci_messages]}")
             data = OCICompletionPayload(
                 compartmentId=oci_compartment_id,
                 servingMode=servingMode,
                 chatRequest=OCIChatRequestPayload(
                     apiFormat=vendor.value,
-                    messages=adapt_messages_to_generic_oci_standard(messages),
+                    messages=oci_messages,
                     **self._get_optional_params(vendor, optional_params),
                 ),
             )
 
-        return data.model_dump(exclude_none=True)
+        request_body = data.model_dump(exclude_none=True)
+        verbose_logger.debug(f"OCI transform_request - final request body: {request_body}")
+        return request_body
 
     def _handle_cohere_response(
         self, 
@@ -976,6 +982,8 @@ def adapt_messages_to_generic_oci_standard_tool_call(
 def adapt_messages_to_generic_oci_standard_tool_response(
     role: str, tool_call_id: str, content: str
 ) -> OCIMessage:
+    # OCI Gemini streaming doesn't return tool call IDs, but requires them in responses.
+    # We generate UUIDs when receiving tool calls, and send them back here.
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
         content=[OCITextContentPart(text=content)],
@@ -1075,12 +1083,14 @@ class OCIStreamWrapper(CustomStreamWrapper):
         super().__init__(**kwargs)
 
     def chunk_creator(self, chunk: Any):
+        verbose_logger.debug(f"OCI chunk_creator received raw chunk: {chunk[:500] if isinstance(chunk, str) else chunk}")
         if not isinstance(chunk, str):
             raise ValueError(f"Chunk is not a string: {chunk}")
         if not chunk.startswith("data:"):
             raise ValueError(f"Chunk does not start with 'data:': {chunk}")
         dict_chunk = json.loads(chunk[5:])  # Remove 'data: ' prefix and parse JSON
-        
+        verbose_logger.debug(f"OCI chunk_creator parsed dict_chunk: {dict_chunk}")
+
         # Check if this is a Cohere stream chunk
         if "apiFormat" in dict_chunk and dict_chunk.get("apiFormat") == "COHERE":
             return self._handle_cohere_stream_chunk(dict_chunk)
@@ -1132,21 +1142,26 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
     def _handle_generic_stream_chunk(self, dict_chunk: dict):
         """Handle generic OCI streaming chunks."""
+        verbose_logger.debug(f"OCI _handle_generic_stream_chunk input: {dict_chunk}")
 
         # Fix missing required fields in tool calls before Pydantic validation
         # OCI streams tool calls progressively, so early chunks may be missing required fields
         if dict_chunk.get("message") and dict_chunk["message"].get("toolCalls"):
-            for tool_call in dict_chunk["message"]["toolCalls"]:
+            for idx, tool_call in enumerate(dict_chunk["message"]["toolCalls"]):
                 if "arguments" not in tool_call:
                     tool_call["arguments"] = ""
-                if "id" not in tool_call:
-                    tool_call["id"] = ""
+                # Generate a UUID if missing - OCI Gemini streaming doesn't return IDs
+                # but requires them in tool responses. Use UUID format like LangChain does.
+                if not tool_call.get("id"):
+                    import uuid
+                    tool_call["id"] = uuid.uuid4().hex
                 if "name" not in tool_call:
                     tool_call["name"] = ""
 
         # Fix missing required fields in content items before Pydantic validation
         # OCI may stream content progressively, especially with tool calls
         if dict_chunk.get("message") and dict_chunk["message"].get("content"):
+            verbose_logger.debug(f"OCI chunk has message.content: {dict_chunk['message']['content']}")
             for content_item in dict_chunk["message"]["content"]:
                 if isinstance(content_item, dict):
                     # If content item has type TEXT but no text field, add empty text
@@ -1155,10 +1170,13 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     # If content item has type IMAGE but missing imageUrl, add empty dict
                     elif content_item.get("type") == "IMAGE" and "imageUrl" not in content_item:
                         content_item["imageUrl"] = {"url": ""}
+        else:
+            verbose_logger.debug(f"OCI chunk missing message or message.content. Keys in dict_chunk: {dict_chunk.keys()}, message keys: {dict_chunk.get('message', {}).keys() if dict_chunk.get('message') else 'NO MESSAGE'}")
 
         try:
             typed_chunk = OCIStreamChunk(**dict_chunk)
         except TypeError as e:
+            verbose_logger.error(f"OCI chunk parsing failed: {str(e)}, dict_chunk: {dict_chunk}")
             raise ValueError(f"Chunk cannot be casted to OCIStreamChunk: {str(e)}")
 
         if typed_chunk.index is None:
@@ -1166,9 +1184,12 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
         text = ""
         if typed_chunk.message and typed_chunk.message.content:
+            verbose_logger.debug(f"OCI typed_chunk.message.content: {typed_chunk.message.content}")
             for item in typed_chunk.message.content:
+                verbose_logger.debug(f"OCI content item type: {type(item)}, item: {item}")
                 if isinstance(item, OCITextContentPart):
                     text += item.text
+                    verbose_logger.debug(f"OCI extracted text from OCITextContentPart: '{item.text}'")
                 elif isinstance(item, OCIImageContentPart):
                     raise ValueError(
                         "OCI does not support image content in streaming responses"
@@ -1177,6 +1198,10 @@ class OCIStreamWrapper(CustomStreamWrapper):
                     raise ValueError(
                         f"Unsupported content type in OCI response: {item.type}"
                     )
+        else:
+            verbose_logger.debug(f"OCI typed_chunk has no message.content. message: {typed_chunk.message}")
+
+        verbose_logger.debug(f"OCI _handle_generic_stream_chunk extracted text: '{text}', finishReason: {typed_chunk.finishReason}")
 
         tool_calls = None
         if typed_chunk.message and typed_chunk.message.toolCalls:
