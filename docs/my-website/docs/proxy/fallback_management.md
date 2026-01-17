@@ -150,9 +150,6 @@ print(response.json())
 
 ### Test fallback
 
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
@@ -169,9 +166,6 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }
 '
 ```
-
-</TabItem>
-</Tabs>
 
 
 
