@@ -5,9 +5,7 @@ import {
   ColumnDef,
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
   getSortedRowModel,
-  PaginationState,
   SortingState,
   useReactTable,
 } from "@tanstack/react-table";
@@ -18,30 +16,25 @@ import {
   TableHead,
   TableHeaderCell,
   TableRow,
+  Badge,
+  Text,
 } from "@tremor/react";
 import { Tooltip } from "antd";
 import React, { useState } from "react";
-import { KeyResponse } from "../../key_team_helpers/key_list";
+import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { getModelDisplayName } from "@/components/key_team_helpers/fetch_available_models_team_key";
 
-interface DeletedKeysTableProps {
-  keys: KeyResponse[];
-  totalCount: number;
+interface DeletedTeamsTableProps {
+  teams: DeletedTeam[];
   isLoading: boolean;
   isFetching: boolean;
-  pageIndex: number;
-  pageSize: number;
-  onPageChange: (pageIndex: number) => void;
 }
 
-export function DeletedKeysTable({
-  keys,
-  totalCount,
+export function DeletedTeamsTable({
+  teams,
   isLoading,
   isFetching,
-  pageIndex,
-  pageSize,
-  onPageChange,
-}: DeletedKeysTableProps) {
+}: DeletedTeamsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([
     {
       id: "deleted_at",
@@ -49,21 +42,28 @@ export function DeletedKeysTable({
     },
   ]);
 
-  const [tablePagination, setTablePagination] = useState<PaginationState>({
-    pageIndex,
-    pageSize,
-  });
-
-  // Sync pagination state when prop changes
-  React.useEffect(() => {
-    setTablePagination({ pageIndex, pageSize });
-  }, [pageIndex, pageSize]);
-
-  const columns: ColumnDef<KeyResponse>[] = [
+  const columns: ColumnDef<DeletedTeam>[] = [
     {
-      id: "token",
-      accessorKey: "token",
-      header: "Key ID",
+      id: "team_alias",
+      accessorKey: "team_alias",
+      header: "Team Name",
+      size: 150,
+      maxSize: 200,
+      cell: (info) => {
+        const value = info.getValue() as string;
+        return (
+          <Tooltip title={value || undefined}>
+            <span className="truncate block max-w-[200px]">
+              {value || "-"}
+            </span>
+          </Tooltip>
+        );
+      },
+    },
+    {
+      id: "team_id",
+      accessorKey: "team_id",
+      header: "Team ID",
       size: 150,
       maxSize: 250,
       cell: (info) => {
@@ -78,102 +78,9 @@ export function DeletedKeysTable({
       },
     },
     {
-      id: "key_alias",
-      accessorKey: "key_alias",
-      header: "Key Alias",
-      size: 150,
-      maxSize: 200,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block max-w-[200px]">
-              {value ?? "-"}
-            </span>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      id: "team_alias",
-      accessorKey: "team_alias",
-      header: "Team Alias",
-      size: 120,
-      maxSize: 180,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <span className="truncate block max-w-[180px]">
-            {value || "-"}
-          </span>
-        );
-      },
-    },
-    {
-      id: "spend",
-      accessorKey: "spend",
-      header: "Spend (USD)",
-      size: 100,
-      maxSize: 140,
-      cell: (info) => (
-        <span className="block max-w-[140px]">
-          {formatNumberWithCommas(info.getValue() as number, 4)}
-        </span>
-      ),
-    },
-    {
-      id: "max_budget",
-      accessorKey: "max_budget",
-      header: "Budget (USD)",
-      size: 110,
-      maxSize: 150,
-      cell: (info) => {
-        const maxBudget = info.getValue() as number | null;
-        return (
-          <span className="block max-w-[150px]">
-            {maxBudget === null ? "Unlimited" : `$${formatNumberWithCommas(maxBudget)}`}
-          </span>
-        );
-      },
-    },
-    {
-      id: "user_email",
-      accessorKey: "user_email",
-      header: "User Email",
-      size: 160,
-      maxSize: 250,
-      cell: (info) => {
-        const value = info.getValue() as string;
-        return (
-          <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block max-w-[250px]">
-              {value ?? "-"}
-            </span>
-          </Tooltip>
-        );
-      },
-    },
-    {
-      id: "user_id",
-      accessorKey: "user_id",
-      header: "User ID",
-      size: 120,
-      maxSize: 200,
-      cell: (info) => {
-        const userId = info.getValue() as string | null;
-        return (
-          <Tooltip title={userId || undefined}>
-            <span className="truncate block max-w-[200px]">
-              {userId || "-"}
-            </span>
-          </Tooltip>
-        );
-      },
-    },
-    {
       id: "created_at",
       accessorKey: "created_at",
-      header: "Created At",
+      header: "Created",
       size: 120,
       maxSize: 140,
       cell: (info) => {
@@ -186,16 +93,89 @@ export function DeletedKeysTable({
       },
     },
     {
-      id: "created_by",
-      accessorKey: "created_by",
-      header: "Created By",
-      size: 120,
-      maxSize: 180,
+      id: "spend",
+      accessorKey: "spend",
+      header: "Spend (USD)",
+      size: 100,
+      maxSize: 140,
       cell: (info) => {
-        const value = (info.row.original as any).created_by as string | null | undefined;
+        const spend = (info.row.original as any).spend as number | undefined;
+        return (
+          <span className="block max-w-[140px]">
+            {spend !== undefined ? formatNumberWithCommas(spend, 4) : "-"}
+          </span>
+        );
+      },
+    },
+    {
+      id: "max_budget",
+      accessorKey: "max_budget",
+      header: "Budget (USD)",
+      size: 110,
+      maxSize: 150,
+      cell: (info) => {
+        const maxBudget = info.getValue() as number | null;
+        return (
+          <span className="block max-w-[150px]">
+            {maxBudget === null || maxBudget === undefined ? "No limit" : `$${formatNumberWithCommas(maxBudget)}`}
+          </span>
+        );
+      },
+    },
+    {
+      id: "models",
+      accessorKey: "models",
+      header: "Models",
+      size: 200,
+      maxSize: 300,
+      cell: (info) => {
+        const models = info.getValue() as string[];
+        if (!Array.isArray(models) || models.length === 0) {
+          return (
+            <Badge size={"xs"} color="red">
+              <Text>All Proxy Models</Text>
+            </Badge>
+          );
+        }
+        return (
+          <div className="flex flex-wrap gap-1 max-w-[300px]">
+            {models.slice(0, 3).map((model: string, index: number) =>
+              model === "all-proxy-models" ? (
+                <Badge key={index} size={"xs"} color="red">
+                  <Text>All Proxy Models</Text>
+                </Badge>
+              ) : (
+                <Badge key={index} size={"xs"} color="blue">
+                  <Text>
+                    {model.length > 30
+                      ? `${getModelDisplayName(model).slice(0, 30)}...`
+                      : getModelDisplayName(model)}
+                  </Text>
+                </Badge>
+              ),
+            )}
+            {models.length > 3 && (
+              <Badge size={"xs"} color="gray">
+                <Text>
+                  +{models.length - 3} {models.length - 3 === 1 ? "more model" : "more models"}
+                </Text>
+              </Badge>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      id: "organization_id",
+      accessorKey: "organization_id",
+      header: "Organization",
+      size: 150,
+      maxSize: 200,
+      cell: (info) => {
+        const value = info.getValue() as string;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block max-w-[180px]">
+            <span className="truncate block max-w-[200px]">
               {value || "-"}
             </span>
           </Tooltip>
@@ -237,33 +217,19 @@ export function DeletedKeysTable({
   ];
 
   const table = useReactTable({
-    data: keys,
+    data: teams,
     columns,
     columnResizeMode: "onChange",
     columnResizeDirection: "ltr",
     state: {
       sorting,
-      pagination: tablePagination,
     },
     onSortingChange: setSorting,
-    onPaginationChange: (updater) => {
-      const newPagination = typeof updater === "function" ? updater(tablePagination) : updater;
-      setTablePagination(newPagination);
-      onPageChange(newPagination.pageIndex);
-    },
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     enableSorting: true,
     manualSorting: false,
-    manualPagination: true,
-    pageCount: Math.ceil(totalCount / pageSize),
   });
-
-  const { pageIndex: currentPageIndex } = table.getState().pagination;
-  const start = currentPageIndex * pageSize + 1;
-  const end = Math.min((currentPageIndex + 1) * pageSize, totalCount);
-  const rangeLabel = `${start} - ${end}`;
 
   return (
     <div className="w-full h-full overflow-hidden">
@@ -273,35 +239,9 @@ export function DeletedKeysTable({
             <span className="inline-flex text-sm text-gray-700">Loading...</span>
           ) : (
             <span className="inline-flex text-sm text-gray-700">
-              Showing {rangeLabel} of {totalCount} results
+              Showing {teams.length} {teams.length === 1 ? "team" : "teams"}
             </span>
           )}
-
-          <div className="inline-flex items-center gap-2">
-            {isLoading || isFetching ? (
-              <span className="text-sm text-gray-700">Loading...</span>
-            ) : (
-              <span className="text-sm text-gray-700">
-                Page {currentPageIndex + 1} of {table.getPageCount()}
-              </span>
-            )}
-
-            <button
-              onClick={() => table.previousPage()}
-              disabled={isLoading || isFetching || !table.getCanPreviousPage()}
-              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Previous
-            </button>
-
-            <button
-              onClick={() => table.nextPage()}
-              disabled={isLoading || isFetching || !table.getCanNextPage()}
-              className="px-3 py-1 text-sm border rounded-md hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          </div>
         </div>
         <div className="h-[75vh] overflow-auto">
           <div className="rounded-lg custom-border relative">
@@ -379,11 +319,11 @@ export function DeletedKeysTable({
                     <TableRow>
                       <TableCell colSpan={columns.length} className="h-8 text-center">
                         <div className="text-center text-gray-500">
-                          <p>🚅 Loading keys...</p>
+                          <p>🚅 Loading teams...</p>
                         </div>
                       </TableCell>
                     </TableRow>
-                  ) : keys.length > 0 ? (
+                  ) : teams.length > 0 ? (
                     table.getRowModel().rows.map((row) => (
                       <TableRow key={row.id} className="h-8">
                         {row.getVisibleCells().map((cell) => (
@@ -406,7 +346,7 @@ export function DeletedKeysTable({
                     <TableRow>
                       <TableCell colSpan={columns.length} className="h-8 text-center">
                         <div className="text-center text-gray-500">
-                          <p>No deleted keys found</p>
+                          <p>No deleted teams found</p>
                         </div>
                       </TableCell>
                     </TableRow>
