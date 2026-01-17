@@ -530,9 +530,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             kwargs: Additional request parameters
 
         Returns:
-            (should_run, agentic_context):
+            (should_run, tools):
                 should_run: True if agentic loop should execute
-                agentic_context: Dict with tool_calls and metadata for execution
+                tools: Dict with tool_calls and metadata for execution
 
         Example:
             # Detect WebSearch tool call
@@ -547,7 +547,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
     async def async_run_agentic_loop(
         self,
-        agentic_context: Dict,
+        tools: Dict,
         model: str,
         messages: List[Dict],
         response: Any,
@@ -566,7 +566,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         return a complete answer to the user in a single API call.
 
         What to do here:
-        1. Extract tool calls from agentic_context
+        1. Extract tool calls from tools dict
         2. Execute the tools (litellm.search, code execution, DB queries, etc.)
         3. Build assistant message with tool_use blocks
         4. Build user message with tool_result blocks containing results
@@ -574,8 +574,8 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         6. Return the final response
 
         Args:
-            agentic_context: Dict from async_should_run_agentic_completion
-                            Contains tool_calls and metadata
+            tools: Dict from async_should_run_agentic_loop
+                  Contains tool_calls and metadata
             model: Model name
             messages: Original messages sent to model
             response: Original response from model (with tool_use)
