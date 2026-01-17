@@ -2229,6 +2229,9 @@ class UserAPIKeyAuth(
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values):
+        # If values is already an instance (not a dict), return it as-is
+        if not isinstance(values, dict):
+            return values
         if values.get("api_key") is not None:
             values.update(
                 {"token": cls._safe_hash_litellm_api_key(values.get("api_key"))}
@@ -3359,7 +3362,7 @@ class TeamListResponseObject(LiteLLM_TeamTable):
 
 
 class KeyListResponseObject(TypedDict, total=False):
-    keys: List[Union[str, UserAPIKeyAuth]]
+    keys: List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]]
     total_count: Optional[int]
     current_page: Optional[int]
     total_pages: Optional[int]

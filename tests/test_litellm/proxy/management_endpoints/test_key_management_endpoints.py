@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi import HTTPException
 
@@ -3800,47 +3800,61 @@ async def test_list_keys_with_expand_user():
     mock_prisma_client = AsyncMock()
 
     # Create mock keys with user_ids
-    mock_key1 = MagicMock()
-    mock_key1.token = "token1"
-    mock_key1.user_id = "user123"
-    mock_key1.dict.return_value = {
+    key1_dict = {
         "token": "token1",
         "user_id": "user123",
         "key_alias": "key1",
         "models": ["gpt-4"],
     }
+    mock_key1 = MagicMock()
+    mock_key1.token = "token1"
+    mock_key1.user_id = "user123"
+    # Set up model_dump() to raise AttributeError so it falls back to dict()
+    mock_key1.model_dump = MagicMock(side_effect=AttributeError("model_dump not available"))
+    mock_key1.dict = MagicMock(return_value=key1_dict)
 
-    mock_key2 = MagicMock()
-    mock_key2.token = "token2"
-    mock_key2.user_id = "user456"
-    mock_key2.dict.return_value = {
+    key2_dict = {
         "token": "token2",
         "user_id": "user456",
         "key_alias": "key2",
         "models": ["gpt-3.5-turbo"],
     }
+    mock_key2 = MagicMock()
+    mock_key2.token = "token2"
+    mock_key2.user_id = "user456"
+    # Set up model_dump() to raise AttributeError so it falls back to dict()
+    mock_key2.model_dump = MagicMock(side_effect=AttributeError("model_dump not available"))
+    mock_key2.dict = MagicMock(return_value=key2_dict)
 
     mock_find_many_keys = AsyncMock(return_value=[mock_key1, mock_key2])
     mock_count_keys = AsyncMock(return_value=2)
 
     # Create mock users
-    mock_user1 = MagicMock()
-    mock_user1.user_id = "user123"
-    mock_user1.user_email = "user1@example.com"
-    mock_user1.dict.return_value = {
+    user1_dict = {
         "user_id": "user123",
         "user_email": "user1@example.com",
         "user_alias": "User One",
     }
+    mock_user1 = MagicMock()
+    # Set user_id as a real attribute (not a MagicMock)
+    mock_user1.user_id = "user123"
+    mock_user1.user_email = "user1@example.com"
+    # Set up both model_dump() and dict() to return the same dict
+    mock_user1.model_dump = MagicMock(return_value=user1_dict)
+    mock_user1.dict = MagicMock(return_value=user1_dict)
 
-    mock_user2 = MagicMock()
-    mock_user2.user_id = "user456"
-    mock_user2.user_email = "user2@example.com"
-    mock_user2.dict.return_value = {
+    user2_dict = {
         "user_id": "user456",
         "user_email": "user2@example.com",
         "user_alias": "User Two",
     }
+    mock_user2 = MagicMock()
+    # Set user_id as a real attribute (not a MagicMock)
+    mock_user2.user_id = "user456"
+    mock_user2.user_email = "user2@example.com"
+    # Set up both model_dump() and dict() to return the same dict
+    mock_user2.model_dump = MagicMock(return_value=user2_dict)
+    mock_user2.dict = MagicMock(return_value=user2_dict)
 
     mock_find_many_users = AsyncMock(return_value=[mock_user1, mock_user2])
 
@@ -3848,60 +3862,68 @@ async def test_list_keys_with_expand_user():
     mock_prisma_client.db.litellm_verificationtoken.count = mock_count_keys
     mock_prisma_client.db.litellm_usertable.find_many = mock_find_many_users
 
-    args = {
-        "prisma_client": mock_prisma_client,
-        "page": 1,
-        "size": 50,
-        "user_id": None,
-        "team_id": None,
-        "organization_id": None,
-        "key_alias": None,
-        "key_hash": None,
-        "exclude_team_id": None,
-        "return_full_object": False,  # This should be overridden by expand=user
-        "admin_team_ids": None,
-        "include_created_by_keys": False,
-        "expand": ["user"],  # Test the expand parameter
-    }
+    # Patch attach_object_permission_to_dict to just return the dict unchanged
+    async def mock_attach_object_permission(d, _):
+        return d
+    
+    with patch(
+        "litellm.proxy.management_endpoints.key_management_endpoints.attach_object_permission_to_dict",
+        side_effect=mock_attach_object_permission,
+    ):
+        args = {
+            "prisma_client": mock_prisma_client,
+            "page": 1,
+            "size": 50,
+            "user_id": None,
+            "team_id": None,
+            "organization_id": None,
+            "key_alias": None,
+            "key_hash": None,
+            "exclude_team_id": None,
+            "return_full_object": False,  # This should be overridden by expand=user
+            "admin_team_ids": None,
+            "include_created_by_keys": False,
+            "expand": ["user"],  # Test the expand parameter
+        }
 
-    result = await _list_key_helper(**args)
+        result = await _list_key_helper(**args)
 
-    # Verify that keys were fetched
-    mock_find_many_keys.assert_called_once()
-    mock_count_keys.assert_called_once()
+        # Verify that keys were fetched
+        mock_find_many_keys.assert_called_once()
+        mock_count_keys.assert_called_once()
 
-    # Verify that users were fetched
-    # Note: Order doesn't matter for the 'in' query, so we just check that both user_ids are present
-    call_args = mock_find_many_users.call_args
-    assert call_args is not None
-    where_clause = call_args.kwargs["where"]
-    assert "user_id" in where_clause
-    assert "in" in where_clause["user_id"]
-    user_ids_in_query = set(where_clause["user_id"]["in"])
-    assert user_ids_in_query == {"user123", "user456"}
+        # Verify that users were fetched
+        # Note: Order doesn't matter for the 'in' query, so we just check that both user_ids are present
+        call_args = mock_find_many_users.call_args
+        assert call_args is not None
+        where_clause = call_args.kwargs["where"]
+        assert "user_id" in where_clause
+        assert "in" in where_clause["user_id"]
+        user_ids_in_query = set(where_clause["user_id"]["in"])
+        assert user_ids_in_query == {"user123", "user456"}
 
-    # Verify response structure
-    assert len(result["keys"]) == 2
-    assert result["total_count"] == 2
-    assert result["current_page"] == 1
-    assert result["total_pages"] == 1
+        # Verify response structure
+        assert len(result["keys"]) == 2
+        assert result["total_count"] == 2
+        assert result["current_page"] == 1
+        assert result["total_pages"] == 1
 
-    # Verify that user data is included in the response
-    # Since expand=user is specified, keys should be full objects
-    assert isinstance(result["keys"][0], UserAPIKeyAuth)
-    assert isinstance(result["keys"][1], UserAPIKeyAuth)
+        # Verify that user data is included in the response
+        # Since expand=user is specified, keys should be full objects
+        assert isinstance(result["keys"][0], UserAPIKeyAuth)
+        assert isinstance(result["keys"][1], UserAPIKeyAuth)
 
-    # Verify user data is attached to keys
-    assert result["keys"][0].user == {
-        "user_id": "user123",
-        "user_email": "user1@example.com",
-        "user_alias": "User One",
-    }
-    assert result["keys"][1].user == {
-        "user_id": "user456",
-        "user_email": "user2@example.com",
-        "user_alias": "User Two",
-    }
+        # Verify user data is attached to keys
+        assert result["keys"][0].user == {
+            "user_id": "user123",
+            "user_email": "user1@example.com",
+            "user_alias": "User One",
+        }
+        assert result["keys"][1].user == {
+            "user_id": "user456",
+            "user_email": "user2@example.com",
+            "user_alias": "User Two",
+        }
 
 
 @pytest.mark.asyncio
