@@ -3637,13 +3637,37 @@ jobs:
               --reporter=html \
               --output=test-results
           no_output_timeout: 120m
+      - run:
+          name: Debug Playwright artifact paths
+          when: always
+          command: |
+            echo "=== Working directory ==="
+            pwd
+
+            echo ""
+            echo "=== playwright-report directories ==="
+            find . -type d -name "playwright-report" -maxdepth 7 || true
+
+            echo ""
+            echo "=== test-results directories ==="
+            find . -type d -name "test-results" -maxdepth 7 || true
+
+            echo ""
+            echo "=== HTML report contents (if any) ==="
+            find . -type f -path "*playwright-report/index.html" || true
+
+            echo ""
+            echo "=== Disk usage summary ==="
+            du -sh \
+              litellm/ui/litellm-dashboard/e2e_tests 2>/dev/null || true
+
       - store_artifacts:
-          path: ui/litellm-dashboard/e2e_tests/test-results
+          path: ~/project/litellm/ui/litellm-dashboard/test-results
           destination: playwright-results
           when: always
 
       - store_artifacts:
-          path: ui/litellm-dashboard/e2e_tests/playwright-report
+          path: ~/project/litellm/ui/litellm-dashboard/playwright-report
           destination: playwright-report
           when: always
   test_nonroot_image:
