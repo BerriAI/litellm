@@ -57,7 +57,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         self.enabled_providers = enabled_providers or ["bedrock"]
         self.search_provider = search_provider
 
-    async def async_should_run_agentic_completion(
+    async def async_should_run_agentic_loop(
         self,
         response: Any,
         model: str,
@@ -111,7 +111,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         }
         return True, agentic_context
 
-    async def async_run_agentic_completion(
+    async def async_run_agentic_loop(
         self,
         agentic_context: Dict,
         model: str,
