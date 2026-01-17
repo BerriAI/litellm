@@ -57,6 +57,38 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
+    # WebSearch Interception: Convert stream=True to stream=False if WebSearch interception is enabled
+    # This allows transparent server-side agentic loop execution for streaming requests
+    if stream and tools and any(t.get("name") == "WebSearch" for t in tools):
+        # Extract provider using litellm's helper function
+        try:
+            _, provider, _, _ = litellm.get_llm_provider(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+            )
+        except Exception:
+            # Fallback to simple split if helper fails
+            provider = model.split("/")[0] if "/" in model else ""
+
+        # Check if WebSearch interception is enabled in callbacks
+        from litellm._logging import verbose_logger
+        from litellm.integrations.websearch_interception import (
+            WebSearchInterceptionLogger,
+        )
+        if litellm.callbacks:
+            for callback in litellm.callbacks:
+                if isinstance(callback, WebSearchInterceptionLogger):
+                    # Check if provider is enabled for interception
+                    if provider in callback.enabled_providers:
+                        verbose_logger.debug(
+                            f"WebSearchInterception: Converting stream=True to stream=False for WebSearch interception "
+                            f"(provider={provider})"
+                        )
+                        stream = False
+                        break
+
     local_vars = locals()
     loop = asyncio.get_event_loop()
     kwargs["is_async"] = True
@@ -145,6 +177,10 @@ def anthropic_messages_handler(
     # Use provided client or create a new one
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
 
+    # Store original model name before get_llm_provider strips the provider prefix
+    # This is needed by agentic hooks (e.g., websearch_interception) to make follow-up requests
+    original_model = model
+
     litellm_params = GenericLiteLLMParams(
         **kwargs,
         api_key=api_key,
@@ -162,6 +198,14 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    
+    # Store agentic loop params in logging object for agentic hooks
+    # This provides original request context needed for follow-up calls
+    if litellm_logging_obj is not None:
+        litellm_logging_obj.model_call_details["agentic_loop_params"] = {
+            "model": original_model,
+            "custom_llm_provider": custom_llm_provider,
+        }
 
     if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
 
