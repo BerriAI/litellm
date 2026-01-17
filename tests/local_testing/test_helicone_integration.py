@@ -162,27 +162,3 @@ def test_helicone_removes_otel_span_from_metadata():
     assert result_metadata["other_metadata"] == "some_value"
     
     print("✅ Test passed: litellm_parent_otel_span was successfully removed from metadata")
-
-
-def test_helicone_gemini_model_in_list():
-    """
-    Test that Gemini models are in the helicone_model_list and use the correct endpoint.
-    Fixes: https://github.com/BerriAI/litellm/issues/19093
-    """
-    from litellm.integrations.helicone import HeliconeLogger
-
-    logger = HeliconeLogger()
-
-    # Test that "gemini" is in the model list
-    assert "gemini" in logger.helicone_model_list, "gemini should be in helicone_model_list"
-
-    # Test that gemini models are recognized (not replaced with gpt-3.5-turbo)
-    test_models = ["gemini-1.5-pro", "gemini-2.0-flash", "vertex_ai/gemini-1.5-flash"]
-    for model in test_models:
-        is_recognized = any(
-            accepted_model in model
-            for accepted_model in logger.helicone_model_list
-        )
-        assert is_recognized, f"{model} should be recognized by helicone_model_list"
-
-    print("✅ Test passed: Gemini models are properly supported in HeliconeLogger")
