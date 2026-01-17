@@ -59,6 +59,7 @@ async def anthropic_messages(
     """
     # WebSearch Interception: Convert stream=True to stream=False if WebSearch interception is enabled
     # This allows transparent server-side agentic loop execution for streaming requests
+    original_stream_value = stream
     if stream and tools and any(t.get("name") == "WebSearch" for t in tools):
         # Extract provider using litellm's helper function
         try:
@@ -87,6 +88,8 @@ async def anthropic_messages(
                             f"(provider={provider})"
                         )
                         stream = False
+                        # Store that we converted stream for WebSearch interception
+                        kwargs["_websearch_interception_converted_stream"] = True
                         break
 
     local_vars = locals()
@@ -206,6 +209,11 @@ def anthropic_messages_handler(
             "model": original_model,
             "custom_llm_provider": custom_llm_provider,
         }
+        
+        # Check if stream was converted for WebSearch interception
+        # This is set in the async wrapper above when stream=True is converted to stream=False
+        if kwargs.get("_websearch_interception_converted_stream", False):
+            litellm_logging_obj.model_call_details["websearch_interception_converted_stream"] = True
 
     if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
 
