@@ -3015,7 +3015,7 @@ def _convert_teams_to_response(
     teams: List[Any], use_deleted_table: bool
 ) -> List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
     """Convert Prisma models to Pydantic models."""
-    team_list = []
+    team_list: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
     if teams:
         for team in teams:
             # Convert Prisma model to dict (supports both Pydantic v1 and v2)
