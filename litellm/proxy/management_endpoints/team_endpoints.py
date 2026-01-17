@@ -3046,7 +3046,7 @@ async def list_team_v2(
         raise HTTPException(
             status_code=400,
             detail={
-                "error": f"Invalid status value. Currently only 'deleted' is supported."
+                "error": "Invalid status value. Currently only 'deleted' is supported."
             },
         )
 

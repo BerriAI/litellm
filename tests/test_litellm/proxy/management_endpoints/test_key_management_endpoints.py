@@ -3979,11 +3979,8 @@ async def test_list_keys_with_status_deleted():
 async def test_list_keys_with_invalid_status():
     """
     Test that invalid status parameter raises ProxyException.
-    Note: Due to a bug where the 'status' parameter shadows the fastapi.status module,
-    an AttributeError may be raised instead of ProxyException. This test handles both cases.
     """
     from unittest.mock import Mock, patch
-    from fastapi import status as fastapi_status
     
     mock_prisma_client = AsyncMock()
     
@@ -3996,28 +3993,19 @@ async def test_list_keys_with_invalid_status():
     mock_user_api_key_dict = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
     
     # Mock prisma_client to be non-None
-    # Also patch the status module reference to avoid shadowing by the function parameter
-    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), \
-         patch("litellm.proxy.management_endpoints.key_management_endpoints.status", fastapi_status):
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
         # Should raise ProxyException for invalid status (HTTPException is caught and re-raised as ProxyException)
-        # However, due to parameter shadowing bug, AttributeError may be raised instead
-        with pytest.raises((ProxyException, AttributeError)) as exc_info:
+        with pytest.raises(ProxyException) as exc_info:
             await list_keys(
                 request=mock_request,
                 user_api_key_dict=mock_user_api_key_dict,
                 status="invalid_status",  # Invalid status value
             )
         
-        # If ProxyException is raised, verify its properties
-        if isinstance(exc_info.value, ProxyException):
-            assert exc_info.value.code == 400
-            assert "Invalid status value" in str(exc_info.value.message)
-            assert "deleted" in str(exc_info.value.message)
-        # If AttributeError is raised (due to bug), verify it's related to the status issue
-        elif isinstance(exc_info.value, AttributeError):
-            # Verify the error is about HTTP_500_INTERNAL_SERVER_ERROR attribute
-            error_msg = str(exc_info.value)
-            assert "HTTP_500_INTERNAL_SERVER_ERROR" in error_msg or "'str' object has no attribute 'HTTP_500_INTERNAL_SERVER_ERROR'" in error_msg
+        # Verify ProxyException properties
+        assert exc_info.value.code == '400'
+        assert "Invalid status value" in str(exc_info.value.message)
+        assert "deleted" in str(exc_info.value.message)
 
 
 @pytest.mark.asyncio

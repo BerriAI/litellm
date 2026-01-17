@@ -3184,7 +3184,7 @@ async def list_keys(
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": f"Invalid status value. Currently only 'deleted' is supported."
+                    "error": "Invalid status value. Currently only 'deleted' is supported."
                 },
             )
 
@@ -3242,7 +3242,7 @@ async def list_keys(
                 message=getattr(e, "detail", f"error({str(e)})"),
                 type=ProxyErrorTypes.internal_server_error,
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+                code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
             raise e
@@ -3250,7 +3250,7 @@ async def list_keys(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error,
             param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
