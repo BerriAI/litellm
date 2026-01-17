@@ -85,14 +85,37 @@ litellm.callbacks = [
     )
 ]
 
-# Make request
+# Make request (streaming or non-streaming both work)
 response = await litellm.messages.acreate(
     model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
     messages=[{"role": "user", "content": "What is LiteLLM?"}],
     tools=[{"name": "WebSearch", ...}],
-    max_tokens=1024
+    max_tokens=1024,
+    stream=True  # Streaming is automatically converted to non-streaming for WebSearch
 )
 ```
+
+---
+
+## Streaming Support
+
+WebSearch interception works transparently with both streaming and non-streaming requests.
+
+**How streaming is handled:**
+1. User makes request with `stream=True` and WebSearch tool
+2. Before API call, `anthropic_messages()` detects WebSearch + interception enabled
+3. Converts `stream=True` → `stream=False` internally
+4. Agentic loop executes with non-streaming responses
+5. Final response returned to user (non-streaming)
+
+**Why this approach:**
+- Server-side agentic loops require consuming full responses to detect tool_use
+- User opts into this behavior by enabling WebSearch interception
+- Provides seamless experience without client changes
+
+**Testing:**
+- **Non-streaming**: `test_websearch_interception_e2e.py`
+- **Streaming**: `test_websearch_interception_streaming_e2e.py`
 
 ---
 
@@ -151,8 +174,9 @@ response.content[0].text
 
 ## Testing
 
-**E2E Test**: `tests/pass_through_unit_tests/test_websearch_interception_e2e.py`
-Makes real API call to Bedrock, validates agentic loop works end-to-end.
+**E2E Tests**:
+- `test_websearch_interception_e2e.py` - Non-streaming real API calls to Bedrock
+- `test_websearch_interception_streaming_e2e.py` - Streaming real API calls to Bedrock
 
-**Unit Tests**: `tests/pass_through_unit_tests/test_websearch_interception.py`
+**Unit Tests**: `test_websearch_interception.py`
 Mocked tests for tool detection, provider filtering, edge cases.
