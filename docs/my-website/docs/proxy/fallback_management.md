@@ -76,7 +76,7 @@ response = requests.post(
 print(response.json())
 ```
 
-### GET /fallback/{model}
+### GET /fallback/\{model\}
 
 Get fallback configuration for a specific model.
 
@@ -112,7 +112,7 @@ response = requests.get(
 print(response.json())
 ```
 
-### DELETE /fallback/{model}
+### DELETE /fallback/\{model\}
 
 Delete fallback configuration for a specific model.
 
