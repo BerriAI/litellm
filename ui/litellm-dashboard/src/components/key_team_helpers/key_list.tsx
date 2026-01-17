@@ -14,6 +14,7 @@ export interface Team {
   created_at: string;
   keys: KeyResponse[];
   members_with_roles: Member[];
+  spend: number;
 }
 
 export interface KeyResponse {
