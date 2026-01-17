@@ -105,6 +105,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Shared HTTP session to prevent memory leaks (issue #14540)
         # Created lazily in _get_http_session() to avoid event loop issues during init
         self._http_session: Optional[aiohttp.ClientSession] = None
+        # Lock to prevent race conditions when creating session under concurrent load
+        self._session_lock: Optional[asyncio.Lock] = None
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -170,16 +172,24 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "http://" + self.presidio_anonymizer_api_base
             )
 
-    def _get_http_session(self) -> aiohttp.ClientSession:
+    async def _get_http_session(self) -> aiohttp.ClientSession:
         """
         Get or create the shared HTTP session for Presidio API calls.
 
         Fixes memory leak (issue #14540) where every guardrail check created
         a new aiohttp.ClientSession that was never properly closed.
+
+        Thread-safe: Uses asyncio.Lock to prevent race conditions when
+        multiple concurrent requests try to create the session simultaneously.
         """
-        if self._http_session is None or self._http_session.closed:
-            self._http_session = aiohttp.ClientSession()
-        return self._http_session
+        # Initialize lock lazily (first time we need it, event loop exists)
+        if self._session_lock is None:
+            self._session_lock = asyncio.Lock()
+
+        async with self._session_lock:
+            if self._http_session is None or self._http_session.closed:
+                self._http_session = aiohttp.ClientSession()
+            return self._http_session
 
     async def _close_http_session(self) -> None:
         """Close the HTTP session if it exists."""
@@ -267,7 +277,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return self.mock_redacted_text
 
             # Use shared session to prevent memory leak (issue #14540)
-            session = self._get_http_session()
+            session = await self._get_http_session()
 
             # Make the request to /analyze
             analyze_url = f"{self.presidio_analyzer_api_base}analyze"
@@ -345,7 +355,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return text
 
             # Use shared session to prevent memory leak (issue #14540)
-            session = self._get_http_session()
+            session = await self._get_http_session()
 
             # Make the request to /anonymize
             anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
