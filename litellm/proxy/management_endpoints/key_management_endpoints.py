@@ -3543,19 +3543,31 @@ async def _list_key_helper(
             user_map = {user.user_id: user for user in users}
 
     # Prepare response
-    key_list: List[Union[str, UserAPIKeyAuth]] = []
+    key_list: List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]] = []
     for key in keys:
-        key_dict = key.dict()
+        # Convert Prisma model to dict (supports both Pydantic v1 and v2)
+        try:
+            key_dict = key.model_dump()
+        except Exception:
+            # Fallback for Pydantic v1 compatibility
+            key_dict = key.dict()
         # Attach object_permission if object_permission_id is set (only for non-deleted keys)
         if not use_deleted_table:
             key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
 
         # Include user information if expand includes "user"
         if expand and "user" in expand and key.user_id and key.user_id in user_map:
-            key_dict["user"] = user_map[key.user_id].dict()
+            try:
+                key_dict["user"] = user_map[key.user_id].model_dump()
+            except Exception:
+                key_dict["user"] = user_map[key.user_id].dict()
 
         if return_full_object is True or (expand and "user" in expand):
-            key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
+            if use_deleted_table:
+                # Use deleted key type to preserve deleted_at, deleted_by, etc.
+                key_list.append(LiteLLM_DeletedVerificationToken(**key_dict))
+            else:
+                key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
             _token = key_dict.get("token")
             key_list.append(cast(str, _token))  # Return only the token
