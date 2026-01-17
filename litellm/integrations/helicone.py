@@ -11,6 +11,7 @@ class HeliconeLogger:
     helicone_model_list = [
         "gpt",
         "claude",
+        "gemini",
         "command-r",
         "command-r-plus",
         "command-light",
@@ -151,6 +152,9 @@ class HeliconeLogger:
             if "claude" in model:
                 url = f"{self.api_base}/anthropic/v1/log"
                 provider_url = "https://api.anthropic.com/v1/messages"
+            elif "gemini" in model:
+                url = f"{self.api_base}/custom/v1/log"
+                provider_url = "https://generativelanguage.googleapis.com/v1beta"
             headers = {
                 "Authorization": f"Bearer {self.key}",
                 "Content-Type": "application/json",
