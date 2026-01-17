@@ -1929,6 +1929,7 @@ class BaseLLMHTTPHandler:
         # used for logging + cost tracking
         logging_obj.model_call_details["httpx_response"] = response
 
+        initial_response: Union[AsyncIterator, AnthropicMessagesResponse]
         if stream:
             completion_stream = anthropic_messages_provider_config.get_async_streaming_response_iterator(
                 model=model,
