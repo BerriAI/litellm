@@ -329,6 +329,11 @@ ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "medium": 5,
     "high": 10,
 }
+
+# LiteLLM standard web search tool name
+# Used for web search interception across providers
+LITELLM_WEB_SEARCH_TOOL_NAME = "litellm_web_search"
+
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
 
