@@ -13,6 +13,20 @@ export interface KeysResponse {
   total_pages: number;
 }
 
+export interface DeletedKeyResponse {
+  token: string;
+  token_id: string;
+  key_name: string;
+  key_alias: string;
+}
+
+export interface DeletedKeysResponse {
+  keys: DeletedKeyResponse[];
+  total_count: number;
+  current_page: number;
+  total_pages: number;
+}
+
 export const useKeys = (page: number, pageSize: number): UseQueryResult<KeysResponse> => {
   const { accessToken } = useAuthorized();
 
@@ -29,6 +43,20 @@ export const useKeys = (page: number, pageSize: number): UseQueryResult<KeysResp
         page,
         pageSize,
       ),
+    enabled: Boolean(accessToken),
+    staleTime: 30000, // 30 seconds
+    placeholderData: keepPreviousData,
+  });
+};
+
+export const deletedKeyKeys = createQueryKeys("deletedKeys");
+export const useDeletedKeys = (page: number, pageSize: number): UseQueryResult<KeysResponse> => {
+  const { accessToken } = useAuthorized();
+
+  return useQuery<KeysResponse>({
+    queryKey: deletedKeyKeys.list({ page, limit: pageSize }),
+    queryFn: async () =>
+      await keyListCall(accessToken!, null, null, null, null, null, page, pageSize, null, null, null, "deleted"),
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,

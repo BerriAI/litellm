@@ -53,7 +53,7 @@ const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
-  console.log = function () {};
+  console.log = function () { };
 }
 
 const getWindowLocation = () => {
@@ -3270,6 +3270,7 @@ export const keyListCall = async (
   sortBy: string | null = null,
   sortOrder: string | null = null,
   expand: string | null = null,
+  status: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -3317,6 +3318,10 @@ export const keyListCall = async (
 
     if (expand) {
       queryParams.append("expand", expand);
+    }
+
+    if (status) {
+      queryParams.append("status", status);
     }
 
     queryParams.append("return_full_object", "true");
