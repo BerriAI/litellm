@@ -905,9 +905,9 @@ def convert_to_anthropic_image_obj(
         )
     except litellm.ImageFetchError:
         raise
-    except Exception:
+    except Exception as e:
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {str(e)}"""
         )
 
 
