@@ -323,3 +323,102 @@ async def test_websearch_interception_streaming():
         import traceback
         traceback.print_exc()
         return False
+
+
+async def test_websearch_interception_no_tool_call_streaming():
+    """
+    Test WebSearch interception when LLM doesn't make a tool call with streaming.
+    
+    This tests the scenario where:
+    1. User requests stream=True
+    2. WebSearch tool is provided
+    3. LLM decides NOT to use the tool (just responds with text)
+    4. System should return a fake stream
+    """
+    print("\n" + "="*80)
+    print("E2E TEST 3: WebSearch Interception (No Tool Call, Streaming)")
+    print("="*80)
+
+    # Router already initialized from test 1
+    print("\n✅ Using existing router configuration")
+    print("✅ WebSearch interception already enabled for Bedrock")
+
+    try:
+        # Make request with WebSearch tool AND stream=True
+        # Use a query that the LLM will answer directly without using the tool
+        print("\n📞 Making litellm.messages.acreate() call with stream=True...")
+        print(f"   Model: bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0")
+        print(f"   Query: 'What is 2+2?'")
+        print(f"   Tools: WebSearch")
+        print(f"   Stream: True")
+
+        response = await messages.acreate(
+            model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+            messages=[{"role": "user", "content": "What is 2+2? Just give me the answer, no need to search."}],
+            tools=[
+                {
+                    "name": "WebSearch",
+                    "description": "Search the web for information",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "The search query",
+                            }
+                        },
+                        "required": ["query"],
+                    },
+                }
+            ],
+            max_tokens=1024,
+            stream=True,  # REQUEST STREAMING
+        )
+
+        print("\n✅ Received response!")
+
+        # Check if response is actually a stream (async generator or async iterator)
+        import inspect
+        is_async_gen = inspect.isasyncgen(response)
+        is_async_iter = hasattr(response, '__aiter__') and hasattr(response, '__anext__')
+        is_stream = is_async_gen or is_async_iter
+
+        if not is_stream:
+            print("\n❌ TEST 3 FAILED: Response is NOT a stream")
+            print(f"❌ Expected a fake stream when LLM doesn't use the tool")
+            print(f"❌ Response type: {type(response)}")
+            return False
+
+        print(f"✅ Response is a stream (async_gen={is_async_gen}, async_iter={is_async_iter})")
+        print("\n📦 Consuming stream chunks:")
+
+        chunks = []
+        chunk_count = 0
+        async for chunk in response:
+            chunk_count += 1
+            print(f"\n--- Chunk {chunk_count} ---")
+            print(f"   Type: {type(chunk)}")
+            print(f"   Content: {chunk[:200] if isinstance(chunk, bytes) else str(chunk)[:200]}...")
+            chunks.append(chunk)
+
+        print(f"\n✅ Received {len(chunks)} stream chunk(s)")
+
+        if len(chunks) > 0:
+            print("\n" + "="*80)
+            print("✅ TEST 3 PASSED!")
+            print("="*80)
+            print("✅ User made ONE litellm.messages.acreate() call with stream=True")
+            print("✅ LLM didn't use the WebSearch tool")
+            print("✅ Got back a fake stream (not a non-streaming response)")
+            print("✅ WebSearch interception handles no-tool-call case correctly!")
+            print("="*80)
+            return True
+        else:
+            print("\n❌ TEST 3 FAILED: No chunks received")
+            return False
+
+    except Exception as e:
+        print(f"\n❌ Test 3 failed with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
