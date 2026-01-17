@@ -39,8 +39,8 @@ sequenceDiagram
     Provider-->>Handler: Response (tool_use)
     Handler->>Logger: async_should_run_agentic_loop()
     Logger->>Logger: Detect WebSearch tool_use
-    Logger-->>Handler: (True, tool_calls)
-    Handler->>Logger: async_run_agentic_loop()
+    Logger-->>Handler: (True, tools)
+    Handler->>Logger: async_run_agentic_loop(tools)
     Logger->>Router: Get search_provider from search_tools
     Router-->>Logger: search_provider
     Logger->>Search: asearch(query, provider)
@@ -62,7 +62,8 @@ sequenceDiagram
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| **WebSearchInterceptionLogger** | `websearch_interception_logger.py` | CustomLogger that intercepts WebSearch tool calls |
+| **WebSearchInterceptionLogger** | `handler.py` | CustomLogger that implements agentic loop hooks |
+| **Transformation Logic** | `transformation.py` | Detect tool_use, build tool_result messages, format search responses |
 | **Agentic Loop Hooks** | `integrations/custom_logger.py` | Base hooks: `async_should_run_agentic_loop()`, `async_run_agentic_loop()` |
 | **Hook Orchestration** | `llms/custom_httpx/llm_http_handler.py` | `_call_agentic_completion_hooks()` - calls hooks after response |
 | **Router Search Tools** | `proxy/proxy_server.py` | `llm_router.search_tools` - configured search providers |
