@@ -88,15 +88,18 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
             )
 
 
-def _set_tool_attributes(span: "Span", optional_params: dict):
-    """Helper to set tool and function call attributes on span."""
+def _set_tool_attributes(span: "Span", optional_params: dict, metadata_tools: Optional[list] = None):
+    """Helper to set tool and function call attributes on span.
+
+    Supports both classic optional_params.tools and metadata-provided llm.tools (e.g., responses API).
+    """
     from litellm.integrations._types.open_inference import (
         MessageAttributes,
         SpanAttributes,
         ToolCallAttributes,
     )
 
-    tools = optional_params.get("tools")
+    tools = optional_params.get("tools") or metadata_tools or []
     if tools:
         for idx, tool in enumerate(tools):
             function = tool.get("function")
@@ -250,8 +253,6 @@ def _set_retrieval_documents(span: "Span", metadata: Optional[dict], max_docs: i
 
             if doc_entry:
                 docs.append(doc_entry)
-
-                # Also set Phoenix/OpenInference-friendly flattened attributes per document so they render on retriever spans.
                 doc_index = len(docs) - 1
                 doc_id = item.get("id") or file_id
                 if doc_id is not None:
@@ -260,7 +261,6 @@ def _set_retrieval_documents(span: "Span", metadata: Optional[dict], max_docs: i
                     )
 
                 if contents:
-                    # Join content pieces to a single string for UI display
                     safe_set_attribute(
                         span,
                         f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.document.content",
@@ -409,14 +409,8 @@ def set_attributes(
 
         span_kind = _infer_open_inference_span_kind(call_type=call_type)
 
-        # If MCP tool calls are present, report span as TOOL even when call_type is generic (e.g., responses).
-        if metadata and metadata.get("mcp_tool_call_metadata"):
-            span_kind = OpenInferenceSpanKindValues.TOOL.value
-
         safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, span_kind)
         attributes.set_messages(span, kwargs)
-
-        _set_tool_attributes(span=span, optional_params=optional_params)
 
         model_params = (
             standard_logging_payload.get("model_parameters")
