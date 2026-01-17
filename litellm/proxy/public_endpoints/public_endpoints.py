@@ -57,7 +57,7 @@ async def public_model_hub():
                     health_checks_map[key] = health_check_dict
                     if check.model_name:
                         health_checks_map[check.model_name] = health_check_dict
-        except Exception as e:
+        except Exception:
             pass
 
     for model_group in model_groups:
