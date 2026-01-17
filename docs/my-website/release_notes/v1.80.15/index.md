@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.15.rc.1 - Manus API Support"
+title: "v1.80.15-stable - Manus API Support"
 slug: "v1-80-15"
 date: 2026-01-10T10:00:00
 authors:
