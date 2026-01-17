@@ -60,8 +60,17 @@ async def anthropic_messages(
     # WebSearch Interception: Convert stream=True to stream=False if WebSearch interception is enabled
     # This allows transparent server-side agentic loop execution for streaming requests
     if stream and tools and any(t.get("name") == "WebSearch" for t in tools):
-        # Extract provider from model string (e.g., "bedrock/model" -> "bedrock")
-        provider = model.split("/")[0] if "/" in model else ""
+        # Extract provider using litellm's helper function
+        try:
+            _, provider, _, _ = litellm.get_llm_provider(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+            )
+        except Exception:
+            # Fallback to simple split if helper fails
+            provider = model.split("/")[0] if "/" in model else ""
 
         # Check if WebSearch interception is enabled in callbacks
         from litellm._logging import verbose_logger
