@@ -10,10 +10,11 @@ import sys
 sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
-from litellm.integrations.websearch_interception_logger import (
+from litellm.integrations.websearch_interception import (
     WebSearchInterceptionLogger,
 )
 from litellm.anthropic_interface import messages
+from litellm.types.utils import LlmProviders
 import asyncio
 
 
@@ -28,16 +29,37 @@ async def test_websearch_interception_real_call():
     print("E2E TEST: WebSearch Interception with Perplexity")
     print("="*80)
 
+    # Initialize real router with search_tools configuration
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm import Router
+
+    # Create real router with search_tools
+    router = Router(
+        search_tools=[
+            {
+                "search_tool_name": "my-perplexity-search",
+                "litellm_params": {
+                    "search_provider": "perplexity"
+                }
+            }
+        ]
+    )
+    proxy_server.llm_router = router
+
+    print("\n✅ Initialized router with search_tools:")
+    print(f"   - search_tool_name: my-perplexity-search")
+    print(f"   - search_provider: perplexity")
+
     # Enable WebSearch interception for bedrock
     websearch_logger = WebSearchInterceptionLogger(
-        enabled_providers=["bedrock"],
-        search_provider="perplexity",
+        enabled_providers=[LlmProviders.BEDROCK],
+        search_tool_name="my-perplexity-search",  # Will look up this tool in router
     )
     litellm.callbacks = [websearch_logger]
     litellm.set_verbose = True  # Enable verbose logging
 
     print("\n✅ Configured WebSearch interception for Bedrock")
-    print("✅ Using Perplexity as search provider")
+    print("✅ Will use search tool from router")
 
     try:
         # Make request with WebSearch tool
