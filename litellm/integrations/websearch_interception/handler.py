@@ -7,7 +7,7 @@ server-side using litellm router's search tools.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -15,6 +15,9 @@ from litellm.anthropic_interface import messages as anthropic_messages
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
+)
+from litellm.types.integrations.websearch_interception import (
+    WebSearchInterceptionConfig,
 )
 from litellm.types.utils import LlmProviders
 
@@ -54,6 +57,52 @@ class WebSearchInterceptionLogger(CustomLogger):
                 for p in enabled_providers
             ]
         self.search_tool_name = search_tool_name
+
+    @classmethod
+    def from_config_yaml(
+        cls, config: WebSearchInterceptionConfig
+    ) -> "WebSearchInterceptionLogger":
+        """
+        Initialize WebSearchInterceptionLogger from proxy config.yaml parameters.
+
+        Args:
+            config: Configuration dictionary from litellm_settings.websearch_interception_params
+
+        Returns:
+            Configured WebSearchInterceptionLogger instance
+
+        Example:
+            From proxy_config.yaml:
+                litellm_settings:
+                  websearch_interception_params:
+                    enabled_providers: ["bedrock"]
+                    search_tool_name: "my-perplexity-search"
+
+            Usage:
+                config = litellm_settings.get("websearch_interception_params", {})
+                logger = WebSearchInterceptionLogger.from_config_yaml(config)
+        """
+        # Extract parameters from config
+        enabled_providers_str = config.get("enabled_providers", None)
+        search_tool_name = config.get("search_tool_name", None)
+
+        # Convert string provider names to LlmProviders enum values
+        enabled_providers: Optional[List[Union[LlmProviders, str]]] = None
+        if enabled_providers_str is not None:
+            enabled_providers = []
+            for provider in enabled_providers_str:
+                try:
+                    # Try to convert string to LlmProviders enum
+                    provider_enum = LlmProviders(provider)
+                    enabled_providers.append(provider_enum)
+                except ValueError:
+                    # If conversion fails, keep as string
+                    enabled_providers.append(provider)
+
+        return cls(
+            enabled_providers=enabled_providers,
+            search_tool_name=search_tool_name,
+        )
 
     async def async_should_run_agentic_loop(
         self,
@@ -172,7 +221,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
 
         # Handle any exceptions in search results
-        final_search_results = []
+        final_search_results: List[str] = []
         for i, result in enumerate(search_results):
             if isinstance(result, Exception):
                 verbose_logger.error(
@@ -181,8 +230,15 @@ class WebSearchInterceptionLogger(CustomLogger):
                 final_search_results.append(
                     f"Search failed: {str(result)}"
                 )
+            elif isinstance(result, str):
+                # Explicitly cast to str for type checker
+                final_search_results.append(cast(str, result))
             else:
-                final_search_results.append(result)
+                # Should never happen, but handle for type safety
+                verbose_logger.warning(
+                    f"WebSearchInterception: Unexpected result type {type(result)} at index {i}"
+                )
+                final_search_results.append(str(result))
 
         # Build assistant and user messages using transformation
         assistant_message, user_message = WebSearchTransformation.transform_response(
@@ -256,7 +312,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 llm_router = None
 
             # Determine search provider from router's search_tools
-            search_provider = None
+            search_provider: Optional[str] = None
             if llm_router is not None and hasattr(llm_router, "search_tools"):
                 if self.search_tool_name:
                     # Find specific search tool by name
@@ -316,3 +372,37 @@ class WebSearchInterceptionLogger(CustomLogger):
     async def _create_empty_search_result(self) -> str:
         """Create an empty search result for tool calls without queries"""
         return "No search query provided"
+
+    @staticmethod
+    def initialize_from_proxy_config(
+        litellm_settings: Dict[str, Any],
+        callback_specific_params: Dict[str, Any],
+    ) -> "WebSearchInterceptionLogger":
+        """
+        Static method to initialize WebSearchInterceptionLogger from proxy config.
+
+        Used in callback_utils.py to simplify initialization logic.
+
+        Args:
+            litellm_settings: Dictionary containing litellm_settings from proxy_config.yaml
+            callback_specific_params: Dictionary containing callback-specific parameters
+
+        Returns:
+            Configured WebSearchInterceptionLogger instance
+
+        Example:
+            From callback_utils.py:
+                websearch_obj = WebSearchInterceptionLogger.initialize_from_proxy_config(
+                    litellm_settings=litellm_settings,
+                    callback_specific_params=callback_specific_params
+                )
+        """
+        # Get websearch_interception_params from litellm_settings or callback_specific_params
+        websearch_params: WebSearchInterceptionConfig = {}
+        if "websearch_interception_params" in litellm_settings:
+            websearch_params = litellm_settings["websearch_interception_params"]
+        elif "websearch_interception" in callback_specific_params:
+            websearch_params = callback_specific_params["websearch_interception"]
+
+        # Use classmethod to initialize from config
+        return WebSearchInterceptionLogger.from_config_yaml(websearch_params)
