@@ -16,7 +16,6 @@ from litellm.integrations.websearch_interception import (
 )
 from litellm.anthropic_interface import messages
 from litellm.types.utils import LlmProviders
-import asyncio
 
 
 async def test_websearch_interception_non_streaming():
@@ -324,32 +323,3 @@ async def test_websearch_interception_streaming():
         import traceback
         traceback.print_exc()
         return False
-
-
-async def run_all_tests():
-    """Run both e2e tests sequentially"""
-    print("\n" + "="*80)
-    print("WebSearch Interception E2E Test Suite")
-    print("="*80)
-
-    # Run test 1: Non-streaming
-    test1_result = await test_websearch_interception_non_streaming()
-
-    # Run test 2: Streaming
-    test2_result = await test_websearch_interception_streaming()
-
-    # Print summary
-    print("\n" + "="*80)
-    print("TEST SUITE SUMMARY")
-    print("="*80)
-    print(f"Test 1 (Non-Streaming): {'✅ PASSED' if test1_result else '❌ FAILED'}")
-    print(f"Test 2 (Streaming):     {'✅ PASSED' if test2_result else '❌ FAILED'}")
-    print("="*80)
-
-    return test1_result and test2_result
-
-
-if __name__ == "__main__":
-    # Run all tests
-    result = asyncio.run(run_all_tests())
-    sys.exit(0 if result else 1)
