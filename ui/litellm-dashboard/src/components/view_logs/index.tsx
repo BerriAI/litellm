@@ -29,6 +29,7 @@ import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
+import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -504,6 +505,7 @@ export default function SpendLogsTable({
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
           <Tab>Deleted Keys</Tab>
+          <Tab>Deleted Teams</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -750,6 +752,7 @@ export default function SpendLogsTable({
             />
           </TabPanel>
           <TabPanel><DeletedKeysPage /></TabPanel>
+          <TabPanel><DeletedTeamsPage /></TabPanel>
         </TabPanels>
       </TabGroup>
     </div>

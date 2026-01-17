@@ -65,11 +65,12 @@ export function DeletedKeysTable({
       accessorKey: "token",
       header: "Key ID",
       size: 150,
+      maxSize: 250,
       cell: (info) => {
         const value = info.getValue() as string;
         return (
           <Tooltip title={value}>
-            <span className="font-mono text-blue-500 text-xs truncate block">
+            <span className="font-mono text-blue-500 text-xs truncate block max-w-[250px]">
               {value || "-"}
             </span>
           </Tooltip>
@@ -81,11 +82,12 @@ export function DeletedKeysTable({
       accessorKey: "key_alias",
       header: "Key Alias",
       size: 150,
+      maxSize: 200,
       cell: (info) => {
         const value = info.getValue() as string;
         return (
           <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block">
+            <span className="font-mono text-xs truncate block max-w-[200px]">
               {value ?? "-"}
             </span>
           </Tooltip>
@@ -97,10 +99,11 @@ export function DeletedKeysTable({
       accessorKey: "team_alias",
       header: "Team Alias",
       size: 120,
+      maxSize: 180,
       cell: (info) => {
         const value = info.getValue() as string;
         return (
-          <span className="truncate block">
+          <span className="truncate block max-w-[180px]">
             {value || "-"}
           </span>
         );
@@ -111,19 +114,26 @@ export function DeletedKeysTable({
       accessorKey: "spend",
       header: "Spend (USD)",
       size: 100,
-      cell: (info) => formatNumberWithCommas(info.getValue() as number, 4),
+      maxSize: 140,
+      cell: (info) => (
+        <span className="block max-w-[140px]">
+          {formatNumberWithCommas(info.getValue() as number, 4)}
+        </span>
+      ),
     },
     {
       id: "max_budget",
       accessorKey: "max_budget",
       header: "Budget (USD)",
       size: 110,
+      maxSize: 150,
       cell: (info) => {
         const maxBudget = info.getValue() as number | null;
-        if (maxBudget === null) {
-          return "Unlimited";
-        }
-        return `$${formatNumberWithCommas(maxBudget)}`;
+        return (
+          <span className="block max-w-[150px]">
+            {maxBudget === null ? "Unlimited" : `$${formatNumberWithCommas(maxBudget)}`}
+          </span>
+        );
       },
     },
     {
@@ -131,11 +141,12 @@ export function DeletedKeysTable({
       accessorKey: "user_email",
       header: "User Email",
       size: 160,
+      maxSize: 250,
       cell: (info) => {
         const value = info.getValue() as string;
         return (
           <Tooltip title={value}>
-            <span className="font-mono text-xs truncate block">
+            <span className="font-mono text-xs truncate block max-w-[250px]">
               {value ?? "-"}
             </span>
           </Tooltip>
@@ -147,11 +158,12 @@ export function DeletedKeysTable({
       accessorKey: "user_id",
       header: "User ID",
       size: 120,
+      maxSize: 200,
       cell: (info) => {
         const userId = info.getValue() as string | null;
         return (
           <Tooltip title={userId || undefined}>
-            <span className="truncate block">
+            <span className="truncate block max-w-[200px]">
               {userId || "-"}
             </span>
           </Tooltip>
@@ -163,9 +175,14 @@ export function DeletedKeysTable({
       accessorKey: "created_at",
       header: "Created At",
       size: 120,
+      maxSize: 140,
       cell: (info) => {
         const value = info.getValue();
-        return value ? new Date(value as string).toLocaleDateString() : "-";
+        return (
+          <span className="block max-w-[140px]">
+            {value ? new Date(value as string).toLocaleDateString() : "-"}
+          </span>
+        );
       },
     },
     {
@@ -173,11 +190,12 @@ export function DeletedKeysTable({
       accessorKey: "created_by",
       header: "Created By",
       size: 120,
+      maxSize: 180,
       cell: (info) => {
         const value = (info.row.original as any).created_by as string | null | undefined;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block">
+            <span className="truncate block max-w-[180px]">
               {value || "-"}
             </span>
           </Tooltip>
@@ -189,9 +207,14 @@ export function DeletedKeysTable({
       accessorKey: "deleted_at",
       header: "Deleted At",
       size: 120,
+      maxSize: 140,
       cell: (info) => {
         const value = (info.row.original as any).deleted_at as string | null | undefined;
-        return value ? new Date(value).toLocaleDateString() : "-";
+        return (
+          <span className="block max-w-[140px]">
+            {value ? new Date(value).toLocaleDateString() : "-"}
+          </span>
+        );
       },
     },
     {
@@ -199,11 +222,12 @@ export function DeletedKeysTable({
       accessorKey: "deleted_by",
       header: "Deleted By",
       size: 120,
+      maxSize: 180,
       cell: (info) => {
         const value = (info.row.original as any).deleted_by as string | null | undefined;
         return (
           <Tooltip title={value || undefined}>
-            <span className="truncate block">
+            <span className="truncate block max-w-[180px]">
               {value || "-"}
             </span>
           </Tooltip>
@@ -293,6 +317,7 @@ export function DeletedKeysTable({
                           className={`py-1 h-8 relative hover:bg-gray-50`}
                           style={{
                             width: header.getSize(),
+                            maxWidth: header.column.columnDef.maxSize,
                             position: "relative",
                           }}
                           onMouseEnter={() => {
@@ -366,7 +391,7 @@ export function DeletedKeysTable({
                             key={cell.id}
                             style={{
                               width: cell.column.getSize(),
-                              maxWidth: "8-x",
+                              maxWidth: cell.column.columnDef.maxSize,
                               whiteSpace: "pre-wrap",
                               overflow: "hidden",
                             }}
