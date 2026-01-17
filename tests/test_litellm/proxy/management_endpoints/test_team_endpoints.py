@@ -2068,6 +2068,7 @@ async def test_list_team_v2_security_check_non_admin_user():
                 http_request=mock_request,
                 user_id=None,  # Non-admin trying to query all teams
                 user_api_key_dict=mock_user_api_key_dict_non_admin,
+                status=None,
             )
 
         assert exc_info.value.status_code == 401
@@ -2108,6 +2109,7 @@ async def test_list_team_v2_security_check_non_admin_user_other_user():
                 http_request=mock_request,
                 user_id="other_user_456",  # Non-admin trying to query other user's teams
                 user_api_key_dict=mock_user_api_key_dict_non_admin,
+                status=None,
             )
 
         assert exc_info.value.status_code == 401
@@ -2166,6 +2168,7 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
             team_id=None,
             page=1,
             page_size=10,
+            status=None,
         )
 
         # Should return results without error
@@ -2215,12 +2218,117 @@ async def test_list_team_v2_security_check_admin_user():
             user_api_key_dict=mock_user_api_key_dict_admin,
             page=1,
             page_size=10,
+            status=None,
         )
 
         # Should return results without error
         assert "teams" in result
         assert "total" in result
         assert result["total"] == 2
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_with_status_deleted():
+    """
+    Test that status="deleted" parameter correctly queries the deleted teams table.
+    """
+    from unittest.mock import AsyncMock, Mock, patch
+    
+    from fastapi import Request
+    
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+    
+    # Mock request
+    mock_request = Mock(spec=Request)
+    
+    # Mock admin user
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+    
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        # Mock prisma client and database operations
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        
+        # Mock deleted teams
+        mock_deleted_team1 = Mock(model_dump=lambda: {"team_id": "team_1", "team_alias": "Deleted Team 1"})
+        mock_deleted_team2 = Mock(model_dump=lambda: {"team_id": "team_2", "team_alias": "Deleted Team 2"})
+        
+        # Mock deleted teams table (should be called)
+        mock_db.litellm_deletedteamtable.find_many = AsyncMock(return_value=[mock_deleted_team1, mock_deleted_team2])
+        mock_db.litellm_deletedteamtable.count = AsyncMock(return_value=2)
+        
+        # Mock regular teams table (should NOT be called)
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=0)
+        
+        # Should NOT raise an exception
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=None,  # Admin querying all teams
+            user_api_key_dict=mock_user_api_key_dict_admin,
+            page=1,
+            page_size=10,
+            status="deleted",  # Test the status parameter
+        )
+        
+        # Verify that deleted table was queried
+        mock_db.litellm_deletedteamtable.find_many.assert_called_once()
+        mock_db.litellm_deletedteamtable.count.assert_called_once()
+        
+        # Verify that regular table was NOT queried
+        mock_db.litellm_teamtable.find_many.assert_not_called()
+        mock_db.litellm_teamtable.count.assert_not_called()
+        
+        # Should return results without error
+        assert "teams" in result
+        assert "total" in result
+        assert result["total"] == 2
+        assert len(result["teams"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_list_team_v2_with_invalid_status():
+    """
+    Test that invalid status parameter raises HTTPException.
+    """
+    from unittest.mock import Mock, patch
+    
+    from fastapi import HTTPException, Request
+    
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import list_team_v2
+    
+    # Mock request
+    mock_request = Mock(spec=Request)
+    
+    # Mock admin user
+    mock_user_api_key_dict_admin = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        user_id="admin_user_123",
+    )
+    
+    mock_prisma_client = Mock()
+    
+    # Mock prisma_client to be non-None
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client):
+        # Should raise HTTPException for invalid status
+        with pytest.raises(HTTPException) as exc_info:
+            await list_team_v2(
+                http_request=mock_request,
+                user_id=None,
+                user_api_key_dict=mock_user_api_key_dict_admin,
+                page=1,
+                page_size=10,
+                status="invalid_status",  # Invalid status value
+            )
+        
+        assert exc_info.value.status_code == 400
+        assert "Invalid status value" in str(exc_info.value.detail)
+        assert "deleted" in str(exc_info.value.detail)
 
 
 @pytest.mark.asyncio
