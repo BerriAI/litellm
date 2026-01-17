@@ -3662,12 +3662,12 @@ jobs:
               litellm/ui/litellm-dashboard/e2e_tests 2>/dev/null || true
 
       - store_artifacts:
-          path: ~/project/litellm/ui/litellm-dashboard/test-results
-          destination: playwright-results
+          path: ui/litellm-dashboard/test-results
+          destination: test-results
           when: always
 
       - store_artifacts:
-          path: ~/project/litellm/ui/litellm-dashboard/playwright-report
+          path: ui/litellm-dashboard/playwright-report
           destination: playwright-report
           when: always
   test_nonroot_image:
