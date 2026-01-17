@@ -177,6 +177,10 @@ def anthropic_messages_handler(
     # Use provided client or create a new one
     litellm_logging_obj: LiteLLMLoggingObj = kwargs.get("litellm_logging_obj")  # type: ignore
 
+    # Store original model name before get_llm_provider strips the provider prefix
+    # This is needed by agentic hooks (e.g., websearch_interception) to make follow-up requests
+    original_model = model
+
     litellm_params = GenericLiteLLMParams(
         **kwargs,
         api_key=api_key,
@@ -194,6 +198,14 @@ def anthropic_messages_handler(
         api_base=litellm_params.api_base,
         api_key=litellm_params.api_key,
     )
+    
+    # Store agentic loop params in logging object for agentic hooks
+    # This provides original request context needed for follow-up calls
+    if litellm_logging_obj is not None:
+        litellm_logging_obj.model_call_details["agentic_loop_params"] = {
+            "model": original_model,
+            "custom_llm_provider": custom_llm_provider,
+        }
 
     if litellm_params.mock_response and isinstance(litellm_params.mock_response, str):
 

@@ -120,6 +120,8 @@ class WebSearchInterceptionLogger(CustomLogger):
         verbose_logger.debug(f"WebSearchInterception: Response type: {type(response)}")
 
         # Check if provider should be intercepted
+        # Note: custom_llm_provider is already normalized by get_llm_provider()
+        # (e.g., "bedrock/invoke/..." -> "bedrock")
         if custom_llm_provider not in self.enabled_providers:
             verbose_logger.debug(
                 f"WebSearchInterception: Skipping provider {custom_llm_provider} (not in enabled list: {self.enabled_providers})"
@@ -183,6 +185,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             messages=messages,
             tool_calls=tool_calls,
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+            logging_obj=logging_obj,
             stream=stream,
             kwargs=kwargs,
         )
@@ -193,6 +196,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         messages: List[Dict],
         tool_calls: List[Dict],
         anthropic_messages_optional_request_params: Dict,
+        logging_obj: Any,
         stream: bool,
         kwargs: Dict,
     ) -> Any:
@@ -278,10 +282,20 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if k != 'max_tokens'
             }
 
+            # Get model from logging_obj.model_call_details["agentic_loop_params"]
+            # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
+            full_model_name = model
+            if logging_obj is not None:
+                agentic_params = logging_obj.model_call_details.get("agentic_loop_params", {})
+                full_model_name = agentic_params.get("model", model)
+            verbose_logger.debug(
+                f"WebSearchInterception: Using model name: {full_model_name}"
+            )
+            
             final_response = await anthropic_messages.acreate(
                 max_tokens=max_tokens,
                 messages=follow_up_messages,
-                model=model,
+                model=full_model_name,
                 **optional_params_without_max_tokens,
                 **kwargs,
             )

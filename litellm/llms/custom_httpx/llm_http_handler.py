@@ -4395,6 +4395,9 @@ class BaseLLMHTTPHandler:
 
                     if should_run:
                         # Second: Execute agentic loop
+                        # Add custom_llm_provider to kwargs so the agentic loop can reconstruct the full model name
+                        kwargs_with_provider = kwargs.copy() if kwargs else {}
+                        kwargs_with_provider["custom_llm_provider"] = custom_llm_provider
                         agentic_response = await callback.async_run_agentic_loop(
                             tools=tool_calls,
                             model=model,
@@ -4404,7 +4407,7 @@ class BaseLLMHTTPHandler:
                             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
                             logging_obj=logging_obj,
                             stream=stream,
-                            kwargs=kwargs,
+                            kwargs=kwargs_with_provider,
                         )
                         # First hook that runs agentic loop wins
                         return agentic_response
