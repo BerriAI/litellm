@@ -3150,12 +3150,14 @@ async def list_keys(
     ),
     sort_order: str = Query(default="desc", description="Sort order ('asc' or 'desc')"),
     expand: Optional[List[str]] = Query(None, description="Expand related objects (e.g. 'user')"),
+    status: Optional[str] = Query(None, description="Filter by status (e.g. 'deleted')"),
 ) -> KeyListResponseObject:
     """
     List all keys for a given user / team / organization.
 
     Parameters:
         expand: Optional[List[str]] - Expand related objects (e.g. 'user' to include user information)
+        status: Optional[str] - Filter by status. Currently supports "deleted" to query deleted keys.
 
     Returns:
         {
@@ -3176,6 +3178,15 @@ async def list_keys(
         if prisma_client is None:
             verbose_proxy_logger.error("Database not connected")
             raise Exception("Database not connected")
+
+        # Validate status parameter
+        if status is not None and status != "deleted":
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "Invalid status value. Currently only 'deleted' is supported."
+                },
+            )
 
         complete_user_info = await validate_key_list_check(
             user_api_key_dict=user_api_key_dict,
@@ -3217,6 +3228,7 @@ async def list_keys(
             sort_by=sort_by,
             sort_order=sort_order,
             expand=expand,
+            status=status,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -3230,7 +3242,7 @@ async def list_keys(
                 message=getattr(e, "detail", f"error({str(e)})"),
                 type=ProxyErrorTypes.internal_server_error,
                 param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", status.HTTP_500_INTERNAL_SERVER_ERROR),
+                code=getattr(e, "status_code", fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR),
             )
         elif isinstance(e, ProxyException):
             raise e
@@ -3238,7 +3250,7 @@ async def list_keys(
             message="Authentication Error, " + str(e),
             type=ProxyErrorTypes.internal_server_error,
             param=getattr(e, "param", "None"),
-            code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            code=fastapi.status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
 
@@ -3424,6 +3436,7 @@ async def _list_key_helper(
     sort_by: Optional[str] = None,
     sort_order: str = "desc",
     expand: Optional[List[str]] = None,
+    status: Optional[str] = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -3468,28 +3481,51 @@ async def _list_key_helper(
         else None
     )
 
+    # Determine which table to query based on status
+    use_deleted_table = status == "deleted"
+
     # Fetch keys with pagination
-    keys = await prisma_client.db.litellm_verificationtoken.find_many(
-        where=where,  # type: ignore
-        skip=skip,  # type: ignore
-        take=size,  # type: ignore
-        order=(
-            order_by
-            if order_by
-            else [
-                {"created_at": "desc"},
-                {"token": "desc"},  # fallback sort
-            ]
-        ),
-        include={"object_permission": True},
-    )
+    if use_deleted_table:
+        keys = await prisma_client.db.litellm_deletedverificationtoken.find_many(
+            where=where,  # type: ignore
+            skip=skip,  # type: ignore
+            take=size,  # type: ignore
+            order=(
+                order_by
+                if order_by
+                else [
+                    {"created_at": "desc"},
+                    {"token": "desc"},  # fallback sort
+                ]
+            ),
+        )
+    else:
+        keys = await prisma_client.db.litellm_verificationtoken.find_many(
+            where=where,  # type: ignore
+            skip=skip,  # type: ignore
+            take=size,  # type: ignore
+            order=(
+                order_by
+                if order_by
+                else [
+                    {"created_at": "desc"},
+                    {"token": "desc"},  # fallback sort
+                ]
+            ),
+            include={"object_permission": True},
+        )
 
     verbose_proxy_logger.debug(f"Fetched {len(keys)} keys")
 
     # Get total count of keys
-    total_count = await prisma_client.db.litellm_verificationtoken.count(
-        where=where  # type: ignore
-    )
+    if use_deleted_table:
+        total_count = await prisma_client.db.litellm_deletedverificationtoken.count(
+            where=where  # type: ignore
+        )
+    else:
+        total_count = await prisma_client.db.litellm_verificationtoken.count(
+            where=where  # type: ignore
+        )
 
     verbose_proxy_logger.debug(f"Total count of keys: {total_count}")
 
@@ -3507,18 +3543,31 @@ async def _list_key_helper(
             user_map = {user.user_id: user for user in users}
 
     # Prepare response
-    key_list: List[Union[str, UserAPIKeyAuth]] = []
+    key_list: List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]] = []
     for key in keys:
-        key_dict = key.dict()
-        # Attach object_permission if object_permission_id is set
-        key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
+        # Convert Prisma model to dict (supports both Pydantic v1 and v2)
+        try:
+            key_dict = key.model_dump()
+        except Exception:
+            # Fallback for Pydantic v1 compatibility
+            key_dict = key.dict()
+        # Attach object_permission if object_permission_id is set (only for non-deleted keys)
+        if not use_deleted_table:
+            key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
 
         # Include user information if expand includes "user"
         if expand and "user" in expand and key.user_id and key.user_id in user_map:
-            key_dict["user"] = user_map[key.user_id].dict()
+            try:
+                key_dict["user"] = user_map[key.user_id].model_dump()
+            except Exception:
+                key_dict["user"] = user_map[key.user_id].dict()
 
         if return_full_object is True or (expand and "user" in expand):
-            key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
+            if use_deleted_table:
+                # Use deleted key type to preserve deleted_at, deleted_by, etc.
+                key_list.append(LiteLLM_DeletedVerificationToken(**key_dict))
+            else:
+                key_list.append(UserAPIKeyAuth(**key_dict))  # Return full key object
         else:
             _token = key_dict.get("token")
             key_list.append(cast(str, _token))  # Return only the token
