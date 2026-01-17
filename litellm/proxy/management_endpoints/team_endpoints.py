@@ -2991,6 +2991,9 @@ async def list_team_v2(
     sort_order: str = fastapi.Query(
         default="asc", description="Sort order ('asc' or 'desc')"
     ),
+    status: Optional[str] = fastapi.Query(
+        default=None, description="Filter by status (e.g. 'deleted')"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -3013,6 +3016,8 @@ async def list_team_v2(
             Column to sort by (e.g. 'team_id', 'team_alias', 'created_at')
         sort_order: str
             Sort order ('asc' or 'desc')
+        status: Optional[str]
+            Filter by status. Currently supports "deleted" to query deleted teams.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -3036,6 +3041,16 @@ async def list_team_v2(
 
     if user_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         user_id = user_api_key_dict.user_id
+
+    if status is not None and status != "deleted":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Invalid status value. Currently only 'deleted' is supported."
+            },
+        )
+
+    use_deleted_table = status == "deleted"
 
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
@@ -3071,16 +3086,19 @@ async def list_team_v2(
                 detail={"error": f"User not found, passed user_id={user_id}"},
             )
         user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
-        # Find teams where this user is a member by checking members_with_roles array
-        if team_id is None:
-            where_conditions["team_id"] = {"in": user_object_correct_type.teams}
-        elif team_id in user_object_correct_type.teams:
-            where_conditions["team_id"] = team_id
+        
+        if use_deleted_table:
+            where_conditions["members"] = {"has": user_id}
         else:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User is not a member of team_id={team_id}"},
-            )
+            if team_id is None:
+                where_conditions["team_id"] = {"in": user_object_correct_type.teams}
+            elif team_id in user_object_correct_type.teams:
+                where_conditions["team_id"] = team_id
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": f"User is not a member of team_id={team_id}"},
+                )
 
     # Build order_by conditions
     valid_sort_columns = ["team_id", "team_alias", "created_at"]
@@ -3091,14 +3109,26 @@ async def list_team_v2(
         order_by = {sort_by: sort_order.lower()}
 
     # Get teams with pagination
-    teams = await prisma_client.db.litellm_teamtable.find_many(
-        where=where_conditions,
-        skip=skip,
-        take=page_size,
-        order=order_by if order_by else {"created_at": "desc"},  # Default sort
-    )
-    # Get total count for pagination
-    total_count = await prisma_client.db.litellm_teamtable.count(where=where_conditions)
+    if use_deleted_table:
+        teams = await prisma_client.db.litellm_deletedteamtable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order=order_by if order_by else {"created_at": "desc"},  # Default sort
+        )
+        # Get total count for pagination
+        total_count = await prisma_client.db.litellm_deletedteamtable.count(
+            where=where_conditions
+        )
+    else:
+        teams = await prisma_client.db.litellm_teamtable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order=order_by if order_by else {"created_at": "desc"},  # Default sort
+        )
+        # Get total count for pagination
+        total_count = await prisma_client.db.litellm_teamtable.count(where=where_conditions)
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division

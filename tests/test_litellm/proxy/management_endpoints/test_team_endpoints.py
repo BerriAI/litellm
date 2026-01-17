@@ -2068,6 +2068,7 @@ async def test_list_team_v2_security_check_non_admin_user():
                 http_request=mock_request,
                 user_id=None,  # Non-admin trying to query all teams
                 user_api_key_dict=mock_user_api_key_dict_non_admin,
+                status=None,
             )
 
         assert exc_info.value.status_code == 401
@@ -2108,6 +2109,7 @@ async def test_list_team_v2_security_check_non_admin_user_other_user():
                 http_request=mock_request,
                 user_id="other_user_456",  # Non-admin trying to query other user's teams
                 user_api_key_dict=mock_user_api_key_dict_non_admin,
+                status=None,
             )
 
         assert exc_info.value.status_code == 401
@@ -2166,6 +2168,7 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
             team_id=None,
             page=1,
             page_size=10,
+            status=None,
         )
 
         # Should return results without error
@@ -2215,6 +2218,7 @@ async def test_list_team_v2_security_check_admin_user():
             user_api_key_dict=mock_user_api_key_dict_admin,
             page=1,
             page_size=10,
+            status=None,
         )
 
         # Should return results without error
