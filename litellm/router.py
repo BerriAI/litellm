@@ -4865,6 +4865,12 @@ class Router:
         ):
             raise error
 
+        status_code = getattr(error, "status_code", None)
+        if status_code is not None and not litellm._should_retry(status_code):
+            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
+            if status_code not in (401, 403):
+                raise error
+
         if isinstance(error, litellm.NotFoundError):
             raise error
         # Error we should only retry if there are other deployments
