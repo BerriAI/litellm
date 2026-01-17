@@ -293,7 +293,7 @@ def test_gemini_image_generation():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "gemini/gemini-2.5-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
         "gemini/gemini-2.0-flash-preview-image-generation",
         "gemini/gemini-3-pro-image-preview",
     ],
@@ -733,7 +733,7 @@ async def test_gemini_image_generation_async():
                 "content": "Generate an image of a banana wearing a costume that says LiteLLM",
             }
         ],
-        model="gemini/gemini-2.5-flash-image-preview",
+        model="gemini/gemini-2.5-flash-image",
     )
 
     CONTENT = response.choices[0].message.content
@@ -762,7 +762,7 @@ async def test_gemini_image_generation_async_stream():
                 "content": "Generate an image of a banana wearing a costume that says LiteLLM",
             }
         ],
-        model="gemini/gemini-2.5-flash-image-preview",
+        model="gemini/gemini-2.5-flash-image",
         stream=True,
     )
 
