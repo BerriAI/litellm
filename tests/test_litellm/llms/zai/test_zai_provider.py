@@ -179,3 +179,168 @@ def test_zai_sync_completion(respx_mock, zai_response, monkeypatch):
 
     assert response.choices[0].message.content == "Hello! How can I help you today?"
     assert response.usage.total_tokens == 25
+
+
+# ========================================
+# Web Search Tests
+# ========================================
+
+
+def test_zai_models_support_web_search(monkeypatch):
+    """Test that GLM models have supports_web_search: true in model_cost"""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    # Force reload of model cost map from local JSON
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    web_search_models = [
+        "zai/glm-4.7",
+        "zai/glm-4.6",
+        "zai/glm-4.5",
+        "zai/glm-4.5v",
+    ]
+
+    for model in web_search_models:
+        assert model in litellm.model_cost, f"Model {model} not found in model_cost"
+        info = litellm.model_cost[model]
+        assert info.get("supports_web_search") is True, f"Model {model} should support web search"
+
+
+def test_zai_web_search_options_in_supported_params(monkeypatch):
+    """Test that web_search_options is in supported params for GLM models"""
+    from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+    # Ensure model_cost is loaded from local JSON
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    config = ZAIChatConfig()
+
+    # Test for a model that supports web search
+    params = config.get_supported_openai_params("zai/glm-4.7")
+    assert "web_search_options" in params, "web_search_options should be in supported params for glm-4.7"
+
+
+def test_zai_map_web_search_options_default():
+    """Test _map_web_search_options with default (medium) search_context_size"""
+    from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+    config = ZAIChatConfig()
+
+    result = config._map_web_search_options({})
+
+    assert result["type"] == "web_search"
+    assert result["web_search"]["search_engine"] == "search_pro_jina"
+    assert result["web_search"]["enable"] is True
+    assert result["web_search"]["count"] == 10  # medium = 10
+    assert result["web_search"]["content_size"] == "medium"
+    assert result["web_search"]["search_recency_filter"] == "noLimit"
+
+
+def test_zai_map_web_search_options_low():
+    """Test _map_web_search_options with low search_context_size"""
+    from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+    config = ZAIChatConfig()
+
+    result = config._map_web_search_options({"search_context_size": "low"})
+
+    assert result["web_search"]["count"] == 5  # low = 5
+    assert result["web_search"]["content_size"] == "medium"
+
+
+def test_zai_map_web_search_options_high():
+    """Test _map_web_search_options with high search_context_size"""
+    from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+    config = ZAIChatConfig()
+
+    result = config._map_web_search_options({"search_context_size": "high"})
+
+    assert result["web_search"]["count"] == 20  # high = 20
+    assert result["web_search"]["content_size"] == "high"
+
+
+def test_zai_map_openai_params_adds_web_search_tool():
+    """Test that map_openai_params adds web_search tool to tools array"""
+    from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+    config = ZAIChatConfig()
+
+    non_default_params = {
+        "web_search_options": {"search_context_size": "medium"}
+    }
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="zai/glm-4.7",
+        drop_params=False,
+    )
+
+    assert "tools" in result
+    assert len(result["tools"]) == 1
+    assert result["tools"][0]["type"] == "web_search"
+    assert result["tools"][0]["web_search"]["enable"] is True
+    assert result["tools"][0]["web_search"]["count"] == 10
+
+
+def test_zai_map_openai_params_preserves_existing_tools():
+    """Test that map_openai_params preserves existing tools when adding web search"""
+    from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+    config = ZAIChatConfig()
+
+    existing_tool = {
+        "type": "function",
+        "function": {"name": "get_weather", "parameters": {}}
+    }
+
+    non_default_params = {
+        "web_search_options": {"search_context_size": "medium"},
+        "tools": [existing_tool],
+    }
+    optional_params = {"tools": [existing_tool]}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="zai/glm-4.7",
+        drop_params=False,
+    )
+
+    assert "tools" in result
+    assert len(result["tools"]) == 2
+    # Existing tool preserved
+    assert any(t.get("type") == "function" for t in result["tools"])
+    # Web search tool added
+    assert any(t.get("type") == "web_search" for t in result["tools"])
+
+
+def test_zai_map_openai_params_no_duplicate_web_search():
+    """Test that map_openai_params doesn't add duplicate web_search tool"""
+    from litellm.llms.zai.chat.transformation import ZAIChatConfig
+
+    config = ZAIChatConfig()
+
+    existing_web_search = {
+        "type": "web_search",
+        "web_search": {"enable": True, "count": 5}
+    }
+
+    non_default_params = {
+        "web_search_options": {"search_context_size": "high"},
+        "tools": [existing_web_search],
+    }
+    optional_params = {"tools": [existing_web_search]}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="zai/glm-4.7",
+        drop_params=False,
+    )
+
+    # Should not add duplicate
+    web_search_count = sum(1 for t in result["tools"] if t.get("type") == "web_search")
+    assert web_search_count == 1
