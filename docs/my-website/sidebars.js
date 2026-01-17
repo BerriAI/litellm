@@ -287,7 +287,8 @@ const sidebars = {
               label: "UI Logs",
               items: [
                 "proxy/ui_logs",
-                "proxy/ui_logs_sessions"
+                "proxy/ui_logs_sessions",
+                "proxy/deleted_keys_teams"
               ]
             }
           ],
