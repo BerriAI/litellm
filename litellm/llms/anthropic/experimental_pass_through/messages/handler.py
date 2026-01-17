@@ -57,6 +57,29 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
+    # WebSearch Interception: Convert stream=True to stream=False if WebSearch interception is enabled
+    # This allows transparent server-side agentic loop execution for streaming requests
+    if stream and tools and any(t.get("name") == "WebSearch" for t in tools):
+        # Extract provider from model string (e.g., "bedrock/model" -> "bedrock")
+        provider = model.split("/")[0] if "/" in model else ""
+
+        # Check if WebSearch interception is enabled in callbacks
+        from litellm._logging import verbose_logger
+        from litellm.integrations.websearch_interception import (
+            WebSearchInterceptionLogger,
+        )
+        if litellm.callbacks:
+            for callback in litellm.callbacks:
+                if isinstance(callback, WebSearchInterceptionLogger):
+                    # Check if provider is enabled for interception
+                    if provider in callback.enabled_providers:
+                        verbose_logger.info(
+                            f"WebSearchInterception: Converting stream=True to stream=False for WebSearch interception "
+                            f"(provider={provider})"
+                        )
+                        stream = False
+                        break
+
     local_vars = locals()
     loop = asyncio.get_event_loop()
     kwargs["is_async"] = True

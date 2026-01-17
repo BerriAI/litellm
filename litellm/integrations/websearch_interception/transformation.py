@@ -38,12 +38,18 @@ class WebSearchTransformation:
             (has_websearch, tool_calls):
                 has_websearch: True if WebSearch tool_use found
                 tool_calls: List of tool_use dicts with id, name, input
+
+        Note:
+            Streaming requests are handled by converting stream=True to stream=False
+            in the WebSearchInterceptionLogger.async_log_pre_api_call hook before
+            the API request is made. This means by the time this method is called,
+            streaming requests have already been converted to non-streaming.
         """
         if stream:
-            # For streaming: need to consume and buffer the stream
-            # TODO: Implement streaming detection in phase 2
+            # This should not happen in practice since we convert streaming to non-streaming
+            # in async_log_pre_api_call, but keep this check for safety
             verbose_logger.warning(
-                "WebSearchInterception: Streaming not yet supported, skipping"
+                "WebSearchInterception: Unexpected streaming response, skipping interception"
             )
             return False, []
 
