@@ -3638,13 +3638,14 @@ jobs:
               --output=test-results
           no_output_timeout: 120m
       - store_artifacts:
-          path: test-results
+          path: ui/litellm-dashboard/e2e_tests/test-results
           destination: playwright-results
+          when: always
 
       - store_artifacts:
-          path: playwright-report
+          path: ui/litellm-dashboard/e2e_tests/playwright-report
           destination: playwright-report
-
+          when: always
   test_nonroot_image:
     machine:
       image: ubuntu-2204:2023.10.1
