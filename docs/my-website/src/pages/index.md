@@ -7,42 +7,41 @@ https://github.com/BerriAI/litellm
 
 ## **Call 100+ LLMs using the OpenAI Input/Output Format**
 
-- Translate inputs to provider's `completion`, `embedding`, and `image_generation` endpoints
-- [Consistent output](https://docs.litellm.ai/docs/completion/output), text responses will always be available at `['choices'][0]['message']['content']`
+- Translate inputs to provider's endpoints (`/chat/completions`, `/responses`, `/embeddings`, `/images`, `/audio`, `/batches`, and more)
+- [Consistent output](https://docs.litellm.ai/docs/supported_endpoints) - same response format regardless of which provider you use
 - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
 - Track spend & set budgets per project [LiteLLM Proxy Server](https://docs.litellm.ai/docs/simple_proxy)
 
 ## How to use LiteLLM
-You can use litellm through either:
-1. [LiteLLM Proxy Server](#litellm-proxy-server-llm-gateway) - Server (LLM Gateway) to call 100+ LLMs, load balance, cost tracking across projects
-2. [LiteLLM python SDK](#basic-usage) - Python Client to call 100+ LLMs, load balance, cost tracking
 
-### **When to use LiteLLM Proxy Server (LLM Gateway)**
+You can use LiteLLM through either the Proxy Server or Python SDK. Both gives you a unified interface to access multiple LLMs (100+ LLMs). Choose the option that best fits your needs:
 
-:::tip
-
-Use LiteLLM Proxy Server if you want a **central service (LLM Gateway) to access multiple LLMs**
-
-Typically used by Gen AI Enablement /  ML PLatform Teams
-
-:::
-
-  - LiteLLM Proxy gives you a unified interface to access multiple LLMs (100+ LLMs)
-  - Track LLM Usage and setup guardrails
-  - Customize Logging, Guardrails, Caching per project
-
-### **When to use LiteLLM Python SDK**
-
-:::tip
-
-  Use LiteLLM Python SDK if you want to use LiteLLM in your **python code**
-
-Typically used by developers building llm projects
-
-:::
-
-  - LiteLLM SDK gives you a unified interface to access multiple LLMs (100+ LLMs) 
-  - Retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - [Router](https://docs.litellm.ai/docs/routing)
+<table style={{width: '100%', tableLayout: 'fixed'}}>
+<thead>
+<tr>
+<th style={{width: '14%'}}></th>
+<th style={{width: '43%'}}><strong><a href="#litellm-proxy-server-llm-gateway">LiteLLM Proxy Server</a></strong></th>
+<th style={{width: '43%'}}><strong><a href="#basic-usage">LiteLLM Python SDK</a></strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td style={{width: '14%'}}><strong>Use Case</strong></td>
+<td style={{width: '43%'}}>Central service (LLM Gateway) to access multiple LLMs</td>
+<td style={{width: '43%'}}>Use LiteLLM directly in your Python code</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Who Uses It?</strong></td>
+<td style={{width: '43%'}}>Gen AI Enablement / ML Platform Teams</td>
+<td style={{width: '43%'}}>Developers building LLM projects</td>
+</tr>
+<tr>
+<td style={{width: '14%'}}><strong>Key Features</strong></td>
+<td style={{width: '43%'}}>• Centralized API gateway with authentication & authorization<br />• Multi-tenant cost tracking and spend management per project/user<br />• Per-project customization (logging, guardrails, caching)<br />• Virtual keys for secure access control<br />• Admin dashboard UI for monitoring and management</td>
+<td style={{width: '43%'}}>• Direct Python library integration in your codebase<br />• Router with retry/fallback logic across multiple deployments (e.g. Azure/OpenAI) - <a href="https://docs.litellm.ai/docs/routing">Router</a><br />• Application-level load balancing and cost tracking<br />• Exception handling with OpenAI-compatible errors<br />• Observability callbacks (Lunary, MLflow, Langfuse, etc.)</td>
+</tr>
+</tbody>
+</table>
 
 ## **LiteLLM Python SDK**
 
@@ -67,7 +66,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="openai/gpt-5",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -83,13 +82,27 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2",
+  model="anthropic/claude-sonnet-4-5-20250929",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
@@ -97,11 +110,11 @@ from litellm import completion
 import os
 
 # auth: run 'gcloud auth application-default'
-os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
-os.environ["VERTEX_LOCATION"] = "us-central1"
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison",
+  model="vertex_ai/gemini-1.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}]
 )
 ```
@@ -212,7 +225,60 @@ response = completion(
 
 </TabItem>
 
+<TabItem value="vercel" label="Vercel AI Gateway">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for instructions on obtaining a key
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
+
+response = completion(
+  model="vercel_ai_gateway/openai/gpt-5",
+  messages=[{ "content": "Hello, how are you?","role": "user"}]
+)
+```
+
+</TabItem>
+
 </Tabs>
+
+### Response Format (OpenAI Chat Completions Format)
+
+```json
+{
+    "id": "chatcmpl-565d891b-a42e-4c39-8d14-82a1f5208885",
+    "created": 1734366691,
+    "model": "gpt-5",
+    "object": "chat.completion",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": "stop",
+            "index": 0,
+            "message": {
+                "content": "Hello! As an AI language model, I don't have feelings, but I'm operating properly and ready to assist you with any questions or tasks you may have. How can I help you today?",
+                "role": "assistant",
+                "tool_calls": null,
+                "function_call": null
+            }
+        }
+    ],
+    "usage": {
+        "completion_tokens": 43,
+        "prompt_tokens": 13,
+        "total_tokens": 56,
+        "completion_tokens_details": null,
+        "prompt_tokens_details": {
+            "audio_tokens": null,
+            "cached_tokens": 0
+        },
+        "cache_creation_input_tokens": 0,
+        "cache_read_input_tokens": 0
+    }
+}
+```
 
 ### Responses API
 
@@ -265,11 +331,11 @@ from litellm import responses
 import os
 
 # auth: run 'gcloud auth application-default'
-os.environ["VERTEX_PROJECT"] = "jr-smith-386718"
-os.environ["VERTEX_LOCATION"] = "us-central1"
+os.environ["VERTEXAI_PROJECT"] = "jr-smith-386718"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
 
 response = responses(
-  model="chat-bison",
+  model="vertex_ai/gemini-1.5-pro",
   messages=[{ "content": "What is the capital of France?","role": "user"}]
 )
 ```
@@ -314,7 +380,7 @@ import os
 os.environ["OPENAI_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="gpt-3.5-turbo",
+  model="openai/gpt-5",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -331,14 +397,29 @@ import os
 os.environ["ANTHROPIC_API_KEY"] = "your-api-key"
 
 response = completion(
-  model="claude-2",
+  model="anthropic/claude-sonnet-4-5-20250929",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
 ```
 
 </TabItem>
+<TabItem value="xai" label="xAI">
 
+```python
+from litellm import completion
+import os
+
+## set ENV variables
+os.environ["XAI_API_KEY"] = "your-api-key"
+
+response = completion(
+  model="xai/grok-2-latest",
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+</TabItem>
 <TabItem value="vertex" label="VertexAI">
 
 ```python
@@ -346,11 +427,11 @@ from litellm import completion
 import os
 
 # auth: run 'gcloud auth application-default'
-os.environ["VERTEX_PROJECT"] = "hardy-device-386718"
-os.environ["VERTEX_LOCATION"] = "us-central1"
+os.environ["VERTEXAI_PROJECT"] = "hardy-device-386718"
+os.environ["VERTEXAI_LOCATION"] = "us-central1"
 
 response = completion(
-  model="chat-bison",
+  model="vertex_ai/gemini-1.5-pro",
   messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
@@ -370,7 +451,7 @@ os.environ["NVIDIA_NIM_API_BASE"] = "nvidia_nim_endpoint_url"
 
 response = completion(
   model="nvidia_nim/<model_name>",
-  messages=[{ "content": "Hello, how are you?","role": "user"}]
+  messages=[{ "content": "Hello, how are you?","role": "user"}],
   stream=True,
 )
 ```
@@ -466,22 +547,74 @@ response = completion(
 ```
 
 </TabItem>
+
+<TabItem value="vercel" label="Vercel AI Gateway">
+
+```python
+from litellm import completion
+import os
+
+## set ENV variables. Visit https://vercel.com/docs/ai-gateway#using-the-ai-gateway-with-an-api-key for instructions on obtaining a key
+os.environ["VERCEL_AI_GATEWAY_API_KEY"] = "your-vercel-api-key"
+
+response = completion(
+  model="vercel_ai_gateway/openai/gpt-5",
+  messages = [{ "content": "Hello, how are you?","role": "user"}],
+  stream=True,
+)
+```
+
+</TabItem>
+
 </Tabs>
+
+### Streaming Response Format (OpenAI Format)
+
+```json
+{
+    "id": "chatcmpl-2be06597-eb60-4c70-9ec5-8cd2ab1b4697",
+    "created": 1734366925,
+    "model": "claude-sonnet-4-5-20250929",
+    "object": "chat.completion.chunk",
+    "system_fingerprint": null,
+    "choices": [
+        {
+            "finish_reason": null,
+            "index": 0,
+            "delta": {
+                "content": "Hello",
+                "role": "assistant",
+                "function_call": null,
+                "tool_calls": null,
+                "audio": null
+            },
+            "logprobs": null
+        }
+    ]
+}
+```
 
 ### Exception handling 
 
 LiteLLM maps exceptions across all supported providers to the OpenAI exceptions. All our exceptions inherit from OpenAI's exception types, so any error-handling you have for that, should work out of the box with LiteLLM.
 
 ```python
-from openai.error import OpenAIError
+import litellm
 from litellm import completion
+import os
 
 os.environ["ANTHROPIC_API_KEY"] = "bad-key"
 try:
-    # some code
-    completion(model="claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
-except OpenAIError as e:
-    print(e)
+    completion(model="anthropic/claude-instant-1", messages=[{"role": "user", "content": "Hey, how's it going?"}])
+except litellm.AuthenticationError as e:
+    # Thrown when the API key is invalid
+    print(f"Authentication failed: {e}")
+except litellm.RateLimitError as e:
+    # Thrown when you've exceeded your rate limit
+    print(f"Rate limited: {e}")
+except litellm.APIError as e:
+    # Thrown for general API errors
+    print(f"API error: {e}")
 ```
 
 ### Logging Observability - Log LLM Input/Output ([Docs](https://docs.litellm.ai/docs/observability/callbacks))
@@ -502,7 +635,7 @@ os.environ["OPENAI_API_KEY"]
 litellm.success_callback = ["lunary", "mlflow", "langfuse", "helicone"] # log input/output to lunary, mlflow, langfuse, helicone
 
 #openai call
-response = completion(model="gpt-3.5-turbo", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
+response = completion(model="openai/gpt-5", messages=[{"role": "user", "content": "Hi 👋 - i'm openai"}])
 ```
 
 ### Track Costs, Usage, Latency for streaming
@@ -527,7 +660,7 @@ litellm.success_callback = [track_cost_callback] # set custom callback function
 
 # litellm.completion() call
 response = completion(
-    model="gpt-3.5-turbo",
+    model="openai/gpt-5",
     messages=[
         {
             "role": "user",
@@ -584,7 +717,7 @@ Example `litellm_config.yaml`
 
 ```yaml
 model_list:
-  - model_name: gpt-3.5-turbo
+  - model_name: gpt-5
     litellm_params:
       model: azure/<your-azure-model-deployment>
       api_base: os.environ/AZURE_API_BASE # runs os.getenv("AZURE_API_BASE")
@@ -621,7 +754,7 @@ docker run \
 import openai # openai v1.0.0+
 client = openai.OpenAI(api_key="anything",base_url="http://0.0.0.0:4000") # set proxy to base_url
 # request sent to model set on litellm proxy, `litellm --model`
-response = client.chat.completions.create(model="gpt-3.5-turbo", messages = [
+response = client.chat.completions.create(model="gpt-5", messages = [
     {
         "role": "user",
         "content": "this is a test request, write a short poem"
