@@ -77,7 +77,7 @@ def _convert_detail_to_media_resolution_enum(
     return None
 
 
-def _process_gemini_image(
+def _process_gemini_media(
     image_url: str,
     format: Optional[str] = None,
     media_resolution_enum: Optional[Dict[str, str]] = None,
@@ -85,11 +85,11 @@ def _process_gemini_image(
     video_metadata: Optional[Dict[str, Any]] = None,
 ) -> PartType:
     """
-    Given an image URL, return the appropriate PartType for Gemini
+    Given a media URL (image, audio, or video), return the appropriate PartType for Gemini
     By the way, actually video_metadata can only be used with videos; it cannot be used with images, audio, or files. However, I haven't made any special handling because vertex returns a parameter error.
-    
+
     Args:
-        image_url: The URL or base64 string of the media
+        image_url: The URL or base64 string of the media (image, audio, or video)
         format: The MIME type of the media
         media_resolution_enum: Media resolution level (for Gemini 3+)
         model: The model name (to check version compatibility)
@@ -309,8 +309,8 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
                             else:
                                 image_url = img_element["image_url"]
-                            _part = _process_gemini_image(
-                                image_url=image_url, 
+                            _part = _process_gemini_media(
+                                image_url=image_url,
                                 format=format,
                                 media_resolution_enum=media_resolution_enum,
                                 model=model,
@@ -335,7 +335,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                         )
                                     )
                                 )
-                                _part = _process_gemini_image(
+                                _part = _process_gemini_media(
                                     image_url=openai_image_str,
                                     format=audio_format_modified,
                                     model=model,
@@ -358,7 +358,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
 
                             try:
-                                _part = _process_gemini_image(
+                                _part = _process_gemini_media(
                                     image_url=passed_file,
                                     format=format,
                                     model=model,
