@@ -360,7 +360,9 @@ class TestOllamaToolCalling:
         assert optional_params["tools"] == tools
         # Should NOT trigger the broken fallback
         assert "functions_unsupported_model" not in optional_params
-        assert "format" not in optional_params or optional_params.get("format") != "json"
+        assert (
+            "format" not in optional_params or optional_params.get("format") != "json"
+        )
 
     def test_finish_reason_tool_calls_non_streaming(self):
         """Test that finish_reason is set to 'tool_calls' when tool_calls present.
@@ -473,3 +475,182 @@ class TestOllamaToolCalling:
         # finish_reason should be "stop" (default behavior)
         assert result.choices[0].finish_reason == "stop"
         assert result.choices[0].message.tool_calls is None
+
+
+class TestOllamaResponseFormatRegression:
+    """Regression tests for Ollama response_format handling.
+
+    These tests ensure that Pydantic models (including nested ones) are properly
+    converted to JSON schemas for Ollama's /api/chat endpoint.
+
+    Issue: https://github.com/BerriAI/litellm/issues/17807
+    """
+
+    def test_nested_pydantic_model_conversion(self):
+        """Test that nested Pydantic models are properly converted to JSON schema.
+
+        Ensures that response_format with nested models (e.g., a list of objects)
+        is correctly transformed for Ollama's format parameter.
+
+        Issue #17807: ollama_chat failed to produce valid JSON with nested Pydantic models.
+        """
+        from typing import List
+
+        from pydantic import Field
+
+        # Example nested model structure (common in LLM-as-judge patterns)
+        class ItemScore(BaseModel):
+            """Individual item score."""
+
+            item_id: str = Field(description="The id of the item being scored.")
+            explanation: str = Field(description="Explanation for the score.")
+            score: float = Field(description="Score between 0 and 1.")
+
+        class ScoringResponse(BaseModel):
+            """Response containing multiple scores."""
+
+            scores: List[ItemScore] = Field(description="The scores for each item.")
+
+        # Test that get_optional_params correctly processes this nested model
+        optional_params = get_optional_params(
+            model="ollama_chat/qwen2.5:7b",
+            response_format=ScoringResponse,
+            custom_llm_provider="ollama_chat",
+        )
+
+        # Must have 'format' key for Ollama
+        assert "format" in optional_params, "format should be set for response_format"
+
+        format_value = optional_params["format"]
+
+        # Must be a dict (the JSON schema)
+        assert isinstance(
+            format_value, dict
+        ), f"Expected format to be dict, got {type(format_value)}"
+
+        # Must contain the nested $defs or properties for ItemScore
+        # Remove additionalProperties that may be added by LiteLLM
+        format_value.pop("additionalProperties", None)
+
+        # Verify the schema structure is preserved
+        assert "properties" in format_value, "Schema should have properties"
+        assert (
+            "scores" in format_value["properties"]
+        ), "Schema should have scores property"
+
+        # Verify nested model is referenced (either via $defs or inline)
+        scores_prop = format_value["properties"]["scores"]
+        assert scores_prop.get("type") == "array", "scores should be an array"
+
+    def test_pydantic_model_with_descriptions_preserved(self):
+        """Test that Pydantic field descriptions are preserved in the JSON schema.
+
+        This is important for LLM-as-judge scenarios where the model needs
+        to understand what each field means.
+        """
+        from pydantic import Field
+
+        class JudgmentResult(BaseModel):
+            """Result of judging a response."""
+
+            reasoning: str = Field(description="Detailed reasoning for the judgment.")
+            accept: bool = Field(description="Whether the response should be accepted.")
+
+        optional_params = get_optional_params(
+            model="ollama_chat/llama3",
+            response_format=JudgmentResult,
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert "format" in optional_params
+        format_value = optional_params["format"]
+
+        # Verify descriptions are preserved
+        props = format_value.get("properties", {})
+        assert "reasoning" in props
+        assert "accept" in props
+
+        # Check that field types are correct
+        assert props["reasoning"].get("type") == "string"
+        assert props["accept"].get("type") == "boolean"
+
+    def test_json_schema_dict_with_nested_schema(self):
+        """Test that explicit json_schema dict with nested structures works.
+
+        This simulates the workaround that ART PR #509 implemented.
+        """
+        from typing import List
+
+        class InnerModel(BaseModel):
+            value: int
+            label: str
+
+        class OuterModel(BaseModel):
+            items: List[InnerModel]
+            total: int
+
+        # Create the explicit json_schema format (ART workaround style)
+        response_format_dict = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "OuterModel",
+                "schema": OuterModel.model_json_schema(),
+            },
+        }
+
+        optional_params = get_optional_params(
+            model="ollama_chat/mistral",
+            response_format=response_format_dict,
+            custom_llm_provider="ollama_chat",
+        )
+
+        assert "format" in optional_params
+
+        format_value = optional_params["format"]
+
+        # Should extract the schema directly
+        assert isinstance(format_value, dict)
+        assert "properties" in format_value
+        assert "items" in format_value["properties"]
+        assert "total" in format_value["properties"]
+
+    def test_transform_request_includes_format_for_json_schema(self):
+        """Test that transform_request properly includes format in the request payload.
+
+        This ensures the JSON schema reaches Ollama's /api/chat endpoint.
+        """
+        from typing import cast
+
+        class SimpleResponse(BaseModel):
+            answer: str
+            confidence: float
+
+        config = OllamaChatConfig()
+
+        # Get the format from get_optional_params
+        optional_params = get_optional_params(
+            model="ollama_chat/phi3",
+            response_format=SimpleResponse,
+            custom_llm_provider="ollama_chat",
+        )
+
+        messages = cast(
+            list[AllMessageValues], [{"role": "user", "content": "What is 2+2?"}]
+        )
+
+        result = config.transform_request(
+            model="phi3",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+
+        # The format should be in the request payload
+        assert "format" in result, "format should be in the request payload"
+        assert isinstance(
+            result["format"], dict
+        ), "format should be a dict (JSON schema)"
+        assert (
+            result["format"].get("type") == "object"
+        ), "format should be an object schema"
