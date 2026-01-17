@@ -30317,6 +30317,7 @@
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
+        "supports_web_search": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
     "zai/glm-4.6": {
@@ -30328,6 +30329,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_web_search": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
     "zai/glm-4.5": {
@@ -30339,6 +30341,7 @@
         "mode": "chat",
         "supports_function_calling": true,
         "supports_tool_choice": true,
+        "supports_web_search": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
     "zai/glm-4.5v": {
@@ -30351,6 +30354,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_vision": true,
+        "supports_web_search": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
     "zai/glm-4.5-x": {
