@@ -28,16 +28,25 @@ sequenceDiagram
     participant Client
     participant ProxyServer as proxy/proxy_server.py
     participant Auth as proxy/auth/user_api_key_auth.py
+    participant Redis as Redis Cache
     participant Hooks as proxy/hooks/
     participant Router as router.py
-    participant Main as main.py
+    participant Main as main.py + utils.py
     participant Handler as llms/custom_httpx/llm_http_handler.py
     participant Transform as llms/{provider}/chat/transformation.py
     participant Provider as LLM Provider API
+    participant CostCalc as cost_calculator.py
+    participant LoggingObj as litellm_logging.py
+    participant DBWriter as db/db_spend_update_writer.py
+    participant Postgres as PostgreSQL
 
+    %% Request Flow
     Client->>ProxyServer: POST /v1/chat/completions
     ProxyServer->>Auth: user_api_key_auth()
+    Auth->>Redis: Check API key cache
+    Redis-->>Auth: Key info + spend limits
     ProxyServer->>Hooks: max_budget_limiter, parallel_request_limiter
+    Hooks->>Redis: Check/increment rate limit counters
     ProxyServer->>Router: route_request()
     Router->>Main: litellm.acompletion()
     Main->>Handler: BaseLLMHTTPHandler.completion()
@@ -45,8 +54,25 @@ sequenceDiagram
     Handler->>Provider: HTTP Request
     Provider-->>Handler: Response
     Handler->>Transform: ProviderConfig.transform_response()
-    Handler-->>Hooks: async_log_success_event()
-    Handler-->>Client: ModelResponse
+    Transform-->>Handler: ModelResponse
+    Handler-->>Main: ModelResponse
+    
+    %% Cost Attribution (in utils.py wrapper)
+    Main->>LoggingObj: update_response_metadata()
+    LoggingObj->>CostCalc: _response_cost_calculator()
+    CostCalc->>CostCalc: completion_cost(tokens × price)
+    CostCalc-->>LoggingObj: response_cost
+    LoggingObj-->>Main: Set response._hidden_params["response_cost"]
+    Main-->>ProxyServer: ModelResponse (with cost in _hidden_params)
+    
+    %% Response Headers + Async Logging
+    ProxyServer->>ProxyServer: Extract cost from hidden_params
+    ProxyServer->>LoggingObj: async_success_handler()
+    LoggingObj->>Hooks: async_log_success_event()
+    Hooks->>DBWriter: update_database(response_cost)
+    DBWriter->>Redis: Queue spend increment
+    DBWriter->>Postgres: Batch write spend logs (async)
+    ProxyServer-->>Client: ModelResponse + x-litellm-response-cost header
 ```
 
 ### Proxy Components
@@ -75,11 +101,19 @@ graph TD
         Main["main.py"]
     end
 
+    subgraph "Infrastructure"
+        DualCache["DualCache<br/>(in-memory + Redis)"]
+        Postgres["PostgreSQL<br/>(keys, teams, spend logs)"]
+    end
+
     Client --> Endpoint
     Endpoint --> Auth
+    Auth --> DualCache
+    DualCache -.->|cache miss| Postgres
     Auth --> PreCall
     PreCall --> RouteRequest
     RouteRequest --> Router
+    Router --> DualCache
     Router --> Main
     Main --> Client
 ```
@@ -118,6 +152,93 @@ graph TD
 | `litellm_skills` | `proxy/hooks/skills_injection.py` | Skills injection |
 
 To add a new proxy hook, implement `CustomLogger` and register in `PROXY_HOOKS`.
+
+### Infrastructure Components
+
+The AI Gateway uses external infrastructure for persistence and caching:
+
+```mermaid
+graph LR
+    subgraph "AI Gateway (proxy/)"
+        Proxy["proxy_server.py"]
+        Auth["auth/user_api_key_auth.py"]
+        DBWriter["db/db_spend_update_writer.py<br/>DBSpendUpdateWriter"]
+        InternalCache["utils.py<br/>InternalUsageCache"]
+        CostCallback["hooks/proxy_track_cost_callback.py<br/>_ProxyDBLogger"]
+        Scheduler["APScheduler<br/>ProxyStartupEvent"]
+    end
+
+    subgraph "SDK (litellm/)"
+        Router["router.py<br/>Router.cache (DualCache)"]
+        LLMCache["caching/caching_handler.py<br/>LLMCachingHandler"]
+        CacheClass["caching/caching.py<br/>Cache"]
+    end
+
+    subgraph "Redis (caching/redis_cache.py)"
+        RateLimit["Rate Limit Counters"]
+        SpendQueue["Spend Increment Queue"]
+        KeyCache["API Key Cache"]
+        TPM_RPM["TPM/RPM Tracking"]
+        Cooldowns["Deployment Cooldowns"]
+        LLMResponseCache["LLM Response Cache"]
+    end
+
+    subgraph "PostgreSQL (proxy/schema.prisma)"
+        Keys["LiteLLM_VerificationToken"]
+        Teams["LiteLLM_TeamTable"]
+        SpendLogs["LiteLLM_SpendLogs"]
+        Users["LiteLLM_UserTable"]
+    end
+
+    Auth --> InternalCache
+    InternalCache --> KeyCache
+    InternalCache -.->|cache miss| Keys
+    InternalCache --> RateLimit
+    Router --> TPM_RPM
+    Router --> Cooldowns
+    LLMCache --> CacheClass
+    CacheClass --> LLMResponseCache
+    CostCallback --> DBWriter
+    DBWriter --> SpendQueue
+    DBWriter --> SpendLogs
+    Scheduler --> SpendLogs
+    Scheduler --> Keys
+```
+
+| Component | Purpose | Key Files/Classes |
+|-----------|---------|-------------------|
+| **Redis** | Rate limiting, API key caching, TPM/RPM tracking, cooldowns, LLM response caching, spend queuing | `caching/redis_cache.py` (`RedisCache`), `caching/dual_cache.py` (`DualCache`) |
+| **PostgreSQL** | API keys, teams, users, spend logs | `proxy/utils.py` (`PrismaClient`), `proxy/schema.prisma` |
+| **InternalUsageCache** | Proxy-level cache for rate limits + API keys (in-memory + Redis) | `proxy/utils.py` (`InternalUsageCache`) |
+| **Router.cache** | TPM/RPM tracking, deployment cooldowns, client caching (in-memory + Redis) | `router.py` (`Router.cache: DualCache`) |
+| **LLMCachingHandler** | SDK-level LLM response/embedding caching | `caching/caching_handler.py` (`LLMCachingHandler`), `caching/caching.py` (`Cache`) |
+| **DBSpendUpdateWriter** | Batches spend updates to reduce DB writes | `proxy/db/db_spend_update_writer.py` (`DBSpendUpdateWriter`) |
+| **Cost Tracking** | Calculates and logs response costs | `proxy/hooks/proxy_track_cost_callback.py` (`_ProxyDBLogger`) |
+
+**Background Jobs** (APScheduler, initialized in `proxy/proxy_server.py` → `ProxyStartupEvent.initialize_scheduled_background_jobs()`):
+
+| Job | Interval | Purpose | Key Files |
+|-----|----------|---------|-----------|
+| `update_spend` | 60s | Batch write spend logs to PostgreSQL | `proxy/db/db_spend_update_writer.py` |
+| `reset_budget` | 10-12min | Reset budgets for keys/users/teams | `proxy/management_helpers/budget_reset_job.py` |
+| `add_deployment` | 10s | Sync new model deployments from DB | `proxy/proxy_server.py` (`ProxyConfig`) |
+| `cleanup_old_spend_logs` | cron/interval | Delete old spend logs | `proxy/management_helpers/spend_log_cleanup.py` |
+| `check_batch_cost` | 30min | Calculate costs for batch jobs | `proxy/management_helpers/check_batch_cost_job.py` |
+| `check_responses_cost` | 30min | Calculate costs for responses API | `proxy/management_helpers/check_responses_cost_job.py` |
+| `process_rotations` | 1hr | Auto-rotate API keys | `proxy/management_helpers/key_rotation_manager.py` |
+| `_run_background_health_check` | continuous | Health check model deployments | `proxy/proxy_server.py` |
+| `send_weekly_spend_report` | weekly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
+| `send_monthly_spend_report` | monthly | Slack spend alerts | `proxy/utils.py` (`SlackAlerting`) |
+
+**Cost Attribution Flow:**
+1. LLM response returns to `utils.py` wrapper after `litellm.acompletion()` completes
+2. `update_response_metadata()` (`llm_response_utils/response_metadata.py`) is called
+3. `logging_obj._response_cost_calculator()` (`litellm_logging.py`) calculates cost via `litellm.completion_cost()` (`cost_calculator.py`)
+4. Cost is stored in `response._hidden_params["response_cost"]`
+5. `proxy/common_request_processing.py` extracts cost from `hidden_params` and adds to response headers (`x-litellm-response-cost`)
+6. `logging_obj.async_success_handler()` triggers callbacks including `_ProxyDBLogger.async_log_success_event()`
+7. `DBSpendUpdateWriter.update_database()` queues spend increments to Redis
+8. Background job `update_spend` flushes queued spend to PostgreSQL every 60s
 
 ---
 
