@@ -484,10 +484,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         return None
 
     #########################################################
-    # AGENTIC COMPLETION HOOKS (for litellm.messages)
+    # AGENTIC LOOP HOOKS (for litellm.messages + future completion support)
     #########################################################
 
-    async def async_should_run_agentic_completion(
+    async def async_should_run_agentic_loop(
         self,
         response: Any,
         model: str,
@@ -517,7 +517,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         1. User calls litellm.messages.acreate(tools=[...])
         2. Model responds with tool_use
         3. THIS HOOK checks if tool should run server-side
-        4. If True, async_run_agentic_completion executes the tool
+        4. If True, async_run_agentic_loop executes the tool
         5. User receives final answer (never sees intermediate tool_use)
 
         Args:
@@ -545,7 +545,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         return False, {}
 
-    async def async_run_agentic_completion(
+    async def async_run_agentic_loop(
         self,
         agentic_context: Dict,
         model: str,
@@ -560,7 +560,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         Hook to execute agentic loop based on context from should_run hook.
 
-        Called only if async_should_run_agentic_completion returns True.
+        Called only if async_messages_should_run_agentic_loop returns True.
 
         USE CASE: Execute server-side tools and orchestrate the agentic loop to
         return a complete answer to the user in a single API call.
