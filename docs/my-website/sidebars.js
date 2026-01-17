@@ -276,6 +276,14 @@ const sidebars = {
             "tutorials/scim_litellm",
             {
               type: "category",
+              label: "UI Usage Tracking",
+              items: [
+                "proxy/customer_usage",
+                "proxy/endpoint_activity"
+              ]
+            },
+            {
+              type: "category",
               label: "UI Logs",
               items: [
                 "proxy/ui_logs",
@@ -329,7 +337,6 @@ const sidebars = {
             "proxy/team_budgets",
             "proxy/tag_budgets",
             "proxy/customers",
-            "proxy/customer_usage",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
