@@ -67,12 +67,12 @@ class WebSearchInterceptionLogger(CustomLogger):
     ) -> Tuple[bool, Dict]:
         """Check if WebSearch tool interception is needed"""
 
-        verbose_logger.info(f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}")
-        verbose_logger.info(f"WebSearchInterception: Response type: {type(response)}")
+        verbose_logger.debug(f"WebSearchInterception: Hook called! provider={custom_llm_provider}, stream={stream}")
+        verbose_logger.debug(f"WebSearchInterception: Response type: {type(response)}")
 
         # Check if provider should be intercepted
         if custom_llm_provider not in self.enabled_providers:
-            verbose_logger.info(
+            verbose_logger.debug(
                 f"WebSearchInterception: Skipping provider {custom_llm_provider} (not in enabled list: {self.enabled_providers})"
             )
             return False, {}
@@ -97,7 +97,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             return False, {}
 
-        verbose_logger.info(
+        verbose_logger.debug(
             f"WebSearchInterception: Detected {len(tool_calls)} WebSearch tool call(s), executing agentic loop"
         )
 
@@ -125,7 +125,7 @@ class WebSearchInterceptionLogger(CustomLogger):
 
         tool_calls = tools["tool_calls"]
 
-        verbose_logger.info(
+        verbose_logger.debug(
             f"WebSearchInterception: Executing agentic loop for {len(tool_calls)} search(es)"
         )
 
@@ -166,7 +166,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 search_tasks.append(self._create_empty_search_result())
 
         # Execute searches in parallel
-        verbose_logger.info(
+        verbose_logger.debug(
             f"WebSearchInterception: Executing {len(search_tasks)} search(es) in parallel"
         )
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
@@ -193,7 +193,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # Make follow-up request with search results
         follow_up_messages = messages + [assistant_message, user_message]
 
-        verbose_logger.info(
+        verbose_logger.debug(
             "WebSearchInterception: Making follow-up request with search results"
         )
         verbose_logger.debug(
@@ -229,7 +229,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 **optional_params_without_max_tokens,
                 **kwargs,
             )
-            verbose_logger.info(
+            verbose_logger.debug(
                 f"WebSearchInterception: Follow-up request completed, response type: {type(final_response)}"
             )
             verbose_logger.debug(

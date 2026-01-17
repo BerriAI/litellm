@@ -82,7 +82,7 @@ async def anthropic_messages(
                 if isinstance(callback, WebSearchInterceptionLogger):
                     # Check if provider is enabled for interception
                     if provider in callback.enabled_providers:
-                        verbose_logger.info(
+                        verbose_logger.debug(
                             f"WebSearchInterception: Converting stream=True to stream=False for WebSearch interception "
                             f"(provider={provider})"
                         )
