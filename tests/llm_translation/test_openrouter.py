@@ -22,7 +22,7 @@ def test_completion_openrouter_reasoning_content():
 def test_completion_openrouter_image_generation():
     litellm._turn_on_debug()
     resp = litellm.completion(
-        model="openrouter/google/gemini-2.5-flash-image-preview",
+        model="openrouter/google/gemini-2.5-flash-image",
         messages=[{"role": "user", "content": "Generate an image of a cat"}],
         modalities=["image", "text"],
     )
