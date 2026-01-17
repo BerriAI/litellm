@@ -196,6 +196,159 @@ def _set_response_attributes(span: "Span", response_obj):
             safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
 
 
+def _set_retrieval_documents(span: "Span", metadata: Optional[dict], max_docs: int = 20):
+    """Attach retrieved documents to the span for retriever/search calls."""
+    from litellm.integrations._types.open_inference import SpanAttributes
+
+    if not metadata or not isinstance(metadata, dict):
+        return
+
+    vector_store_requests = metadata.get("vector_store_request_metadata") or []
+    if not vector_store_requests:
+        return
+
+    docs = []
+    for vector_request in vector_store_requests:
+        if not isinstance(vector_request, dict):
+            continue
+
+        vector_store_search_response = vector_request.get("vector_store_search_response") or {}
+        search_query = vector_store_search_response.get("search_query")
+
+        for item in vector_store_search_response.get("data", []) or []:
+            if len(docs) >= max_docs:
+                break
+
+            doc_entry = {}
+            if search_query is not None:
+                doc_entry["search_query"] = search_query
+
+            score = item.get("score")
+            if score is not None:
+                doc_entry["score"] = score
+
+            file_id = item.get("file_id")
+            if file_id is not None:
+                doc_entry["file_id"] = file_id
+
+            filename = item.get("filename")
+            if filename is not None:
+                doc_entry["filename"] = filename
+
+            attributes = item.get("attributes")
+            if attributes is not None:
+                doc_entry["attributes"] = attributes
+
+            contents = []
+            for content_item in item.get("content", []) or []:
+                if isinstance(content_item, dict):
+                    text_val = content_item.get("text")
+                    if text_val is not None:
+                        contents.append(text_val)
+            if contents:
+                doc_entry["content"] = contents
+
+            if doc_entry:
+                docs.append(doc_entry)
+
+                # Also set Phoenix/OpenInference-friendly flattened attributes per document so they render on retriever spans.
+                doc_index = len(docs) - 1
+                doc_id = item.get("id") or file_id
+                if doc_id is not None:
+                    safe_set_attribute(
+                        span, f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.document.id", doc_id
+                    )
+
+                if contents:
+                    # Join content pieces to a single string for UI display
+                    safe_set_attribute(
+                        span,
+                        f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.document.content",
+                        "\n\n".join(contents),
+                    )
+
+                metadata_payload: Dict[str, Any] = {}
+                if attributes is not None:
+                    metadata_payload["attributes"] = attributes
+                if filename is not None:
+                    metadata_payload["filename"] = filename
+                if search_query is not None:
+                    metadata_payload["search_query"] = search_query
+                if score is not None:
+                    metadata_payload["score"] = score
+                if file_id is not None:
+                    metadata_payload["file_id"] = file_id
+
+                if metadata_payload:
+                    safe_set_attribute(
+                        span,
+                        f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.document.metadata",
+                        safe_dumps(metadata_payload),
+                    )
+
+        if len(docs) >= max_docs:
+            break
+
+    if docs:
+        safe_set_attribute(span, SpanAttributes.RETRIEVAL_DOCUMENTS, safe_dumps(docs))
+
+
+def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
+    """
+    Map LiteLLM call types to OpenInference span kinds.
+    Falls back to UNKNOWN only when we cannot determine a sensible kind.
+    """
+    from litellm.integrations._types.open_inference import OpenInferenceSpanKindValues
+
+    if not call_type:
+        return OpenInferenceSpanKindValues.UNKNOWN.value
+
+    lowered = str(call_type).lower()
+
+    if "embed" in lowered:
+        return OpenInferenceSpanKindValues.EMBEDDING.value
+
+    if "rerank" in lowered:
+        return OpenInferenceSpanKindValues.RERANKER.value
+
+    if "search" in lowered:
+        return OpenInferenceSpanKindValues.RETRIEVER.value
+
+    if "moderation" in lowered or "guardrail" in lowered:
+        return OpenInferenceSpanKindValues.GUARDRAIL.value
+
+    if lowered == "call_mcp_tool" or lowered == "mcp" or lowered.endswith("tool"):
+        return OpenInferenceSpanKindValues.TOOL.value
+
+    if "assistant" in lowered:
+        return OpenInferenceSpanKindValues.AGENT.value
+
+    if any(
+        keyword in lowered
+        for keyword in (
+            "completion",
+            "chat",
+            "image",
+            "audio",
+            "speech",
+            "transcription",
+            "generate_content",
+            "response",
+            "videos",
+            "realtime",
+            "pass_through",
+            "anthropic_messages",
+            "ocr",
+        )
+    ):
+        return OpenInferenceSpanKindValues.LLM.value
+
+    if any(keyword in lowered for keyword in ("file", "batch", "container", "fine_tuning_job")):
+        return OpenInferenceSpanKindValues.CHAIN.value
+
+    return OpenInferenceSpanKindValues.UNKNOWN.value
+
+
 def set_attributes(
     span: "Span", kwargs, response_obj, attributes: Type[BaseLLMObsOTELAttributes]
 ):
@@ -227,6 +380,10 @@ def set_attributes(
         if metadata is not None:
             safe_set_attribute(span, SpanAttributes.METADATA, safe_dumps(metadata))
 
+        _set_retrieval_documents(span, metadata)
+
+        call_type = standard_logging_payload.get("call_type")
+
         if kwargs.get("model"):
             safe_set_attribute(span, SpanAttributes.LLM_MODEL_NAME, kwargs.get("model"))
 
@@ -250,7 +407,13 @@ def set_attributes(
         if response_obj and response_obj.get("model"):
             safe_set_attribute(span, "llm.response.model", response_obj.get("model"))
 
-        safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, OpenInferenceSpanKindValues.LLM.value)
+        span_kind = _infer_open_inference_span_kind(call_type=call_type)
+
+        # If MCP tool calls are present, report span as TOOL even when call_type is generic (e.g., responses).
+        if metadata and metadata.get("mcp_tool_call_metadata"):
+            span_kind = OpenInferenceSpanKindValues.TOOL.value
+
+        safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, span_kind)
         attributes.set_messages(span, kwargs)
 
         _set_tool_attributes(span=span, optional_params=optional_params)
