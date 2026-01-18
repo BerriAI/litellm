@@ -104,6 +104,70 @@ class FakeAnthropicMessagesStreamIterator:
                     }
                     chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
                 
+                elif block_type == "thinking":
+                    # content_block_start for thinking
+                    content_block_start = {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": {
+                            "type": "thinking",
+                            "thinking": "",
+                            "signature": ""
+                        }
+                    }
+                    chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
+                    
+                    # content_block_delta for thinking text
+                    thinking_text = block_dict.get("thinking", "")
+                    if thinking_text:
+                        content_block_delta = {
+                            "type": "content_block_delta",
+                            "index": index,
+                            "delta": {
+                                "type": "thinking_delta",
+                                "thinking": thinking_text
+                            }
+                        }
+                        chunks.append(f"event: content_block_delta\ndata: {json.dumps(content_block_delta)}\n\n".encode())
+                    
+                    # content_block_delta for signature (if present)
+                    signature = block_dict.get("signature", "")
+                    if signature:
+                        signature_delta = {
+                            "type": "content_block_delta",
+                            "index": index,
+                            "delta": {
+                                "type": "signature_delta",
+                                "signature": signature
+                            }
+                        }
+                        chunks.append(f"event: content_block_delta\ndata: {json.dumps(signature_delta)}\n\n".encode())
+                    
+                    # content_block_stop
+                    content_block_stop = {
+                        "type": "content_block_stop",
+                        "index": index
+                    }
+                    chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
+                
+                elif block_type == "redacted_thinking":
+                    # content_block_start for redacted_thinking
+                    content_block_start = {
+                        "type": "content_block_start",
+                        "index": index,
+                        "content_block": {
+                            "type": "redacted_thinking"
+                        }
+                    }
+                    chunks.append(f"event: content_block_start\ndata: {json.dumps(content_block_start)}\n\n".encode())
+                    
+                    # content_block_stop (no delta for redacted thinking)
+                    content_block_stop = {
+                        "type": "content_block_stop",
+                        "index": index
+                    }
+                    chunks.append(f"event: content_block_stop\ndata: {json.dumps(content_block_stop)}\n\n".encode())
+                
                 elif block_type == "tool_use":
                     # content_block_start
                     content_block_start = {
