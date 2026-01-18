@@ -95,4 +95,17 @@
         "LiteLLM",
         "Quickstart"
     ]
+},
+{
+    "title": "AI Coding Tool Usage Tracking",
+    "description": "This is a guide to tracking usage for AI coding tools monitor the use of Claude Code , Google Antigravity, OpenAI Codex, Roo Code etc. through LiteLLM.",
+    "url": "https://docs.litellm.ai/docs/tutorials/cost_tracking_coding",
+    "date": "2026-01-17",
+    "version": "1.0.0",
+    "tags": [
+        "Claude Code",
+        "Gemini CLI",
+        "OpenAI Codex",
+        "LiteLLM"
+    ]
 }]
