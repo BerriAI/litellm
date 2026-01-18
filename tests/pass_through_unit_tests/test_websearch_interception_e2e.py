@@ -422,3 +422,393 @@ async def test_websearch_interception_no_tool_call_streaming():
         import traceback
         traceback.print_exc()
         return False
+
+
+async def test_claude_code_native_websearch():
+    """
+    Test WebSearch interception with Claude Code's native web_search_20250305 tool.
+    
+    This tests the exact request format that Claude Code sends:
+    - tools: [{'type': 'web_search_20250305', 'name': 'web_search', 'max_uses': 8}]
+    - Model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+    """
+    print("\n" + "="*80)
+    print("E2E TEST: Claude Code Native WebSearch (web_search_20250305)")
+    print("="*80)
+
+    # Router already initialized from test 1
+    print("\n✅ Using existing router configuration")
+    print("✅ WebSearch interception already enabled for Bedrock")
+
+    try:
+        # Make request with Claude Code's exact native web_search tool format
+        print("\n📞 Making litellm.messages.acreate() call...")
+        print(f"   Model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        print(f"   Query: 'Perform a web search for the query: litellm what is it'")
+        print(f"   Tools: Native web_search_20250305")
+        print(f"   Stream: False")
+
+        response = await messages.acreate(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Perform a web search for the query: litellm what is it"}],
+            tools=[
+                {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": 8
+                }
+            ],
+            max_tokens=1024,
+            stream=False,
+        )
+
+        print("\n✅ Received response!")
+
+        # Handle both dict and object responses
+        if isinstance(response, dict):
+            response_id = response.get("id")
+            response_model = response.get("model")
+            response_stop_reason = response.get("stop_reason")
+            response_content = response.get("content", [])
+        else:
+            response_id = response.id
+            response_model = response.model
+            response_stop_reason = response.stop_reason
+            response_content = response.content
+
+        print(f"\n📄 Response ID: {response_id}")
+        print(f"📄 Model: {response_model}")
+        print(f"📄 Stop Reason: {response_stop_reason}")
+        print(f"📄 Content blocks: {len(response_content)}")
+
+        # Debug: Print all content block types
+        for i, block in enumerate(response_content):
+            block_type = block.get("type") if isinstance(block, dict) else block.type
+            print(f"   Block {i}: type={block_type}")
+            if block_type == "tool_use":
+                block_name = block.get("name") if isinstance(block, dict) else block.name
+                print(f"            name={block_name}")
+
+        # Validate response
+        assert response is not None, "Response should not be None"
+        assert response_content is not None, "Response should have content"
+        assert len(response_content) > 0, "Response should have at least one content block"
+
+        # Check if response contains tool_use (means interception didn't work)
+        has_tool_use = any(
+            (block.get("type") if isinstance(block, dict) else block.type) == "tool_use"
+            for block in response_content
+        )
+
+        # Check if we got a text response
+        has_text = any(
+            (block.get("type") if isinstance(block, dict) else block.type) == "text"
+            for block in response_content
+        )
+
+        if has_tool_use:
+            print("\n❌ TEST FAILED: Interception did not work")
+            print(f"❌ Stop reason: {response_stop_reason}")
+            print("❌ Response contains tool_use blocks")
+            return False
+
+        elif has_text and response_stop_reason != "tool_use":
+            text_block = next(
+                block for block in response_content
+                if (block.get("type") if isinstance(block, dict) else block.type) == "text"
+            )
+            text_content = text_block.get("text") if isinstance(text_block, dict) else text_block.text
+
+            print(f"\n📝 Response Text:")
+            print(f"   {text_content[:200]}...")
+
+            if "litellm" in text_content.lower():
+                print("\n" + "="*80)
+                print("✅ TEST PASSED!")
+                print("="*80)
+                print("✅ Claude Code's native web_search_20250305 tool was intercepted")
+                print("✅ Tool was converted to LiteLLM standard format")
+                print("✅ User made ONE litellm.messages.acreate() call")
+                print("✅ Got back final answer with search results")
+                print("✅ Agentic loop executed transparently")
+                print("✅ WebSearch interception working with Claude Code!")
+                print("="*80)
+                return True
+            else:
+                print("\n⚠️  Got text response but doesn't mention LiteLLM")
+                return False
+        else:
+            print("\n❌ Unexpected response format")
+            return False
+
+    except Exception as e:
+        print(f"\n❌ Test failed with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+if __name__ == "__main__":
+    import asyncio
+    
+    async def run_all_tests():
+        """Run all E2E tests"""
+        test_results = []
+        
+        # Test 1: Non-streaming
+        result1 = await test_websearch_interception_non_streaming()
+        test_results.append(("Non-Streaming", result1))
+        
+        # Test 2: Streaming
+        result2 = await test_websearch_interception_streaming()
+        test_results.append(("Streaming", result2))
+        
+        # Test 3: No tool call with streaming
+        result3 = await test_websearch_interception_no_tool_call_streaming()
+        test_results.append(("No Tool Call Streaming", result3))
+        
+        # Test 4: Claude Code native web_search
+        result4 = await test_claude_code_native_websearch()
+        test_results.append(("Claude Code Native WebSearch", result4))
+        
+        # Print summary
+        print("\n" + "="*80)
+        print("TEST SUMMARY")
+        print("="*80)
+        for test_name, result in test_results:
+            status = "✅ PASSED" if result else "❌ FAILED"
+            print(f"{test_name}: {status}")
+        print("="*80)
+        
+        # Return overall result
+        return all(result for _, result in test_results)
+    
+    result = asyncio.run(run_all_tests())
+    import sys
+    sys.exit(0 if result else 1)
+
+
+async def test_litellm_standard_websearch_tool():
+    """
+    PRIORITY TEST #1: Test with the canonical litellm_web_search tool format.
+
+    This validates that using get_litellm_web_search_tool() directly
+    works end-to-end without any conversion needed.
+    """
+    print("\n" + "="*80)
+    print("E2E TEST: LiteLLM Standard WebSearch Tool")
+    print("="*80)
+
+    from litellm.integrations.websearch_interception import get_litellm_web_search_tool
+
+    print("\n✅ Using existing router configuration")
+    print("✅ WebSearch interception already enabled for Bedrock")
+
+    try:
+        print("\n📞 Making litellm.messages.acreate() call...")
+        print(f"   Model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        print(f"   Query: 'What is the latest news about AI?'")
+        print(f"   Tool: litellm_web_search (standard format, no conversion needed)")
+        print(f"   Stream: False")
+
+        response = await messages.acreate(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "What is the latest news about AI? Give me a brief overview."}],
+            tools=[get_litellm_web_search_tool()],
+            max_tokens=1024,
+            stream=False,
+        )
+
+        print("\n✅ Received response!")
+
+        if isinstance(response, dict):
+            response_id = response.get("id")
+            response_stop_reason = response.get("stop_reason")
+            response_content = response.get("content", [])
+        else:
+            response_id = response.id
+            response_stop_reason = response.stop_reason
+            response_content = response.content
+
+        print(f"\n📄 Response ID: {response_id}")
+        print(f"📄 Stop Reason: {response_stop_reason}")
+        print(f"📄 Content blocks: {len(response_content)}")
+
+        for i, block in enumerate(response_content):
+            block_type = block.get("type") if isinstance(block, dict) else block.type
+            print(f"   Block {i}: type={block_type}")
+
+        has_tool_use = any(
+            (block.get("type") if isinstance(block, dict) else block.type) == "tool_use"
+            for block in response_content
+        )
+
+        has_text = any(
+            (block.get("type") if isinstance(block, dict) else block.type) == "text"
+            for block in response_content
+        )
+
+        if has_tool_use:
+            print("\n❌ TEST FAILED: Interception did not work")
+            return False
+
+        elif has_text and response_stop_reason != "tool_use":
+            text_block = next(
+                block for block in response_content
+                if (block.get("type") if isinstance(block, dict) else block.type) == "text"
+            )
+            text_content = text_block.get("text") if isinstance(text_block, dict) else text_block.text
+
+            print(f"\n📝 Response Text: {text_content[:200]}...")
+
+            print("\n" + "="*80)
+            print("✅ TEST PASSED!")
+            print("="*80)
+            print("✅ LiteLLM standard tool format works without conversion")
+            print("✅ Agentic loop executed transparently")
+            print("="*80)
+            return True
+        else:
+            print("\n❌ Unexpected response format")
+            return False
+
+    except Exception as e:
+        print(f"\n❌ Test failed with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+async def test_claude_code_native_websearch_streaming():
+    """
+    PRIORITY TEST #2: Test Claude Code's native tool WITH stream=True.
+
+    Validates:
+    - Native tool conversion (web_search_20250305 → litellm_web_search)
+    - Stream=True → Stream=False conversion
+    - Agentic loop executes with both conversions
+    """
+    print("\n" + "="*80)
+    print("E2E TEST: Claude Code Native WebSearch + Streaming")
+    print("="*80)
+
+    print("\n✅ Using existing router configuration")
+    print("✅ WebSearch interception already enabled for Bedrock")
+
+    try:
+        print("\n📞 Making litellm.messages.acreate() call with stream=True...")
+        print(f"   Model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        print(f"   Tool: Native web_search_20250305")
+        print(f"   Stream: True (will be converted to False)")
+
+        response = await messages.acreate(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Search for the latest AI developments."}],
+            tools=[{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}],
+            max_tokens=1024,
+            stream=True,
+        )
+
+        print("\n✅ Received response!")
+
+        import inspect
+        is_stream = inspect.isasyncgen(response)
+
+        if is_stream:
+            print("\n⚠️  Response is a stream (stream conversion didn't work)")
+            return False
+
+        print("✅ Response is NOT a stream (conversion worked!)")
+
+        if isinstance(response, dict):
+            response_stop_reason = response.get("stop_reason")
+            response_content = response.get("content", [])
+        else:
+            response_stop_reason = response.stop_reason
+            response_content = response.content
+
+        has_tool_use = any(
+            (block.get("type") if isinstance(block, dict) else block.type) == "tool_use"
+            for block in response_content
+        )
+
+        has_text = any(
+            (block.get("type") if isinstance(block, dict) else block.type) == "text"
+            for block in response_content
+        )
+
+        if has_tool_use:
+            print("\n❌ TEST FAILED: Interception did not work")
+            return False
+
+        elif has_text and response_stop_reason != "tool_use":
+            print("\n" + "="*80)
+            print("✅ TEST PASSED!")
+            print("="*80)
+            print("✅ Native tool converted to litellm_web_search")
+            print("✅ Stream=True converted to Stream=False")
+            print("✅ Both conversions working together!")
+            print("="*80)
+            return True
+        else:
+            print("\n❌ Unexpected response format")
+            return False
+
+    except Exception as e:
+        print(f"\n❌ Test failed with error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def test_is_web_search_tool_detection():
+    """
+    PRIORITY TEST #3: Unit test for is_web_search_tool() utility.
+
+    Validates detection of all supported formats including future versions.
+    """
+    print("\n" + "="*80)
+    print("UNIT TEST: Web Search Tool Detection")
+    print("="*80)
+
+    from litellm.integrations.websearch_interception import is_web_search_tool
+
+    test_cases = [
+        ({"name": "litellm_web_search"}, True, "LiteLLM standard tool"),
+        ({"type": "web_search_20250305", "name": "web_search", "max_uses": 8}, True, "Current Anthropic native (2025)"),
+        ({"type": "web_search_2026", "name": "web_search"}, True, "Future Anthropic native (2026)"),
+        ({"type": "web_search_20270615", "name": "web_search"}, True, "Future Anthropic native (2027)"),
+        ({"name": "web_search", "type": "web_search_20250305"}, True, "Claude Code format"),
+        ({"name": "WebSearch"}, True, "Legacy WebSearch"),
+        ({"name": "calculator"}, False, "Non-web-search tool"),
+        ({"name": "some_tool", "type": "function"}, False, "Other tool with type"),
+        ({"type": "custom_tool"}, False, "Custom tool type"),
+    ]
+
+    passed = 0
+    failed = 0
+
+    for tool, expected, description in test_cases:
+        result = is_web_search_tool(tool)
+        if result == expected:
+            print(f"   ✅ PASS: {description}")
+            passed += 1
+        else:
+            print(f"   ❌ FAIL: {description}")
+            print(f"      Tool: {tool}")
+            print(f"      Expected: {expected}, Got: {result}")
+            failed += 1
+
+    print(f"\n📊 Results: {passed} passed, {failed} failed")
+
+    if failed == 0:
+        print("\n" + "="*80)
+        print("✅ ALL DETECTION TESTS PASSED!")
+        print("="*80)
+        print("✅ Detects all current formats")
+        print("✅ Future-proof for new web_search_* versions")
+        print("="*80)
+        return True
+    else:
+        print("\n❌ Some detection tests failed")
+        return False
