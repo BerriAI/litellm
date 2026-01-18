@@ -1,5 +1,5 @@
 ---
-title: "v1.81.0 - Claude Code - Web Search with all LiteLLM Providers"
+title: "v1.81.0 - Claude Code - Web Search Across All Providers"
 slug: "v1-81-0"
 date: 2026-01-18T10:00:00
 authors:
@@ -48,6 +48,20 @@ pip install litellm==1.81.0
 - **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
 - **Major Change** - [50MB limit on image URL downloads](#major-change---chatcompletions-image-url-download-size-limit) to improve reliability
 - **Deleted Keys Audit Table on UI** - [View deleted keys and teams for audit purposes](../../docs/proxy/deleted_keys_teams.md) with spend and budget information at the time of deletion
+
+---
+
+## Claude Code - Web Search Across All Providers
+
+<Image img={require('../../img/claude_code_websearch.png')} />
+
+This release brings web search support to Claude Code across all LiteLLM providers (Bedrock, Azure, Vertex AI, and more), enabling AI coding assistants to search the web for real-time information.
+
+This means you can now use Claude Code's web search tool with any provider, not just Anthropic's native API. LiteLLM automatically intercepts web search requests and executes them server-side using your configured search provider (Perplexity, Tavily, Exa AI, and more).
+
+Proxy Admins can configure web search interception in their LiteLLM proxy config to enable this capability for their teams using Claude Code with Bedrock, Azure, or any other supported provider.
+
+[**Learn more →**](../../docs/tutorials/claude_code_websearch.md)
 
 ---
 
