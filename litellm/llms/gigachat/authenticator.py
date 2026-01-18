@@ -146,7 +146,7 @@ def get_access_token(
     if credentials:
         _validate_credentials(credentials)
         token, expires_at = _request_oauth_token_sync(credentials, scope, auth_url)
-    else:
+    elif user and password:
         token, expires_at = _request_basic_token_sync(user, password)
 
     # Cache token
@@ -204,7 +204,7 @@ async def get_access_token_async(
     if credentials:
         _validate_credentials(credentials)
         token, expires_at = await _request_oauth_token_async(credentials, scope, auth_url)
-    else:
+    elif user and password:
         token, expires_at = await _request_basic_token_async(user, password)
 
     # Cache token
@@ -295,8 +295,8 @@ async def _request_oauth_token_async(
 
 
 def _request_basic_token_sync(
-    user: Optional[str] = None,
-    password: Optional[str] = None,
+    user: str,
+    password: str,
     api_base: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
@@ -346,8 +346,8 @@ def _request_basic_token_sync(
 
 
 async def _request_basic_token_async(
-    user: Optional[str] = None,
-    password: Optional[str] = None,
+    user: str,
+    password: str,
     api_base: Optional[str] = None,
 ) -> Tuple[str, int]:
     """Async version of _request_basic_token_sync."""
