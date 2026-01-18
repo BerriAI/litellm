@@ -125,7 +125,39 @@ See [all supported search providers](../search/index.md) for the complete list.
 
 ## Configuration Options
 
+### WebSearch Interception Parameters
+
+| Parameter | Type | Required | Description | Example |
+|-----------|------|----------|-------------|---------|
+| `enabled_providers` | List[String] | Yes | List of providers to enable web search interception for | `[bedrock, azure, vertex_ai]` |
+| `search_tool_name` | String | No | Specific search tool from `search_tools` config. If not set, uses first available search tool. | `perplexity-search` |
+
+### Supported Provider Values
+
+Use these values in `enabled_providers`:
+
+| Provider | Value | Description |
+|----------|-------|-------------|
+| AWS Bedrock | `bedrock` | Amazon Bedrock Claude models |
+| Azure OpenAI | `azure` | Azure-hosted models |
+| Google Vertex AI | `vertex_ai` | Google Cloud Vertex AI |
+| Any Other | Provider name | Any LiteLLM-supported provider |
+
+### Complete Configuration Example
+
 ```yaml
+model_list:
+  - model_name: bedrock-sonnet
+    litellm_params:
+      model: bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0
+      aws_region_name: us-east-1
+
+  - model_name: azure-gpt4
+    litellm_params:
+      model: azure/gpt-4
+      api_base: https://my-azure.openai.azure.com
+      api_key: os.environ/AZURE_API_KEY
+
 litellm_settings:
   callbacks:
     - websearch_interception:
@@ -133,12 +165,25 @@ litellm_settings:
           - bedrock        # Enable for AWS Bedrock
           - azure          # Enable for Azure OpenAI
           - vertex_ai      # Enable for Google Vertex
-        search_tool_name: perplexity-search  # Optional
+        search_tool_name: perplexity-search  # Optional: use specific search tool
+
+# Configure search tools
+search_tools:
+  - search_tool_name: perplexity-search
+    litellm_params:
+      search_provider: perplexity
+      api_key: os.environ/PERPLEXITY_API_KEY
+
+  - search_tool_name: tavily-search
+    litellm_params:
+      search_provider: tavily
+      api_key: os.environ/TAVILY_API_KEY
 ```
 
-**Parameters:**
-- `enabled_providers`: List of providers to enable interception for
-- `search_tool_name`: (Optional) Specific search tool from `search_tools` config. If not set, uses first available search tool.
+**How search tool selection works:**
+- If `search_tool_name` is specified → Uses that specific search tool
+- If `search_tool_name` is not specified → Uses first search tool in `search_tools` list
+- In example above: Without `search_tool_name`, would use `perplexity-search` (first in list)
 
 ## Related
 
