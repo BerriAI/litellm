@@ -35,6 +35,36 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
     throw error;
   }
 };
+
+export const getInProductNudgesCall = async (accessToken: string) => {
+  /**
+   * Get in-product nudges configuration.
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/in_product_nudges` : `/in_product_nudges`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get in-product nudges:", error);
+    throw error;
+  }
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -53,7 +83,7 @@ const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
-  console.log = function () {};
+  console.log = function () { };
 }
 
 const getWindowLocation = () => {
@@ -195,17 +225,42 @@ export interface ProviderCreateInfo {
   credential_fields: ProviderCredentialFieldMetadata[];
 }
 
+export interface AgentCredentialFieldMetadata {
+  key: string;
+  label: string;
+  placeholder?: string | null;
+  tooltip?: string | null;
+  required?: boolean;
+  field_type?: "text" | "password" | "select" | "upload" | "textarea";
+  options?: string[] | null;
+  default_value?: string | null;
+  include_in_litellm_params?: boolean;
+}
+
+export interface AgentCreateInfo {
+  agent_type: string;
+  agent_type_display_name: string;
+  description?: string | null;
+  logo_url?: string | null;
+  credential_fields: AgentCredentialFieldMetadata[];
+  litellm_params_template?: Record<string, string> | null;
+  model_template?: string | null;
+  use_a2a_form_fields?: boolean;
+}
+
 export interface PublicModelHubInfo {
   docs_title: string;
   custom_docs_description: string | null;
   litellm_version: string;
-  useful_links: Record<string, string>;
+  // Supports both old format (Record<string, string>) and new format (Record<string, {url: string, index: number}>)
+  useful_links: Record<string, string | { url: string; index: number }>;
 }
 
 export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
+  admin_ui_disabled: boolean;
 }
 
 export interface CredentialsResponse {
@@ -214,7 +269,7 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
-const handleError = async (errorData: string | any) => {
+export const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
@@ -255,6 +310,26 @@ export const getProviderCreateMetadata = async (): Promise<ProviderCreateInfo[]>
   return jsonData;
 };
 
+export const getAgentCreateMetadata = async (): Promise<AgentCreateInfo[]> => {
+  /**
+   * Fetch agent type metadata from the proxy's public endpoint.
+   * This is used by the UI to dynamically render agent-specific credential fields.
+   */
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/public/agents/fields` : `/public/agents/fields`;
+  const response = await fetch(url, {
+    method: "GET",
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("Failed to fetch agent create metadata:", response.status, errorText);
+    throw new Error("Failed to load agent configuration");
+  }
+
+  const jsonData: AgentCreateInfo[] = await response.json();
+  return jsonData;
+};
+
 // Global variable for the header name
 let globalLitellmHeaderName: string = "Authorization";
 const MCP_AUTH_HEADER: string = "x-mcp-auth";
@@ -263,6 +338,11 @@ const MCP_AUTH_HEADER: string = "x-mcp-auth";
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
+}
+
+// Function to get the global header name
+export function getGlobalLitellmHeaderName(): string {
+  return globalLitellmHeaderName;
 }
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
@@ -310,13 +390,12 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelCostMap = async (accessToken: string) => {
+export const modelCostMap = async () => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/litellm_model_cost_map` : `/get/litellm_model_cost_map`;
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/litellm_model_cost_map` : `/public/litellm_model_cost_map`;
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });
@@ -1367,12 +1446,31 @@ export const availableTeamListCall = async (accessToken: string) => {
   }
 };
 
-export const organizationListCall = async (accessToken: string) => {
+export const organizationListCall = async (
+  accessToken: string,
+  org_id: string | null = null,
+  org_alias: string | null = null,
+) => {
   /**
    * Get all organizations on proxy
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/list` : `/organization/list`;
+    const queryParams = new URLSearchParams();
+
+    if (org_id) {
+      queryParams.append("org_id", org_id.toString());
+    }
+
+    if (org_alias) {
+      queryParams.append("org_alias", org_alias.toString());
+    }
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1751,6 +1849,25 @@ export const customerDailyActivityCall = async (
     page,
     extraQueryParams: {
       end_user_ids: customerIds,
+    },
+  });
+};
+
+export const agentDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  agentIds: string[] | null = null,
+) => {
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/agent/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      agent_ids: agentIds,
     },
   });
 };
@@ -2302,7 +2419,10 @@ export const modelExceptionsCall = async (
   }
 };
 
-export const updateUsefulLinksCall = async (accessToken: string, useful_links: Record<string, string>) => {
+export const updateUsefulLinksCall = async (
+  accessToken: string,
+  useful_links: Record<string, string | { url: string; index: number }>,
+) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/model_hub/update_useful_links` : `/model_hub/update_useful_links`;
     const response = await fetch(url, {
@@ -2622,6 +2742,7 @@ export const uiSpendLogsCall = async (
   status_filter?: string,
   model?: string,
   keyAlias?: string,
+  error_code?: string,
 ) => {
   try {
     // Construct base URL
@@ -2641,6 +2762,7 @@ export const uiSpendLogsCall = async (
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
+    if (error_code) queryParams.append("error_code", error_code);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -3182,6 +3304,8 @@ export const keyListCall = async (
   pageSize: number,
   sortBy: string | null = null,
   sortOrder: string | null = null,
+  expand: string | null = null,
+  status: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -3226,6 +3350,15 @@ export const keyListCall = async (
     if (sortOrder) {
       queryParams.append("sort_order", sortOrder);
     }
+
+    if (expand) {
+      queryParams.append("expand", expand);
+    }
+
+    if (status) {
+      queryParams.append("status", status);
+    }
+
     queryParams.append("return_full_object", "true");
     queryParams.append("include_team_keys", "true");
     queryParams.append("include_created_by_keys", "true");
@@ -5619,6 +5752,44 @@ export const fetchMCPServers = async (accessToken: string) => {
   }
 };
 
+export const fetchMCPServerHealth = async (accessToken: string, serverIds?: string[]) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server/health` : `/v1/mcp/server/health`;
+
+    // Add server_ids query parameters if provided
+    if (serverIds && serverIds.length > 0) {
+      const params = new URLSearchParams();
+      serverIds.forEach((id) => params.append("server_ids", id));
+      url = `${url}?${params.toString()}`;
+    }
+
+    console.log("Fetching MCP server health from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP server health:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP server health:", error);
+    throw error;
+  }
+};
+
 export const fetchMCPAccessGroups = async (accessToken: string) => {
   try {
     // Construct base URL
@@ -5997,12 +6168,17 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
-export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
+export const callMCPTool = async (
+  accessToken: string,
+  serverId: string,
+  toolName: string,
+  toolArguments: Record<string, any>,
+) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/call` : `/mcp-rest/tools/call`;
 
-    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments, "for server:", serverId);
 
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -6013,6 +6189,7 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
       method: "POST",
       headers,
       body: JSON.stringify({
+        server_id: serverId,
         name: toolName,
         arguments: toolArguments,
       }),
@@ -6767,6 +6944,40 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
     return data;
   } catch (error) {
     console.error("Failed to get guardrail provider specific parameters:", error);
+    throw error;
+  }
+};
+
+export const getCategoryYaml = async (accessToken: string, categoryName: string) => {
+  try {
+    // URL encode the category name to handle special characters
+    const encodedCategoryName = encodeURIComponent(categoryName);
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/ui/category_yaml/${encodedCategoryName}`
+      : `/guardrails/ui/category_yaml/${encodedCategoryName}`;
+
+    console.log(`Fetching category YAML from: ${url}`);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(`Failed to get category YAML. Status: ${response.status}, Error:`, errorData);
+      handleError(errorData);
+      throw new Error(`Failed to get category YAML: ${response.status} ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("Category YAML response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get category YAML:", error);
     throw error;
   }
 };
@@ -7985,7 +8196,7 @@ export const perUserAnalyticsCall = async (
   }
 };
 
-const deriveErrorMessage = (errorData: any): string => {
+export const deriveErrorMessage = (errorData: any): string => {
   return (
     (errorData?.error && (errorData.error.message || errorData.error)) ||
     errorData?.message ||
@@ -8028,6 +8239,44 @@ export const loginCall = async (username: string, password: string): Promise<Log
     throw new Error(errorMessage);
   }
 
+  const data = await response.json();
+  return data;
+};
+
+export const getUiSettings = async (accessToken: string) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
+  const response = await fetch(url, {
+    method: "GET",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
+  }
+  const data = await response.json();
+  return data;
+};
+
+export const updateUiSettings = async (accessToken: string, settings: Record<string, any>) => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/update/ui_settings` : `/update/ui_settings`;
+  const response = await fetch(url, {
+    method: "PATCH",
+    headers: {
+      [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(settings),
+  });
+  if (!response.ok) {
+    const errorData = await response.json();
+    const errorMessage = deriveErrorMessage(errorData);
+    throw new Error(errorMessage);
+  }
   const data = await response.json();
   return data;
 };

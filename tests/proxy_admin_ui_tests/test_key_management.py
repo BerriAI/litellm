@@ -341,7 +341,7 @@ async def test_get_users(prisma_client):
     # Create some test users
     test_users = [
         NewUserRequest(
-            user_id=f"test_user_{i}",
+            user_id=f"test_user_{i}_{uuid.uuid4()}",
             user_role=(
                 LitellmUserRoles.INTERNAL_USER.value
                 if i % 2 == 0
@@ -1061,6 +1061,7 @@ async def test_list_key_helper(prisma_client):
                 api_key="sk-1234",
                 user_id="admin",
             ),
+            litellm_changed_by=None,
         )
 
 
@@ -1181,6 +1182,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
                     api_key="sk-1234",
                     user_id="admin",
                 ),
+                litellm_changed_by=None,
             )
 
 

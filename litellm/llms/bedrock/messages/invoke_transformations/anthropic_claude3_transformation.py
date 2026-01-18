@@ -108,6 +108,58 @@ class AmazonAnthropicClaudeMessagesConfig(
             stream=stream,
         )
 
+    def _remove_ttl_from_cache_control(
+        self, anthropic_messages_request: Dict
+    ) -> None:
+        """
+        Remove `ttl` field from cache_control in messages.
+        Bedrock doesn't support the ttl field in cache_control.
+        
+        Args:
+            anthropic_messages_request: The request dictionary to modify in-place
+        """
+        if "messages" in anthropic_messages_request:
+            for message in anthropic_messages_request["messages"]:
+                if isinstance(message, dict) and "content" in message:
+                    content = message["content"]
+                    if isinstance(content, list):
+                        for item in content:
+                            if isinstance(item, dict) and "cache_control" in item:
+                                cache_control = item["cache_control"]
+                                if isinstance(cache_control, dict) and "ttl" in cache_control:
+                                    cache_control.pop("ttl", None)
+
+    def _get_tool_search_beta_header_for_bedrock(
+        self,
+        model: str,
+        tool_search_used: bool,
+        programmatic_tool_calling_used: bool,
+        input_examples_used: bool,
+        beta_set: set,
+    ) -> None:
+        """
+        Adjust tool search beta header for Bedrock.
+        
+        Bedrock requires a different beta header for tool search on Opus 4 models
+        when tool search is used without programmatic tool calling or input examples.
+        
+        Note: On Amazon Bedrock, server-side tool search is only supported on Claude Opus 4
+        with the `tool-search-tool-2025-10-19` beta header.
+        
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+        
+        Args:
+            model: The model name
+            tool_search_used: Whether tool search is used
+            programmatic_tool_calling_used: Whether programmatic tool calling is used
+            input_examples_used: Whether input examples are used
+            beta_set: The set of beta headers to modify in-place
+        """
+        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
+            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+            if "opus-4" in model.lower() or "opus_4" in model.lower():
+                beta_set.add("tool-search-tool-2025-10-19")
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -141,8 +193,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         # 3. `model` is not allowed in request body for bedrock invoke
         if "model" in anthropic_messages_request:
             anthropic_messages_request.pop("model", None)
+
+        # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it)
+        self._remove_ttl_from_cache_control(anthropic_messages_request)
             
-        # 4. AUTO-INJECT beta headers based on features used
+        # 5. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)
@@ -165,16 +220,17 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         beta_set.update(auto_betas)
 
-        if (
-            tool_search_used
-            and not (programmatic_tool_calling_used or input_examples_used)
-        ):
-            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
-            if "opus-4" in model.lower() or "opus_4" in model.lower():
-                beta_set.add("tool-search-tool-2025-10-19")
+        self._get_tool_search_beta_header_for_bedrock(
+            model=model,
+            tool_search_used=tool_search_used,
+            programmatic_tool_calling_used=programmatic_tool_calling_used,
+            input_examples_used=input_examples_used,
+            beta_set=beta_set,
+        )
 
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
+        
             
         return anthropic_messages_request
 

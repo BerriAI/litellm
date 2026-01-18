@@ -18,6 +18,7 @@ from litellm.integrations.azure_storage.azure_storage import AzureBlobStorageLog
 from litellm.integrations.bitbucket import BitBucketPromptManager
 from litellm.integrations.braintrust_logging import BraintrustLogger
 from litellm.integrations.cloudzero.cloudzero import CloudZeroLogger
+from litellm.integrations.focus.focus_logger import FocusLogger
 from litellm.integrations.datadog.datadog import DataDogLogger
 from litellm.integrations.datadog.datadog_llm_obs import DataDogLLMObsLogger
 from litellm.integrations.deepeval import DeepEvalLogger
@@ -76,6 +77,7 @@ class CustomLoggerRegistry:
         "arize_phoenix": OpenTelemetry,
         "langtrace": OpenTelemetry,
         "weave_otel": OpenTelemetry,
+        "levo": OpenTelemetry,
         "mlflow": MlflowLogger,
         "langfuse": LangfusePromptManagement,
         "otel": OpenTelemetry,
@@ -92,6 +94,7 @@ class CustomLoggerRegistry:
         "bitbucket": BitBucketPromptManager,
         "gitlab": GitLabPromptManager,
         "cloudzero": CloudZeroLogger,
+        "focus": FocusLogger,
         "posthog": PostHogLogger,
     }
 
@@ -101,6 +104,9 @@ class CustomLoggerRegistry:
         )
         from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
             ResendEmailLogger,
+        )
+        from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+            SendGridEmailLogger,
         )
         from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import (
             SMTPEmailLogger,
@@ -114,6 +120,7 @@ class CustomLoggerRegistry:
             "pagerduty": PagerDutyAlerting,
             "generic_api": GenericAPILogger,
             "resend_email": ResendEmailLogger,
+            "sendgrid_email": SendGridEmailLogger,
             "smtp_email": SMTPEmailLogger,
         }
         CALLBACK_CLASS_STR_TO_CLASS_TYPE.update(enterprise_loggers)

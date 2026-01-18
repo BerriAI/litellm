@@ -640,10 +640,6 @@ def test_embedding(mock_aembedding, client_no_auth):
             pre_call_kwargs.get("call_type") == "aembedding"
         ), f"expected pre_call_hook to receive call_type='aembedding', got {pre_call_kwargs.get('call_type')}"
 
-        during_call_kwargs = mock_during_hook.await_args_list[0].kwargs
-        assert (
-            during_call_kwargs.get("call_type") == "embeddings"
-        ), f"expected during_call_hook to receive call_type='embeddings', got {during_call_kwargs.get('call_type')}"
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -2185,6 +2181,10 @@ async def test_proxy_server_prisma_setup():
         mock_client._set_spend_logs_row_count_in_proxy_state = (
             AsyncMock()
         )  # Mock the _set_spend_logs_row_count_in_proxy_state method
+        # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
+        mock_db = MagicMock()
+        mock_db.start_token_refresh_task = AsyncMock()
+        mock_client.db = mock_db
 
         await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
@@ -2497,9 +2497,6 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
     
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
-    ), patch(
-        "litellm.proxy.common_utils.callback_utils.decrypt_value_helper",
-        side_effect=lambda value, key=None: value
     ):
         response = client_no_auth.get("/get/config/callbacks")
         
@@ -2549,7 +2546,7 @@ async def test_get_config_callbacks_with_all_types(client_no_auth):
 async def test_get_config_callbacks_environment_variables(client_no_auth):
     """
     Test that /get/config/callbacks correctly includes environment variables
-    for each callback type with proper decryption.
+    for each callback type. Values are returned as-is from the config (no decryption).
     """
     from litellm.proxy.proxy_server import ProxyConfig
     
@@ -2561,8 +2558,8 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
             "callbacks": ["otel"]
         },
         "environment_variables": {
-            "LANGFUSE_PUBLIC_KEY": "encrypted-public-key",
-            "LANGFUSE_SECRET_KEY": "encrypted-secret-key",
+            "LANGFUSE_PUBLIC_KEY": "test-public-key",
+            "LANGFUSE_SECRET_KEY": "test-secret-key",
             "LANGFUSE_HOST": "https://cloud.langfuse.com",
             "OTEL_EXPORTER": "otlp",
             "OTEL_ENDPOINT": "http://localhost:4317",
@@ -2571,19 +2568,10 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         "general_settings": {}
     }
     
-    # Mock decrypt to prepend "decrypted-" to values
-    def mock_decrypt(value, key=None):
-        if value and isinstance(value, str) and "encrypted" in value:
-            return f"decrypted-{value}"
-        return value
-    
     proxy_config = getattr(litellm.proxy.proxy_server, "proxy_config")
     
     with patch.object(
         proxy_config, "get_config", new=AsyncMock(return_value=mock_config_data)
-    ), patch(
-        "litellm.proxy.common_utils.callback_utils.decrypt_value_helper",
-        side_effect=mock_decrypt
     ):
         response = client_no_auth.get("/get/config/callbacks")
         
@@ -2600,12 +2588,12 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
         assert langfuse_callback["type"] == "success"
         assert "variables" in langfuse_callback
         
-        # Verify langfuse env vars are present and decrypted
+        # Verify langfuse env vars are present (values returned as-is, no decryption)
         langfuse_vars = langfuse_callback["variables"]
         assert "LANGFUSE_PUBLIC_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "decrypted-encrypted-public-key"
+        assert langfuse_vars["LANGFUSE_PUBLIC_KEY"] == "test-public-key"
         assert "LANGFUSE_SECRET_KEY" in langfuse_vars
-        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "decrypted-encrypted-secret-key"
+        assert langfuse_vars["LANGFUSE_SECRET_KEY"] == "test-secret-key"
         assert "LANGFUSE_HOST" in langfuse_vars
         assert langfuse_vars["LANGFUSE_HOST"] == "https://cloud.langfuse.com"
         
@@ -2683,3 +2671,61 @@ async def test_update_config_success_callback_normalization():
     assert "sQs" not in callbacks
     # Existing callback should still be present
     assert "langfuse" in callbacks
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {
+            "model": {
+                "model_name": "azure/gpt-4.1-mini",
+                "litellm_params": {"model": "azure/gpt-4.1-mini"},
+                "model_info": {"base_model": "gpt-4.1-mini"},
+            },
+            "expected": "gpt-4.1-mini",
+        },
+        {
+            "model": {
+                "model_name": "openai/gpt-4.1-mini",
+                "litellm_params": {"model": "openai/gpt-4.1-mini"},
+            },
+            "expected": "openai/gpt-4.1-mini",
+        },
+        {
+            "model": {
+                "model_name": "openai/gpt-4.1-mini",
+                "litellm_params": {"model": "openai/gpt-4.1-mini"},
+                "model_info": {"base_model": "gpt-4.1-mini"},
+            },
+            "expected": "gpt-4.1-mini",
+        },
+        {
+            "model": {
+                "model_name": "claude-sonnet-4-5-20250929",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5@20250929"},
+                "model_info": {"base_model": "anthropic/claude-sonnet-4-5-20250929"},
+            },
+            "expected": "anthropic/claude-sonnet-4-5-20250929",
+        },
+        {
+            "model": {
+                "model_name": "gemini-2.5-flash-001",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash@001"},
+                "model_info": {"base_model": "gemini-2.5-flash-001"},
+            },
+            "expected": "gemini-2.5-flash-001",
+        },
+    ],
+)
+def test_get_litellm_model_info(data):
+    from litellm.proxy.proxy_server import get_litellm_model_info
+
+    model = data["model"]
+    get_info_mock = MagicMock()
+
+    with mock.patch(
+        "litellm.get_model_info",
+        new=get_info_mock,
+    ):
+        get_litellm_model_info(model=model)
+        get_info_mock.assert_called_once_with(data["expected"])

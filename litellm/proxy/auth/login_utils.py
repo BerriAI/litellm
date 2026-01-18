@@ -34,6 +34,59 @@ from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
 
 
+async def expire_previous_ui_session_tokens(
+    user_id: str, prisma_client: Optional[PrismaClient]
+) -> None:
+    """
+    Expire (block) all other valid UI session tokens for a user.
+
+    This prevents accumulation of multiple valid UI session tokens that
+    are supposed to be short-lived test keys. Only affects keys with
+    team_id = "litellm-dashboard" and that haven't expired yet.
+
+    Args:
+        user_id: The user ID whose previous UI session tokens should be expired
+        prisma_client: Database client for performing the update
+    """
+    if prisma_client is None:
+        return
+
+    try:
+        from datetime import datetime, timezone
+
+        current_time = datetime.now(timezone.utc)
+
+        # Find all unblocked AND non-expired UI session tokens for this user
+        ui_session_tokens = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={
+                "user_id": user_id,
+                "team_id": "litellm-dashboard",
+                "OR": [
+                    {"blocked": None},  # Tokens that have never been blocked (null)
+                    {"blocked": False},  # Tokens explicitly set to not blocked
+                ],
+                "expires": {"gt": current_time},  # Only get tokens that haven't expired
+            }
+        )
+
+        if not ui_session_tokens:
+            return
+
+        # Block all the found tokens
+        tokens_to_block = [token.token for token in ui_session_tokens if token.token]
+
+        if tokens_to_block:
+            await prisma_client.db.litellm_verificationtoken.update_many(
+                where={"token": {"in": tokens_to_block}},
+                data={"blocked": True}
+            )
+
+    except Exception:
+        # Silently fail - don't block login if cleanup fails
+        # This is a best-effort operation
+        pass
+
+
 def get_ui_credentials(master_key: Optional[str]) -> tuple[str, str]:
     """
     Get UI username and password from environment variables or master key.
@@ -85,7 +138,7 @@ class LoginResult:
         self.login_method = login_method
 
 
-async def authenticate_user(
+async def authenticate_user(  # noqa: PLR0915
     username: str,
     password: str,
     master_key: Optional[str],
@@ -135,7 +188,7 @@ async def authenticate_user(
         _user_row = cast(
             Optional[LiteLLM_UserTable],
             await prisma_client.db.litellm_usertable.find_first(
-                where={"user_email": {"equals": username}}
+                where={"user_email": {"equals": username, "mode": "insensitive"}}
             ),
         )
 
@@ -174,6 +227,10 @@ async def authenticate_user(
         )
 
         if os.getenv("DATABASE_URL") is not None:
+            # Expire any previous UI session tokens for this user
+            await expire_previous_ui_session_tokens(
+                user_id=key_user_id, prisma_client=prisma_client
+            )
             response = await generate_key_helper_fn(
                 request_type="key",
                 **{
@@ -260,6 +317,11 @@ async def authenticate_user(
             hash_password, _password
         ):
             if os.getenv("DATABASE_URL") is not None:
+                # Expire any previous UI session tokens for this user
+                await expire_previous_ui_session_tokens(
+                    user_id=user_id, prisma_client=prisma_client
+                )
+
                 response = await generate_key_helper_fn(
                     request_type="key",
                     **{  # type: ignore

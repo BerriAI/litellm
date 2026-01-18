@@ -54,9 +54,10 @@ def validate_responses_api_response(response, final_chunk: bool = False):
     assert "created_at" in response and isinstance(
         response["created_at"], int
     ), "Response should have an integer 'created_at' field"
-    assert "output" in response and isinstance(
-        response["output"], list
-    ), "Response should have a list 'output' field"
+    if response.get("status") == "completed":
+        assert "output" in response and isinstance(
+            response["output"], list
+        ), "Response should have a list 'output' field"
 
     # Optional fields with their expected types
     optional_fields = {
@@ -91,7 +92,7 @@ def validate_responses_api_response(response, final_chunk: bool = False):
             ), f"Field '{field}' should be of type {expected_type}, but got {type(response[field])}"
 
     # Check if output has at least one item
-    if final_chunk is True:
+    if final_chunk is True and response.get("status") == "completed":
         assert (
             len(response["output"]) > 0
         ), "Response 'output' field should have at least one item"
@@ -170,48 +171,57 @@ class BaseResponsesAPITest(ABC):
                 elif event.type == "response.completed":
                     response_completed_event = event
 
-        # assert the delta chunks content had len(collected_content_string) > 0
-        # this content is typically rendered on chat ui's
-        assert len(collected_content_string) > 0
-
         # assert the response completed event is not None
         assert response_completed_event is not None
 
         # assert the response completed event has a response
         assert response_completed_event.response is not None
 
-        # assert the response completed event includes the usage
-        assert response_completed_event.response.usage is not None
+        # For async agent APIs (like Manus), the response may be in 'running' state
+        # without content yet - this is valid behavior
+        response_status = response_completed_event.response.status
+        if response_status in ["running", "pending"]:
+            # Running/pending state is acceptable - task started successfully
+            print(f"Response is in '{response_status}' state - async agent API behavior")
+            assert response_completed_event.response.id is not None
+        else:
+            # For completed responses, validate content and usage
+            # assert the delta chunks content had len(collected_content_string) > 0
+            # this content is typically rendered on chat ui's
+            assert len(collected_content_string) > 0
 
-        # basic test assert the usage seems reasonable
-        print(
-            "response_completed_event.response.usage=",
-            response_completed_event.response.usage,
-        )
-        assert (
-            response_completed_event.response.usage.input_tokens > 0
-            and response_completed_event.response.usage.input_tokens < 100
-        )
-        assert (
-            response_completed_event.response.usage.output_tokens > 0
-            and response_completed_event.response.usage.output_tokens < 2000
-        )
-        assert (
-            response_completed_event.response.usage.total_tokens > 0
-            and response_completed_event.response.usage.total_tokens < 2000
-        )
+            # assert the response completed event includes the usage
+            assert response_completed_event.response.usage is not None
 
-        # total tokens should be the sum of input and output tokens
-        assert (
-            response_completed_event.response.usage.total_tokens
-            == response_completed_event.response.usage.input_tokens
-            + response_completed_event.response.usage.output_tokens
-        )
+            # basic test assert the usage seems reasonable
+            print(
+                "response_completed_event.response.usage=",
+                response_completed_event.response.usage,
+            )
+            assert (
+                response_completed_event.response.usage.input_tokens > 0
+                and response_completed_event.response.usage.input_tokens < 100
+            )
+            assert (
+                response_completed_event.response.usage.output_tokens > 0
+                and response_completed_event.response.usage.output_tokens < 2000
+            )
+            assert (
+                response_completed_event.response.usage.total_tokens > 0
+                and response_completed_event.response.usage.total_tokens < 2000
+            )
 
-        # assert the response completed event includes cost when include_cost_in_streaming_usage is True
-        assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
-        assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
-        print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
+            # total tokens should be the sum of input and output tokens
+            assert (
+                response_completed_event.response.usage.total_tokens
+                == response_completed_event.response.usage.input_tokens
+                + response_completed_event.response.usage.output_tokens
+            )
+
+            # assert the response completed event includes cost when include_cost_in_streaming_usage is True
+            assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
+            assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
+            print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
         
         # Reset the setting
         litellm.include_cost_in_streaming_usage = False
@@ -450,7 +460,13 @@ class BaseResponsesAPITest(ABC):
         # Additional assertions specific to tool calls
         assert response is not None
         assert "output" in response
-        assert len(response["output"]) > 0
+        # For async agent APIs (like Manus), the response may be in 'running' state
+        # without output yet - this is valid behavior
+        if response.get("status") in ["running", "pending"]:
+            print(f"Response is in '{response.get('status')}' state - async agent API behavior")
+            assert response.get("id") is not None
+        else:
+            assert len(response["output"]) > 0
 
     @pytest.mark.asyncio
     async def test_responses_api_multi_turn_with_reasoning_and_structured_output(self):

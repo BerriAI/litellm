@@ -12,7 +12,12 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.core_helpers import (
+    filter_exceptions_from_params,
+    filter_internal_params,
+    map_finish_reason,
+    safe_deep_copy,
+)
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _parse_content_for_reasoning,
@@ -100,6 +105,7 @@ class AmazonConverseConfig(BaseConfig):
         return {
             "guardrailConfig": GuardrailConfigBlock,
             "performanceConfig": PerformanceConfigBlock,
+            "serviceTier": ServiceTierBlock,
         }
 
     @staticmethod
@@ -333,6 +339,55 @@ class AmazonConverseConfig(BaseConfig):
             }
         }
 
+    def _handle_reasoning_effort_parameter(
+        self, model: str, reasoning_effort: str, optional_params: dict
+    ) -> None:
+        """
+        Handle the reasoning_effort parameter based on the model type.
+
+        Different model families handle reasoning effort differently:
+        - GPT-OSS models: Keep reasoning_effort as-is (passed to additionalModelRequestFields)
+        - Nova Lite 2 models: Transform to reasoningConfig structure
+        - Other models (Anthropic, etc.): Convert to thinking parameter
+
+        Args:
+            model: The model identifier
+            reasoning_effort: The reasoning effort value
+            optional_params: Dictionary of optional parameters to update in-place
+
+        Examples:
+            >>> config = AmazonConverseConfig()
+            >>> params = {}
+            >>> config._handle_reasoning_effort_parameter("gpt-oss-model", "high", params)
+            >>> params
+            {'reasoning_effort': 'high'}
+
+            >>> params = {}
+            >>> config._handle_reasoning_effort_parameter("amazon.nova-2-lite-v1:0", "high", params)
+            >>> params
+            {'reasoningConfig': {'type': 'enabled', 'maxReasoningEffort': 'high'}}
+
+            >>> params = {}
+            >>> config._handle_reasoning_effort_parameter("anthropic.claude-3", "high", params)
+            >>> params
+            {'thinking': {'type': 'enabled', 'budget_tokens': 10000}}
+        """
+        if "gpt-oss" in model:
+            # GPT-OSS models: keep reasoning_effort as-is
+            # It will be passed through to additionalModelRequestFields
+            optional_params["reasoning_effort"] = reasoning_effort
+        elif self._is_nova_lite_2_model(model):
+            # Nova Lite 2 models: transform to reasoningConfig
+            reasoning_config = self._transform_reasoning_effort_to_reasoning_config(
+                reasoning_effort
+            )
+            optional_params.update(reasoning_config)
+        else:
+            # Anthropic and other models: convert to thinking parameter
+            optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
+                reasoning_effort
+            )
+
     def get_supported_openai_params(self, model: str) -> List[str]:
         from litellm.utils import supports_function_calling
 
@@ -347,6 +402,7 @@ class AmazonConverseConfig(BaseConfig):
             "extra_headers",
             "response_format",
             "requestMetadata",
+            "service_tier",
         ]
 
         if (
@@ -651,25 +707,22 @@ class AmazonConverseConfig(BaseConfig):
             if param == "thinking":
                 optional_params["thinking"] = value
             elif param == "reasoning_effort" and isinstance(value, str):
-                if "gpt-oss" in model:
-                    # GPT-OSS models: keep reasoning_effort as-is
-                    # It will be passed through to additionalModelRequestFields
-                    optional_params["reasoning_effort"] = value
-                elif self._is_nova_lite_2_model(model):
-                    # Nova Lite 2 models: transform to reasoningConfig
-                    reasoning_config = (
-                        self._transform_reasoning_effort_to_reasoning_config(value)
-                    )
-                    optional_params.update(reasoning_config)
-                else:
-                    # Anthropic and other models: convert to thinking parameter
-                    optional_params["thinking"] = AnthropicConfig._map_reasoning_effort(
-                        value
-                    )
+                self._handle_reasoning_effort_parameter(
+                    model=model, reasoning_effort=value, optional_params=optional_params
+                )
             if param == "requestMetadata":
                 if value is not None and isinstance(value, dict):
                     self._validate_request_metadata(value)  # type: ignore
                     optional_params["requestMetadata"] = value
+            if param == "service_tier" and isinstance(value, str):
+                # Map OpenAI service_tier (string) to Bedrock serviceTier (object)
+                # OpenAI values: "auto", "default", "flex", "priority"
+                # Bedrock values: "default", "flex", "priority" (no "auto")
+                bedrock_tier = value
+                if value == "auto":
+                    bedrock_tier = "default"  # Bedrock doesn't support "auto"
+                if bedrock_tier in ("default", "flex", "priority"):
+                    optional_params["serviceTier"] = {"type": bedrock_tier}
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
         # Nova Lite 2 handles token budgeting differently through reasoningConfig
@@ -679,10 +732,7 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         final_is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if (
-            final_is_thinking_enabled
-            and "tool_choice" in optional_params
-        ):
+        if final_is_thinking_enabled and "tool_choice" in optional_params:
             tool_choice_block = optional_params["tool_choice"]
             if isinstance(tool_choice_block, dict):
                 if "any" in tool_choice_block or "tool" in tool_choice_block:
@@ -878,7 +928,10 @@ class AmazonConverseConfig(BaseConfig):
         self, optional_params: dict, model: str
     ) -> Tuple[dict, dict, dict]:
         """Prepare and separate request parameters."""
-        inference_params = copy.deepcopy(optional_params)
+        # Filter out exception objects before deepcopy to prevent deepcopy failures
+        # Exceptions should not be stored in optional_params (this is a defensive fix)
+        cleaned_params = filter_exceptions_from_params(optional_params)
+        inference_params = safe_deep_copy(cleaned_params)
         supported_converse_params = list(
             AmazonConverseConfig.__annotations__.keys()
         ) + ["top_k"]
@@ -909,6 +962,17 @@ class AmazonConverseConfig(BaseConfig):
             self._handle_top_k_value(model, inference_params)
         )
 
+        # Filter out internal/MCP-related parameters that shouldn't be sent to the API
+        # These are LiteLLM internal parameters, not API parameters
+        additional_request_params = filter_internal_params(additional_request_params)
+
+        # Filter out non-serializable objects (exceptions, callables, logging objects, etc.)
+        # from additional_request_params to prevent JSON serialization errors
+        # This filters: Exception objects, callable objects (functions), Logging objects, etc.
+        additional_request_params = filter_exceptions_from_params(
+            additional_request_params
+        )
+
         return inference_params, additional_request_params, request_metadata
 
     def _process_tools_and_beta(
@@ -932,7 +996,10 @@ class AmazonConverseConfig(BaseConfig):
         if original_tools:
             for tool in original_tools:
                 tool_type = tool.get("type", "")
-                if tool_type in ("tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119"):
+                if tool_type in (
+                    "tool_search_tool_regex_20251119",
+                    "tool_search_tool_bm25_20251119",
+                ):
                     # Tool search not supported in Converse API - skip it
                     continue
                 filtered_tools.append(tool)
@@ -1516,6 +1583,13 @@ class AmazonConverseConfig(BaseConfig):
         # Add "trace" from Bedrock guardrails - if user has opted in to returning it
         if "trace" in completion_response:
             setattr(model_response, "trace", completion_response["trace"])
+
+        # Add service_tier if present in Bedrock response
+        # Map Bedrock serviceTier (object) to OpenAI service_tier (string)
+        if "serviceTier" in completion_response:
+            service_tier_block = completion_response["serviceTier"]
+            if isinstance(service_tier_block, dict) and "type" in service_tier_block:
+                setattr(model_response, "service_tier", service_tier_block["type"])
 
         return model_response
 

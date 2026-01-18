@@ -664,8 +664,29 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 **data, timeout=timeout
             )
             headers = dict(raw_response.headers)
-            response = raw_response.parse()
+            
+            # Convert json.JSONDecodeError to AzureOpenAIError for two critical reasons:
+            #
+            # 1. ROUTER BEHAVIOR: The router relies on exception.status_code to determine cooldown logic:
+            #    - JSONDecodeError has no status_code → router skips cooldown evaluation
+            #    - AzureOpenAIError has status_code → router properly evaluates for cooldown
+            #
+            # 2. CONNECTION CLEANUP: When response.parse() throws JSONDecodeError, the response
+            #    body may not be fully consumed, preventing httpx from properly returning the
+            #    connection to the pool. By catching the exception and accessing raw_response.status_code,
+            #    we trigger httpx's internal cleanup logic. Without this:
+            #    - parse() fails → JSONDecodeError bubbles up → httpx never knows response was acknowledged → connection leak
+            #    This completely eliminates "Unclosed connection" warnings during high load.
+            try:
+                response = raw_response.parse()
+            except json.JSONDecodeError as json_error:
+                raise AzureOpenAIError(
+                    status_code=raw_response.status_code or 500,
+                    message=f"Failed to parse raw Azure embedding response: {str(json_error)}"
+                ) from json_error
+            
             stringified_response = response.model_dump()
+
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -990,6 +1011,10 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
     def create_azure_base_url(
         self, azure_client_params: dict, model: Optional[str]
     ) -> str:
+        from litellm.llms.azure_ai.image_generation import (
+            AzureFoundryFluxImageGenerationConfig,
+        )
+
         api_base: str = azure_client_params.get(
             "azure_endpoint", ""
         )  # "https://example-endpoint.openai.azure.com"
@@ -998,6 +1023,15 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         api_version: str = azure_client_params.get("api_version", "")
         if model is None:
             model = ""
+
+        # Handle FLUX 2 models on Azure AI which use a different URL pattern
+        # e.g., /providers/blackforestlabs/v1/flux-2-pro instead of /openai/deployments/{model}/images/generations
+        if AzureFoundryFluxImageGenerationConfig.is_flux2_model(model):
+            return AzureFoundryFluxImageGenerationConfig.get_flux2_image_generation_url(
+                api_base=api_base,
+                model=model,
+                api_version=api_version,
+            )
 
         if "/openai/deployments/" in api_base:
             base_url_with_deployment = api_base

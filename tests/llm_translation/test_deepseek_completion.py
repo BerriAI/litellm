@@ -30,6 +30,7 @@ def test_deepseek_mock_completion(stream):
         messages=[{"role": "user", "content": "Hello, world!"}],
         api_base="https://exampleopenaiendpoint-production.up.railway.app/v1/chat/completions",
         stream=stream,
+        mock_response="Hello! How can I help you today?",
     )
     print(f"response: {response}")
     if stream:

@@ -1,17 +1,16 @@
-FROM cgr.dev/chainguard/python:latest-dev
+FROM python:3.13-alpine
 
-USER root
 WORKDIR /app
 
 ENV HOME=/home/litellm
 ENV PATH="${HOME}/venv/bin:$PATH"
 
 # Install runtime dependencies
-# Note: The base image has Python 3.14, but python3-dev installs Python 3.13 which conflicts.
-# The -dev variant should include Python headers, but if compilation fails, we may need
-# to install python-3.14-dev specifically (if available in the repo)
+# Note: Using Python 3.13 for compatibility with ddtrace and other packages
+# rust and cargo are required for building ddtrace from source
+# musl-dev and libffi-dev are needed for some Python packages on Alpine
 RUN apk update && \
-    apk add --no-cache gcc openssl openssl-dev
+    apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo
 
 RUN python -m venv ${HOME}/venv
 RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip

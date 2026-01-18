@@ -2,13 +2,17 @@
 Unified /v1/messages endpoint - (Anthropic Spec)
 """
 
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from litellm._logging import verbose_proxy_logger
+from litellm.anthropic_interface.exceptions import AnthropicExceptionMapping
+from litellm.integrations.custom_guardrail import ModifyResponseException
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import (
+    ProxyBaseLLMRequestProcessing,
+    create_response,
+)
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import TokenCountResponse
 
@@ -65,6 +69,50 @@ async def anthropic_response(  # noqa: PLR0915
             version=version,
         )
         return result
+    except ModifyResponseException as e:
+        # Guardrail flagged content in passthrough mode - return 200 with violation message
+        _data = e.request_data
+        await proxy_logging_obj.post_call_failure_hook(
+            user_api_key_dict=user_api_key_dict,
+            original_exception=e,
+            request_data=_data,
+        )
+
+        # Create Anthropic-formatted response with violation message
+        import uuid
+        from litellm.types.utils import AnthropicMessagesResponse
+
+        _anthropic_response = AnthropicMessagesResponse(
+            id=f"msg_{str(uuid.uuid4())}",
+            type="message",
+            role="assistant",
+            content=[{"type": "text", "text": e.message}],
+            model=e.model,
+            stop_reason="end_turn",
+            usage={"input_tokens": 0, "output_tokens": 0},
+        )
+
+        if data.get("stream", None) is not None and data["stream"] is True:
+            # For streaming, use the standard SSE data generator
+            async def _passthrough_stream_generator():
+                yield _anthropic_response
+
+            selected_data_generator = (
+                ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                    response=_passthrough_stream_generator(),
+                    user_api_key_dict=user_api_key_dict,
+                    request_data=_data,
+                    proxy_logging_obj=proxy_logging_obj,
+                )
+            )
+
+            return await create_response(
+                generator=selected_data_generator,
+                media_type="text/event-stream",
+                headers={},
+            )
+
+        return _anthropic_response
     except Exception as e:
         await proxy_logging_obj.post_call_failure_hook(
             user_api_key_dict=user_api_key_dict, original_exception=e, request_data=data
@@ -173,6 +221,16 @@ async def count_tokens(
 
     except HTTPException:
         raise
+    except ProxyException as e:
+        status_code = int(e.code) if e.code and e.code.isdigit() else 500
+        detail = AnthropicExceptionMapping.transform_to_anthropic_error(
+            status_code=status_code,
+            raw_message=e.message,
+        )
+        raise HTTPException(
+            status_code=status_code,
+            detail=detail,
+        )
     except Exception as e:
         verbose_proxy_logger.exception(
             "litellm.proxy.anthropic_endpoints.count_tokens(): Exception occurred - {}".format(

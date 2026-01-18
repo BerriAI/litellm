@@ -63,6 +63,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         headers["Content-Type"] = "application/json"
         return headers
 
+    def use_multipart_form_data(self) -> bool:
+        """Gemini uses JSON requests, not multipart/form-data."""
+        return False
+
     def get_complete_url(
         self,
         model: str,
@@ -76,7 +80,7 @@ class GeminiImageEditConfig(BaseImageEditConfig):
     def transform_image_edit_request(  # type: ignore[override]
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
@@ -85,6 +89,9 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         inline_parts = self._prepare_inline_image_parts(image)
         if not inline_parts:
             raise ValueError("Gemini image edit requires at least one image.")
+
+        if prompt is None:
+            raise ValueError("Gemini image edit requires a prompt.")
 
         contents = [
             {

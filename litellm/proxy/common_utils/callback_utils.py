@@ -6,9 +6,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import CommonProxyErrors, LiteLLMPromptInjectionParams
 from litellm.proxy.types_utils.utils import get_instance_fn
-from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-)
 from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
     StandardLoggingPayload,
@@ -272,6 +269,16 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
+            elif isinstance(callback, str) and callback == "websearch_interception":
+                from litellm.integrations.websearch_interception.handler import (
+                    WebSearchInterceptionLogger,
+                )
+
+                websearch_interception_obj = WebSearchInterceptionLogger.initialize_from_proxy_config(
+                    litellm_settings=litellm_settings,
+                    callback_specific_params=callback_specific_params,
+                )
+                imported_list.append(websearch_interception_obj)
             elif isinstance(callback, CustomLogger):
                 imported_list.append(callback)
             else:
@@ -362,7 +369,11 @@ def get_remaining_tokens_and_requests_from_request_data(data: Dict) -> Dict[str,
 
 
 def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
-    _metadata = request_data.get("metadata", None) or {}
+    _metadata = request_data.get("metadata", None)
+    if not _metadata:
+        _metadata = request_data.get("litellm_metadata", None)
+    if not isinstance(_metadata, dict):
+        _metadata = {}
     headers = {}
     if "applied_guardrails" in _metadata:
         headers["x-litellm-applied-guardrails"] = ",".join(
@@ -371,6 +382,12 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
 
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
+
+    pillar_headers = _metadata.get("pillar_response_headers")
+    if isinstance(pillar_headers, dict):
+        headers.update(pillar_headers)
+    elif "pillar_flagged" in _metadata:
+        headers["x-pillar-flagged"] = str(_metadata["pillar_flagged"]).lower()
 
     return headers
 
@@ -436,11 +453,7 @@ def process_callback(_callback: str, callback_type: str, environment_variables: 
         if env_variable is None:
             env_vars_dict[_var] = None
         else:
-            # decode + decrypt the value
-            decrypted_value = decrypt_value_helper(
-                value=env_variable, key=_var
-            )
-            env_vars_dict[_var] = decrypted_value
+            env_vars_dict[_var] = env_variable
 
     return {
         "name": _callback,

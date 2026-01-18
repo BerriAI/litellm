@@ -20,6 +20,10 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
 )
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    _resolve_embedding_config_from_db,
+    new_vector_store,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     check_vector_store_permission,
     is_allowed_to_call_vector_store_endpoint,
@@ -644,7 +648,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.method = "GET"
         mock_request.url.path = "/azure_ai/indexes/dall-e-4/docs/search"
         mock_user_api_key = UserAPIKeyAuth(
-            token="b637312ebffb9745321224644430ba9e4916a291c8281f293d21182c5e80bc5a",
+            token="sk-test-mock-token-404",
             key_name="sk-...plNQ",
             metadata={
                 "allowed_vector_store_indexes": [
@@ -1045,3 +1049,139 @@ async def test_vector_store_synchronization_across_instances():
     assert len(vector_stores_to_run) == 0, (
         "Deleted vector store should not be returned when trying to use it"
     )
+
+
+@pytest.mark.asyncio
+async def test_resolve_embedding_config_from_db():
+    """Test that _resolve_embedding_config_from_db correctly resolves embedding config from database."""
+    mock_prisma_client = MagicMock()
+    
+    # Mock database model with litellm_params
+    mock_db_model = MagicMock()
+    mock_db_model.litellm_params = {
+        "api_key": "test-api-key",
+        "api_base": "https://api.openai.com",
+        "api_version": "2024-01-01"
+    }
+    
+    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
+        return_value=mock_db_model
+    )
+    
+    with patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
+        side_effect=lambda value, key, return_original_value: value
+    ):
+        result = await _resolve_embedding_config_from_db(
+            embedding_model="text-embedding-ada-002",
+            prisma_client=mock_prisma_client
+        )
+    
+    assert result is not None
+    assert result["api_key"] == "test-api-key"
+    assert result["api_base"] == "https://api.openai.com"
+    assert result["api_version"] == "2024-01-01"
+    mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called_once_with(
+        where={"model_name": "text-embedding-ada-002"}
+    )
+    
+    # Test with empty embedding_model
+    result_empty = await _resolve_embedding_config_from_db(
+        embedding_model="",
+        prisma_client=mock_prisma_client
+    )
+    assert result_empty is None
+    
+    # Test with model not found
+    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
+        return_value=None
+    )
+    result_not_found = await _resolve_embedding_config_from_db(
+        embedding_model="non-existent-model",
+        prisma_client=mock_prisma_client
+    )
+    assert result_not_found is None
+
+
+@pytest.mark.asyncio
+async def test_new_vector_store_auto_resolves_embedding_config():
+    """Test that new_vector_store auto-resolves embedding config when embedding_model is provided but config is not."""
+    import json
+
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    
+    mock_prisma_client = MagicMock()
+    
+    # Mock vector store request with embedding_model but no embedding_config
+    vector_store_data: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "test-store-001",
+        "custom_llm_provider": "openai",
+        "litellm_params": {
+            "litellm_embedding_model": "text-embedding-ada-002",
+            # Note: litellm_embedding_config is not provided
+        }
+    }
+    
+    # Mock database model lookup for embedding config resolution
+    mock_db_model = MagicMock()
+    mock_db_model.litellm_params = {
+        "api_key": "resolved-api-key",
+        "api_base": "https://api.openai.com",
+        "api_version": "2024-01-01"
+    }
+    
+    # Mock user API key
+    mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key.user_role = None
+    
+    # Mock database operations
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=None  # Vector store doesn't exist yet
+    )
+    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
+        return_value=mock_db_model
+    )
+    
+    # Track what was passed to create
+    captured_create_data = {}
+    
+    async def mock_create(*args, **kwargs):
+        captured_create_data.update(kwargs.get("data", {}))
+        mock_created_vector_store = MagicMock()
+        mock_created_vector_store.model_dump.return_value = {
+            "vector_store_id": "test-store-001",
+            "custom_llm_provider": "openai",
+            "litellm_params": kwargs.get("data", {}).get("litellm_params")
+        }
+        return mock_created_vector_store
+    
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
+        side_effect=mock_create
+    )
+    
+    mock_registry = MagicMock()
+    mock_registry.add_vector_store_to_registry = MagicMock()
+    
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
+        side_effect=lambda value, key, return_original_value: value
+    ), patch.object(
+        litellm, "vector_store_registry", mock_registry
+    ):
+        result = await new_vector_store(
+            vector_store=vector_store_data,
+            user_api_key_dict=mock_user_api_key
+        )
+    
+    assert result["status"] == "success"
+    # Verify that embedding config was resolved and included in the create call
+    litellm_params_json = captured_create_data.get("litellm_params")
+    assert litellm_params_json is not None
+    litellm_params_dict = json.loads(litellm_params_json)
+    assert "litellm_embedding_config" in litellm_params_dict
+    assert litellm_params_dict["litellm_embedding_config"]["api_key"] == "resolved-api-key"
+    assert litellm_params_dict["litellm_embedding_config"]["api_base"] == "https://api.openai.com"
+    assert litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-01-01"

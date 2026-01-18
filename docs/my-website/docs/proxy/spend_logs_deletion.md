@@ -30,6 +30,9 @@ general_settings:
   # Optional: set how frequently cleanup should run - default is daily
   maximum_spend_logs_retention_interval: "1d"  # Run cleanup daily
 
+  # Optional: set exact time for cleanup (Cron syntax)
+  maximum_spend_logs_cleanup_cron: "0 4 * * *" # Run at 04:00 AM daily
+
 litellm_settings:
   cache: true
   cache_params:
@@ -50,6 +53,15 @@ How long logs should be kept before deletion. Supported formats:
 #### `maximum_spend_logs_retention_interval` (optional)
 
 How often the cleanup job should run. Uses the same format as above. If not set, cleanup will run every 24 hours if and only if `maximum_spend_logs_retention_period` is set.
+
+#### `maximum_spend_logs_cleanup_cron` (optional)
+
+Schedule the cleanup using standard cron syntax. This takes precedence over `maximum_spend_logs_retention_interval`.
+
+Examples:
+- `"0 4 * * *"` – Run at 04:00 AM daily
+- `"0 0 * * 0"` – Run at midnight every Sunday
+- `"*/30 * * * *"` – Run every 30 minutes
 
 ## How it works
 

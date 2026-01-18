@@ -142,7 +142,47 @@ def completion(
 - `tool_call_id`: *str (optional)* - Tool call that this message is responding to.
 
 
-[**See All Message Values**](https://github.com/BerriAI/litellm/blob/8600ec77042dacad324d3879a2bd918fc6a719fa/litellm/types/llms/openai.py#L392)
+[**See All Message Values**](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L664)
+
+#### Content Types
+
+`content` can be a string (text only) or a list of content blocks (multimodal):
+
+| Type | Description | Docs |
+|------|-------------|------|
+| `text` | Text content | [Type Definition](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L598) |
+| `image_url` | Images | [Vision](./vision.md) |
+| `input_audio` | Audio input | [Audio](./audio.md) |
+| `video_url` | Video input | [Type Definition](https://github.com/BerriAI/litellm/blob/main/litellm/types/llms/openai.py#L625) |
+| `file` | Files | [Document Understanding](./document_understanding.md) |
+| `document` | Documents/PDFs | [Document Understanding](./document_understanding.md) |
+
+**Examples:**
+```python
+# Text
+messages=[{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}]
+
+# Image
+messages=[{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}]}]
+
+# Audio
+messages=[{"role": "user", "content": [{"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}]}]
+
+# Video
+messages=[{"role": "user", "content": [{"type": "video_url", "video_url": {"url": "https://example.com/video.mp4"}}]}]
+
+# File
+messages=[{"role": "user", "content": [{"type": "file", "file": {"file_id": "https://example.com/doc.pdf"}}]}]
+
+# Document
+messages=[{"role": "user", "content": [{"type": "document", "source": {"type": "text", "media_type": "application/pdf", "data": "<base64>"}}]}]
+
+# Combining multiple types (multimodal)
+messages=[{"role": "user", "content": [
+    {"type": "text", "text": "Generate a product description based on this image"},
+    {"type": "image_url", "image_url": {"url": "https://example.com/image.jpg"}}
+]}]
+```
 
 ## Optional Fields
 
@@ -174,11 +214,11 @@ def completion(
 
 - `seed`: *integer or null (optional)* - This feature is in Beta. If specified, our system will make a best effort to sample deterministically, such that repeated requests with the same seed and parameters should return the same result. Determinism is not guaranteed, and you should refer to the `system_fingerprint` response parameter to monitor changes in the backend.
 
-- `tools`: *array (optional)* - A list of tools the model may call. Currently, only functions are supported as a tool. Use this to provide a list of functions the model may generate JSON inputs for.
+- `tools`: *array (optional)* - A list of tools the model may call. Use this to provide a list of functions the model may generate JSON inputs for.
 
-    - `type`: *string* - The type of the tool. Currently, only function is supported.
+    - `type`: *string* - The type of the tool. You can set this to `"function"` or `"mcp"` (matching the `/responses` schema) to call LiteLLM-registered MCP servers directly from `/chat/completions`.
 
-    - `function`: *object* - Required.
+    - `function`: *object* - Required for function tools.
 
 - `tool_choice`: *string or object (optional)* - Controls which (if any) function is called by the model. none means the model will not call a function and instead generates a message. auto means the model can pick between generating a message or calling a function. Specifying a particular function via `{"type": "function", "function": {"name": "my_function"}}` forces the model to call that function.
 
@@ -247,4 +287,3 @@ def completion(
 - `eos_token`: *string (optional)* - Initial string applied at the end of a sequence
 
 - `hf_model_name`: *string (optional)* - [Sagemaker Only] The corresponding huggingface name of the model, used to pull the right chat template for the model. 
-

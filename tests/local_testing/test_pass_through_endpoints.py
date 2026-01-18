@@ -443,6 +443,10 @@ async def test_aaapass_through_endpoint_pass_through_keys_langfuse(
         }
 
         # Make a request to the pass-through endpoint
+        # For langfuse custom_auth_parser, the Authorization header must be valid base64
+        # Format: base64(public_key:secret_key) where public_key is the LiteLLM API key
+        import base64
+        auth_token = base64.b64encode(f"{mock_api_key}:anything".encode()).decode()
         response = client.post(
             "/api/public/ingestion",
             json=_json_data,

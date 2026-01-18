@@ -1,16 +1,9 @@
-import json
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from typing_extensions import (
-    Protocol,
     Required,
-    Self,
     TypedDict,
-    TypeGuard,
-    get_origin,
-    override,
-    runtime_checkable,
 )
 
 
@@ -176,7 +169,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["low", "medium", "high"]
+    thinkingLevel: Literal["minimal", "low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
@@ -221,6 +214,7 @@ class GenerationConfig(TypedDict, total=False):
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
     mediaResolution: str
+    speechConfig: SpeechConfig
 
 
 class VertexToolName(str, Enum):
@@ -231,6 +225,7 @@ class VertexToolName(str, Enum):
     URL_CONTEXT = "url_context"
     CODE_EXECUTION = "code_execution"
     GOOGLE_MAPS = "googleMaps"
+    COMPUTER_USE = "computerUse"
 
 
 class Tools(TypedDict, total=False):
@@ -241,6 +236,7 @@ class Tools(TypedDict, total=False):
     url_context: dict
     code_execution: dict
     googleMaps: dict
+    computerUse: dict
     retrieval: Retrieval
 
 
@@ -265,6 +261,7 @@ class UsageMetadata(TypedDict, total=False):
     responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
     candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses
@@ -307,7 +304,6 @@ class RequestBody(TypedDict, total=False):
     generationConfig: GenerationConfig
     cachedContent: str
     labels: Dict[str, str]
-    speechConfig: SpeechConfig
 
 
 class CachedContentRequestBody(TypedDict, total=False):

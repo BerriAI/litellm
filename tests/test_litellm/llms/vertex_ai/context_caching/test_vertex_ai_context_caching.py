@@ -187,9 +187,9 @@ class TestContextCachingEndpoints:
         assert returned_params == optional_params
         assert returned_cache == "existing_cache_name"
 
-        # Verify cache key was generated with tools
+        # Verify cache key was generated with tools and model
         mock_cache_obj.get_cache_key.assert_called_once_with(
-            messages=cached_messages, tools=self.sample_tools
+            messages=cached_messages, tools=self.sample_tools, model="gemini-1.5-pro"
         )
 
     @pytest.mark.parametrize(
@@ -460,9 +460,9 @@ class TestContextCachingEndpoints:
         assert returned_params == optional_params
         assert returned_cache == "existing_cache_name"
 
-        # Verify cache key was generated with tools
+        # Verify cache key was generated with tools and model
         mock_cache_obj.get_cache_key.assert_called_once_with(
-            messages=cached_messages, tools=self.sample_tools
+            messages=cached_messages, tools=self.sample_tools, model="gemini-1.5-pro"
         )
 
     @pytest.mark.asyncio

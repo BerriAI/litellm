@@ -15,10 +15,10 @@ import GeneralSettings from "@/components/general_settings";
 import GuardrailsPanel from "@/components/guardrails";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { MCPServers } from "@/components/mcp_tools";
-import ModelHubTable from "@/components/model_hub_table";
+import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import Navbar from "@/components/navbar";
-import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName } from "@/components/networking";
-import NewUsagePage from "@/components/new_usage";
+import { getUiConfig, Organization, proxyBaseUrl, setGlobalLitellmHeaderName, getInProductNudgesCall } from "@/components/networking";
+import NewUsagePage from "@/components/UsagePage/components/UsagePageView";
 import OldTeams from "@/components/OldTeams";
 import { fetchUserModels } from "@/components/organisms/create_key_button";
 import Organizations, { fetchOrganizations } from "@/components/organizations";
@@ -27,6 +27,7 @@ import PromptsPanel from "@/components/prompts";
 import PublicModelHub from "@/components/public_model_hub";
 import { SearchTools } from "@/components/search_tools";
 import Settings from "@/components/settings";
+import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import TagManagement from "@/components/tag_management";
 import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
@@ -118,6 +119,15 @@ export default function CreateKeyPage() {
   const [createClicked, setCreateClicked] = useState<boolean>(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
+
+  // Survey state - always show by default
+  const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
+  const [showSurveyModal, setShowSurveyModal] = useState(false);
+
+  // Claude Code feedback state
+  const [isClaudeCode, setIsClaudeCode] = useState(false);
+  const [showClaudeCodePrompt, setShowClaudeCodePrompt] = useState(false);
+  const [showClaudeCodeModal, setShowClaudeCodeModal] = useState(false);
 
   const invitation_id = searchParams.get("invitation_id");
 
@@ -262,6 +272,87 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, userID, userRole]);
 
+  // Fetch in-product nudges configuration from backend
+  useEffect(() => {
+    if (accessToken && token) {
+      (async () => {
+        try {
+          const nudgesConfig = await getInProductNudgesCall(accessToken);
+          const isUsingClaudeCode = nudgesConfig?.is_claude_code_enabled || false;
+          setIsClaudeCode(isUsingClaudeCode);
+          
+          // Show Claude Code prompt on login if enabled
+          if (isUsingClaudeCode) {
+            setShowClaudeCodePrompt(true);
+            // Don't show the regular survey prompt if showing Claude Code prompt
+            setShowSurveyPrompt(false);
+          }
+        } catch (error) {
+          console.error("Failed to fetch in-product nudges:", error);
+          // Silently fail and don't show Claude Code nudge
+        }
+      })();
+    }
+  }, [accessToken, token]);
+
+  // Auto-dismiss survey prompt after 15 seconds
+  useEffect(() => {
+    if (showSurveyPrompt && !showSurveyModal) {
+      const timer = setTimeout(() => {
+        setShowSurveyPrompt(false);
+      }, 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [showSurveyPrompt, showSurveyModal]);
+
+  // Auto-dismiss Claude Code prompt after 15 seconds
+  useEffect(() => {
+    if (showClaudeCodePrompt && !showClaudeCodeModal) {
+      const timer = setTimeout(() => {
+        setShowClaudeCodePrompt(false);
+      }, 15000);
+      return () => clearTimeout(timer);
+    }
+  }, [showClaudeCodePrompt, showClaudeCodeModal]);
+
+  const handleOpenSurvey = () => {
+    setShowSurveyPrompt(false);
+    setShowSurveyModal(true);
+  };
+
+  const handleDismissSurveyPrompt = () => {
+    setShowSurveyPrompt(false);
+  };
+
+  const handleSurveyComplete = () => {
+    setShowSurveyModal(false);
+  };
+
+  const handleSurveyModalClose = () => {
+    // If they close the modal without completing, show the prompt again
+    setShowSurveyModal(false);
+    setShowSurveyPrompt(true);
+  };
+
+  const handleOpenClaudeCode = () => {
+    setShowClaudeCodePrompt(false);
+    setShowClaudeCodeModal(true);
+  };
+
+  const handleDismissClaudeCodePrompt = () => {
+    setShowClaudeCodePrompt(false);
+  };
+
+  const handleClaudeCodeComplete = () => {
+    setShowClaudeCodeModal(false);
+  };
+
+  const handleClaudeCodeModalClose = () => {
+    // If they close the modal without completing, show the prompt again
+    setShowClaudeCodeModal(false);
+    setShowClaudeCodePrompt(true);
+  };
+
   if (authLoading || redirectToLogin) {
     return <LoadingScreen />;
   }
@@ -323,11 +414,8 @@ export default function CreateKeyPage() {
                   />
                 ) : page == "models" ? (
                   <OldModelDashboard
-                    userID={userID}
-                    userRole={userRole}
                     token={token}
                     keys={keys}
-                    accessToken={accessToken}
                     modelData={modelData}
                     setModelData={setModelData}
                     premiumUser={premiumUser}
@@ -446,12 +534,8 @@ export default function CreateKeyPage() {
                   <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "new_usage" ? (
                   <NewUsagePage
-                    userID={userID}
-                    userRole={userRole}
-                    accessToken={accessToken}
                     teams={(teams as Team[]) ?? []}
                     organizations={(organizations as Organization[]) ?? []}
-                    premiumUser={premiumUser}
                   />
                 ) : (
                   <Usage
@@ -464,6 +548,30 @@ export default function CreateKeyPage() {
                   />
                 )}
               </div>
+
+              {/* Survey Components */}
+              <SurveyPrompt
+                isVisible={showSurveyPrompt}
+                onOpen={handleOpenSurvey}
+                onDismiss={handleDismissSurveyPrompt}
+              />
+              <SurveyModal
+                isOpen={showSurveyModal}
+                onClose={handleSurveyModalClose}
+                onComplete={handleSurveyComplete}
+              />
+
+              {/* Claude Code Components */}
+              <ClaudeCodePrompt
+                isVisible={showClaudeCodePrompt}
+                onOpen={handleOpenClaudeCode}
+                onDismiss={handleDismissClaudeCodePrompt}
+              />
+              <ClaudeCodeModal
+                isOpen={showClaudeCodeModal}
+                onClose={handleClaudeCodeModalClose}
+                onComplete={handleClaudeCodeComplete}
+              />
             </div>
           )}
         </ThemeProvider>

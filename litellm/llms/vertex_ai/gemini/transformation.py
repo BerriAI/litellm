@@ -3,7 +3,7 @@ Transformation logic from OpenAI format to Gemini format.
 
 Why separate file? Make it easy to see how transformation works
 """
-
+import json
 import os
 from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Tuple, Union, cast
 
@@ -68,6 +68,8 @@ def _convert_detail_to_media_resolution_enum(
 ) -> Optional[Dict[str, str]]:
     if detail == "low":
         return {"level": "MEDIA_RESOLUTION_LOW"}
+    elif detail == "medium":
+        return {"level": "MEDIA_RESOLUTION_MEDIUM"}
     elif detail == "high":
         return {"level": "MEDIA_RESOLUTION_HIGH"}
     return None
@@ -162,7 +164,7 @@ def _process_gemini_image(
             and (image_type := format or _get_image_mime_type_from_url(image_url))
             is not None
         ):
-            file_data = FileDataType(file_uri=image_url, mime_type=image_type)
+            file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
             
             if media_resolution_enum is not None and model is not None:
@@ -430,7 +432,18 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     and isinstance(_message_content, str)
                 ):
                     assistant_text = _message_content
-                    assistant_content.append(PartType(text=assistant_text))  # type: ignore
+                    # Check if message has thought_signatures in provider_specific_fields
+                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                    thought_signatures = None
+                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
+                        thought_signatures = provider_specific_fields.get("thought_signatures")
+                    
+                    # If we have thought signatures, add them to the part
+                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                        # Use the first signature for the text part (Gemini expects one signature per part)
+                        assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
+                    else:
+                        assistant_content.append(PartType(text=assistant_text))  # type: ignore
 
                 ## HANDLE ASSISTANT FUNCTION CALL
                 if (
@@ -465,7 +478,11 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                     messages[msg_i], last_message_with_tool_calls  # type: ignore
                 )
                 msg_i += 1
-                tool_call_responses.append(_part)
+                # Handle both single part and list of parts (for Computer Use with images)
+                if isinstance(_part, list):
+                    tool_call_responses.extend(_part)
+                else:
+                    tool_call_responses.append(_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):
