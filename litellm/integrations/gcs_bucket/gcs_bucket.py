@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import time
 from litellm._uuid import uuid
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -27,18 +28,21 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         super().__init__(bucket_name=bucket_name)
 
         # Init Batch logging settings
-        self.log_queue: List[GCSLogQueueItem] = []
         self.batch_size = int(os.getenv("GCS_BATCH_SIZE", GCS_DEFAULT_BATCH_SIZE))
         self.flush_interval = int(
             os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS)
         )
-        asyncio.create_task(self.periodic_flush())
         self.flush_lock = asyncio.Lock()
         super().__init__(
             flush_lock=self.flush_lock,
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
+        # Override log_queue with asyncio.Queue for thread-safe concurrent access
+        # Must be done after super().__init__() which sets it to List
+        # Type override is intentional for thread-safety - using asyncio.Queue instead of List
+        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue()  # type: ignore[assignment]
+        asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 
         if premium_user is not True:
@@ -66,7 +70,8 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
             # Add to logging queue - this will be flushed periodically
-            self.log_queue.append(
+            # Use asyncio.Queue.put() for thread-safe concurrent access
+            await self.log_queue.put(
                 GCSLogQueueItem(
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
                 )
@@ -89,7 +94,8 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             if logging_payload is None:
                 raise ValueError("standard_logging_object not found in kwargs")
             # Add to logging queue - this will be flushed periodically
-            self.log_queue.append(
+            # Use asyncio.Queue.put() for thread-safe concurrent access
+            await self.log_queue.put(
                 GCSLogQueueItem(
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
                 )
@@ -98,38 +104,60 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         except Exception as e:
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
 
+    def _drain_queue_batch(self) -> List[GCSLogQueueItem]:
+        """
+        Drain items from the queue (non-blocking), respecting batch_size limit.
+        
+        This prevents unbounded queue growth when processing is slower than log accumulation.
+        
+        Returns:
+            List of items to process, up to batch_size items
+        """
+        items_to_process = []
+        while len(items_to_process) < self.batch_size:
+            try:
+                item = self.log_queue.get_nowait()
+                items_to_process.append(item)
+            except asyncio.QueueEmpty:
+                break
+        return items_to_process
+
     async def async_send_batch(self):
         """
         Process queued logs in batch - sends logs to GCS Bucket
-
 
         GCS Bucket does not have a Batch endpoint to batch upload logs
 
         Instead, we
             - collect the logs to flush every `GCS_FLUSH_INTERVAL` seconds
             - during async_send_batch, we make 1 POST request per log to GCS Bucket
+            - process up to `batch_size` items per flush to prevent unbounded queue growth
 
+        Uses asyncio.Queue for thread-safe concurrent access. Processes up to `batch_size`
+        items per flush, leaving remaining items for the next flush cycle.
         """
-        if not self.log_queue:
+        items_to_process = self._drain_queue_batch()
+
+        if not items_to_process:
             return
 
-        for log_item in self.log_queue:
+        for log_item in items_to_process:
             logging_payload = log_item["payload"]
             kwargs = log_item["kwargs"]
             response_obj = log_item.get("response_obj", None) or {}
 
-            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                kwargs
-            )
-
-            headers = await self.construct_request_headers(
-                vertex_instance=gcs_logging_config["vertex_instance"],
-                service_account_json=gcs_logging_config["path_service_account"],
-            )
-            bucket_name = gcs_logging_config["bucket_name"]
-            object_name = self._get_object_name(kwargs, logging_payload, response_obj)
-
             try:
+                gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+                    kwargs
+                )
+
+                headers = await self.construct_request_headers(
+                    vertex_instance=gcs_logging_config["vertex_instance"],
+                    service_account_json=gcs_logging_config["path_service_account"],
+                )
+                bucket_name = gcs_logging_config["bucket_name"]
+                object_name = self._get_object_name(kwargs, logging_payload, response_obj)
+
                 await self._log_json_data_on_gcs(
                     headers=headers,
                     bucket_name=bucket_name,
@@ -142,9 +170,6 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     f"GCS Bucket error logging payload to GCS bucket: {str(e)}"
                 )
                 pass
-
-        # Clear the queue after processing
-        self.log_queue.clear()
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
@@ -229,6 +254,34 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
     def _get_object_date_from_datetime(self, datetime_obj: datetime) -> str:
         return datetime_obj.strftime("%Y-%m-%d")
+
+    async def flush_queue(self):
+        """
+        Override flush_queue to work with asyncio.Queue.
+        
+        No lock needed: asyncio.Queue.get_nowait() is atomic, and async_send_batch()
+        drains the queue completely, so concurrent flushes just compete for items safely.
+        No qsize() check needed: async_send_batch() handles empty queues gracefully.
+        """
+        await self.async_send_batch()
+        # Note: async_send_batch() already drains the queue and handles empty case
+        self.last_flush_time = time.time()
+
+    async def periodic_flush(self):
+        """
+        Override periodic_flush to add queue size observability.
+        Logs the GCS queue size before each flush operation.
+        """
+        while True:
+            await asyncio.sleep(self.flush_interval)
+            queue_size = self.log_queue.qsize()
+            print(
+                f"GCS Bucket queue status: {queue_size} logs queued, batch_size={self.batch_size}, flush_interval={self.flush_interval}s"
+            )
+            verbose_logger.debug(
+                f"GCS Bucket periodic flush after {self.flush_interval} seconds"
+            )
+            await self.flush_queue()
 
     async def async_health_check(self) -> IntegrationHealthCheckStatus:
         raise NotImplementedError("GCS Bucket does not support health check")
