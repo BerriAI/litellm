@@ -812,3 +812,143 @@ def test_is_web_search_tool_detection():
     else:
         print("\n❌ Some detection tests failed")
         return False
+
+
+async def test_pre_request_hook_modifies_request_body():
+    """
+    Unit test to verify async_pre_request_hook correctly modifies request body.
+
+    Tests that:
+    1. WebSearchInterceptionLogger is active
+    2. Native web_search_20250305 tool is converted to litellm_web_search
+    3. Stream is converted from True to False
+    4. Modified parameters reach the API call
+    """
+    import asyncio
+    from unittest.mock import AsyncMock, patch, MagicMock
+    from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
+
+    litellm._turn_on_debug()
+
+    print("\n" + "="*80)
+    print("UNIT TEST: Pre-Request Hook Modifies Request Body")
+    print("="*80)
+
+    # Initialize WebSearchInterceptionLogger
+    litellm.callbacks = [
+        WebSearchInterceptionLogger(
+            enabled_providers=[LlmProviders.BEDROCK],
+            search_tool_name="test-search-tool"
+        )
+    ]
+
+    print("✅ WebSearchInterceptionLogger initialized")
+
+    # Track what actually gets sent to the API
+    captured_request = {}
+
+    def mock_anthropic_messages_handler(
+        max_tokens,
+        messages,
+        model,
+        metadata=None,
+        stop_sequences=None,
+        stream=None,
+        system=None,
+        temperature=None,
+        thinking=None,
+        tool_choice=None,
+        tools=None,
+        top_k=None,
+        top_p=None,
+        container=None,
+        api_key=None,
+        api_base=None,
+        client=None,
+        custom_llm_provider=None,
+        **kwargs
+    ):
+        """Mock handler that captures the actual request parameters"""
+        # Capture what gets sent to the handler (after hook modifications)
+        captured_request['tools'] = tools
+        captured_request['stream'] = stream
+        captured_request['max_tokens'] = max_tokens
+        captured_request['model'] = model
+
+        # Return a mock response (non-streaming)
+        from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
+        return AnthropicMessagesResponse(
+            id="msg_test",
+            type="message",
+            role="assistant",
+            content=[{
+                "type": "text",
+                "text": "Test response"
+            }],
+            model="claude-sonnet-4-5",
+            stop_reason="end_turn",
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 20
+            }
+        )
+
+    # Patch the anthropic_messages_handler function (called after hooks)
+    with patch('litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler',
+               side_effect=mock_anthropic_messages_handler):
+
+        print("\n📝 Making request with native web_search_20250305 tool (stream=True)...")
+
+        # Make the request with native tool format
+        response = await messages.acreate(
+            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Test query"}],
+            tools=[{
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": 8
+            }],
+            max_tokens=100,
+            stream=True  # Should be converted to False
+        )
+
+        print("\n🔍 Verifying request modifications...")
+
+        # Verify tool was converted
+        tools = captured_request.get('tools')
+        print(f"\n   Captured tools: {tools}")
+
+        if tools and len(tools) > 0:
+            tool = tools[0]
+            tool_name = tool.get('name')
+
+            if tool_name == LITELLM_WEB_SEARCH_TOOL_NAME:
+                print(f"   ✅ Tool converted: web_search_20250305 → {LITELLM_WEB_SEARCH_TOOL_NAME}")
+            else:
+                print(f"   ❌ Tool NOT converted: expected {LITELLM_WEB_SEARCH_TOOL_NAME}, got {tool_name}")
+                return False
+        else:
+            print("   ❌ No tools captured in request")
+            return False
+
+        # Verify stream was converted
+        stream = captured_request.get('stream')
+        print(f"   Captured stream: {stream}")
+
+        if stream is False:
+            print("   ✅ Stream converted: True → False")
+        else:
+            print(f"   ❌ Stream NOT converted: expected False, got {stream}")
+            return False
+
+        print("\n" + "="*80)
+        print("✅ PRE-REQUEST HOOK TEST PASSED!")
+        print("="*80)
+        print("✅ CustomLogger is active")
+        print("✅ async_pre_request_hook modifies request body")
+        print("✅ Tool conversion works correctly")
+        print("✅ Stream conversion works correctly")
+        print("="*80)
+
+        return True
+
