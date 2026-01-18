@@ -549,6 +549,62 @@ class TestAdditionalParams:
             )
 
 
+class TestModelParameter:
+    """Test model parameter handling in guardrail requests"""
+
+    @pytest.mark.asyncio
+    async def test_model_passed_from_inputs(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """Test that model is passed to the API when provided in inputs"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["test"], "model": "gpt-4"},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            # Verify API was called with model
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert json_payload["model"] == "gpt-4"
+
+    @pytest.mark.asyncio
+    async def test_model_none_when_not_provided(
+        self, generic_guardrail, mock_request_data_input
+    ):
+        """Test that model is None when not provided in inputs"""
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            generic_guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await generic_guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},  # No model in inputs
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            # Verify API was called with model=None
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert json_payload["model"] is None
+
+
 class TestErrorHandling:
     """Test error handling scenarios"""
 
