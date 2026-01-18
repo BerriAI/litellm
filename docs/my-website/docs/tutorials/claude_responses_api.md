@@ -2,7 +2,7 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Claude Code
+# Claude Code Quickstart
 
 This tutorial shows how to call Claude models through LiteLLM proxy from Claude Code.
 
@@ -142,7 +142,7 @@ Common issues and solutions:
 - Ensure the model name in Claude Code matches exactly with your `config.yaml`
 - Check LiteLLM logs for detailed error messages
 
-## Using Multiple Models
+## Using Bedrock/Vertex AI/Azure Foundry Models
 
 Expand your configuration to support multiple providers and models:
 
@@ -151,25 +151,6 @@ Expand your configuration to support multiple providers and models:
 
 ```yaml
 model_list:
-  # OpenAI models
-  - model_name: codex-mini
-    litellm_params:  
-      model: openai/codex-mini
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
-
-  - model_name: o3-pro
-    litellm_params:
-      model: openai/o3-pro
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
-
-  - model_name: gpt-4o
-    litellm_params:
-      model: openai/gpt-4o
-      api_key: os.environ/OPENAI_API_KEY
-      api_base: https://api.openai.com/v1
-
   # Anthropic models
   - model_name: claude-3-5-sonnet-20241022
     litellm_params:
@@ -189,6 +170,24 @@ model_list:
       aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
       aws_region_name: us-east-1
 
+  # Azure Foundry
+  - model_name: claude-4-azure
+    litellm_params:
+      model: azure_ai/claude-opus-4-1
+      api_key: os.environ/AZURE_AI_API_KEY
+      api_base: os.environ/AZURE_AI_API_BASE # https://my-resource.services.ai.azure.com/anthropic
+
+  # Google Vertex AI
+  - model_name: anthropic-vertex
+    litellm_params:
+      model: vertex_ai/claude-haiku-4-5@20251001
+      vertex_ai_project: "my-test-project"
+      vertex_ai_location: "us-east-1"
+      vertex_credentials: os.environ/VERTEX_FILE_PATH_ENV_VAR # os.environ["VERTEX_FILE_PATH_ENV_VAR"] = "/path/to/service_account.json" 
+
+
+
+
 litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 ```
@@ -204,103 +203,16 @@ claude --model claude-3-5-haiku-20241022
 
 # Use Bedrock deployment
 claude --model claude-bedrock
+
+# Use Azure Foundry deployment
+claude --model claude-4-azure
+
+# Use Vertex AI deployment
+claude --model anthropic-vertex
 ```
 
 </TabItem>
 </Tabs>
 
 <Image img={require('../../img/release_notes/claude_code_demo.png')} style={{ width: '500px', height: 'auto' }} />
-
-
-## Connecting MCP Servers
-
-You can also connect MCP servers to Claude Code via LiteLLM Proxy.
-
-:::note
-
-Limitations:
-
-- Currently, only HTTP MCP servers are supported
-
-:::
-
-1. Add the MCP server to your `config.yaml`
-
-<Tabs>
-<TabItem value="github" label="GitHub MCP">
-
-In this example, we'll add the Github MCP server to our `config.yaml`
-
-```yaml title="config.yaml" showLineNumbers
-mcp_servers:
-  github_mcp:
-    url: "https://api.githubcopilot.com/mcp"
-    auth_type: oauth2
-    client_id: os.environ/GITHUB_OAUTH_CLIENT_ID
-    client_secret: os.environ/GITHUB_OAUTH_CLIENT_SECRET
-```
-
-</TabItem>
-<TabItem value="atlassian" label="Atlassian MCP">
-
-In this example, we'll add the Atlassian MCP server to our `config.yaml`
-
-```yaml title="config.yaml" showLineNumbers
-atlassian_mcp:
-  server_id: atlassian_mcp_id
-  url: "https://mcp.atlassian.com/v1/sse"
-  transport: "sse"
-  auth_type: oauth2
-```
-
-</TabItem>
-</Tabs>
-
-2. Start LiteLLM Proxy
-
-```bash
-litellm --config /path/to/config.yaml
-
-# RUNNING on http://0.0.0.0:4000
-```
-
-3. Use the MCP server in Claude Code
-
-```bash
-claude mcp add --transport http litellm_proxy http://0.0.0.0:4000/github_mcp/mcp --header "Authorization: Bearer sk-LITELLM_VIRTUAL_KEY"
-```
-
-For MCP servers that require dynamic client registration (such as Atlassian), please set `x-litellm-api-key: Bearer sk-LITELLM_VIRTUAL_KEY` instead of using `Authorization: Bearer LITELLM_VIRTUAL_KEY`.
-
-4. Authenticate via Claude Code
-
-a. Start Claude Code
-
-```bash
-claude
-```
-
-b. Authenticate via Claude Code
-
-```bash
-/mcp
-```
-
-c. Select the MCP server
-
-```bash
-> litellm_proxy
-```
-
-d. Start Oauth flow via Claude Code
-
-```bash
-> 1. Authenticate
- 2. Reconnect
- 3. Disable             
-```
-
-e. Once completed, you should see this success message:
-
-<Image img={require('../../img/oauth_2_success.png')} style={{ width: '500px', height: 'auto' }} />
 

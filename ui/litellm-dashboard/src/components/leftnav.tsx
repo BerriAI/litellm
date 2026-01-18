@@ -152,16 +152,16 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           page: "new_usage",
           icon: <BarChartOutlined />,
           roles: [...all_admin_roles, ...internalUserRoles],
-          label: (
-            <span className="flex items-center gap-4">
-              Usage <NewBadge />
-            </span>
-          ),
+          label: "Usage",
         },
         {
           key: "logs",
           page: "logs",
-          label: "Logs",
+          label: (
+            <span className="flex items-center gap-4">
+              Logs <NewBadge />
+            </span>
+          ),
           icon: <LineChartOutlined />,
         },
       ],

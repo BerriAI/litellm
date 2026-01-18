@@ -206,6 +206,7 @@ Expected successful response:
 | `mode` | No | When to run the guardrail | `pre_call` |
 | `fallback_on_error` | No | Action when PANW API is unavailable: `"block"` (fail-closed, default) or `"allow"` (fail-open). Config errors always block. | `block` |
 | `timeout` | No | PANW API call timeout in seconds (1-60) | `10.0` |
+| `violation_message_template` | No | Custom template for error message when request is blocked. Supports `{guardrail_name}`, `{category}`, `{action_type}`, `{default_message}` placeholders. | - |
 
 ### Regional Endpoints
 
@@ -448,6 +449,33 @@ LiteLLM does not alter or configure your PANW security profile. To change what c
 :::info Security Posture
 The guardrail is **fail-closed** by default - if the PANW API is unavailable, requests are blocked to ensure no unscanned content reaches your LLM. This provides maximum security.
 :::
+
+### Custom Violation Messages
+
+You can customize the error message returned to the user when a request is blocked by configuring the `violation_message_template` parameter. This is useful for providing user-friendly feedback instead of technical details.
+
+```yaml
+guardrails:
+  - guardrail_name: "panw-custom-message"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      # Simple message
+      violation_message_template: "Your request was blocked by our AI Security Policy."
+
+  - guardrail_name: "panw-detailed-message"
+    litellm_params:
+      guardrail: panw_prisma_airs
+      api_key: os.environ/PANW_PRISMA_AIRS_API_KEY
+      # Message with placeholders
+      violation_message_template: "{action_type} blocked due to {category} violation. Please contact support."
+```
+
+**Supported Placeholders:**
+- `{guardrail_name}`: Name of the guardrail (e.g. "panw-custom-message")
+- `{category}`: Violation category (e.g. "malicious", "injection", "dlp")
+- `{action_type}`: "Prompt" or "Response"
+- `{default_message}`: The original technical error message
 
 ### Fail-Open Configuration
 

@@ -175,6 +175,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
+    "litellm_remaining_user_budget_metric",
+    "litellm_user_max_budget_metric",
+    "litellm_user_budget_remaining_hours_metric",
     "litellm_deployment_state",
     "litellm_deployment_failure_responses",
     "litellm_deployment_total_requests",
@@ -420,6 +423,18 @@ class PrometheusMetricLabels:
     litellm_api_key_budget_remaining_hours_metric = (
         litellm_remaining_api_key_budget_metric
     )
+
+    litellm_remaining_user_budget_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_max_budget_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
 
     # Add deployment metrics
     litellm_deployment_failure_responses = [

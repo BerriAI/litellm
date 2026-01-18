@@ -7,6 +7,16 @@ body:
     attributes:
       value: |
         Thanks for taking the time to fill out this bug report!
+        
+        **💡 Tip:** See our [Troubleshooting Guide](https://docs.litellm.ai/docs/troubleshoot) for what information to include.
+  - type: checkboxes
+    id: duplicate-check
+    attributes:
+      label: Check for existing issues
+      description: Please search to see if an issue already exists for the bug you encountered.
+      options:
+        - label: I have searched the existing issues and checked that my issue is not a duplicate.
+          required: true
   - type: textarea
     id: what-happened
     attributes:
