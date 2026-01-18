@@ -139,6 +139,16 @@ This feature improves reliability by:
 
 ---
 
+## New Providers and Endpoints
+
+### New LLM API Endpoints
+
+|| Endpoint | Method | Description | Documentation |
+|| -------- | ------ | ----------- | ------------- |
+|| `/messages` | POST | Claude Code support with tool search, web search, and end-user tracking | [Docs](../../docs/providers/anthropic) |
+
+---
+
 ## New Models / Updated Models
 
 #### New Model Support
@@ -313,9 +323,9 @@ This feature improves reliability by:
 
 ---
 
-## Logging / Guardrail / Prompt Management Integrations
+## AI Integrations
 
-#### Features
+### Logging
 
 - **[OpenTelemetry](../../docs/proxy/logging#opentelemetry)**
   - Update semantic conventions to 1.38 (gen_ai attributes) - [PR #18793](https://github.com/BerriAI/litellm/pull/18793)
@@ -335,7 +345,7 @@ This feature improves reliability by:
   - Preserve llm_provider-* headers in error responses - [PR #19020](https://github.com/BerriAI/litellm/pull/19020)
   - Fix turn_off_message_logging not redacting request messages in proxy_server_request field - [PR #18897](https://github.com/BerriAI/litellm/pull/18897)
 
-#### Guardrails
+### Guardrails
 
 - **[Grayswan](../../docs/proxy/guardrails/grayswan)**
   - Implement fail-open option (default: True) - [PR #18266](https://github.com/BerriAI/litellm/pull/18266)
