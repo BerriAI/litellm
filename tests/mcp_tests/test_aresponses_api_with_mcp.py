@@ -665,7 +665,7 @@ async def test_streaming_mcp_events_validation():
     "model",
     [
         pytest.param("gpt-4o-mini", id="openai"),
-        pytest.param("anthropic/claude-4-5-haiku", id="anthropic"),
+        pytest.param("claude-haiku-4-5", id="anthropic"),
     ],
 )
 async def test_streaming_responses_api_with_mcp_tools(
@@ -717,7 +717,9 @@ async def test_streaming_responses_api_with_mcp_tools(
             mock_get_tools.return_value = (mock_mcp_tools, ["litellm_proxy"])
 
             # Create a dynamic mock that will match the actual tool call ID from the LLM response
-            def mock_execute_tool_calls_side_effect(tool_calls, user_api_key_auth):
+            def mock_execute_tool_calls_side_effect(
+                tool_calls, user_api_key_auth, **kwargs
+            ):
                 """Mock function that returns results matching the actual tool call IDs from the LLM"""
                 results = []
                 for tool_call in tool_calls:
