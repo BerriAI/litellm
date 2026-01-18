@@ -660,16 +660,23 @@ async def test_streaming_mcp_events_validation():
 
 
 @pytest.mark.asyncio 
-async def test_streaming_responses_api_with_mcp_tools():
+@pytest.mark.parametrize(
+    "model",
+    [
+        pytest.param("gpt-4o-mini", id="openai"),
+        pytest.param("anthropic/claude-4-5-haiku", id="anthropic"),
+    ],
+)
+async def test_streaming_responses_api_with_mcp_tools(model: str):
     """
     Test the streaming responses API with MCP tools when using server_url="litellm_proxy"
 
     Under the hood the follow occurs
 
     - MCP: responses called litellm MCP manager.list_tools (MOCKED)
-    - Request 1: Made to gpt-4o with fetched tools (REAL LLM CALL)
+    - Request 1: Made to model under test with fetched tools (REAL LLM CALL)
     - MCP: Execute tool call from request 1 and returns result (MOCKED)
-    - Request 2: Made to gpt-4o with fetched tools and tool results (REAL LLM CALL)
+    - Request 2: Made to model under test with fetched tools and tool results (REAL LLM CALL)
 
     Return the user the result of request 2
     """
@@ -729,7 +736,7 @@ async def test_streaming_responses_api_with_mcp_tools():
             "require_approval": "never"
         })
         response = await litellm.aresponses(
-            model="gpt-4o-mini",
+            model=model,
             tools=[mcp_tool_config],
             tool_choice="required",
             input=[
