@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import { render } from "@testing-library/react";
 import PublicModelHub from "./public_model_hub";
-import { FeatureFlagsProvider } from "@/hooks/useFeatureFlags";
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
@@ -27,6 +26,10 @@ vi.mock("./networking", async (importOriginal) => {
     getUiConfig: vi.fn().mockResolvedValue({}),
   };
 });
+
+vi.mock("./navbar", () => ({
+  default: vi.fn(() => <div data-testid="navbar">Navbar Component</div>),
+}));
 
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
@@ -58,11 +61,7 @@ beforeEach(() => {
 
 describe("PublicModelHub", () => {
   it("renders", () => {
-    const { container } = render(
-      <FeatureFlagsProvider>
-        <PublicModelHub />
-      </FeatureFlagsProvider>,
-    );
+    const { container } = render(<PublicModelHub />);
     expect(container).toBeInTheDocument();
   });
 });

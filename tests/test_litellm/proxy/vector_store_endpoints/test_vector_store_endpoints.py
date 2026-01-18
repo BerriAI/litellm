@@ -1,5 +1,6 @@
 import os
 import sys
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +19,10 @@ from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook i
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
+)
+from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    _resolve_embedding_config_from_db,
+    new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
     check_vector_store_permission,
@@ -643,7 +648,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         mock_request.method = "GET"
         mock_request.url.path = "/azure_ai/indexes/dall-e-4/docs/search"
         mock_user_api_key = UserAPIKeyAuth(
-            token="b637312ebffb9745321224644430ba9e4916a291c8281f293d21182c5e80bc5a",
+            token="sk-test-mock-token-404",
             key_name="sk-...plNQ",
             metadata={
                 "allowed_vector_store_indexes": [
@@ -762,3 +767,421 @@ class TestIsAllowedToCallVectorStoreFilesEndpoint:
             )
 
         assert result is None
+
+
+class TestVectorStoreManagementEndpointsExist:
+    def test_vector_store_management_endpoints_exist_on_proxy_startup(self):
+        """
+        Test that all vector store management endpoints are registered on proxy app startup.
+        
+        Verifies the following endpoints exist in the proxy_server app:
+        - POST /vector_store/new
+        - GET /vector_store/list
+        - POST /vector_store/delete
+        - POST /vector_store/info
+        - POST /vector_store/update
+        """
+        from litellm.proxy.proxy_server import app
+
+        # Define expected endpoints
+        expected_endpoints = [
+            ("POST", "/vector_store/new"),
+            ("GET", "/vector_store/list"),
+            ("POST", "/vector_store/delete"),
+            ("POST", "/vector_store/info"),
+            ("POST", "/vector_store/update"),
+        ]
+        
+        # Get all routes from the app
+        app_routes = []
+        for route in app.routes:
+            methods = getattr(route, "methods", None)
+            path = getattr(route, "path", None)
+            if methods is not None and path is not None:
+                for method in methods:
+                    app_routes.append((method, path))
+        
+        # Verify each expected endpoint exists
+        for method, path in expected_endpoints:
+            assert (method, path) in app_routes, (
+                f"Expected endpoint {method} {path} not found in registered routes. "
+                f"Available routes: {app_routes}"
+            )
+
+
+@pytest.mark.asyncio
+async def test_vector_store_synchronization_across_instances():
+    """
+    Test that vector stores are properly synchronized across multiple instances.
+    
+    This test simulates the scenario where:
+    1. Instance 1 creates a vector store (writes to DB, updates its own cache)
+    2. Instance 2 should be able to find it (via database fallback)
+    3. Instance 1 deletes the vector store (removes from DB, updates its own cache)
+    4. Instance 2 should not show it in the list (database is source of truth)
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.vector_stores import (
+        LiteLLM_ManagedVectorStore,
+        VectorStoreDeleteRequest,
+    )
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    # Simulate two instances with separate in-memory registries
+    instance_1_registry = VectorStoreRegistry(vector_stores=[])
+    instance_2_registry = VectorStoreRegistry(vector_stores=[])
+    
+    # Mock database that both instances share
+    mock_db_vector_stores = []
+    
+    async def mock_find_unique(where):
+        """Mock find_unique for checking if vector store exists"""
+        vector_store_id = where.get("vector_store_id")
+        for vs in mock_db_vector_stores:
+            if vs.get("vector_store_id") == vector_store_id:
+                # Create a simple object that dict() can convert
+                class MockVectorStore:
+                    def __init__(self, data):
+                        for key, value in data.items():
+                            setattr(self, key, value)
+                        self._data = data
+                    
+                    def __iter__(self):
+                        return iter(self._data.items())
+                return MockVectorStore(vs)
+        return None
+    
+    async def mock_find_many(order=None):
+        """Mock find_many for listing vector stores"""
+        # Return objects that can be converted to dict using dict()
+        # The _get_vector_stores_from_db uses dict(vector_store), so we need to make it work
+        result = []
+        for vs in mock_db_vector_stores:
+            # Create a simple object that dict() can convert
+            class MockVectorStore:
+                def __init__(self, data):
+                    for key, value in data.items():
+                        setattr(self, key, value)
+                    self._data = data
+                
+                def __iter__(self):
+                    return iter(self._data.items())
+            result.append(MockVectorStore(vs))
+        return result
+    
+    async def mock_create(data):
+        """Mock create for adding vector store to DB"""
+        vector_store = data.copy()
+        mock_db_vector_stores.append(vector_store)
+        mock_obj = MagicMock()
+        mock_obj.model_dump.return_value = vector_store
+        for key, value in vector_store.items():
+            setattr(mock_obj, key, value)
+        return mock_obj
+    
+    async def mock_delete(where):
+        """Mock delete for removing vector store from DB"""
+        vector_store_id = where.get("vector_store_id")
+        mock_db_vector_stores[:] = [
+            vs for vs in mock_db_vector_stores 
+            if vs.get("vector_store_id") != vector_store_id
+        ]
+        return None
+    
+    # Create mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        side_effect=mock_find_unique
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
+        side_effect=mock_find_many
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
+        side_effect=mock_create
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.delete = AsyncMock(
+        side_effect=mock_delete
+    )
+    
+    # Test vector store data
+    test_vector_store_id = "test-sync-store-001"
+    test_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": test_vector_store_id,
+        "custom_llm_provider": "bedrock",
+        "vector_store_name": "Test Sync Store",
+        "vector_store_description": "Testing synchronization",
+        "litellm_params": {
+            "vector_store_id": test_vector_store_id,
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-east-1"
+        },
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    
+    # Step 1: Create vector store on Instance 1
+    # (Simulate what happens in new_vector_store endpoint)
+    await mock_prisma_client.db.litellm_managedvectorstorestable.create(
+        data=test_vector_store
+    )
+    instance_1_registry.add_vector_store_to_registry(vector_store=test_vector_store)
+    
+    # Verify it's in Instance 1's memory
+    assert instance_1_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is not None, "Vector store should be in Instance 1's memory"
+    
+    # Verify it's in the database
+    db_store = await mock_prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": test_vector_store_id}
+    )
+    assert db_store is not None, "Vector store should be in database"
+    
+    # Step 2: Instance 2 should be able to find it via database fallback
+    # (Simulate what happens in pop_vector_stores_to_run_with_db_fallback)
+    found_store = await instance_2_registry.get_litellm_managed_vector_store_from_registry_or_db(
+        vector_store_id=test_vector_store_id,
+        prisma_client=mock_prisma_client
+    )
+    assert found_store is not None, "Instance 2 should find vector store from database"
+    assert found_store.get("vector_store_id") == test_vector_store_id
+    
+    # Verify it's now cached in Instance 2's memory
+    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is not None, "Vector store should now be cached in Instance 2's memory"
+    
+    # Step 3: Test that Instance 2 can list vector stores from database
+    # (Simulate what happens in list_vector_stores endpoint - using DB as source of truth)
+    vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+        prisma_client=mock_prisma_client
+    )
+    
+    # Verify vector store appears in the database list
+    vector_store_ids = [vs.get("vector_store_id") for vs in vector_stores_from_db]
+    assert test_vector_store_id in vector_store_ids, (
+        "Instance 2 should see vector store from database"
+    )
+    
+    # Verify the list endpoint logic: only show DB stores (filter out stale cache)
+    # This simulates what list_vector_stores does
+    db_vector_store_ids = {
+        vs.get("vector_store_id") 
+        for vs in vector_stores_from_db 
+        if vs.get("vector_store_id")
+    }
+    
+    # Instance 2's in-memory cache should only contain stores that exist in DB
+    # (This is what the list endpoint cleanup does)
+    for vs in list(instance_2_registry.vector_stores):
+        vs_id = vs.get("vector_store_id")
+        if vs_id and vs_id not in db_vector_store_ids:
+            instance_2_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
+    
+    # After cleanup, instance 2 should still have the vector store (it's in DB)
+    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is not None, "Instance 2 should still have vector store (it exists in DB)"
+    
+    # Step 4: Delete vector store on Instance 1
+    # (Simulate what happens in delete_vector_store endpoint)
+    await mock_prisma_client.db.litellm_managedvectorstorestable.delete(
+        where={"vector_store_id": test_vector_store_id}
+    )
+    instance_1_registry.delete_vector_store_from_registry(
+        vector_store_id=test_vector_store_id
+    )
+    
+    # Verify it's removed from Instance 1's memory
+    assert instance_1_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is None, "Vector store should be removed from Instance 1's memory"
+    
+    # Verify it's removed from database
+    db_store_after_delete = await mock_prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": test_vector_store_id}
+    )
+    assert db_store_after_delete is None, "Vector store should be removed from database"
+    
+    # Step 5: Instance 2 should NOT show it in the list (database is source of truth)
+    # The list endpoint logic should clean up stale cache entries
+    vector_stores_from_db_after_delete = await VectorStoreRegistry._get_vector_stores_from_db(
+        prisma_client=mock_prisma_client
+    )
+    
+    # Verify vector store does NOT appear in the database list
+    vector_store_ids_after_delete = [vs.get("vector_store_id") for vs in vector_stores_from_db_after_delete]
+    assert test_vector_store_id not in vector_store_ids_after_delete, (
+        "Deleted vector store should not be in database"
+    )
+    
+    # Simulate list endpoint cleanup logic
+    db_vector_store_ids_after_delete = {
+        vs.get("vector_store_id") 
+        for vs in vector_stores_from_db_after_delete 
+        if vs.get("vector_store_id")
+    }
+    
+    # Remove any in-memory vector stores that no longer exist in database
+    for vs in list(instance_2_registry.vector_stores):
+        vs_id = vs.get("vector_store_id")
+        if vs_id and vs_id not in db_vector_store_ids_after_delete:
+            instance_2_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
+    
+    # Verify it was removed from Instance 2's cache
+    assert instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    ) is None, (
+        "Deleted vector store should be removed from Instance 2's cache"
+    )
+    
+    # Step 6: Test that using a deleted vector store fails gracefully
+    # (Simulate what happens in pop_vector_stores_to_run_with_db_fallback)
+    non_default_params = {"vector_store_ids": [test_vector_store_id]}
+    vector_stores_to_run = await instance_2_registry.pop_vector_stores_to_run_with_db_fallback(
+        non_default_params=non_default_params,
+        tools=None,
+        prisma_client=mock_prisma_client
+    )
+    
+    assert len(vector_stores_to_run) == 0, (
+        "Deleted vector store should not be returned when trying to use it"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_embedding_config_from_db():
+    """Test that _resolve_embedding_config_from_db correctly resolves embedding config from database."""
+    mock_prisma_client = MagicMock()
+    
+    # Mock database model with litellm_params
+    mock_db_model = MagicMock()
+    mock_db_model.litellm_params = {
+        "api_key": "test-api-key",
+        "api_base": "https://api.openai.com",
+        "api_version": "2024-01-01"
+    }
+    
+    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
+        return_value=mock_db_model
+    )
+    
+    with patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
+        side_effect=lambda value, key, return_original_value: value
+    ):
+        result = await _resolve_embedding_config_from_db(
+            embedding_model="text-embedding-ada-002",
+            prisma_client=mock_prisma_client
+        )
+    
+    assert result is not None
+    assert result["api_key"] == "test-api-key"
+    assert result["api_base"] == "https://api.openai.com"
+    assert result["api_version"] == "2024-01-01"
+    mock_prisma_client.db.litellm_proxymodeltable.find_first.assert_called_once_with(
+        where={"model_name": "text-embedding-ada-002"}
+    )
+    
+    # Test with empty embedding_model
+    result_empty = await _resolve_embedding_config_from_db(
+        embedding_model="",
+        prisma_client=mock_prisma_client
+    )
+    assert result_empty is None
+    
+    # Test with model not found
+    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
+        return_value=None
+    )
+    result_not_found = await _resolve_embedding_config_from_db(
+        embedding_model="non-existent-model",
+        prisma_client=mock_prisma_client
+    )
+    assert result_not_found is None
+
+
+@pytest.mark.asyncio
+async def test_new_vector_store_auto_resolves_embedding_config():
+    """Test that new_vector_store auto-resolves embedding config when embedding_model is provided but config is not."""
+    import json
+
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    
+    mock_prisma_client = MagicMock()
+    
+    # Mock vector store request with embedding_model but no embedding_config
+    vector_store_data: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": "test-store-001",
+        "custom_llm_provider": "openai",
+        "litellm_params": {
+            "litellm_embedding_model": "text-embedding-ada-002",
+            # Note: litellm_embedding_config is not provided
+        }
+    }
+    
+    # Mock database model lookup for embedding config resolution
+    mock_db_model = MagicMock()
+    mock_db_model.litellm_params = {
+        "api_key": "resolved-api-key",
+        "api_base": "https://api.openai.com",
+        "api_version": "2024-01-01"
+    }
+    
+    # Mock user API key
+    mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key.user_role = None
+    
+    # Mock database operations
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=None  # Vector store doesn't exist yet
+    )
+    mock_prisma_client.db.litellm_proxymodeltable.find_first = AsyncMock(
+        return_value=mock_db_model
+    )
+    
+    # Track what was passed to create
+    captured_create_data = {}
+    
+    async def mock_create(*args, **kwargs):
+        captured_create_data.update(kwargs.get("data", {}))
+        mock_created_vector_store = MagicMock()
+        mock_created_vector_store.model_dump.return_value = {
+            "vector_store_id": "test-store-001",
+            "custom_llm_provider": "openai",
+            "litellm_params": kwargs.get("data", {}).get("litellm_params")
+        }
+        return mock_created_vector_store
+    
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
+        side_effect=mock_create
+    )
+    
+    mock_registry = MagicMock()
+    mock_registry.add_vector_store_to_registry = MagicMock()
+    
+    with patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client
+    ), patch(
+        "litellm.proxy.vector_store_endpoints.management_endpoints.decrypt_value_helper",
+        side_effect=lambda value, key, return_original_value: value
+    ), patch.object(
+        litellm, "vector_store_registry", mock_registry
+    ):
+        result = await new_vector_store(
+            vector_store=vector_store_data,
+            user_api_key_dict=mock_user_api_key
+        )
+    
+    assert result["status"] == "success"
+    # Verify that embedding config was resolved and included in the create call
+    litellm_params_json = captured_create_data.get("litellm_params")
+    assert litellm_params_json is not None
+    litellm_params_dict = json.loads(litellm_params_json)
+    assert "litellm_embedding_config" in litellm_params_dict
+    assert litellm_params_dict["litellm_embedding_config"]["api_key"] == "resolved-api-key"
+    assert litellm_params_dict["litellm_embedding_config"]["api_base"] == "https://api.openai.com"
+    assert litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-01-01"

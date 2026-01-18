@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
-import { jwtDecode } from "jwt-decode";
+import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
+import { jwtDecode } from "jwt-decode";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo } from "react";
+import { useUIConfig } from "./uiConfig/useUIConfig";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -36,15 +38,19 @@ function formatUserRole(userRole: string) {
 
 const useAuthorized = () => {
   const router = useRouter();
+  const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
   // Redirect after mount if missing/invalid token
   useEffect(() => {
-    if (!token) {
-      router.replace("/sso/key/generate");
+    if (isUIConfigLoading) {
+      return;
     }
-  }, [token, router]);
+    if (!token || uiConfig?.admin_ui_disabled) {
+      router.replace(`${getProxyBaseUrl()}/ui/login`);
+    }
+  }, [token, router, isUIConfigLoading, uiConfig]);
 
   // Decode safely
   const decoded = useMemo(() => {
@@ -54,7 +60,7 @@ const useAuthorized = () => {
     } catch {
       // Bad token in cookie — clear and bounce
       clearTokenCookies();
-      router.replace("/sso/key/generate");
+      router.replace(`${getProxyBaseUrl()}/ui/login`);
       return null;
     }
   }, [token, router]);

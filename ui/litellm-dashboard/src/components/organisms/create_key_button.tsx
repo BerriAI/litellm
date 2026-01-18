@@ -1,54 +1,52 @@
 "use client";
-import React, { useState, useEffect, useCallback } from "react";
-import { Button, TextInput, Grid, Col } from "@tremor/react";
-import { Text, Title, Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
-import { CopyToClipboard } from "react-copy-to-clipboard";
-import { Button as Button2, Modal, Form, Input, Select, Radio, Switch } from "antd";
-import NumericalInput from "../shared/numerical_input";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
-import SchemaFormFields from "../common_components/check_openapi_schema";
-import {
-  keyCreateCall,
-  modelAvailableCall,
-  getGuardrailsList,
-  proxyBaseUrl,
-  getPossibleUserRoles,
-  userFilterUICall,
-  keyCreateServiceAccountCall,
-  fetchMCPAccessGroups,
-  getPromptsList,
-} from "../networking";
-import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { Team } from "../key_team_helpers/key_list";
-import TeamDropdown from "../common_components/team_dropdown";
-import { InfoCircleOutlined } from "@ant-design/icons";
-import { Tooltip } from "antd";
-import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
-import Createuser from "../create_user_button";
-import debounce from "lodash/debounce";
-import { rolesWithWriteAccess } from "../../utils/roles";
-import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import { keyKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
+import { InfoCircleOutlined } from "@ant-design/icons";
+import { useQueryClient } from "@tanstack/react-query";
+import { Accordion, AccordionBody, AccordionHeader, Button, Col, Grid, Text, TextInput, Title } from "@tremor/react";
+import { Button as Button2, Form, Input, Modal, Radio, Select, Switch, Tooltip } from "antd";
+import debounce from "lodash/debounce";
+import React, { useCallback, useEffect, useState } from "react";
+import { CopyToClipboard } from "react-copy-to-clipboard";
+import { rolesWithWriteAccess } from "../../utils/roles";
+import AgentSelector from "../agent_management/AgentSelector";
 import { mapDisplayToInternalNames } from "../callback_info_helpers";
+import BudgetDurationDropdown from "../common_components/budget_duration_dropdown";
+import SchemaFormFields from "../common_components/check_openapi_schema";
+import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
+import ModelAliasManager from "../common_components/ModelAliasManager";
+import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
+import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
+import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import TeamDropdown from "../common_components/team_dropdown";
+import Createuser from "../create_user_button";
+import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
+import { Team } from "../key_team_helpers/key_list";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
-import ModelAliasManager from "../common_components/ModelAliasManager";
 import NotificationsManager from "../molecules/notifications_manager";
-import KeyLifecycleSettings from "../common_components/KeyLifecycleSettings";
-import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import {
+  getGuardrailsList,
+  getPossibleUserRoles,
+  getPromptsList,
+  keyCreateCall,
+  keyCreateServiceAccountCall,
+  modelAvailableCall,
+  proxyBaseUrl,
+  userFilterUICall,
+} from "../networking";
+import NumericalInput from "../shared/numerical_input";
+import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
+import { simplifyKeyGenerateError } from "./utils";
 
 const { Option } = Select;
 
 interface CreateKeyProps {
-  userID: string;
   team: Team | null;
-  userRole: string | null;
-  accessToken: string;
   data: any[] | null;
   teams: Team[] | null;
   addKey: (data: any) => void;
-  premiumUser?: boolean;
 }
 
 interface User {
@@ -139,16 +137,9 @@ export const fetchUserModels = async (
  * Please contribute to the new refactor.
  * ─────────────────────────────────────────────────────────────────────────
  */
-const CreateKey: React.FC<CreateKeyProps> = ({
-  userID,
-  team,
-  teams,
-  userRole,
-  accessToken,
-  data,
-  addKey,
-  premiumUser = false,
-}) => {
+const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
+  const { accessToken, userId: userID, userRole, premiumUser } = useAuthorized();
+  const queryClient = useQueryClient();
   const [form] = Form.useForm();
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
@@ -167,13 +158,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
-  const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
   const [keyType, setKeyType] = useState<string>("default");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
-
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -203,22 +192,6 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       fetchUserModels(userID, userRole, accessToken, setUserModels);
     }
   }, [accessToken, userID, userRole]);
-
-  const fetchMcpAccessGroups = async () => {
-    try {
-      if (accessToken == null) {
-        return;
-      }
-      const groups = await fetchMCPAccessGroups(accessToken);
-      setMcpAccessGroups(groups);
-    } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
-    }
-  };
-
-  useEffect(() => {
-    fetchMcpAccessGroups();
-  }, [accessToken]);
 
   useEffect(() => {
     const fetchGuardrails = async () => {
@@ -385,6 +358,26 @@ const CreateKey: React.FC<CreateKeyProps> = ({
         delete formValues.allowed_mcp_access_groups;
       }
 
+      // Transform allowed_agents_and_groups into object_permission format
+      if (
+        formValues.allowed_agents_and_groups &&
+        (formValues.allowed_agents_and_groups.agents?.length > 0 ||
+          formValues.allowed_agents_and_groups.accessGroups?.length > 0)
+      ) {
+        if (!formValues.object_permission) {
+          formValues.object_permission = {};
+        }
+        const { agents, accessGroups } = formValues.allowed_agents_and_groups;
+        if (agents && agents.length > 0) {
+          formValues.object_permission.agents = agents;
+        }
+        if (accessGroups && accessGroups.length > 0) {
+          formValues.object_permission.agent_access_groups = accessGroups;
+        }
+        // Remove the original field as it's now part of object_permission
+        delete formValues.allowed_agents_and_groups;
+      }
+
       // Add model_aliases if any are defined
       if (Object.keys(modelAliases).length > 0) {
         formValues.aliases = JSON.stringify(modelAliases);
@@ -400,22 +393,27 @@ const CreateKey: React.FC<CreateKeyProps> = ({
       console.log("key create Response:", response);
 
       // Add the data to the state in the parent component
-      // Also directly update the keys list in AllKeysTable without an API call
+      // Also directly update the keys list in VirtualKeysTable without an API call
       addKey(response);
+
+      // Invalidate and refetch all keys list queries to update the table
+      // This will trigger a refetch of all key list queries regardless of pagination
+      queryClient.invalidateQueries({ queryKey: keyKeys.lists() });
 
       setApiKey(response["key"]);
       setSoftBudget(response["soft_budget"]);
-      NotificationsManager.success("API Key Created");
+      NotificationsManager.success("Virtual Key Created");
       form.resetFields();
       localStorage.removeItem("userData" + userID);
     } catch (error) {
       console.log("error in create key:", error);
-      NotificationsManager.fromBackend(`Error creating the key: ${error}`);
+      const simplifiedError = simplifyKeyGenerateError(error);
+      NotificationsManager.fromBackend(simplifiedError);
     }
   };
 
   const handleCopy = () => {
-    NotificationsManager.success("API Key copied to clipboard");
+    NotificationsManager.success("Virtual Key copied to clipboard");
   };
 
   useEffect(() => {
@@ -489,14 +487,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           + Create New Key
         </Button>
       )}
-      <Modal
-        // title="Create Key"
-        visible={isModalVisible}
-        width={1000}
-        footer={null}
-        onOk={handleOk}
-        onCancel={handleCancel}
-      >
+      <Modal open={isModalVisible} width={1000} footer={null} onOk={handleOk} onCancel={handleCancel}>
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           {/* Section 1: Key Ownership */}
           <div className="mb-8">
@@ -505,7 +496,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
               label={
                 <span>
                   Owned By{" "}
-                  <Tooltip title="Select who will own this API key">
+                  <Tooltip title="Select who will own this Virtual Key">
                     <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
@@ -594,8 +585,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
               <Text className="text-blue-800 text-sm">
-                Please select a team to continue configuring your API key. If you do not see any teams, please contact
-                your Proxy Admin to either provide you with access to models or to add you to a team.
+                Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
+                contact your Proxy Admin to either provide you with access to models or to add you to a team.
               </Text>
             </div>
           )}
@@ -904,11 +895,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         : "Premium feature - Upgrade to disable global guardrails by key"
                     }
                   >
-                    <Switch 
-                      disabled={!premiumUser}
-                      checkedChildren="Yes"
-                      unCheckedChildren="No"
-                    />
+                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
                   </Form.Item>
                   <Form.Item
                     label={
@@ -973,7 +960,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       value={form.getFieldValue("allowed_passthrough_routes")}
                       accessToken={accessToken}
                       placeholder={
-                        !premiumUser ? "Premium feature - Upgrade to set pass through routes by key" : "Select or enter pass through routes"
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set pass through routes by key"
+                          : "Select or enter pass through routes"
                       }
                       disabled={!premiumUser}
                       teamId={selectedCreateKeyTeam ? selectedCreateKeyTeam.team_id : null}
@@ -1034,15 +1023,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                       options={predefinedTags}
                     />
                   </Form.Item>
-                  <Accordion
-                    className="mt-4 mb-4"
-                    onClick={() => {
-                      if (!mcpAccessGroupsLoaded) {
-                        fetchMcpAccessGroups();
-                        setMcpAccessGroupsLoaded(true);
-                      }
-                    }}
-                  >
+                  <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
                       <b>MCP Settings</b>
                     </AccordionHeader>
@@ -1089,6 +1070,33 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                             />
                           </div>
                         )}
+                      </Form.Item>
+                    </AccordionBody>
+                  </Accordion>
+
+                  <Accordion className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Agent Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <Form.Item
+                        label={
+                          <span>
+                            Allowed Agents{" "}
+                            <Tooltip title="Select which agents or access groups this key can access">
+                              <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                            </Tooltip>
+                          </span>
+                        }
+                        name="allowed_agents_and_groups"
+                        help="Select agents or access groups this key can access"
+                      >
+                        <AgentSelector
+                          onChange={(val: any) => form.setFieldValue("allowed_agents_and_groups", val)}
+                          value={form.getFieldValue("allowed_agents_and_groups")}
+                          accessToken={accessToken}
+                          placeholder="Select agents or access groups (optional)"
+                        />
                       </Form.Item>
                     </AccordionBody>
                   </Accordion>
@@ -1181,7 +1189,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                         />
                       </div>
                     </AccordionBody>
-                    <Form.Item name="duration" hidden initialValue="">
+                    <Form.Item name="duration" hidden initialValue={null}>
                       <Input />
                     </Form.Item>
                   </Accordion>
@@ -1279,7 +1287,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
             <Col numColSpan={1}>
               {apiKey != null ? (
                 <div>
-                  <Text className="mt-3">API Key:</Text>
+                  <Text className="mt-3">Virtual Key:</Text>
                   <div
                     style={{
                       background: "#f8f8f8",
@@ -1292,7 +1300,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({
                   </div>
 
                   <CopyToClipboard text={apiKey} onCopy={handleCopy}>
-                    <Button className="mt-3">Copy API Key</Button>
+                    <Button className="mt-3">Copy Virtual Key</Button>
                   </CopyToClipboard>
                   {/* <Button className="mt-3" onClick={sendSlackAlert}>
                     Test Key

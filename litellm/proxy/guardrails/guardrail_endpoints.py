@@ -699,6 +699,7 @@ async def get_guardrail_ui_settings():
     """
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
         PATTERN_CATEGORIES,
+        get_available_content_categories,
         get_pattern_metadata,
     )
 
@@ -721,8 +722,54 @@ async def get_guardrail_ui_settings():
             "prebuilt_patterns": get_pattern_metadata(),
             "pattern_categories": list(PATTERN_CATEGORIES.keys()),
             "supported_actions": ["BLOCK", "MASK"],
+            "content_categories": get_available_content_categories(),
         },
     )
+
+
+@router.get(
+    "/guardrails/ui/category_yaml/{category_name}",
+    tags=["Guardrails"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_category_yaml(category_name: str):
+    """
+    Get the YAML content for a specific content filter category.
+
+    Args:
+        category_name: The name of the category (e.g., "bias_gender", "harmful_self_harm")
+
+    Returns:
+        The raw YAML content of the category file
+    """
+    import os
+
+    # Get the categories directory path
+    categories_dir = os.path.join(
+        os.path.dirname(__file__),
+        "guardrail_hooks",
+        "litellm_content_filter",
+        "categories",
+    )
+
+    # Construct the file path
+    category_file_path = os.path.join(categories_dir, f"{category_name}.yaml")
+
+    if not os.path.exists(category_file_path):
+        raise HTTPException(
+            status_code=404, detail=f"Category file not found: {category_name}"
+        )
+
+    try:
+        # Read and return the raw YAML content
+        with open(category_file_path, "r") as f:
+            yaml_content = f.read()
+
+        return {"category_name": category_name, "yaml_content": yaml_content}
+    except Exception as e:
+        raise HTTPException(
+            status_code=500, detail=f"Error reading category file: {str(e)}"
+        )
 
 
 @router.post(
@@ -1162,9 +1209,9 @@ async def get_provider_specific_params():
     lakera_v2_fields = _get_fields_from_model(LakeraV2GuardrailConfigModel)
     tool_permission_fields = _get_fields_from_model(ToolPermissionGuardrailConfigModel)
 
-    tool_permission_fields[
-        "ui_friendly_name"
-    ] = ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    tool_permission_fields["ui_friendly_name"] = (
+        ToolPermissionGuardrailConfigModel.ui_friendly_name()
+    )
 
     # Return the provider-specific parameters
     provider_params = {
@@ -1203,10 +1250,10 @@ async def apply_guardrail(
     from litellm.proxy.utils import handle_exception_on_proxy
 
     try:
-        active_guardrail: Optional[
-            CustomGuardrail
-        ] = GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
-            guardrail_name=request.guardrail_name
+        active_guardrail: Optional[CustomGuardrail] = (
+            GUARDRAIL_REGISTRY.get_initialized_guardrail_callback(
+                guardrail_name=request.guardrail_name
+            )
         )
         if active_guardrail is None:
             raise HTTPException(
@@ -1214,10 +1261,15 @@ async def apply_guardrail(
                 detail=f"Guardrail '{request.guardrail_name}' not found. Please ensure the guardrail is configured in your LiteLLM proxy.",
             )
 
-        response_text = await active_guardrail.apply_guardrail(
-            text=request.text, language=request.language, entities=request.entities
+        guardrailed_inputs = await active_guardrail.apply_guardrail(
+            inputs={"texts": [request.text]},
+            request_data={},
+            input_type="request",
         )
+        response_text = guardrailed_inputs.get("texts", [])
 
-        return ApplyGuardrailResponse(response_text=response_text)
+        return ApplyGuardrailResponse(
+            response_text=response_text[0] if response_text else request.text
+        )
     except Exception as e:
         raise handle_exception_on_proxy(e)

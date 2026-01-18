@@ -23,10 +23,11 @@ import { Typography } from "antd";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import NotificationsManager from "./molecules/notifications_manager";
 import { modelAvailableCall, userDeleteCall } from "./networking";
-import SSOSettings from "./SSOSettings";
+import DefaultUserSettings from "./DefaultUserSettings";
 import { columns } from "./view_users/columns";
 import { UserDataTable } from "./view_users/table";
 import { UserInfo } from "./view_users/types";
+import { Skeleton } from "antd";
 
 const { Text, Title } = Typography;
 
@@ -277,14 +278,6 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
   });
   const possibleUIRoles = userRolesQuery.data;
 
-  if (userListQuery.isLoading) {
-    return <div>Loading...</div>;
-  }
-
-  if (!accessToken || !token || !userRole || !userID) {
-    return <div>Loading...</div>;
-  }
-
   const tableColumns = columns(
     possibleUIRoles,
     (user) => {
@@ -300,21 +293,31 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
     <div className="w-full p-8 overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <div className="flex space-x-3">
-          <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
+          {userListQuery.isLoading ? (
+            <>
+              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+              <Skeleton.Button active size="default" shape="default" style={{ width: 145, height: 36 }} />
+              <Skeleton.Button active size="default" shape="default" style={{ width: 110, height: 36 }} />
+            </>
+          ) : userID && accessToken ? (
+            <>
+              <CreateUser userID={userID} accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
 
-          <Button
-            onClick={handleToggleSelectionMode}
-            variant={selectionMode ? "primary" : "secondary"}
-            className="flex items-center"
-          >
-            {selectionMode ? "Cancel Selection" : "Select Users"}
-          </Button>
+              <Button
+                onClick={handleToggleSelectionMode}
+                variant={selectionMode ? "primary" : "secondary"}
+                className="flex items-center"
+              >
+                {selectionMode ? "Cancel Selection" : "Select Users"}
+              </Button>
 
-          {selectionMode && (
-            <Button onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
-              Bulk Edit ({selectedUsers.length} selected)
-            </Button>
-          )}
+              {selectionMode && (
+                <Button onClick={handleBulkEdit} disabled={selectedUsers.length === 0} className="flex items-center">
+                  Bulk Edit ({selectedUsers.length} selected)
+                </Button>
+              )}
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -358,12 +361,18 @@ const ViewUserDashboard: React.FC<ViewUserDashboardProps> = ({ accessToken, toke
           </TabPanel>
 
           <TabPanel>
-            <SSOSettings
-              accessToken={accessToken}
-              possibleUIRoles={possibleUIRoles}
-              userID={userID}
-              userRole={userRole}
-            />
+            {!userID || !userRole || !accessToken ? (
+              <div className="flex justify-center items-center h-64">
+                <Skeleton active paragraph={{ rows: 4 }} />
+              </div>
+            ) : (
+              <DefaultUserSettings
+                accessToken={accessToken}
+                possibleUIRoles={possibleUIRoles}
+                userID={userID}
+                userRole={userRole}
+              />
+            )}
           </TabPanel>
         </TabPanels>
       </TabGroup>

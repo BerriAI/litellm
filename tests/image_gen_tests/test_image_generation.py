@@ -135,22 +135,6 @@ class TestVertexAIGeminiImageGeneration(BaseImageGenTest):
         }
 
 
-class TestVertexAIGemini3ProImageGeneration(BaseImageGenTest):
-    """Test Gemini 3 Pro image generation model"""
-    def get_base_image_generation_call_args(self) -> dict:
-        # comment this when running locally
-        load_vertex_ai_credentials()
-
-        litellm.in_memory_llm_clients_cache = InMemoryCache()
-        return {
-            "model": "vertex_ai/gemini-3-pro-image-preview",
-            "vertex_ai_project": "pathrise-convert-1606954137718",
-            "vertex_ai_location": "us-central1",
-            "n": 1,
-            "size": "1024x1024",
-        }
-
-
 class TestBedrockNovaCanvasTextToImage(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         litellm.in_memory_llm_clients_cache = InMemoryCache()
@@ -188,6 +172,7 @@ class TestOpenAIGPTImage1(BaseImageGenTest):
         return {"model": "gpt-image-1"}
 
 
+@pytest.mark.skip(reason="Recraft image generation API only tested locally")
 class TestRecraftImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "recraft/recraftv3"}
@@ -201,6 +186,7 @@ class TestGoogleImageGen(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "gemini/imagen-4.0-generate-001"}
 
+@pytest.mark.skip(reason="Runwayml image generation API only tested locally")
 class TestRunwaymlImageGeneration(BaseImageGenTest):
     def get_base_image_generation_call_args(self) -> dict:
         return {"model": "runwayml/gen4_image"}

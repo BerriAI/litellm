@@ -211,12 +211,47 @@ def test_gpt5_1_reasoning_effort_none(config: OpenAIConfig):
         assert params["reasoning_effort"] == effort
 
 
+def test_gpt5_1_codex_max_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.1-codex-max",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_rejects_reasoning_effort_xhigh_for_other_models(config: OpenAIConfig):
+    with pytest.raises(litellm.utils.UnsupportedParamsError):
+        config.map_openai_params(
+            non_default_params={"reasoning_effort": "xhigh"},
+            optional_params={},
+            model="gpt-5.1",
+            drop_params=False,
+        )
+
+
+def test_gpt5_drops_reasoning_effort_xhigh_when_requested(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5",
+        drop_params=True,
+    )
+    assert "reasoning_effort" not in params
+
+
 # GPT-5.1 temperature handling tests
 def test_gpt5_1_model_detection(gpt5_config: OpenAIGPT5Config):
     """Test that GPT-5.1 models are correctly detected."""
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-codex-max")
     assert gpt5_config.is_model_gpt_5_1_model("gpt-5.1-chat")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-2025-12-11")
+    assert gpt5_config.is_model_gpt_5_1_model("gpt-5.2-chat-latest")
+    assert not gpt5_config.is_model_gpt_5_1_model("gpt-5.2-pro")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-mini")
     assert not gpt5_config.is_model_gpt_5_1_model("gpt-5-codex")
@@ -230,6 +265,19 @@ def test_gpt5_1_temperature_with_reasoning_effort_none(config: OpenAIConfig):
             non_default_params={"temperature": temp, "reasoning_effort": "none"},
             optional_params={},
             model="gpt-5.1",
+            drop_params=False,
+        )
+        assert params["temperature"] == temp
+        assert params["reasoning_effort"] == "none"
+
+
+def test_gpt5_2_temperature_with_reasoning_effort_none(config: OpenAIConfig):
+    """Test that GPT-5.2 aligns with GPT-5.1 temperature rules when effort='none'."""
+    for temp in [0.0, 0.3, 0.7, 1.0, 1.5]:
+        params = config.map_openai_params(
+            non_default_params={"temperature": temp, "reasoning_effort": "none"},
+            optional_params={},
+            model="gpt-5.2",
             drop_params=False,
         )
         assert params["temperature"] == temp
@@ -328,3 +376,24 @@ def test_gpt5_temperature_still_restricted(config: OpenAIConfig):
         drop_params=False,
     )
     assert params["temperature"] == 1.0
+
+
+def test_gpt5_2_pro_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.2-pro",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"
+
+
+def test_gpt5_2_allows_reasoning_effort_xhigh(config: OpenAIConfig):
+    """Test that gpt-5.2 (base model) also supports reasoning_effort='xhigh'."""
+    params = config.map_openai_params(
+        non_default_params={"reasoning_effort": "xhigh"},
+        optional_params={},
+        model="gpt-5.2",
+        drop_params=False,
+    )
+    assert params["reasoning_effort"] == "xhigh"

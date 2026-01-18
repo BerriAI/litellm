@@ -11,7 +11,12 @@ from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIImageGenerationOptionalParams,
 )
-from litellm.types.utils import ImageObject, ImageResponse
+from litellm.types.utils import (
+    ImageObject,
+    ImageResponse,
+    ImageUsage,
+    ImageUsageInputTokensDetails,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -21,12 +26,6 @@ else:
     LiteLLMLoggingObj = Any
 
 
-FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS = (
-    "2.0-flash-preview-image",
-    "2.0-flash-preview-image-generation",
-    "2.5-flash-image-preview",
-    "3-pro-image-preview",
-)
 class GoogleImageGenConfig(BaseImageGenerationConfig):
     DEFAULT_BASE_URL: str = "https://generativelanguage.googleapis.com/v1beta"
     
@@ -79,6 +78,33 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             "896x1280": "3:4",
         }
         return aspect_ratio_map.get(size, "1:1")
+    
+    def _transform_image_usage(self, usage_metadata: dict) -> ImageUsage:
+        """
+        Transform Gemini usageMetadata to ImageUsage format
+        """
+        input_tokens_details = ImageUsageInputTokensDetails(
+            image_tokens=0,
+            text_tokens=0,
+        )
+        
+        # Extract detailed token counts from promptTokensDetails
+        tokens_details = usage_metadata.get("promptTokensDetails", [])
+        for details in tokens_details:
+            if isinstance(details, dict):
+                modality = details.get("modality")
+                token_count = details.get("tokenCount", 0)
+                if modality == "TEXT":
+                    input_tokens_details.text_tokens = token_count
+                elif modality == "IMAGE":
+                    input_tokens_details.image_tokens = token_count
+        
+        return ImageUsage(
+            input_tokens=usage_metadata.get("promptTokenCount", 0),
+            input_tokens_details=input_tokens_details,
+            output_tokens=usage_metadata.get("candidatesTokenCount", 0),
+            total_tokens=usage_metadata.get("totalTokenCount", 0),
+        )
 
     def get_complete_url(
         self,
@@ -104,7 +130,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         complete_url = complete_url.rstrip("/")
 
         # Gemini Flash Image Preview models use generateContent endpoint
-        if any(identifier in model for identifier in FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS):
+        if "gemini" in model:
             complete_url = f"{complete_url}/models/{model}:generateContent"
         else:
             # All other Imagen models use predict endpoint
@@ -159,7 +185,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
         }
         """
         # For Gemini Flash Image Preview models, use standard Gemini format
-        if any(identifier in model for identifier in FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS):
+        if "gemini" in model:
             request_body: dict = {
                 "contents": [
                     {
@@ -218,7 +244,7 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
             model_response.data = []
 
         # Handle different response formats based on model
-        if any(identifier in model for identifier in FLASH_IMAGE_PREVIEW_MODEL_IDENTIFIERS):
+        if "gemini" in model:
             # Gemini Flash Image Preview models return in candidates format
             candidates = response_data.get("candidates", [])
             for candidate in candidates:
@@ -233,6 +259,10 @@ class GoogleImageGenConfig(BaseImageGenerationConfig):
                                 b64_json=inline_data["data"],
                                 url=None,
                             ))
+            
+            # Extract usage metadata for Gemini models
+            if "usageMetadata" in response_data:
+                model_response.usage = self._transform_image_usage(response_data["usageMetadata"])
         else:
             # Original Imagen format - predictions with generated images
             predictions = response_data.get("predictions", [])

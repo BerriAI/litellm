@@ -7,7 +7,7 @@ ALL Bedrock models (Anthropic, Meta, Deepseek, Mistral, Amazon, etc.) are Suppor
 | Property | Details |
 |-------|-------|
 | Description | Amazon Bedrock is a fully managed service that offers a choice of high-performing foundation models (FMs). |
-| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#deepseek-not-r1), [`bedrock/deepseek_r1/`](#deepseek-r1), [`bedrock/qwen3/`](#qwen3-imported-models), [`bedrock/openai/`](./bedrock_imported.md#openai-compatible-imported-models-qwen-25-vl-etc) |
+| Provider Route on LiteLLM | `bedrock/`, [`bedrock/converse/`](#set-converse--invoke-route), [`bedrock/invoke/`](#set-invoke-route), [`bedrock/converse_like/`](#calling-via-internal-proxy), [`bedrock/llama/`](#deepseek-not-r1), [`bedrock/deepseek_r1/`](#deepseek-r1), [`bedrock/qwen3/`](#qwen3-imported-models), [`bedrock/qwen2/`](./bedrock_imported.md#qwen2-imported-models), [`bedrock/openai/`](./bedrock_imported.md#openai-compatible-imported-models-qwen-25-vl-etc), [`bedrock/moonshot`](./bedrock_imported.md#moonshot-kimi-k2-thinking) |
 | Provider Doc | [Amazon Bedrock ↗](https://docs.aws.amazon.com/bedrock/latest/userguide/what-is-bedrock.html) |
 | Supported OpenAI Endpoints | `/chat/completions`, `/completions`, `/embeddings`, `/images/generations` |
 | Rerank Endpoint | `/rerank` |
@@ -43,6 +43,8 @@ export AWS_BEARER_TOKEN_BEDROCK="your-api-key"
 
 Option 2: use the api_key parameter to pass in API key for completion, embedding, image_generation API calls.
 
+<Tabs>
+<TabItem value="sdk" label="SDK">
 ```python
 response = completion(
   model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
@@ -50,7 +52,17 @@ response = completion(
   api_key="your-api-key"
 )
 ```
-
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+```yaml
+model_list:
+  - model_name: bedrock-claude-3-sonnet
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      api_key: os.environ/AWS_BEARER_TOKEN_BEDROCK
+```
+</TabItem>
+</Tabs>
 
 ## Usage
 
@@ -945,6 +957,89 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 </TabItem>
 </Tabs>
 
+## Usage - Service Tier
+
+Control the processing tier for your Bedrock requests using `serviceTier`. Valid values are `priority`, `default`, or `flex`.
+
+- `priority`: Higher priority processing with guaranteed capacity
+- `default`: Standard processing tier
+- `flex`: Cost-optimized processing for batch workloads
+
+[Bedrock ServiceTier API Reference](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ServiceTier.html)
+
+### OpenAI-compatible `service_tier` parameter
+
+LiteLLM also supports the OpenAI-style `service_tier` parameter, which is automatically translated to Bedrock's native `serviceTier` format:
+
+| OpenAI `service_tier` | Bedrock `serviceTier` |
+|-----------------------|----------------------|
+| `"priority"` | `{"type": "priority"}` |
+| `"default"` | `{"type": "default"}` |
+| `"flex"` | `{"type": "flex"}` |
+| `"auto"` | `{"type": "default"}` |
+
+```python
+from litellm import completion
+
+# Using OpenAI-style service_tier parameter
+response = completion(
+    model="bedrock/converse/anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "Hello!"}],
+    service_tier="priority"  # Automatically translated to serviceTier={"type": "priority"}
+)
+```
+
+### Native Bedrock `serviceTier` parameter
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/converse/qwen.qwen3-235b-a22b-2507-v1:0",
+    messages=[{"role": "user", "content": "What is the capital of France?"}],
+    serviceTier={"type": "priority"},
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: qwen3-235b-priority
+    litellm_params:
+      model: bedrock/converse/qwen.qwen3-235b-a22b-2507-v1:0
+      aws_region_name: ap-northeast-1
+      serviceTier:
+        type: priority
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Test it!
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "qwen3-235b-priority",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "serviceTier": {"type": "priority"}
+  }'
+```
+
+</TabItem>
+</Tabs>
 ## Usage - Bedrock Guardrails
 
 Example of using [Bedrock Guardrails with LiteLLM](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails-use-converse-api.html)
@@ -1683,6 +1778,131 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 </TabItem>
 </Tabs>
 
+## TwelveLabs Pegasus - Video Understanding
+
+TwelveLabs Pegasus 1.2 is a video understanding model that can analyze and describe video content. LiteLLM supports this model through Bedrock's `/invoke` endpoint.
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/us.twelvelabs.pegasus-1-2-v1:0`, `bedrock/eu.twelvelabs.pegasus-1-2-v1:0` |
+| Provider Documentation | [TwelveLabs Pegasus Docs ↗](https://docs.twelvelabs.io/docs/models/pegasus) |
+| Supported Parameters | `max_tokens`, `temperature`, `response_format` |
+| Media Input | S3 URI or base64-encoded video |
+
+### Supported Features
+
+- **Video Analysis**: Analyze video content from S3 or base64 input
+- **Structured Output**: Support for JSON schema response format
+- **S3 Integration**: Support for S3 video URLs with bucket owner specification
+
+### Usage with S3 Video
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python title="TwelveLabs Pegasus SDK Usage" showLineNumbers
+from litellm import completion
+import os
+
+# Set AWS credentials
+os.environ["AWS_ACCESS_KEY_ID"] = "your-aws-access-key"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-aws-secret-key"
+os.environ["AWS_REGION_NAME"] = "us-east-1"
+
+response = completion(
+    model="bedrock/us.twelvelabs.pegasus-1-2-v1:0",
+    messages=[{"role": "user", "content": "Describe what happens in this video."}],
+    mediaSource={
+        "s3Location": {
+            "uri": "s3://your-bucket/video.mp4",
+            "bucketOwner": "123456789012",  # 12-digit AWS account ID
+        }
+    },
+    temperature=0.2
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: pegasus-video
+    litellm_params:
+      model: bedrock/us.twelvelabs.pegasus-1-2-v1:0
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: os.environ/AWS_REGION_NAME
+```
+
+**2. Start proxy**
+
+```bash title="Start LiteLLM Proxy" showLineNumbers
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash title="Test Pegasus via Proxy" showLineNumbers
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Authorization: Bearer sk-1234' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "pegasus-video",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Describe what happens in this video."
+      }
+    ],
+    "mediaSource": {
+      "s3Location": {
+        "uri": "s3://your-bucket/video.mp4",
+        "bucketOwner": "123456789012"
+      }
+    },
+    "temperature": 0.2
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+### Usage with Base64 Video
+
+You can also pass video content directly as base64:
+
+```python title="Base64 Video Input" showLineNumbers
+from litellm import completion
+import base64
+
+# Read video file and encode to base64
+with open("video.mp4", "rb") as video_file:
+    video_base64 = base64.b64encode(video_file.read()).decode("utf-8")
+
+response = completion(
+    model="bedrock/us.twelvelabs.pegasus-1-2-v1:0",
+    messages=[{"role": "user", "content": "What is happening in this video?"}],
+    mediaSource={
+        "base64String": video_base64
+    },
+    temperature=0.2,
+)
+
+print(response.choices[0].message.content)
+```
+
+### Important Notes
+
+- **Response Format**: The model supports structured output via `response_format` with JSON schema
+
 ## Provisioned throughput models
 To use provisioned throughput Bedrock models pass 
 - `model=bedrock/<base-model>`, example `model=bedrock/anthropic.claude-v2`. Set `model` to any of the [Supported AWS models](#supported-aws-bedrock-models)
@@ -1743,6 +1963,9 @@ Here's an example of using a bedrock model with LiteLLM. For a complete list, re
 | Meta Llama 2 Chat 70b      | `completion(model='bedrock/meta.llama2-70b-chat-v1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mistral 7B Instruct        | `completion(model='bedrock/mistral.mistral-7b-instruct-v0:2', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 | Mixtral 8x7B Instruct      | `completion(model='bedrock/mistral.mixtral-8x7b-instruct-v0:1', messages=messages)`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| TwelveLabs Pegasus 1.2 (US) | `completion(model='bedrock/us.twelvelabs.pegasus-1-2-v1:0', messages=messages, mediaSource={...})`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| TwelveLabs Pegasus 1.2 (EU) | `completion(model='bedrock/eu.twelvelabs.pegasus-1-2-v1:0', messages=messages, mediaSource={...})`   | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
+| Moonshot Kimi K2 Thinking | `completion(model='bedrock/moonshot.kimi-k2-thinking', messages=messages)` or `completion(model='bedrock/invoke/moonshot.kimi-k2-thinking', messages=messages)` | `os.environ['AWS_ACCESS_KEY_ID']`, `os.environ['AWS_SECRET_ACCESS_KEY']`, `os.environ['AWS_REGION_NAME']` |
 
 
 ## Bedrock Embedding
@@ -2009,6 +2232,53 @@ response = completion(
 | `aws_secret_access_key` | `aws_secret_access_key` | AWS secret key associated with the access key | [Credentials](https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html) |
 | `aws_role_name` | `RoleArn` | The Amazon Resource Name (ARN) of the role to assume | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
 | `aws_session_name` | `RoleSessionName` | An identifier for the assumed role session | [AssumeRole API](https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/sts.html#STS.Client.assume_role) |
+
+### IAM Roles Anywhere (On-Premise / External Workloads)
+
+[IAM Roles Anywhere](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/introduction.html) extends IAM roles to workloads **outside of AWS** (on-premise servers, edge devices, other clouds). It uses the same STS mechanism as regular IAM roles but authenticates via X.509 certificates instead of AWS credentials.
+
+**Setup**: Configure the [AWS Signing Helper](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/credential-helper.html) as a credential process in `~/.aws/config`:
+
+```ini
+[profile litellm-roles-anywhere]
+credential_process = aws_signing_helper credential-process \
+    --certificate /path/to/certificate.pem \
+    --private-key /path/to/private-key.pem \
+    --trust-anchor-arn arn:aws:rolesanywhere:us-east-1:123456789012:trust-anchor/abc123 \
+    --profile-arn arn:aws:rolesanywhere:us-east-1:123456789012:profile/def456 \
+    --role-arn arn:aws:iam::123456789012:role/MyBedrockRole
+```
+
+**Usage**: Reference the profile in LiteLLM:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+    messages=[{"role": "user", "content": "Hello!"}],
+    aws_profile_name="litellm-roles-anywhere",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: bedrock-claude
+    litellm_params:
+      model: bedrock/anthropic.claude-3-sonnet-20240229-v1:0
+      aws_profile_name: "litellm-roles-anywhere"
+```
+
+</TabItem>
+</Tabs>
+
+See the [IAM Roles Anywhere Getting Started Guide](https://docs.aws.amazon.com/rolesanywhere/latest/userguide/getting-started.html) for trust anchor and profile setup.
 
 
 

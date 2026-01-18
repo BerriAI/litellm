@@ -1,6 +1,7 @@
-import { render, waitFor } from "@testing-library/react";
-import { describe, it, expect, beforeAll, vi } from "vitest";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor } from "@testing-library/react";
 import { Form } from "antd";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import ProviderSpecificFields from "./provider_specific_fields";
 
@@ -97,7 +98,6 @@ vi.mock("../networking", async () => {
   };
 });
 
-// Mock window.matchMedia for Ant Design components
 beforeAll(() => {
   Object.defineProperty(window, "matchMedia", {
     writable: true,
@@ -105,8 +105,8 @@ beforeAll(() => {
       matches: false,
       media: query,
       onchange: null,
-      addListener: () => {}, // deprecated
-      removeListener: () => {}, // deprecated
+      addListener: () => {},
+      removeListener: () => {},
       addEventListener: () => {},
       removeEventListener: () => {},
       dispatchEvent: () => false,
@@ -114,80 +114,105 @@ beforeAll(() => {
   });
 });
 
+const createQueryClient = () =>
+  new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+        gcTime: 0,
+      },
+    },
+  });
+
 describe("ProviderSpecificFields", () => {
-  it("should render the provider specific fields for OpenAI", async () => {
-    const { getByLabelText, getByPlaceholderText } = render(
-      <Form>
-        <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
-      </Form>,
+  it("should render", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
+        </Form>
+      </QueryClientProvider>,
     );
 
     await waitFor(() => {
-      // Check for the API Base text input
-      const apiBaseInput = getByPlaceholderText("https://api.openai.com/v1");
+      expect(screen.getByLabelText("OpenAI API Key")).toBeInTheDocument();
+    });
+  });
+
+  it("should render the provider specific fields for OpenAI", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.OpenAI} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      const apiKeyLabel = screen.getByLabelText("OpenAI API Key");
+      expect(apiKeyLabel).toBeInTheDocument();
+
+      const apiBaseInput = screen.getByPlaceholderText("https://api.openai.com/v1");
       expect(apiBaseInput).toBeInTheDocument();
       expect(apiBaseInput).toHaveAttribute("type", "text");
 
-      // Check for Organization field
-      const orgInput = getByPlaceholderText("[OPTIONAL] my-unique-org");
+      const orgInput = screen.getByPlaceholderText("[OPTIONAL] my-unique-org");
       expect(orgInput).toBeInTheDocument();
-
-      // Check for API Key field
-      const apiKeyLabel = getByLabelText("OpenAI API Key");
-      expect(apiKeyLabel).toBeInTheDocument();
     });
   });
 
   it("should render the provider specific fields for vLLM", async () => {
-    const { getByLabelText, getByPlaceholderText } = render(
-      <Form>
-        <ProviderSpecificFields selectedProvider={"Hosted_Vllm" as Providers} />
-      </Form>,
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={"Hosted_Vllm" as Providers} />
+        </Form>
+      </QueryClientProvider>,
     );
 
     await waitFor(() => {
-      const apiBaseInput = getByPlaceholderText("https://...");
+      const apiKeyLabel = screen.getByLabelText("vLLM API Key");
+      expect(apiKeyLabel).toBeInTheDocument();
+
+      const apiBaseInput = screen.getByPlaceholderText("https://...");
       expect(apiBaseInput).toBeInTheDocument();
       expect(apiBaseInput).toHaveAttribute("type", "text");
-
-      // Check for API Key field
-      const apiKeyLabel = getByLabelText("vLLM API Key");
-      expect(apiKeyLabel).toBeInTheDocument();
     });
   });
 
   it("should render the provider specific fields for Azure", async () => {
-    const { getByLabelText, getByPlaceholderText } = render(
-      <Form>
-        <ProviderSpecificFields selectedProvider={Providers.Azure} />
-      </Form>,
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.Azure} />
+        </Form>
+      </QueryClientProvider>,
     );
 
     await waitFor(() => {
-      // Check for API Base field
-      const apiBaseInput = getByPlaceholderText("https://...");
-      expect(apiBaseInput).toBeInTheDocument();
-      expect(apiBaseInput).toHaveAttribute("type", "text");
-
-      // Check for API Version field
-      const apiVersionInput = getByPlaceholderText("2023-07-01-preview");
-      expect(apiVersionInput).toBeInTheDocument();
-
-      // Check for Base Model field
-      const baseModelInput = getByPlaceholderText("azure/gpt-3.5-turbo");
-      expect(baseModelInput).toBeInTheDocument();
-
-      // Check for API Key field
-      const apiKeyInput = getByLabelText("Azure API Key");
+      const apiKeyInput = screen.getByLabelText("Azure API Key");
       expect(apiKeyInput).toBeInTheDocument();
       expect(apiKeyInput).toHaveAttribute("type", "password");
       expect(apiKeyInput).toHaveAttribute("placeholder", "Enter your Azure API Key");
 
-      // Check for Azure AD Token field
-      const azureAdTokenInput = getByLabelText("Azure AD Token");
+      const azureAdTokenInput = screen.getByLabelText("Azure AD Token");
       expect(azureAdTokenInput).toBeInTheDocument();
       expect(azureAdTokenInput).toHaveAttribute("type", "password");
       expect(azureAdTokenInput).toHaveAttribute("placeholder", "Enter your Azure AD Token");
+
+      const apiBaseInput = screen.getByPlaceholderText("https://...");
+      expect(apiBaseInput).toBeInTheDocument();
+      expect(apiBaseInput).toHaveAttribute("type", "text");
+
+      const apiVersionInput = screen.getByPlaceholderText("2023-07-01-preview");
+      expect(apiVersionInput).toBeInTheDocument();
+
+      const baseModelInput = screen.getByPlaceholderText("azure/gpt-3.5-turbo");
+      expect(baseModelInput).toBeInTheDocument();
     });
   });
 });

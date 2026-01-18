@@ -382,7 +382,7 @@ async def mistral_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [Docs](https://docs.litellm.ai/docs/anthropic_completion)
+    [Docs](https://docs.litellm.ai/docs/pass_through/mistral)
     """
     base_target_url = os.getenv("MISTRAL_API_BASE") or "https://api.mistral.ai"
     encoded_endpoint = httpx.URL(endpoint).path
@@ -578,7 +578,7 @@ async def anthropic_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    [Docs](https://docs.litellm.ai/docs/anthropic_completion)
+    [Docs](https://docs.litellm.ai/docs/pass_through/anthropic_completion)
     """
     base_target_url = os.getenv("ANTHROPIC_API_BASE") or "https://api.anthropic.com"
     encoded_endpoint = httpx.URL(endpoint).path
@@ -776,6 +776,7 @@ async def handle_bedrock_count_tokens(
     - /v1/messages/count_tokens
     - /v1/messages/count-tokens
     """
+    from litellm.llms.bedrock.common_utils import BedrockError
     from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
     from litellm.proxy.proxy_server import llm_router
 
@@ -822,6 +823,12 @@ async def handle_bedrock_count_tokens(
 
         return result
 
+    except BedrockError as e:
+        # Convert BedrockError to HTTPException for FastAPI
+        verbose_proxy_logger.error(f"BedrockError in handle_bedrock_count_tokens: {str(e)}")
+        raise HTTPException(
+            status_code=e.status_code, detail={"error": e.message}
+        )
     except HTTPException:
         # Re-raise HTTP exceptions as-is
         raise
@@ -1030,6 +1037,7 @@ async def bedrock_proxy_route(
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
         is_streaming_request=is_streaming_request,
+        _forward_headers=True
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,

@@ -25,7 +25,24 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
         return "gpt-5" in model or "gpt5_series" in model
 
     def get_supported_openai_params(self, model: str) -> List[str]:
-        return OpenAIGPT5Config.get_supported_openai_params(self, model=model)
+        """Get supported parameters for Azure OpenAI GPT-5 models.
+
+        Azure OpenAI GPT-5.2 models support logprobs, unlike OpenAI's GPT-5.
+        This overrides the parent class to add logprobs support back for gpt-5.2.
+
+        Reference:
+        - Tested with Azure OpenAI GPT-5.2 (api-version: 2025-01-01-preview)
+        - Azure returns logprobs successfully despite Microsoft's general
+          documentation stating reasoning models don't support it.
+        """
+        params = OpenAIGPT5Config.get_supported_openai_params(self, model=model)
+
+        # Only gpt-5.2 has been verified to support logprobs on Azure
+        if self.is_model_gpt_5_2_model(model):
+            azure_supported_params = ["logprobs", "top_logprobs"]
+            params.extend(azure_supported_params)
+
+        return params
 
     def map_openai_params(
         self,
@@ -40,7 +57,11 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             or optional_params.get("reasoning_effort")
         )
 
-        if reasoning_effort_value == "none":
+        # gpt-5.1 supports reasoning_effort='none', but other gpt-5 models don't
+        # See: https://learn.microsoft.com/en-us/azure/ai-foundry/openai/how-to/reasoning
+        is_gpt_5_1 = self.is_model_gpt_5_1_model(model)
+
+        if reasoning_effort_value == "none" and not is_gpt_5_1:
             if litellm.drop_params is True or (
                 drop_params is not None and drop_params is True
             ):
@@ -54,7 +75,7 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
                 raise UnsupportedParamsError(
                     status_code=400,
                     message=(
-                        "Azure OpenAI does not support reasoning_effort='none'. "
+                        "Azure OpenAI does not support reasoning_effort='none' for this model. "
                         "Supported values are: 'low', 'medium', and 'high'. "
                         "To drop this parameter, set `litellm.drop_params=True` or for proxy:\n\n"
                         "`litellm_settings:\n drop_params: true`\n"
@@ -70,7 +91,8 @@ class AzureOpenAIGPT5Config(AzureOpenAIConfig, OpenAIGPT5Config):
             drop_params=drop_params,
         )
 
-        if result.get("reasoning_effort") == "none":
+        # Only drop reasoning_effort='none' for non-gpt-5.1 models
+        if result.get("reasoning_effort") == "none" and not is_gpt_5_1:
             result.pop("reasoning_effort")
 
         return result

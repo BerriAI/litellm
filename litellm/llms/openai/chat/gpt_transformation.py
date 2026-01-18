@@ -168,9 +168,11 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
         ):  # gpt-4 does not support 'response_format'
             model_specific_params.append("response_format")
 
+        # Normalize model name for responses API (e.g., "responses/gpt-4.1" -> "gpt-4.1")
+        model_for_check = model.split("responses/", 1)[1] if "responses/" in model else model
         if (
-            model in litellm.open_ai_chat_completion_models
-        ) or model in litellm.open_ai_text_completion_models:
+            model_for_check in litellm.open_ai_chat_completion_models
+        ) or model_for_check in litellm.open_ai_text_completion_models:
             model_specific_params.append(
                 "user"
             )  # user is not a param supported by all openai-compatible endpoints - e.g. azure ai
@@ -769,9 +771,9 @@ class OpenAIChatCompletionStreamingHandler(BaseModelResponseIterator):
             return ModelResponseStream(
                 id=chunk["id"],
                 object="chat.completion.chunk",
-                created=chunk["created"],
-                model=chunk["model"],
-                choices=chunk["choices"],
+                created=chunk.get("created"),
+                model=chunk.get("model"),
+                choices=chunk.get("choices", []),
             )
         except Exception as e:
             raise e

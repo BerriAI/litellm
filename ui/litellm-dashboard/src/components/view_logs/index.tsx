@@ -18,6 +18,7 @@ import KeyInfoView from "../templates/key_info_view";
 import { SessionView } from "./SessionView";
 import { VectorStoreViewer } from "./VectorStoreViewer";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
+import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import FilterComponent from "../molecules/filter";
 import { FilterOption } from "../molecules/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -366,6 +367,24 @@ export default function SpendLogsTable({
     setExpandedRequestId(requestId);
   };
 
+  // Function to extract unique error codes from logs
+  const extractErrorCodes = (logs: LogEntry[], searchText: string = "") => {
+    const errorCodes = new Set<string>();
+    logs.forEach((log) => {
+      const metadata = log.metadata || {};
+      if (metadata.status === "failure" && metadata.error_information) {
+        const errorCode = metadata.error_information.error_code;
+        if (errorCode && (!searchText || errorCode.toLowerCase().includes(searchText.toLowerCase()))) {
+          errorCodes.add(errorCode);
+        }
+      }
+    });
+    return Array.from(errorCodes).map((code) => ({
+      label: code,
+      value: code,
+    }));
+  };
+
   const logFilterOptions: FilterOption[] = [
     {
       name: "Team ID",
@@ -424,6 +443,14 @@ export default function SpendLogsTable({
         const users = data?.map((u: any) => u.user_id) || [];
         const filtered = users.filter((u: string) => u.toLowerCase().includes(searchText.toLowerCase()));
         return filtered.map((u: string) => ({ label: u, value: u }));
+      },
+    },
+    {
+      name: "Error Code",
+      label: "Error Code",
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        return extractErrorCodes(logsData.data, searchText);
       },
     },
     {
@@ -499,12 +526,8 @@ export default function SpendLogsTable({
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
-                premiumUser={premiumUser}
                 backButtonText="Back to Logs"
               />
             ) : selectedSessionId ? (
@@ -930,9 +953,18 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span className="font-medium w-1/3">Duration:</span>
               <span>{row.original.duration} s.</span>
             </div>
+            {row.original.metadata?.litellm_overhead_time_ms !== undefined && (
+              <div className="flex">
+                <span className="font-medium w-1/3">LiteLLM Overhead:</span>
+                <span>{row.original.metadata.litellm_overhead_time_ms} ms</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
+
+      {/* Cost Breakdown - Show if cost breakdown data is available */}
+      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
 
       {/* Configuration Info Message - Show when data is missing */}
       <ConfigInfoMessage show={missingData} />

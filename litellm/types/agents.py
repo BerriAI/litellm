@@ -1,8 +1,13 @@
 from datetime import datetime
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, PrivateAttr
 from typing_extensions import Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
+
+if TYPE_CHECKING:
+    from a2a.types import SendMessageResponse
 
 
 # AgentProvider
@@ -200,3 +205,57 @@ class AgentMakePublicResponse(BaseModel):
 
 class MakeAgentsPublicRequest(BaseModel):
     agent_ids: List[str]
+
+
+class LiteLLMSendMessageResponse(LiteLLMPydanticObjectBase):
+    """
+    LiteLLM wrapper for A2A SendMessageResponse.
+
+    Wraps the a2a SDK's SendMessageResponse with LiteLLM's _hidden_params
+    for cost tracking and logging integration.
+    """
+
+    # A2A response fields
+    id: str
+    jsonrpc: str = "2.0"
+    result: Optional[Dict[str, Any]] = None
+    error: Optional[Dict[str, Any]] = None
+
+    # LiteLLM usage tracking
+    usage: Optional[Dict[str, Any]] = None
+
+    model_config = {"extra": "allow"}
+
+    # LiteLLM private attributes for logging/cost tracking
+    _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @classmethod
+    def from_a2a_response(
+        cls, response: "SendMessageResponse"
+    ) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from an a2a SDK SendMessageResponse.
+
+        Args:
+            response: The a2a SDK SendMessageResponse
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
+        # Convert the a2a response to a dict
+        response_dict = response.model_dump(mode="json", exclude_none=True)
+
+        return cls(**response_dict)
+
+    @classmethod
+    def from_dict(cls, response_dict: Dict[str, Any]) -> "LiteLLMSendMessageResponse":
+        """
+        Create a LiteLLMSendMessageResponse from a dict.
+
+        Args:
+            response_dict: Dict with A2A response structure
+
+        Returns:
+            LiteLLMSendMessageResponse with _hidden_params support
+        """
+        return cls(**response_dict)

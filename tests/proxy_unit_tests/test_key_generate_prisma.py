@@ -665,7 +665,8 @@ def test_call_with_end_user_over_budget(prisma_client):
         asyncio.run(test())
     except Exception as e:
         print(f"raised error: {e}, traceback: {traceback.format_exc()}")
-        error_detail = e.message
+        # Handle DataError and other exceptions that don't have .message attribute
+        error_detail = getattr(e, 'message', str(e))
         assert "ExceededBudget: End User=" in error_detail
         assert "over budget" in error_detail
         assert isinstance(e, ProxyException)
@@ -2081,7 +2082,8 @@ async def test_call_with_key_over_budget_stream(prisma_client):
 
     except Exception as e:
         print("Got Exception", e)
-        error_detail = e.message
+        # Handle DataError and other exceptions that don't have .message attribute
+        error_detail = getattr(e, 'message', str(e))
         assert "Budget has been exceeded" in error_detail
 
         print(vars(e))
@@ -3502,6 +3504,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     print("response=", response)
     assert "keys" in response
@@ -3526,6 +3529,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     print("pagination response=", response)
     assert len(response["keys"]) == 2
@@ -3566,6 +3570,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     print("filtered user_id response=", response)
     assert len(response["keys"]) == 1
@@ -3587,6 +3592,7 @@ async def test_list_keys(prisma_client):
         include_created_by_keys=False,
         sort_by=None,
         sort_order="desc",
+        expand=None,
     )
     assert len(response["keys"]) == 1
     assert _key in response["keys"]

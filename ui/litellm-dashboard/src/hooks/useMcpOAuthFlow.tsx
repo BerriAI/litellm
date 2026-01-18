@@ -8,6 +8,7 @@ import {
   exchangeMcpOAuthToken,
   getProxyBaseUrl,
   registerMcpOAuthClient,
+  serverRootPath,
 } from "@/components/networking";
 
 export type McpOAuthStatus = "idle" | "authorizing" | "exchanging" | "success" | "error";
@@ -87,12 +88,21 @@ export const useMcpOAuthFlow = ({
     }
   };
 
-  const callbackUrl = () => {
-    if (typeof window === "undefined") {
-      return `${getProxyBaseUrl()}/v1/mcp/oauth/callback`;
+  const buildCallbackUrl = () => {
+    if (typeof window !== "undefined") {
+      const path = window.location.pathname || "";
+      const uiIndex = path.indexOf("/ui");
+      const uiPrefix = uiIndex >= 0 ? path.slice(0, uiIndex + 3) : "";
+      const normalizedPrefix = uiPrefix.replace(/\/+$/, "");
+      return `${window.location.origin}${normalizedPrefix}/mcp/oauth/callback`;
     }
-    return `${window.location.origin}/mcp/oauth/callback`;
+
+    const base = (getProxyBaseUrl() || "").replace(/\/+$/, "");
+    const rootPrefix = serverRootPath && serverRootPath !== "/" ? serverRootPath : "";
+    return `${base}${rootPrefix}/ui/mcp/oauth/callback`;
   };
+
+  const callbackUrl = () => buildCallbackUrl();
 
   const startOAuthFlow = useCallback(async () => {
     const credentials = getCredentials() || {};
@@ -126,7 +136,7 @@ export const useMcpOAuthFlow = ({
       if (!hasPreconfiguredCredentials) {
         const registration = await registerMcpOAuthClient(accessToken, serverId, {
           client_name: temporaryPayload.alias || temporaryPayload.server_name || serverId,
-          grant_types: ["authorization_code"],
+          grant_types: ["authorization_code", "refresh_token"],
           response_types: ["code"],
           token_endpoint_auth_method:
             temporaryPayload.credentials && temporaryPayload.credentials.client_secret ? "client_secret_post" : "none",
