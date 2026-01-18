@@ -295,8 +295,8 @@ async def _request_oauth_token_async(
 
 
 def _request_basic_token_sync(
-    user: str,
-    password: str,
+    user: Optional[str] = None,
+    password: Optional[str] = None,
     api_base: Optional[str] = None,
 ) -> Tuple[str, int]:
     """
@@ -346,8 +346,8 @@ def _request_basic_token_sync(
 
 
 async def _request_basic_token_async(
-    user: str,
-    password: str,
+    user: Optional[str] = None,
+    password: Optional[str] = None,
     api_base: Optional[str] = None,
 ) -> Tuple[str, int]:
     """Async version of _request_basic_token_sync."""
