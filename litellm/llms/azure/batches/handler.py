@@ -35,7 +35,7 @@ class AzureBatchesAPI(BaseAzureLLM):
     async def acreate_batch(
         self,
         create_batch_data: CreateBatchRequest,
-        azure_client: AsyncAzureOpenAI,
+        azure_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> LiteLLMBatch:
         response = await azure_client.batches.create(**create_batch_data)
         return LiteLLMBatch(**response.model_dump())
@@ -81,7 +81,7 @@ class AzureBatchesAPI(BaseAzureLLM):
     async def aretrieve_batch(
         self,
         retrieve_batch_data: RetrieveBatchRequest,
-        client: AsyncAzureOpenAI,
+        client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> LiteLLMBatch:
         response = await client.batches.retrieve(**retrieve_batch_data)
         return LiteLLMBatch(**response.model_dump())
@@ -129,7 +129,7 @@ class AzureBatchesAPI(BaseAzureLLM):
     async def acancel_batch(
         self,
         cancel_batch_data: CancelBatchRequest,
-        client: AsyncAzureOpenAI,
+        client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> Batch:
         response = await client.batches.cancel(**cancel_batch_data)
         return response
@@ -165,7 +165,7 @@ class AzureBatchesAPI(BaseAzureLLM):
 
     async def alist_batches(
         self,
-        client: AsyncAzureOpenAI,
+        client: Union[AsyncAzureOpenAI, AsyncOpenAI],
         after: Optional[str] = None,
         limit: Optional[int] = None,
     ):

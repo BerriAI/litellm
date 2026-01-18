@@ -40,7 +40,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
     async def acreate_file(
         self,
         create_file_data: CreateFileRequest,
-        openai_client: AsyncAzureOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> OpenAIFileObject:
         verbose_logger.debug("create_file_data=%s", create_file_data)
         response = await openai_client.files.create(**self._prepare_create_file_data(create_file_data))  # type: ignore[arg-type]
@@ -88,7 +88,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
     async def afile_content(
         self,
         file_content_request: FileContentRequest,
-        openai_client: AsyncAzureOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> HttpxBinaryResponseContent:
         response = await openai_client.files.content(**file_content_request)
         return HttpxBinaryResponseContent(response=response.response)
@@ -140,7 +140,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
     async def aretrieve_file(
         self,
         file_id: str,
-        openai_client: AsyncAzureOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> FileObject:
         response = await openai_client.files.retrieve(file_id=file_id)
         return response
@@ -188,7 +188,7 @@ class AzureOpenAIFilesAPI(BaseAzureLLM):
     async def adelete_file(
         self,
         file_id: str,
-        openai_client: AsyncAzureOpenAI,
+        openai_client: Union[AsyncAzureOpenAI, AsyncOpenAI],
     ) -> FileDeleted:
         response = await openai_client.files.delete(file_id=file_id)
 
