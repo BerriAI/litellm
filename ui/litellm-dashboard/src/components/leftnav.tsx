@@ -216,6 +216,13 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           icon: <AppstoreOutlined />,
         },
         {
+          key: "learning-resources",
+          page: "learning-resources",
+          label: "Learning Resources",
+          icon: <BookOutlined />,
+          external_url: "https://models.litellm.ai/cookbook",
+        },
+        {
           key: "experimental",
           page: "experimental",
           label: "Experimental",
@@ -254,14 +261,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
               page: "usage",
               label: "Old Usage",
               icon: <BarChartOutlined />,
-            },
-            {
-              key: "learning-resources",
-              page: "learning-resources",
-              label: "Learning Resources",
-              icon: <BookOutlined />,
-              external_url: "https://models.litellm.ai/cookbook",
-            },
+            }
           ],
         },
       ],
