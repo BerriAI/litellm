@@ -484,7 +484,7 @@ class BaseAzureLLM(BaseOpenAILLM):
                 verbose_logger.debug(f"Using Azure v1 API with base_url: {v1_params['base_url']}")
 
                 if _is_async is True:
-                    openai_client = AsyncOpenAI(**v1_params)
+                    openai_client = AsyncOpenAI(**v1_params)  # type: ignore
                 else:
                     openai_client = OpenAI(**v1_params)  # type: ignore
             else:
