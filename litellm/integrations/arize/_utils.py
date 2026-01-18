@@ -88,59 +88,21 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
             )
 
 
-def _set_tool_attributes(span: "Span", optional_params: dict, metadata_tools: Optional[list] = None):
-    """Helper to set tool and function call attributes on span.
-
-    Supports both classic optional_params.tools and metadata-provided llm.tools (e.g., responses API).
-    """
-    from litellm.integrations._types.open_inference import (
-        MessageAttributes,
-        SpanAttributes,
-        ToolCallAttributes,
-    )
-
-    tools = optional_params.get("tools") or metadata_tools or []
-    if tools:
-        for idx, tool in enumerate(tools):
-            function = tool.get("function")
-            if not function:
-                continue
-            prefix = f"{SpanAttributes.LLM_TOOLS}.{idx}"
-            safe_set_attribute(
-                span, f"{prefix}.{SpanAttributes.TOOL_NAME}", function.get("name")
-            )
-            safe_set_attribute(
-                span,
-                f"{prefix}.{SpanAttributes.TOOL_DESCRIPTION}",
-                function.get("description"),
-            )
-            safe_set_attribute(
-                span,
-                f"{prefix}.{SpanAttributes.TOOL_PARAMETERS}",
-                json.dumps(function.get("parameters")),
-            )
-
-    functions = optional_params.get("functions")
-    if functions:
-        for idx, function in enumerate(functions):
-            prefix = f"{MessageAttributes.MESSAGE_TOOL_CALLS}.{idx}"
-            safe_set_attribute(
-                span,
-                f"{prefix}.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
-                function.get("name"),
-            )
-
-
 def _set_response_attributes(span: "Span", response_obj):
     """Helper to set response output and token usage attributes on span."""
     from litellm.integrations._types.open_inference import (
+        ImageAttributes,
         MessageAttributes,
         SpanAttributes,
+        AudioAttributes,
+        EmbeddingAttributes,
+        RerankerAttributes,
     )
 
     if not hasattr(response_obj, "get"):
         return
 
+    # set chat completion attributes
     for idx, choice in enumerate(response_obj.get("choices", [])):
         response_message = choice.get("message", {})
         safe_set_attribute(
@@ -159,6 +121,69 @@ def _set_response_attributes(span: "Span", response_obj):
             f"{prefix}.{MessageAttributes.MESSAGE_CONTENT}",
             response_message.get("content", ""),
         )
+
+    # set image generation attributes
+    images = response_obj.get("data", [])
+    if images:
+        for i, image in enumerate(images):
+            img_url = image.get("url")
+            if img_url is None and image.get("b64_json"):
+                img_url = f"data:image/png;base64,{image.get('b64_json')}"
+
+            if img_url:
+                if i == 0:
+                    safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, img_url)
+
+                # ste attribute per-image url
+                safe_set_attribute(span, f"{ImageAttributes.IMAGE_URL}.{i}", img_url)
+
+    # set audio generation attr
+    audio = response_obj.get("audio", [])
+    if audio:
+        for i, audio_item in enumerate(audio):
+            audio_url = audio_item.get("url")
+            if audio_url is None and audio_item.get("b64_json"):
+                audio_url = f"data:audio/wav;base64,{audio_item.get('b64_json')}"
+
+            if audio_url:
+                if i == 0:
+                    safe_set_attribute(span, SpanAttributes.OUTPUT_VALUE, audio_url)
+
+                safe_set_attribute(span, f"{AudioAttributes.AUDIO_URL}.{i}", audio_url)
+
+            audio_mime = audio_item.get("mime_type")
+            if audio_mime:
+                safe_set_attribute(span, f"{AudioAttributes.AUDIO_MIME_TYPE}.{i}", audio_mime)
+
+            audio_transcript = audio_item.get("transcript")
+            if audio_transcript:
+                safe_set_attribute(span, f"{AudioAttributes.AUDIO_TRANSCRIPT}.{i}", audio_transcript)
+
+    embeddings = response_obj.get("data", [])
+    if embeddings:
+        for i, embedding_item in enumerate(embeddings):
+            embedding_vector = embedding_item.get("embedding")
+            if embedding_vector:
+                if i == 0:
+                    safe_set_attribute(
+                        span,
+                        SpanAttributes.OUTPUT_VALUE,
+                        str(embedding_vector),
+                    )
+
+                safe_set_attribute(
+                    span,
+                    f"{EmbeddingAttributes.EMBEDDING_VECTOR}.{i}",
+                    str(embedding_vector),
+                )
+
+            embedding_text = embedding_item.get("text")
+            if embedding_text:
+                safe_set_attribute(
+                    span,
+                    f"{EmbeddingAttributes.EMBEDDING_TEXT}.{i}",
+                    str(embedding_text),
+                )
 
     output_items = response_obj.get("output", [])
     if output_items:
@@ -199,104 +224,9 @@ def _set_response_attributes(span: "Span", response_obj):
             safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
 
 
-def _set_retrieval_documents(span: "Span", metadata: Optional[dict], max_docs: int = 20):
-    """Attach retrieved documents to the span for retriever/search calls."""
-    from litellm.integrations._types.open_inference import SpanAttributes
-
-    if not metadata or not isinstance(metadata, dict):
-        return
-
-    vector_store_requests = metadata.get("vector_store_request_metadata") or []
-    if not vector_store_requests:
-        return
-
-    docs = []
-    for vector_request in vector_store_requests:
-        if not isinstance(vector_request, dict):
-            continue
-
-        vector_store_search_response = vector_request.get("vector_store_search_response") or {}
-        search_query = vector_store_search_response.get("search_query")
-
-        for item in vector_store_search_response.get("data", []) or []:
-            if len(docs) >= max_docs:
-                break
-
-            doc_entry = {}
-            if search_query is not None:
-                doc_entry["search_query"] = search_query
-
-            score = item.get("score")
-            if score is not None:
-                doc_entry["score"] = score
-
-            file_id = item.get("file_id")
-            if file_id is not None:
-                doc_entry["file_id"] = file_id
-
-            filename = item.get("filename")
-            if filename is not None:
-                doc_entry["filename"] = filename
-
-            attributes = item.get("attributes")
-            if attributes is not None:
-                doc_entry["attributes"] = attributes
-
-            contents = []
-            for content_item in item.get("content", []) or []:
-                if isinstance(content_item, dict):
-                    text_val = content_item.get("text")
-                    if text_val is not None:
-                        contents.append(text_val)
-            if contents:
-                doc_entry["content"] = contents
-
-            if doc_entry:
-                docs.append(doc_entry)
-                doc_index = len(docs) - 1
-                doc_id = item.get("id") or file_id
-                if doc_id is not None:
-                    safe_set_attribute(
-                        span, f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.document.id", doc_id
-                    )
-
-                if contents:
-                    safe_set_attribute(
-                        span,
-                        f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.document.content",
-                        "\n\n".join(contents),
-                    )
-
-                metadata_payload: Dict[str, Any] = {}
-                if attributes is not None:
-                    metadata_payload["attributes"] = attributes
-                if filename is not None:
-                    metadata_payload["filename"] = filename
-                if search_query is not None:
-                    metadata_payload["search_query"] = search_query
-                if score is not None:
-                    metadata_payload["score"] = score
-                if file_id is not None:
-                    metadata_payload["file_id"] = file_id
-
-                if metadata_payload:
-                    safe_set_attribute(
-                        span,
-                        f"{SpanAttributes.RETRIEVAL_DOCUMENTS}.{doc_index}.document.metadata",
-                        safe_dumps(metadata_payload),
-                    )
-
-        if len(docs) >= max_docs:
-            break
-
-    if docs:
-        safe_set_attribute(span, SpanAttributes.RETRIEVAL_DOCUMENTS, safe_dumps(docs))
-
-
 def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
     """
     Map LiteLLM call types to OpenInference span kinds.
-    Falls back to UNKNOWN only when we cannot determine a sensible kind.
     """
     from litellm.integrations._types.open_inference import OpenInferenceSpanKindValues
 
@@ -348,6 +278,51 @@ def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
 
     return OpenInferenceSpanKindValues.UNKNOWN.value
 
+def _set_tool_attributes(
+    span: "Span", optional_tools: Optional[list], metadata_tools: Optional[list]
+):
+    """set tool attributes on span from optional_params or tool call metadata"""
+    from litellm.integrations._types.open_inference import (
+        SpanAttributes,
+    )
+
+    if optional_tools:
+        for idx, tool in enumerate(optional_tools):
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function") if isinstance(tool.get("function"), dict) else None
+            if not function:
+                continue
+            tool_name = function.get("name")
+            if tool_name:
+                safe_set_attribute(span, f"{SpanAttributes.LLM_TOOLS}.{idx}.name", tool_name)
+            tool_description = function.get("description")
+            if tool_description:
+                safe_set_attribute(span, f"{SpanAttributes.LLM_TOOLS}.{idx}.description", tool_description)
+            params = function.get("parameters")
+            if params is not None:
+                safe_set_attribute(span, f"{SpanAttributes.LLM_TOOLS}.{idx}.parameters", json.dumps(params))
+
+    if metadata_tools and isinstance(metadata_tools, list):
+        for idx, tool in enumerate(metadata_tools):
+            if not isinstance(tool, dict):
+                continue
+            tool_name = tool.get("name")
+            if tool_name:
+                safe_set_attribute(
+                    span,
+                    f"{SpanAttributes.LLM_INVOCATION_PARAMETERS}.tools.{idx}.name",
+                    tool_name,
+                )
+
+            tool_description = tool.get("description")
+            if tool_description:
+                safe_set_attribute(
+                    span,
+                    f"{SpanAttributes.LLM_INVOCATION_PARAMETERS}.tools.{idx}.description",
+                    tool_description,
+                )
+
 
 def set_attributes(
     span: "Span", kwargs, response_obj, attributes: Type[BaseLLMObsOTELAttributes]
@@ -380,7 +355,15 @@ def set_attributes(
         if metadata is not None:
             safe_set_attribute(span, SpanAttributes.METADATA, safe_dumps(metadata))
 
-        _set_retrieval_documents(span, metadata)
+        metadata_tools: Optional[list] = None
+        if isinstance(metadata, dict):
+            llm_obj = metadata.get("llm")
+            if isinstance(llm_obj, dict):
+                metadata_tools = llm_obj.get("tools")
+
+        optional_tools = None
+        if isinstance(optional_params, dict):
+            optional_tools = optional_params.get("tools")
 
         call_type = standard_logging_payload.get("call_type")
 
@@ -408,6 +391,11 @@ def set_attributes(
             safe_set_attribute(span, "llm.response.model", response_obj.get("model"))
 
         span_kind = _infer_open_inference_span_kind(call_type=call_type)
+
+        _set_tool_attributes(span, optional_tools, metadata_tools)
+
+        if (optional_tools or metadata_tools) and span_kind != OpenInferenceSpanKindValues.TOOL.value:
+            span_kind = OpenInferenceSpanKindValues.TOOL.value
 
         safe_set_attribute(span, SpanAttributes.OPENINFERENCE_SPAN_KIND, span_kind)
         attributes.set_messages(span, kwargs)

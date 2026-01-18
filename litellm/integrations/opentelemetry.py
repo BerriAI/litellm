@@ -17,6 +17,10 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes,
+)
 
 # OpenTelemetry imports moved to individual functions to avoid import errors when not installed
 
@@ -1104,6 +1108,12 @@ class OpenTelemetry(CustomLogger):
                 name="guardrail",
                 start_time=self._to_ns(start_time_datetime),
                 context=context,
+            )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                value=OpenInferenceSpanKindValues.GUARDRAIL.value,
             )
 
             self.safe_set_attribute(
