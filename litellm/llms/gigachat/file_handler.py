@@ -81,7 +81,8 @@ async def _download_image_async(url: str) -> Tuple[bytes, str, str]:
 
 
 def upload_file_sync(
-    image_url: str,
+    file_url: str,
+    filename: Optional[str] = None,
     credentials: Optional[str] = None,
     api_base: Optional[str] = None,
 ) -> Optional[str]:
@@ -89,14 +90,15 @@ def upload_file_sync(
     Upload file to GigaChat and return file_id (sync).
 
     Args:
-        image_url: URL or base64 data URL of the image
+        file_url: URL or base64 data URL of the file
+        filename: filename in content part if available
         credentials: GigaChat credentials for auth
         api_base: Optional custom API base URL
 
     Returns:
         file_id string or None if upload failed
     """
-    url_hash = _get_url_hash(image_url)
+    url_hash = _get_url_hash(file_url)
 
     # Check cache
     if url_hash in _file_cache:
@@ -105,16 +107,15 @@ def upload_file_sync(
 
     try:
         # Get image data
-        parsed = _parse_data_url(image_url)
+        parsed = _parse_data_url(file_url)
         if parsed:
             content_bytes, content_type, ext = parsed
             verbose_logger.debug("Decoded base64 image")
         else:
-            verbose_logger.debug(f"Downloading image from URL: {image_url[:80]}...")
-            content_bytes, content_type, ext = _download_image_sync(image_url)
+            verbose_logger.debug(f"Downloading image from URL: {file_url[:80]}...")
+            content_bytes, content_type, ext = _download_image_sync(file_url)
 
-        filename = f"{uuid.uuid4()}.{ext}"
-
+        filename = filename or f"{uuid.uuid4()}.{ext}"
         # Get access token
         access_token = get_access_token(credentials)
 
@@ -129,13 +130,12 @@ def upload_file_sync(
                 "Authorization": f"Bearer {access_token}",
                 "User-Agent": USER_AGENT,
             },
-            files={"file": (filename, content_bytes, content_type)},
+            files={"file": (filename, content_bytes)},
             data={"purpose": "general"},
             timeout=60,
         )
         response.raise_for_status()
         result = response.json()
-        print(result)
 
         file_id = result.get("id")
         if file_id:
@@ -201,7 +201,7 @@ async def upload_file_async(
                 "Authorization": f"Bearer {access_token}",
                 "User-Agent": USER_AGENT,
             },
-            files={"file": (filename, content_bytes, content_type)},
+            files={"file": (filename, content_bytes)},
             data={"purpose": "general"},
             timeout=60,
         )

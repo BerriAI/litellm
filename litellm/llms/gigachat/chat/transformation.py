@@ -236,19 +236,20 @@ class GigaChatConfig(BaseConfig):
                 functions.append(giga_func)
         return functions
 
-    def _upload_image(self, image_url: str) -> Optional[str]:
+    def _upload_file(self, file_url: str, filename: Optional[str] = None) -> Optional[str]:
         """
-        Upload image to GigaChat and return file_id.
+        Upload file to GigaChat and return file_id.
 
         Args:
-            image_url: URL or base64 data URL of the image
+            file_url: URL or base64 data URL of the file
 
         Returns:
             file_id string or None if upload failed
         """
         try:
             return upload_file_sync(
-                image_url=image_url,
+                file_url=file_url,
+                filename=filename,
                 credentials=self._current_credentials,
                 api_base=self._current_api_base,
             )
@@ -346,9 +347,15 @@ class GigaChatConfig(BaseConfig):
                             else:
                                 url = image_url.get("url", "")
                             if url:
-                                file_id = self._upload_image(url)
+                                file_id = self._upload_file(url)
                                 if file_id:
                                     attachments.append(file_id)
+                        elif part.get("type") == "file" and part.get("file"):
+                            filename = part["file"].get("filename")
+                            file_data = part["file"].get("file_data")
+                            file_id = self._upload_file(file_data, filename)
+                            if file_id:
+                                attachments.append(file_id)
                 message["content"] = "\n".join(texts) if texts else ""
                 if attachments:
                     message["attachments"] = attachments
