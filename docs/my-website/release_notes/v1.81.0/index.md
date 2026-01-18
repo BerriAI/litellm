@@ -164,7 +164,7 @@ LiteLLM now reduces CPU usage by removing premature `model.dump()` calls from th
 
 ## Deleted Keys Audit Table on UI
 
-<Image img={require('../../../img/ui_deleted_keys_table.png')} />
+<Image img={require('../../img/ui_deleted_keys_table.png')} />
 
 LiteLLM now provides a comprehensive audit table for deleted API keys and teams directly in the UI. This feature allows you to easily track the spend of deleted keys, view their associated team information, and maintain accurate financial records for auditing and compliance purposes. The table displays key details including key aliases, team associations, and spend information captured at the time of deletion. For more information on how to use this feature, see the [Deleted Keys & Teams documentation](../../docs/proxy/deleted_keys_teams.md).
 
