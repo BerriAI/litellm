@@ -54,7 +54,7 @@ pip install litellm==1.81.0
 
 ## Claude Code - Web Search Across All Providers
 
-<Image img={require('../../img/claude_code_websearch.png')} />
+<Image img={require('../../img/release_notes/claude_code_websearch.png')} />
 
 This release brings web search support to Claude Code across all LiteLLM providers (Bedrock, Azure, Vertex AI, and more), enabling AI coding assistants to search the web for real-time information.
 
