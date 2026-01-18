@@ -2,6 +2,7 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
+from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
@@ -452,13 +453,17 @@ class LiteLLMCompletionResponsesConfig:
             call_id = ""
 
             if role == "assistant":
-                tool_calls = None
+                tool_calls: Any = None
                 if isinstance(tool_call_message, dict):
                     tool_calls = tool_call_message.get("tool_calls")
                 else:
                     tool_calls = getattr(tool_call_message, "tool_calls", None)
 
-                if tool_calls and len(tool_calls) > 0:
+                if (
+                    isinstance(tool_calls, Sequence)
+                    and not isinstance(tool_calls, (str, bytes))
+                    and len(tool_calls) > 0
+                ):
                     first_call = tool_calls[0]
                     call_id_raw = None
                     if isinstance(first_call, dict):
