@@ -135,12 +135,7 @@ This feature improves reliability by:
 
 ## Key Highlights
 
-- **🛡️ Image URL Download Limits** - Configurable 50MB default limit to prevent OOM crashes
-- **🎯 Claude Code Support** - Tool search, end-user tracking, web search integration, prompt caching
-- **💰 Cost Tracking** - Fixed Gemini image token costs, improved cache token tracking
-- **📊 UI Enhancements** - Deleted keys/teams tables, model hub health checks, usage filters
-- **⚡ Performance** - Removed bottlenecks causing high CPU usage under heavy load
-- **🆕 New Models** - GPT-5.2-codex, Azure Grok pricing, Cerebras GLM-4.7, and more
+- **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
 
 ---
 
