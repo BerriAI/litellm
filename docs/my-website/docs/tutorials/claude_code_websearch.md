@@ -1,6 +1,10 @@
+import Image from '@theme/IdealImage';
+
 # Claude Code - WebSearch Across All Providers
 
 Enable Claude Code's web search tool to work with any provider (Bedrock, Azure, Vertex, etc.). LiteLLM automatically intercepts web search requests and executes them server-side.
+
+<Image img={require('../../img/claude_code_websearch.png')} />
 
 ## Proxy Configuration
 
