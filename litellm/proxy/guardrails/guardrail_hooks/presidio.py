@@ -103,10 +103,10 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         )
         self.presidio_language = presidio_language or "en"
         # Shared HTTP session to prevent memory leaks (issue #14540)
-        # Created lazily in _get_http_session() to avoid event loop issues during init
         self._http_session: Optional[aiohttp.ClientSession] = None
         # Lock to prevent race conditions when creating session under concurrent load
-        self._session_lock: Optional[asyncio.Lock] = None
+        # Note: asyncio.Lock() can be created without an event loop; it only needs one when awaited
+        self._session_lock: asyncio.Lock = asyncio.Lock()
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -182,10 +182,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         Thread-safe: Uses asyncio.Lock to prevent race conditions when
         multiple concurrent requests try to create the session simultaneously.
         """
-        # Initialize lock lazily (first time we need it, event loop exists)
-        if self._session_lock is None:
-            self._session_lock = asyncio.Lock()
-
         async with self._session_lock:
             if self._http_session is None or self._http_session.closed:
                 self._http_session = aiohttp.ClientSession()
