@@ -33,6 +33,70 @@ base_llm_http_handler = BaseLLMHTTPHandler()
 #################################################
 
 
+async def _execute_pre_request_hooks(
+    model: str,
+    messages: List[Dict],
+    tools: Optional[List[Dict]],
+    stream: Optional[bool],
+    custom_llm_provider: Optional[str],
+    **kwargs,
+) -> Dict:
+    """
+    Execute pre-request hooks from CustomLogger callbacks.
+
+    Allows CustomLoggers to modify request parameters before the API call.
+    Used for WebSearch tool conversion, stream modification, etc.
+
+    Args:
+        model: Model name
+        messages: List of messages
+        tools: Optional tools list
+        stream: Optional stream flag
+        custom_llm_provider: Provider name (if not set, will be extracted from model)
+        **kwargs: Additional request parameters
+
+    Returns:
+        Dict containing all (potentially modified) request parameters including tools, stream
+    """
+    # If custom_llm_provider not provided, extract from model
+    if not custom_llm_provider:
+        try:
+            _, custom_llm_provider, _, _ = litellm.get_llm_provider(model=model)
+        except Exception:
+            # If extraction fails, continue without provider
+            pass
+
+    # Build complete request kwargs dict
+    request_kwargs = {
+        "tools": tools,
+        "stream": stream,
+        "litellm_params": {
+            "custom_llm_provider": custom_llm_provider,
+        },
+        **kwargs,
+    }
+
+    if not litellm.callbacks:
+        return request_kwargs
+
+    from litellm.integrations.custom_logger import CustomLogger as _CustomLogger
+
+    for callback in litellm.callbacks:
+        if not isinstance(callback, _CustomLogger):
+            continue
+
+        # Call the pre-request hook
+        modified_kwargs = await callback.async_pre_request_hook(
+            model, messages, request_kwargs
+        )
+
+        # If hook returned modified kwargs, use them
+        if modified_kwargs is not None:
+            request_kwargs = modified_kwargs
+
+    return request_kwargs
+
+
 @client
 async def anthropic_messages(
     max_tokens: int,
@@ -57,42 +121,24 @@ async def anthropic_messages(
     """
     Async: Make llm api request in Anthropic /messages API spec
     """
-    # WebSearch Interception: Convert stream=True to stream=False if WebSearch interception is enabled
-    # This allows transparent server-side agentic loop execution for streaming requests
-    original_stream_value = stream
-    if stream and tools and any(t.get("name") == "WebSearch" for t in tools):
-        # Extract provider using litellm's helper function
-        try:
-            _, provider, _, _ = litellm.get_llm_provider(
-                model=model,
-                custom_llm_provider=custom_llm_provider,
-                api_base=api_base,
-                api_key=api_key,
-            )
-        except Exception:
-            # Fallback to simple split if helper fails
-            provider = model.split("/")[0] if "/" in model else ""
+    # Execute pre-request hooks to allow CustomLoggers to modify request
+    request_kwargs = await _execute_pre_request_hooks(
+        model=model,
+        messages=messages,
+        tools=tools,
+        stream=stream,
+        custom_llm_provider=custom_llm_provider,
+        **kwargs,
+    )
 
-        # Check if WebSearch interception is enabled in callbacks
-        from litellm._logging import verbose_logger
-        from litellm.integrations.websearch_interception import (
-            WebSearchInterceptionLogger,
-        )
-        if litellm.callbacks:
-            for callback in litellm.callbacks:
-                if isinstance(callback, WebSearchInterceptionLogger):
-                    # Check if provider is enabled for interception
-                    if provider in callback.enabled_providers:
-                        verbose_logger.debug(
-                            f"WebSearchInterception: Converting stream=True to stream=False for WebSearch interception "
-                            f"(provider={provider})"
-                        )
-                        stream = False
-                        # Store that we converted stream for WebSearch interception
-                        kwargs["_websearch_interception_converted_stream"] = True
-                        break
+    # Extract modified parameters
+    tools = request_kwargs.pop("tools", tools)
+    stream = request_kwargs.pop("stream", stream)
+    # Remove litellm_params from kwargs (only needed for hooks)
+    request_kwargs.pop("litellm_params", None)
+    # Merge back any other modifications
+    kwargs.update(request_kwargs)
 
-    local_vars = locals()
     loop = asyncio.get_event_loop()
     kwargs["is_async"] = True
 
