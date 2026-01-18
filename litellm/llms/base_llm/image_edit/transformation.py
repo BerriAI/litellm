@@ -92,7 +92,7 @@ class BaseImageEditConfig(ABC):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,

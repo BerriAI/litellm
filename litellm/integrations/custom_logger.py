@@ -33,10 +33,9 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from fastapi import HTTPException
-
-    from litellm.caching.caching import DualCache
     from opentelemetry.trace import Span as _Span
 
+    from litellm.caching.caching import DualCache
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import (
@@ -142,6 +141,34 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         pass
 
     async def async_log_pre_api_call(self, model, messages, kwargs):
+        pass
+
+    async def async_pre_request_hook(
+        self, model: str, messages: List, kwargs: Dict
+    ) -> Optional[Dict]:
+        """
+        Hook called before making the API request to allow modifying request parameters.
+
+        This is specifically designed for modifying the request before it's sent to the provider.
+        Unlike async_log_pre_api_call (which is for logging), this hook is meant for transformations.
+
+        Args:
+            model: The model name
+            messages: The messages list
+            kwargs: The request parameters (tools, stream, temperature, etc.)
+
+        Returns:
+            Optional[Dict]: Modified kwargs to use for the request, or None if no modifications
+
+        Example:
+            ```python
+            async def async_pre_request_hook(self, model, messages, kwargs):
+                # Convert native tools to standard format
+                if kwargs.get("tools"):
+                    kwargs["tools"] = convert_tools(kwargs["tools"])
+                return kwargs
+            ```
+        """
         pass
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -483,6 +510,138 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         Useful if you want to modiy the standard logging payload after the MCP tool call is made.
         """
         return None
+
+    #########################################################
+    # AGENTIC LOOP HOOKS (for litellm.messages + future completion support)
+    #########################################################
+
+    async def async_should_run_agentic_loop(
+        self,
+        response: Any,
+        model: str,
+        messages: List[Dict],
+        tools: Optional[List[Dict]],
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Dict,
+    ) -> Tuple[bool, Dict]:
+        """
+        Hook to determine if agentic loop should be executed.
+
+        Called after receiving response from model, before returning to user.
+
+        USE CASE: Enables transparent server-side tool execution for models that
+        don't natively support server-side tools. User makes ONE API call and gets
+        back the final answer - the agentic loop happens transparently on the server.
+
+        Example use cases:
+        - WebSearch: Intercept WebSearch tool calls for Bedrock/Claude, execute
+          litellm.search(), return final answer with search results
+        - Code execution: Execute code in sandboxed environment, return results
+        - Database queries: Execute queries server-side, return data to model
+        - API calls: Make external API calls and inject responses back into context
+
+        Flow:
+        1. User calls litellm.messages.acreate(tools=[...])
+        2. Model responds with tool_use
+        3. THIS HOOK checks if tool should run server-side
+        4. If True, async_run_agentic_loop executes the tool
+        5. User receives final answer (never sees intermediate tool_use)
+
+        Args:
+            response: Response from model (AnthropicMessagesResponse or AsyncIterator)
+            model: Model name
+            messages: Original messages sent to model
+            tools: List of tool definitions from request
+            stream: Whether response is streaming
+            custom_llm_provider: Provider name (e.g., "bedrock", "anthropic")
+            kwargs: Additional request parameters
+
+        Returns:
+            (should_run, tools):
+                should_run: True if agentic loop should execute
+                tools: Dict with tool_calls and metadata for execution
+
+        Example:
+            # Detect WebSearch tool call
+            if has_websearch_tool_use(response):
+                return True, {
+                    "tool_calls": extract_tool_calls(response),
+                    "tool_type": "websearch"
+                }
+            return False, {}
+        """
+        return False, {}
+
+    async def async_run_agentic_loop(
+        self,
+        tools: Dict,
+        model: str,
+        messages: List[Dict],
+        response: Any,
+        anthropic_messages_provider_config: Any,
+        anthropic_messages_optional_request_params: Dict,
+        logging_obj: "LiteLLMLoggingObj",
+        stream: bool,
+        kwargs: Dict,
+    ) -> Any:
+        """
+        Hook to execute agentic loop based on context from should_run hook.
+
+        Called only if async_messages_should_run_agentic_loop returns True.
+
+        USE CASE: Execute server-side tools and orchestrate the agentic loop to
+        return a complete answer to the user in a single API call.
+
+        What to do here:
+        1. Extract tool calls from tools dict
+        2. Execute the tools (litellm.search, code execution, DB queries, etc.)
+        3. Build assistant message with tool_use blocks
+        4. Build user message with tool_result blocks containing results
+        5. Make follow-up litellm.messages.acreate() call with results
+        6. Return the final response
+
+        Args:
+            tools: Dict from async_should_run_agentic_loop
+                  Contains tool_calls and metadata
+            model: Model name
+            messages: Original messages sent to model
+            response: Original response from model (with tool_use)
+            anthropic_messages_provider_config: Provider config for making requests
+            anthropic_messages_optional_request_params: Request parameters (tools, etc.)
+            logging_obj: LiteLLM logging object
+            stream: Whether response is streaming
+            kwargs: Additional request parameters
+
+        Returns:
+            Final response after executing agentic loop
+            (AnthropicMessagesResponse with final answer)
+
+        Example:
+            # Extract tool calls
+            tool_calls = agentic_context["tool_calls"]
+
+            # Execute searches in parallel
+            search_results = await asyncio.gather(
+                *[litellm.asearch(tc["input"]["query"]) for tc in tool_calls]
+            )
+
+            # Build messages with tool results
+            assistant_msg = {"role": "assistant", "content": [...tool_use blocks...]}
+            user_msg = {"role": "user", "content": [...tool_result blocks...]}
+
+            # Make follow-up request
+            from litellm.anthropic_interface import messages
+            final_response = await messages.acreate(
+                model=model,
+                messages=messages + [assistant_msg, user_msg],
+                max_tokens=anthropic_messages_optional_request_params.get("max_tokens"),
+                **anthropic_messages_optional_request_params
+            )
+
+            return final_response
+        """
+        pass
 
     # Useful helpers for custom logger classes
 

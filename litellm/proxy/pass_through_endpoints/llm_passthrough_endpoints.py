@@ -1037,6 +1037,7 @@ async def bedrock_proxy_route(
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
         is_streaming_request=is_streaming_request,
+        _forward_headers=True
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
@@ -1554,6 +1555,7 @@ async def _base_vertex_proxy_route(
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
         get_vertex_location_from_url,
+        get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
     )
 
@@ -1582,6 +1584,25 @@ async def _base_vertex_proxy_route(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
     )
+
+    if vertex_project is None or vertex_location is None:
+        # Check if model is in router config
+        model_id = get_vertex_model_id_from_url(endpoint)
+        if model_id:
+            from litellm.proxy.proxy_server import llm_router
+
+            if llm_router:
+                try:
+                    # Use the dedicated pass-through deployment selection method to automatically filter use_in_pass_through=True
+                    deployment = llm_router.get_available_deployment_for_pass_through(model=model_id)
+                    if deployment:
+                        litellm_params = deployment.get("litellm_params", {})
+                        vertex_project = litellm_params.get("vertex_project")
+                        vertex_location = litellm_params.get("vertex_location")
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        f"Error getting available deployment for model {model_id}: {e}"
+                    )
 
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,

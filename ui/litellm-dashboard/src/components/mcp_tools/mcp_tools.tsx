@@ -40,7 +40,7 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result: CallMCPToolResponse = await callMCPTool(accessToken, args.tool.name, args.arguments);
+        const result: CallMCPToolResponse = await callMCPTool(accessToken, serverId, args.tool.name, args.arguments);
         return result;
       } catch (error) {
         throw error;

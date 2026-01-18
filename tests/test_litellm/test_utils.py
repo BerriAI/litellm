@@ -21,12 +21,37 @@ from litellm.types.utils import (
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
+    _check_provider_match,
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
 )
 
 # Adds the parent directory to the system path
+
+
+def test_check_provider_match_azure_ai_allows_openai_and_azure():
+    """
+    Test that azure_ai provider can match openai and azure models.
+    This is needed for Azure Model Router which can route to OpenAI models.
+    """
+    # azure_ai should match openai models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "openai"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should match azure models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "azure"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should NOT match other providers
+    assert _check_provider_match(
+        model_info={"litellm_provider": "anthropic"},
+        custom_llm_provider="azure_ai"
+    ) is False
 
 
 def test_get_optional_params_image_gen():

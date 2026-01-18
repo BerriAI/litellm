@@ -34,8 +34,10 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_DeletedTeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
+    LiteLLM_VerificationToken,
     LitellmTableNames,
     LitellmUserRoles,
     Member,
@@ -2018,6 +2020,28 @@ async def team_member_delete(
 
     ## DELETE KEYS CREATED BY USER FOR THIS TEAM
     if user_ids_to_delete:
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            _persist_deleted_verification_tokens,
+        )
+
+        # Fetch keys before deletion to persist them
+        keys_to_delete: List[LiteLLM_VerificationToken] = (
+            await prisma_client.db.litellm_verificationtoken.find_many(
+                where={
+                    "user_id": {"in": list(user_ids_to_delete)},
+                    "team_id": data.team_id,
+                }
+            )
+        )
+        
+        if keys_to_delete:
+            await _persist_deleted_verification_tokens(
+                keys=keys_to_delete,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=None,
+            )
+
         await prisma_client.db.litellm_verificationtoken.delete_many(
             where={
                 "user_id": {"in": list(user_ids_to_delete)},
@@ -2403,6 +2427,13 @@ async def delete_team(
         team_row_pydantic = LiteLLM_TeamTable(**team_row_base.model_dump())
         team_rows.append(team_row_pydantic)
 
+    await _persist_deleted_team_records(
+        teams=team_rows,
+        prisma_client=prisma_client,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+
     # Enterprise Feature - Audit Logging. Enable with litellm.store_audit_logs = True
     # we do this after the first for loop, since first for loop is for validation. we only want this inserted after validation passes
     if litellm.store_audit_logs is True:
@@ -2438,6 +2469,25 @@ async def delete_team(
     # End of Audit logging
 
     ## DELETE ASSOCIATED KEYS
+    # Fetch keys before deletion to persist them
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _persist_deleted_verification_tokens,
+    )
+
+    keys_to_delete: List[LiteLLM_VerificationToken] = (
+        await prisma_client.db.litellm_verificationtoken.find_many(
+            where={"team_id": {"in": data.team_ids}}
+        )
+    )
+
+    if keys_to_delete:
+        await _persist_deleted_verification_tokens(
+            keys=keys_to_delete,
+            prisma_client=prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+
     await prisma_client.delete_data(team_id_list=data.team_ids, table_name="key")
 
     # ## DELETE TEAM MEMBERSHIPS
@@ -2465,6 +2515,70 @@ async def delete_team(
     )
     return deleted_teams
 
+
+
+def _transform_teams_to_deleted_records(
+    teams: List[LiteLLM_TeamTable],
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Transform teams into deleted team records ready for persistence."""
+    if not teams:
+        return []
+
+    deleted_at = datetime.now(timezone.utc)
+    records = []
+    for team in teams:
+        team_payload = team.model_dump()
+        deleted_record = LiteLLM_DeletedTeamTable(
+            **team_payload,
+            deleted_at=deleted_at,
+            deleted_by=user_api_key_dict.user_id,
+            deleted_by_api_key=user_api_key_dict.api_key,
+            litellm_changed_by=litellm_changed_by,
+        )
+        record = deleted_record.model_dump()
+
+        for json_field in ["members_with_roles", "metadata", "model_spend", "model_max_budget", "router_settings"]:
+            if json_field in record and record[json_field] is not None:
+                record[json_field] = json.dumps(record[json_field])
+
+        for rel_key in ("litellm_model_table", "object_permission", "id"):
+            record.pop(rel_key, None)
+
+        records.append(record)
+
+    return records
+
+
+async def _save_deleted_team_records(
+    records: List[Dict[str, Any]],
+    prisma_client: PrismaClient,
+) -> None:
+    """Save deleted team records to the database."""
+    if not records:
+        return
+    await prisma_client.db.litellm_deletedteamtable.create_many(
+        data=records
+    )
+
+
+async def _persist_deleted_team_records(
+    teams: List[LiteLLM_TeamTable],
+    prisma_client: PrismaClient,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str] = None,
+) -> None:
+    """Persist deleted team records by transforming and saving them."""
+    records = _transform_teams_to_deleted_records(
+        teams=teams,
+        user_api_key_dict=user_api_key_dict,
+        litellm_changed_by=litellm_changed_by,
+    )
+    await _save_deleted_team_records(
+        records=records,
+        prisma_client=prisma_client,
+    )
 
 def validate_membership(
     user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
@@ -2841,6 +2955,83 @@ async def list_available_teams(
     return available_teams_correct_type
 
 
+async def _build_team_list_where_conditions(
+    prisma_client: PrismaClient,
+    team_id: Optional[str],
+    team_alias: Optional[str],
+    organization_id: Optional[str],
+    user_id: Optional[str],
+    use_deleted_table: bool,
+) -> Dict[str, Any]:
+    """Build where conditions for team list query."""
+    where_conditions: Dict[str, Any] = {}
+
+    if team_id:
+        where_conditions["team_id"] = team_id
+
+    if team_alias:
+        where_conditions["team_alias"] = {
+            "contains": team_alias,
+            "mode": "insensitive",  # Case-insensitive search
+        }
+
+    if organization_id:
+        where_conditions["organization_id"] = organization_id
+
+    if user_id:
+        try:
+            user_object = await prisma_client.db.litellm_usertable.find_unique(
+                where={"user_id": user_id}
+            )
+        except Exception:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        if user_object is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"User not found, passed user_id={user_id}"},
+            )
+        user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
+
+        if use_deleted_table:
+            where_conditions["members"] = {"has": user_id}
+        else:
+            if team_id is None:
+                where_conditions["team_id"] = {"in": user_object_correct_type.teams}
+            elif team_id in user_object_correct_type.teams:
+                where_conditions["team_id"] = team_id
+            else:
+                raise HTTPException(
+                    status_code=404,
+                    detail={"error": f"User is not a member of team_id={team_id}"},
+                )
+
+    return where_conditions
+
+
+def _convert_teams_to_response(
+    teams: List[Any], use_deleted_table: bool
+) -> List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]]:
+    """Convert Prisma models to Pydantic models."""
+    team_list: List[Union[LiteLLM_TeamTable, LiteLLM_DeletedTeamTable]] = []
+    if teams:
+        for team in teams:
+            # Convert Prisma model to dict (supports both Pydantic v1 and v2)
+            try:
+                team_dict = team.model_dump()
+            except Exception:
+                # Fallback for Pydantic v1 compatibility
+                team_dict = team.dict()
+            if use_deleted_table:
+                # Use deleted team type to preserve deleted_at, deleted_by, etc.
+                team_list.append(LiteLLM_DeletedTeamTable(**team_dict))
+            else:
+                team_list.append(LiteLLM_TeamTable(**team_dict))
+    return team_list
+
+
 @router.get(
     "/v2/team/list",
     tags=["team management"],
@@ -2877,6 +3068,9 @@ async def list_team_v2(
     sort_order: str = fastapi.Query(
         default="asc", description="Sort order ('asc' or 'desc')"
     ),
+    status: Optional[str] = fastapi.Query(
+        default=None, description="Filter by status (e.g. 'deleted')"
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -2899,6 +3093,8 @@ async def list_team_v2(
             Column to sort by (e.g. 'team_id', 'team_alias', 'created_at')
         sort_order: str
             Sort order ('asc' or 'desc')
+        status: Optional[str]
+            Filter by status. Currently supports "deleted" to query deleted teams.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -2923,50 +3119,28 @@ async def list_team_v2(
     if user_id is None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         user_id = user_api_key_dict.user_id
 
+    if status is not None and status != "deleted":
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid status value. Currently only 'deleted' is supported."
+            },
+        )
+
+    use_deleted_table = status == "deleted"
+
     # Calculate skip and take for pagination
     skip = (page - 1) * page_size
 
     # Build where conditions based on provided parameters
-    where_conditions: Dict[str, Any] = {}
-
-    if team_id:
-        where_conditions["team_id"] = team_id
-
-    if team_alias:
-        where_conditions["team_alias"] = {
-            "contains": team_alias,
-            "mode": "insensitive",  # Case-insensitive search
-        }
-
-    if organization_id:
-        where_conditions["organization_id"] = organization_id
-
-    if user_id:
-        try:
-            user_object = await prisma_client.db.litellm_usertable.find_unique(
-                where={"user_id": user_id}
-            )
-        except Exception:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User not found, passed user_id={user_id}"},
-            )
-        if user_object is None:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User not found, passed user_id={user_id}"},
-            )
-        user_object_correct_type = LiteLLM_UserTable(**user_object.model_dump())
-        # Find teams where this user is a member by checking members_with_roles array
-        if team_id is None:
-            where_conditions["team_id"] = {"in": user_object_correct_type.teams}
-        elif team_id in user_object_correct_type.teams:
-            where_conditions["team_id"] = team_id
-        else:
-            raise HTTPException(
-                status_code=404,
-                detail={"error": f"User is not a member of team_id={team_id}"},
-            )
+    where_conditions = await _build_team_list_where_conditions(
+        prisma_client=prisma_client,
+        team_id=team_id,
+        team_alias=team_alias,
+        organization_id=organization_id,
+        user_id=user_id,
+        use_deleted_table=use_deleted_table,
+    )
 
     # Build order_by conditions
     valid_sort_columns = ["team_id", "team_alias", "created_at"]
@@ -2977,20 +3151,35 @@ async def list_team_v2(
         order_by = {sort_by: sort_order.lower()}
 
     # Get teams with pagination
-    teams = await prisma_client.db.litellm_teamtable.find_many(
-        where=where_conditions,
-        skip=skip,
-        take=page_size,
-        order=order_by if order_by else {"created_at": "desc"},  # Default sort
-    )
-    # Get total count for pagination
-    total_count = await prisma_client.db.litellm_teamtable.count(where=where_conditions)
+    if use_deleted_table:
+        teams = await prisma_client.db.litellm_deletedteamtable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order=order_by if order_by else {"created_at": "desc"},  # Default sort
+        )
+        # Get total count for pagination
+        total_count = await prisma_client.db.litellm_deletedteamtable.count(
+            where=where_conditions
+        )
+    else:
+        teams = await prisma_client.db.litellm_teamtable.find_many(
+            where=where_conditions,
+            skip=skip,
+            take=page_size,
+            order=order_by if order_by else {"created_at": "desc"},  # Default sort
+        )
+        # Get total count for pagination
+        total_count = await prisma_client.db.litellm_teamtable.count(where=where_conditions)
 
     # Calculate total pages
     total_pages = -(-total_count // page_size)  # Ceiling division
 
+    # Convert Prisma models to Pydantic models, preserving deleted fields when applicable
+    team_list = _convert_teams_to_response(teams, use_deleted_table)
+
     return {
-        "teams": [team.model_dump() for team in teams] if teams else [],
+        "teams": team_list,
         "total": total_count,
         "page": page,
         "page_size": page_size,
@@ -3601,7 +3790,7 @@ async def get_team_daily_activity(
                         },
                     )
 
-    ## Fetch team aliases
+    ## Fetch team aliases and check team admin status
     where_condition = {}
     if team_ids_list:
         where_condition["team_id"] = {"in": list(team_ids_list)}
@@ -3611,6 +3800,36 @@ async def get_team_daily_activity(
     team_alias_metadata = {
         t.team_id: {"team_alias": t.team_alias} for t in team_aliases
     }
+
+    # Check if user is team admin for any requested teams
+    # If not, filter by user's API keys
+    user_api_keys: Optional[List[str]] = None
+    if not _user_has_admin_view(user_api_key_dict) and team_ids_list and team_aliases:
+        # Check if user is team admin for any of the teams
+        is_team_admin_for_any = False
+        for team_alias in team_aliases:
+            team_obj = LiteLLM_TeamTable(**team_alias.model_dump())
+            if _is_user_team_admin(
+                user_api_key_dict=user_api_key_dict, team_obj=team_obj
+            ):
+                is_team_admin_for_any = True
+                break
+
+        # If user is not a team admin for any team, filter by their API keys
+        if not is_team_admin_for_any:
+            # Get all API keys for this user
+            user_keys = await prisma_client.db.litellm_verificationtoken.find_many(
+                where={"user_id": user_api_key_dict.user_id}
+            )
+            user_api_keys = [key.token for key in user_keys if key.token]
+            # If user has no API keys, return empty result
+            if not user_api_keys:
+                user_api_keys = [""]  # Use empty string to ensure no matches
+
+    # If api_key parameter is provided, use it; otherwise use user_api_keys if set
+    final_api_key_filter: Optional[Union[str, List[str]]] = api_key
+    if final_api_key_filter is None and user_api_keys is not None:
+        final_api_key_filter = user_api_keys
 
     return await get_daily_activity(
         prisma_client=prisma_client,
@@ -3622,7 +3841,7 @@ async def get_team_daily_activity(
         start_date=start_date,
         end_date=end_date,
         model=model,
-        api_key=api_key,
+        api_key=final_api_key_filter,
         page=page,
         page_size=page_size,
     )

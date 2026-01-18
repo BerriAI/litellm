@@ -14,12 +14,40 @@ from pydantic import BaseModel
 
 import litellm
 from litellm.cost_calculator import (
+    completion_cost,
     handle_realtime_stream_cost_calculation,
     response_cost_calculator,
 )
 from litellm.types.llms.openai import OpenAIRealtimeStreamList
 from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 from litellm.utils import TranscriptionResponse
+
+
+def test_completion_cost_uses_response_model_for_dynamic_routing():
+    """
+    Test that completion_cost uses the model from the response object
+    when the input model (e.g., azure-model-router) is not in model_cost.
+    This supports Azure Model Router and similar dynamic routing scenarios.
+    """
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Simulate Azure Model Router: input is generic router, response has actual model
+    response = ModelResponse(
+        id="test-id",
+        model="azure_ai/gpt-4o-2024-08-06",  # Response contains actual model used
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+
+    # Should calculate cost using the response model, not the input model
+    cost = completion_cost(
+        completion_response=response,
+        model="azure_ai/azure-model-router",  # Input model doesn't exist in model_cost
+        custom_llm_provider="azure_ai",
+    )
+
+    assert cost > 0, "Cost should be calculated using response model"
 
 
 def test_cost_calculator_with_response_cost_in_additional_headers():
