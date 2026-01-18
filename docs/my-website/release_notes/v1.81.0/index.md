@@ -160,7 +160,6 @@ This feature improves reliability by:
   - Add presence_penalty support for Google AI Studio - [PR #18154](https://github.com/BerriAI/litellm/pull/18154)
   - Forward extra_headers in generateContent adapter - [PR #18935](https://github.com/BerriAI/litellm/pull/18935)
   - Add medium value support for detail param - [PR #19187](https://github.com/BerriAI/litellm/pull/19187)
-  - Dereference $defs/$ref in tool response content - [PR #19062](https://github.com/BerriAI/litellm/pull/19062)
 
 - **[Vertex AI](../../docs/providers/vertex)**
   - Improve passthrough endpoint URL parsing and construction - [PR #17526](https://github.com/BerriAI/litellm/pull/17526)
@@ -214,6 +213,7 @@ This feature improves reliability by:
 
 - **[Vertex AI](../../docs/providers/vertex)**
   - Fix Vertex AI 400 Error with CachedContent model mismatch - [PR #19193](https://github.com/BerriAI/litellm/pull/19193)
+  - Fix Vertex AI doesn't support structured output - [PR #19201](https://github.com/BerriAI/litellm/pull/19201)
 
 - **[Bedrock](../../docs/providers/bedrock)**
   - Fix Claude Code (`/messages`) Bedrock Invoke usage and request signing - [PR #19111](https://github.com/BerriAI/litellm/pull/19111)
@@ -293,7 +293,6 @@ This feature improves reliability by:
 **SSO & Auth**
 - Allow setting custom MSFT Base URLs - [PR #18977](https://github.com/BerriAI/litellm/pull/18977)
 - Allow overriding env var attribute names - [PR #18998](https://github.com/BerriAI/litellm/pull/18998)
-- Fix `/user/new` privilege escalation vulnerability - [PR #19116](https://github.com/BerriAI/litellm/pull/19116)
 - Fix SCIM GET /Users error and enforce SCIM 2.0 compliance - [PR #17420](https://github.com/BerriAI/litellm/pull/17420)
 - Feature flag for SCIM compliance fix - [PR #18878](https://github.com/BerriAI/litellm/pull/18878)
 
@@ -362,7 +361,6 @@ This feature improves reliability by:
   - Fix negative text_tokens when using cache with images - [PR #18768](https://github.com/BerriAI/litellm/pull/18768)
   - Fix image tokens spend logging for `/images/generations` - [PR #19009](https://github.com/BerriAI/litellm/pull/19009)
   - Fix incorrect `prompt_tokens_details` in Gemini Image Generation - [PR #19070](https://github.com/BerriAI/litellm/pull/19070)
-  - Add support for 0 cost models - [PR #19027](https://github.com/BerriAI/litellm/pull/19027)
   - Fix case-insensitive model cost map lookup - [PR #18208](https://github.com/BerriAI/litellm/pull/18208)
 
 - **Pricing Updates**
@@ -402,7 +400,6 @@ This feature improves reliability by:
 - **Reliability**
   - Add fallback endpoints support - [PR #19185](https://github.com/BerriAI/litellm/pull/19185)
   - Fix stream_timeout parameter functionality - [PR #19191](https://github.com/BerriAI/litellm/pull/19191)
-  - Add handling for user-disabled mid-stream fallbacks - [PR #19078](https://github.com/BerriAI/litellm/pull/19078)
   - Fix model matching priority in configuration - [PR #19012](https://github.com/BerriAI/litellm/pull/19012)
   - Fix num_retries in litellm_params as per config - [PR #18975](https://github.com/BerriAI/litellm/pull/18975)
   - Handle exceptions without response parameter - [PR #18919](https://github.com/BerriAI/litellm/pull/18919)
@@ -480,6 +477,7 @@ This feature improves reliability by:
 * @guilherme-segantini made their first contribution in [PR #19166](https://github.com/BerriAI/litellm/pull/19166)
 * @jgreek made their first contribution in [PR #19147](https://github.com/BerriAI/litellm/pull/19147)
 * @anand-kamble made their first contribution in [PR #19193](https://github.com/BerriAI/litellm/pull/19193)
+* @neubig made their first contribution in [PR #19162](https://github.com/BerriAI/litellm/pull/19162)
 
 ---
 
