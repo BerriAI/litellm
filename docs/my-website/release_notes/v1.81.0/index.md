@@ -1,5 +1,5 @@
 ---
-title: "v1.81.0"
+title: "v1.81.0 - Claude Code Web Search Support"
 slug: "v1-81-0"
 date: 2026-01-18T10:00:00
 authors:
@@ -136,16 +136,6 @@ This feature improves reliability by:
 ## Key Highlights
 
 - **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
-
----
-
-## New Providers and Endpoints
-
-### New LLM API Endpoints
-
-|| Endpoint | Method | Description | Documentation |
-|| -------- | ------ | ----------- | ------------- |
-|| `/messages` | POST | Claude Code support with tool search, web search, and end-user tracking | [Docs](../../docs/providers/anthropic) |
 
 ---
 
