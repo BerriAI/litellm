@@ -14,19 +14,12 @@ from litellm import LlmProviders
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
-
-
-class GigaChatEmbeddingError(BaseLLMException):
-    """GigaChat Embedding API error."""
-
-    pass
+from ..common_utils import GIGACHAT_BASE_URL, USER_AGENT, build_url, GigaChatEmbeddingError
 
 
 class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
@@ -95,8 +88,8 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         stream: Optional[bool] = None,
     ) -> str:
         """Get the complete URL for embeddings endpoint."""
-        base = api_base or GIGACHAT_BASE_URL
-        return f"{base}/embeddings"
+        base = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        return build_url(base, "embeddings")
 
     def transform_embedding_request(
         self,
@@ -190,15 +183,14 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        """
-        Set up headers with OAuth token for GigaChat.
-        """
-        # Get access token via OAuth
-        access_token = get_access_token(api_key)
+        """Set up headers with OAuth token for GigaChat."""
+        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
+        access_token = get_access_token(credentials=credentials)
 
         default_headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {access_token}",
+            "User-Agent": USER_AGENT,
         }
         return {**default_headers, **headers}
 

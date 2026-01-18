@@ -18,10 +18,12 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import LlmProviders
 
-from .authenticator import get_access_token, get_access_token_async
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
+from .authenticator import (
+    get_access_token,
+    get_access_token_async,
+)
+from .common_utils import GIGACHAT_BASE_URL, USER_AGENT, build_url
+from ...secret_managers.main import get_secret_str
 
 # Simple in-memory cache for file IDs
 _file_cache: Dict[str, str] = {}
@@ -54,7 +56,7 @@ def _parse_data_url(data_url: str) -> Optional[Tuple[bytes, str, str]]:
 def _download_image_sync(url: str) -> Tuple[bytes, str, str]:
     """Download image from URL synchronously."""
     client = _get_httpx_client(params={"ssl_verify": False})
-    response = client.get(url)
+    response = client.get(url, headers={"User-Agent": USER_AGENT})
     response.raise_for_status()
 
     content_type = response.headers.get("content-type", "image/jpeg")
@@ -69,7 +71,7 @@ async def _download_image_async(url: str) -> Tuple[bytes, str, str]:
         llm_provider=LlmProviders.GIGACHAT,
         params={"ssl_verify": False},
     )
-    response = await client.get(url)
+    response = await client.get(url, headers={"User-Agent": USER_AGENT})
     response.raise_for_status()
 
     content_type = response.headers.get("content-type", "image/jpeg")
@@ -117,19 +119,23 @@ def upload_file_sync(
         access_token = get_access_token(credentials)
 
         # Upload to GigaChat
-        base_url = api_base or GIGACHAT_BASE_URL
-        upload_url = f"{base_url}/files"
+        base_url = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        upload_url = build_url(base_url, "files")
 
         client = _get_httpx_client(params={"ssl_verify": False})
         response = client.post(
             upload_url,
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "User-Agent": USER_AGENT,
+            },
             files={"file": (filename, content_bytes, content_type)},
             data={"purpose": "general"},
             timeout=60,
         )
         response.raise_for_status()
         result = response.json()
+        print(result)
 
         file_id = result.get("id")
         if file_id:
@@ -182,8 +188,8 @@ async def upload_file_async(
         access_token = await get_access_token_async(credentials)
 
         # Upload to GigaChat
-        base_url = api_base or GIGACHAT_BASE_URL
-        upload_url = f"{base_url}/files"
+        base_url = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
+        upload_url = build_url(base_url, "files")
 
         client = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
@@ -191,14 +197,16 @@ async def upload_file_async(
         )
         response = await client.post(
             upload_url,
-            headers={"Authorization": f"Bearer {access_token}"},
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "User-Agent": USER_AGENT,
+            },
             files={"file": (filename, content_bytes, content_type)},
             data={"purpose": "general"},
             timeout=60,
         )
         response.raise_for_status()
         result = response.json()
-
         file_id = result.get("id")
         if file_id:
             _file_cache[url_hash] = file_id
