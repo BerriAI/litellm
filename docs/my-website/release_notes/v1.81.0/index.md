@@ -47,7 +47,7 @@ pip install litellm==1.81.0
 
 - **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
 - **Major Change** - [50MB limit on image URL downloads](#major-change---chatcompletions-image-url-download-size-limit) to improve reliability
-- **Performance** - [25% CPU Usage Reduction](#performance---25-cpu-usage-reduction) by preventing unbounded queue growth in GCS Bucket logging
+- **Performance** - [25% CPU Usage Reduction](#performance---25-cpu-usage-reduction) by removing premature model.dump() calls from the hot path
 
 ---
 
