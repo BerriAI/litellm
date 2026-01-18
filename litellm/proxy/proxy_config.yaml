@@ -46,7 +46,21 @@ model_list:
       api_base: https://krish-mh44t553-eastus2.services.ai.azure.com
       api_key: os.environ/AZURE_ANTHROPIC_API_KEY
 
+# Search Tools Configuration - Define search providers for WebSearch interception
+# search_tools:
+#   - search_tool_name: "my-perplexity-search"
+#     litellm_params:
+#       search_provider: "perplexity"  # Can be: perplexity, brave, etc.
+
+litellm_settings:
+  callbacks: ["websearch_interception"]
+  # WebSearch Interception - Automatically intercepts and executes WebSearch tool calls
+  # for models that don't natively support web search (e.g., Bedrock/Claude)
+  websearch_interception_params:
+    enabled_providers: ["bedrock"]  # List of providers to enable interception for
+    search_tool_name: "my-perplexity-search"  # Optional: Name of search tool from search_tools config
 
 general_settings:
   store_prompts_in_spend_logs: true
   forward_client_headers_to_llm_api: true
+

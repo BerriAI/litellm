@@ -4418,6 +4418,41 @@ class BaseLLMHTTPHandler:
                     f"LiteLLM.AgenticHookError: Exception in agentic completion hooks: {str(e)}"
                 )
 
+        # Check if we need to convert response to fake stream
+        # This happens when:
+        # 1. Stream was originally True but converted to False for WebSearch interception
+        # 2. No agentic loop ran (LLM didn't use the tool)
+        # 3. We have a non-streaming response that needs to be converted to streaming
+        websearch_converted_stream = (
+            logging_obj.model_call_details.get("websearch_interception_converted_stream", False)
+            if logging_obj is not None
+            else False
+        )
+        
+        if websearch_converted_stream:
+            from typing import cast
+
+            from litellm._logging import verbose_logger
+            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                FakeAnthropicMessagesStreamIterator,
+            )
+            from litellm.types.llms.anthropic_messages.anthropic_response import (
+                AnthropicMessagesResponse,
+            )
+            
+            verbose_logger.debug(
+                "WebSearchInterception: No tool call made, converting non-streaming response to fake stream"
+            )
+            
+            # Convert the non-streaming response to a fake stream
+            # The response should be an AnthropicMessagesResponse (dict)
+            if isinstance(response, dict):
+                # Create a fake streaming iterator
+                fake_stream = FakeAnthropicMessagesStreamIterator(
+                    response=cast(AnthropicMessagesResponse, response)
+                )
+                return fake_stream
+        
         return None
 
     def _handle_error(
