@@ -1,5 +1,5 @@
 ---
-title: "v1.81.0 - Claude Code Web Search Support"
+title: "v1.81.0 - Claude Code - Web Search with all LiteLLM Providers"
 slug: "v1-81-0"
 date: 2026-01-18T10:00:00
 authors:
