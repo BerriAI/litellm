@@ -47,6 +47,7 @@ pip install litellm==1.81.0
 
 - **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
 - **Major Change** - [50MB limit on image URL downloads](#major-change---chatcompletions-image-url-download-size-limit) to improve reliability
+- **Performance** - [25% CPU Usage Reduction](#performance---25-cpu-usage-reduction) by preventing unbounded queue growth in GCS Bucket logging
 
 ---
 
@@ -137,6 +138,13 @@ This feature improves reliability by:
 - Preventing memory issues from very large images
 - Aligning with OpenAI's 50MB payload limit
 - Validating image sizes early (when Content-Length header is available)
+
+---
+
+## Performance - 25% CPU Usage Reduction
+
+
+LiteLLM now reduces CPU usage by removing premature `model.dump()` calls from the hot path in request processing. Previously, Pydantic model serialization was performed earlier and more frequently than necessary, causing unnecessary CPU overhead on every request. By deferring serialization until it is actually needed, LiteLLM reduces CPU usage and improves request throughput under high load.
 
 ---
 
