@@ -43,7 +43,14 @@ pip install litellm==1.81.0
 
 ---
 
-## Major change - /chat/completions Image URL Download Size Limit
+## Key Highlights
+
+- **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
+- **Major Change** - [50MB limit on image URL downloads](#major-change---chatcompletions-image-url-download-size-limit) to improve reliability
+
+---
+
+## Major Change - /chat/completions Image URL Download Size Limit
 
 To improve reliability and prevent memory issues, LiteLLM now includes a configurable **50MB limit** on image URL downloads by default. Previously, there was no limit on image downloads, which could occasionally cause memory issues with very large images.
 
@@ -130,12 +137,6 @@ This feature improves reliability by:
 - Preventing memory issues from very large images
 - Aligning with OpenAI's 50MB payload limit
 - Validating image sizes early (when Content-Length header is available)
-
----
-
-## Key Highlights
-
-- **Claude Code** - Support for using web search across Bedrock, Vertex AI, and all LiteLLM providers
 
 ---
 
