@@ -18,7 +18,7 @@ Supported features:
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional, Union, Tuple
 
 import httpx
 
@@ -198,22 +198,6 @@ class GigaChatConfig(BaseConfig):
                     optional_params["functions"].append(function_def)
                     optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
-            # GigaChat-specific params
-            elif param == "repetition_penalty":
-                optional_params["repetition_penalty"] = value
-            elif param == "update_interval":
-                optional_params["update_interval"] = value
-            elif param == "profanity_check":
-                optional_params["profanity_check"] = value
-            elif param == "flags":
-                optional_params["flags"] = value
-            elif param == "reasoning_effort":
-                if value in ("low", "medium", "high"):
-                    optional_params["reasoning_effort"] = value
-                else:
-                    verbose_logger.warning(
-                        f"Invalid reasoning_effort value: {value}. Must be 'low', 'medium', or 'high'"
-                    )
 
         return optional_params
 
@@ -228,11 +212,6 @@ class GigaChatConfig(BaseConfig):
                     "description": func.get("description", ""),
                     "parameters": func.get("parameters", {}),
                 }
-                # Pass through GigaChat-specific fields if present
-                if "few_shot_examples" in func:
-                    giga_func["few_shot_examples"] = func["few_shot_examples"]
-                if "return_parameters" in func:
-                    giga_func["return_parameters"] = func["return_parameters"]
                 functions.append(giga_func)
         return functions
 
@@ -333,29 +312,7 @@ class GigaChatConfig(BaseConfig):
             # Handle list content (multimodal) - extract text and images
             content = message.get("content")
             if isinstance(content, list):
-                texts = []
-                attachments = []
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "text":
-                            texts.append(part.get("text", ""))
-                        elif part.get("type") == "image_url":
-                            # Extract image URL and upload to GigaChat
-                            image_url = part.get("image_url", {})
-                            if isinstance(image_url, str):
-                                url = image_url
-                            else:
-                                url = image_url.get("url", "")
-                            if url:
-                                file_id = self._upload_file(url)
-                                if file_id:
-                                    attachments.append(file_id)
-                        elif part.get("type") == "file" and part.get("file"):
-                            filename = part["file"].get("filename")
-                            file_data = part["file"].get("file_data")
-                            file_id = self._upload_file(file_data, filename)
-                            if file_id:
-                                attachments.append(file_id)
+                texts, attachments = self._handle_multimodel_content(content)
                 message["content"] = "\n".join(texts) if texts else ""
                 if attachments:
                     message["attachments"] = attachments
@@ -381,6 +338,33 @@ class GigaChatConfig(BaseConfig):
 
         # Collapse consecutive user messages
         return self._collapse_user_messages(transformed)
+
+    def _handle_multimodel_content(self, content: List) -> Tuple[List[str], List[str]]:
+        texts = []
+        attachments = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    texts.append(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    # Extract image URL and upload to GigaChat
+                    image_url = part.get("image_url", {})
+                    if isinstance(image_url, str):
+                        url = image_url
+                    else:
+                        url = image_url.get("url", "")
+                    if url:
+                        file_id = self._upload_file(url)
+                        if file_id:
+                            attachments.append(file_id)
+                elif part.get("type") == "file" and part.get("file"):
+                    filename = part["file"].get("filename")
+                    file_data = part["file"].get("file_data")
+                    file_id = self._upload_file(file_data, filename)
+                    if file_id:
+                        attachments.append(file_id)
+
+        return texts, attachments
 
     def _collapse_user_messages(self, messages: List[dict]) -> List[dict]:
         """Collapse consecutive user messages into one."""
