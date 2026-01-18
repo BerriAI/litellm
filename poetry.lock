@@ -3081,15 +3081,15 @@ files = [
 
 [[package]]
 name = "litellm-proxy-extras"
-version = "0.4.21"
+version = "0.4.23"
 description = "Additional files for the LiteLLM Proxy. Reduces the size of the main litellm package."
 optional = true
 python-versions = "!=2.7.*,!=3.0.*,!=3.1.*,!=3.2.*,!=3.3.*,!=3.4.*,!=3.5.*,!=3.6.*,!=3.7.*,>=3.8"
 groups = ["main"]
 markers = "extra == \"proxy\""
 files = [
-    {file = "litellm_proxy_extras-0.4.21-py3-none-any.whl", hash = "sha256:83a1734e9773610945230606012e602bbcbfba1c60fde836d51102c1a296f166"},
-    {file = "litellm_proxy_extras-0.4.21.tar.gz", hash = "sha256:fa0e012984aa8e5114f88f4bad53d6abb589e5ca3eab445f74f8ddeceb62d848"},
+    {file = "litellm_proxy_extras-0.4.23-py3-none-any.whl", hash = "sha256:dfda21203dde9fd97cf364396a9b5be0cfdf00fa9846439ee33ce11b7a52f9ce"},
+    {file = "litellm_proxy_extras-0.4.23.tar.gz", hash = "sha256:8e3f95576dc2a296e7f73d8c87e73628bd899b4644c45863960fe3c3762d8f64"},
 ]
 
 [[package]]
@@ -7981,4 +7981,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "ea62b77c662ab9fc486e421c576f0868bcde16d62a24703ee1f4916a0465ffb2"
+content-hash = "2d6b3d8d44919c29315b5e645befbf745a276714a2454c563d460a6a001b90af"
