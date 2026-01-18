@@ -133,6 +133,26 @@ ALL_LOGGERS = [
 ]
 
 
+def _get_loggers_to_initialize():
+    """
+    Get all loggers that should be initialized with the JSON handler.
+
+    Includes third-party integration loggers (like langfuse) if they are
+    configured as callbacks.
+    """
+    import litellm
+
+    loggers = list(ALL_LOGGERS)
+
+    # Add langfuse logger if langfuse is being used as a callback
+    langfuse_callbacks = {"langfuse", "langfuse_otel"}
+    all_callbacks = set(litellm.success_callback + litellm.failure_callback)
+    if langfuse_callbacks & all_callbacks:
+        loggers.append(logging.getLogger("langfuse"))
+
+    return loggers
+
+
 def _initialize_loggers_with_handler(handler: logging.Handler):
     """
     Initialize all loggers with a handler
@@ -140,7 +160,7 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
-    for lg in ALL_LOGGERS:
+    for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root

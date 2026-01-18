@@ -29,6 +29,7 @@ import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { getModelDisplayName } from "./key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "./mcp_server_management/MCPServerSelector";
+import { ModelSelect } from "./ModelSelect/ModelSelect";
 import NotificationsManager from "./molecules/notifications_manager";
 import { Organization, organizationCreateCall, organizationDeleteCall, organizationListCall } from "./networking";
 import OrganizationInfoView from "./organization/organization_view";
@@ -473,18 +474,12 @@ const OrganizationsTable: React.FC<OrganizationsTableProps> = ({
             <TextInput placeholder="" />
           </Form.Item>
           <Form.Item label="Models" name="models">
-            <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-              <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                All Proxy Models
-              </Select2.Option>
-              {userModels &&
-                userModels.length > 0 &&
-                userModels.map((model) => (
-                  <Select2.Option key={model} value={model}>
-                    {getModelDisplayName(model)}
-                  </Select2.Option>
-                ))}
-            </Select2>
+            <ModelSelect
+              options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
+              value={form.getFieldValue("models")}
+              onChange={(values) => form.setFieldValue("models", values)}
+              context="organization"
+            />
           </Form.Item>
 
           <Form.Item label="Max Budget (USD)" name="max_budget">
