@@ -2,35 +2,6 @@
 
 Enable Claude Code's web search tool to work with any provider (Bedrock, Azure, Vertex, etc.). LiteLLM automatically intercepts web search requests and executes them server-side.
 
-## How It Works
-
-When Claude Code sends a web search request, LiteLLM:
-1. Intercepts the native `web_search` tool
-2. Converts it to LiteLLM's standard format
-3. Executes the search via Perplexity/Tavily
-4. Returns the final answer to Claude Code
-
-```mermaid
-sequenceDiagram
-    participant CC as Claude Code
-    participant LP as LiteLLM Proxy
-    participant B as Bedrock/Azure/etc
-    participant P as Perplexity/Tavily
-
-    CC->>LP: Request with web_search tool
-    Note over LP: Convert native tool<br/>to LiteLLM format
-    LP->>B: Request with converted tool
-    B-->>LP: Response: tool_use
-    Note over LP: Detect web search<br/>tool_use
-    LP->>P: Execute search
-    P-->>LP: Search results
-    LP->>B: Follow-up with results
-    B-->>LP: Final answer
-    LP-->>CC: Final answer with search results
-```
-
-**Result**: One API call from Claude Code → Complete answer with search results
-
 ## Proxy Configuration
 
 Add WebSearch interception to your `litellm_config.yaml`:
@@ -102,6 +73,35 @@ claude
 
 Now use web search in Claude Code - it works with any provider!
 
+## How It Works
+
+When Claude Code sends a web search request, LiteLLM:
+1. Intercepts the native `web_search` tool
+2. Converts it to LiteLLM's standard format
+3. Executes the search via Perplexity/Tavily
+4. Returns the final answer to Claude Code
+
+```mermaid
+sequenceDiagram
+    participant CC as Claude Code
+    participant LP as LiteLLM Proxy
+    participant B as Bedrock/Azure/etc
+    participant P as Perplexity/Tavily
+
+    CC->>LP: Request with web_search tool
+    Note over LP: Convert native tool<br/>to LiteLLM format
+    LP->>B: Request with converted tool
+    B-->>LP: Response: tool_use
+    Note over LP: Detect web search<br/>tool_use
+    LP->>P: Execute search
+    P-->>LP: Search results
+    LP->>B: Follow-up with results
+    B-->>LP: Final answer
+    LP-->>CC: Final answer with search results
+```
+
+**Result**: One API call from Claude Code → Complete answer with search results
+
 ## Supported Providers
 
 | Provider | Native Web Search | With LiteLLM |
@@ -114,12 +114,14 @@ Now use web search in Claude Code - it works with any provider!
 
 ## Search Providers
 
-Configure which search provider to use:
+Configure which search provider to use. LiteLLM supports multiple search providers:
 
 | Provider | Configuration |
 |----------|---------------|
 | **Perplexity** | `search_provider: perplexity` |
 | **Tavily** | `search_provider: tavily` |
+
+See [all supported search providers](../search/index.md) for the complete list.
 
 ## Configuration Options
 
