@@ -2143,6 +2143,9 @@ def anthropic_messages_pt(  # noqa: PLR0915
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
 
+        # Track unique tool IDs in this merge block to avoid duplication
+        unique_tool_ids: Set[str] = set()
+
         assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
         while msg_i < len(messages) and messages[msg_i]["role"] == "assistant":
@@ -2236,13 +2239,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                 )
-                # AnthropicMessagesAssistantMessageValues includes AnthropicMessagesToolUseParam
-                assistant_content.extend(
-                    cast(
-                        List[AnthropicMessagesAssistantMessageValues],
-                        tool_invoke_results,
+
+                # Prevent "tool_use ids must be unique" errors by filtering duplicates
+                # This can happen when merging history that already contains the tool calls
+                for item in tool_invoke_results:
+                    # tool_use items are typically dicts, but handle objects just in case
+                    item_id = (
+                        item.get("id")
+                        if isinstance(item, dict)
+                        else getattr(item, "id", None)
                     )
-                )
+
+                    if item_id:
+                        if item_id in unique_tool_ids:
+                            continue
+                        unique_tool_ids.add(item_id)
+
+                    assistant_content.append(
+                        cast(AnthropicMessagesAssistantMessageValues, item)
+                    )
 
             assistant_function_call = assistant_content_block.get("function_call")
 
