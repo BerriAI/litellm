@@ -158,9 +158,6 @@ This feature improves reliability by:
 #### Features
 
 - **[Anthropic](../../docs/providers/anthropic)**
-  - Add support for Tool Search on `/messages` API across Azure, Bedrock, and Anthropic API - [PR #19165](https://github.com/BerriAI/litellm/pull/19165)
-  - Track end-users with Claude Code for better analytics and monitoring - [PR #19171](https://github.com/BerriAI/litellm/pull/19171)
-  - Add web search support using LiteLLM `/search` endpoint - [PR #19263](https://github.com/BerriAI/litellm/pull/19263), [PR #19294](https://github.com/BerriAI/litellm/pull/19294)
   - Add missing anthropic tool results in response - [PR #18945](https://github.com/BerriAI/litellm/pull/18945)
   - Preserve web_fetch_tool_result in multi-turn conversations - [PR #18142](https://github.com/BerriAI/litellm/pull/18142)
 
@@ -176,8 +173,6 @@ This feature improves reliability by:
   - Keep type field in Gemini schema when properties is empty - [PR #18979](https://github.com/BerriAI/litellm/pull/18979)
 
 - **[Bedrock](../../docs/providers/bedrock)**
-  - Add support for Prompt Caching with Bedrock Converse - [PR #19123](https://github.com/BerriAI/litellm/pull/19123)
-  - Ensure budget tokens are passed to converse API correctly - [PR #19107](https://github.com/BerriAI/litellm/pull/19107)
   - Add OpenAI-compatible service_tier parameter translation - [PR #18091](https://github.com/BerriAI/litellm/pull/18091)
   - Add user auth in standard logging object for Bedrock passthrough - [PR #19140](https://github.com/BerriAI/litellm/pull/19140)
   - Strip throughput tier suffixes from model names - [PR #19147](https://github.com/BerriAI/litellm/pull/19147)
@@ -226,7 +221,7 @@ This feature improves reliability by:
   - Fix Vertex AI 400 Error with CachedContent model mismatch - [PR #19193](https://github.com/BerriAI/litellm/pull/19193)
 
 - **[Bedrock](../../docs/providers/bedrock)**
-  - Fix Claude Code Bedrock Invoke usage and request signing - [PR #19111](https://github.com/BerriAI/litellm/pull/19111)
+  - Fix Claude Code (`/messages`) Bedrock Invoke usage and request signing - [PR #19111](https://github.com/BerriAI/litellm/pull/19111)
   - Fix model ID encoding for Bedrock passthrough - [PR #18944](https://github.com/BerriAI/litellm/pull/18944)
   - Respect max_completion_tokens in thinking feature - [PR #18946](https://github.com/BerriAI/litellm/pull/18946)
   - Fix header forwarding in Bedrock passthrough - [PR #19007](https://github.com/BerriAI/litellm/pull/19007)
@@ -237,6 +232,15 @@ This feature improves reliability by:
 ## LLM API Endpoints
 
 #### Features
+
+- **[/messages (Claude Code)](../../docs/providers/anthropic)**
+  - Add support for Tool Search on `/messages` API across Azure, Bedrock, and Anthropic API - [PR #19165](https://github.com/BerriAI/litellm/pull/19165)
+  - Track end-users with Claude Code (`/messages`) for better analytics and monitoring - [PR #19171](https://github.com/BerriAI/litellm/pull/19171)
+  - Add web search support using LiteLLM `/search` endpoint with Claude Code (`/messages`) - [PR #19263](https://github.com/BerriAI/litellm/pull/19263), [PR #19294](https://github.com/BerriAI/litellm/pull/19294)
+
+- **[/messages (Claude Code) - Bedrock](../../docs/providers/bedrock)**
+  - Add support for Prompt Caching with Bedrock Converse on `/messages` - [PR #19123](https://github.com/BerriAI/litellm/pull/19123)
+  - Ensure budget tokens are passed to Bedrock Converse API correctly on `/messages` - [PR #19107](https://github.com/BerriAI/litellm/pull/19107)
 
 - **[Responses API](../../docs/response_api)**
   - Add support for caching for responses API - [PR #19068](https://github.com/BerriAI/litellm/pull/19068)
@@ -421,9 +425,11 @@ This feature improves reliability by:
 
 ## Database Changes
 
-- Add created_at/updated_at fields to LiteLLM_ProxyModelTable - [PR #18937](https://github.com/BerriAI/litellm/pull/18937)
-- Include proxy/prisma_migration.py in non-root - [PR #18971](https://github.com/BerriAI/litellm/pull/18971)
-- Update prisma_migration.py - [PR #19083](https://github.com/BerriAI/litellm/pull/19083)
+### Schema Updates
+
+| Table | Change Type | Description | PR |
+| ----- | ----------- | ----------- | -- |
+| `LiteLLM_ProxyModelTable` | New Columns | Added `created_at` and `updated_at` timestamp fields | [PR #18937](https://github.com/BerriAI/litellm/pull/18937) |
 
 ---
 
@@ -452,6 +458,8 @@ This feature improves reliability by:
 - Normalize OpenAI SDK BaseModel choices/messages to avoid Pydantic serializer warnings - [PR #18972](https://github.com/BerriAI/litellm/pull/18972)
 - Add contextual gap checks and word-form digits - [PR #18301](https://github.com/BerriAI/litellm/pull/18301)
 - Clean up orphaned files from repository root - [PR #19150](https://github.com/BerriAI/litellm/pull/19150)
+- Include proxy/prisma_migration.py in non-root - [PR #18971](https://github.com/BerriAI/litellm/pull/18971)
+- Update prisma_migration.py - [PR #19083](https://github.com/BerriAI/litellm/pull/19083)
 
 ---
 
