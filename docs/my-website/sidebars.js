@@ -121,6 +121,8 @@ const sidebars = {
           label: "Claude Code",
           items: [
             "tutorials/claude_responses_api",
+            "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
           ]
@@ -275,10 +277,19 @@ const sidebars = {
             "tutorials/scim_litellm",
             {
               type: "category",
+              label: "UI Usage Tracking",
+              items: [
+                "proxy/customer_usage",
+                "proxy/endpoint_activity"
+              ]
+            },
+            {
+              type: "category",
               label: "UI Logs",
               items: [
                 "proxy/ui_logs",
-                "proxy/ui_logs_sessions"
+                "proxy/ui_logs_sessions",
+                "proxy/deleted_keys_teams"
               ]
             }
           ],
@@ -328,7 +339,6 @@ const sidebars = {
             "proxy/team_budgets",
             "proxy/tag_budgets",
             "proxy/customers",
-            "proxy/customer_usage",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
@@ -857,6 +867,7 @@ const sidebars = {
         "proxy/load_balancing",
         "proxy/provider_budget_routing",
         "proxy/reliability",
+        "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
         "wildcard_routing"

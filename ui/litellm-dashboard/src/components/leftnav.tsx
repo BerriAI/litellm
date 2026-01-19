@@ -7,6 +7,7 @@ import {
   BarChartOutlined,
   BgColorsOutlined,
   BlockOutlined,
+  BookOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -47,6 +48,7 @@ interface MenuItem {
   roles?: string[];
   children?: MenuItem[];
   icon?: React.ReactNode;
+  external_url?: string;
 }
 
 // Group configuration
@@ -152,16 +154,16 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           page: "new_usage",
           icon: <BarChartOutlined />,
           roles: [...all_admin_roles, ...internalUserRoles],
-          label: (
-            <span className="flex items-center gap-4">
-              Usage <NewBadge />
-            </span>
-          ),
+          label: "Usage",
         },
         {
           key: "logs",
           page: "logs",
-          label: "Logs",
+          label: (
+            <span className="flex items-center gap-4">
+              Logs <NewBadge />
+            </span>
+          ),
           icon: <LineChartOutlined />,
         },
       ],
@@ -214,6 +216,13 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           icon: <AppstoreOutlined />,
         },
         {
+          key: "learning-resources",
+          page: "learning-resources",
+          label: "Learning Resources",
+          icon: <BookOutlined />,
+          external_url: "https://models.litellm.ai/cookbook",
+        },
+        {
           key: "experimental",
           page: "experimental",
           label: "Experimental",
@@ -252,7 +261,7 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
               page: "usage",
               label: "Old Usage",
               icon: <BarChartOutlined />,
-            },
+            }
           ],
         },
       ],
@@ -364,9 +373,23 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
             key: child.key,
             icon: child.icon,
             label: child.label,
-            onClick: () => navigateToPage(child.page),
+            onClick: () => {
+              if (child.external_url) {
+                window.open(child.external_url, "_blank");
+              } else {
+                navigateToPage(child.page);
+              }
+            },
           })),
-          onClick: !item.children ? () => navigateToPage(item.page) : undefined,
+          onClick: !item.children
+            ? () => {
+                if (item.external_url) {
+                  window.open(item.external_url, "_blank");
+                } else {
+                  navigateToPage(item.page);
+                }
+              }
+            : undefined,
         })),
       });
     });
