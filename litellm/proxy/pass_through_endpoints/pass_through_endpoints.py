@@ -51,6 +51,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.utils import get_server_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -2003,7 +2004,7 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = parts[2] if get_server_root_path() == "/" else f"{get_server_root_path()}{parts[2]}"
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -2021,7 +2022,7 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = parts[2] if get_server_root_path() == "/" else f"{get_server_root_path()}{parts[2]}"
 
                 if route_type == "exact" and route == registered_path:
                     return _registered_pass_through_routes[key]
