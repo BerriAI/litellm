@@ -35,7 +35,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Model Information</span>,
+    header: () => <span className="text-sm font-semibold">Информация о модели</span>,
     accessorKey: "model_name",
     size: 250, // Fixed column width
     cell: ({ row }) => {
@@ -44,13 +44,13 @@ export const columns = (
       const tooltipContent = (
         <div>
           <div>
-            <strong>Provider:</strong> {model.provider || "-"}
+            <strong>Провайдер:</strong> {model.provider || "-"}
           </div>
           <div>
-            <strong>Public Model Name:</strong> {displayName}
+            <strong>Публичное имя модели:</strong> {displayName}
           </div>
           <div>
-            <strong>LiteLLM Model Name:</strong> {model.litellm_model_name || "-"}
+            <strong>Имя модели LiteLLM:</strong> {model.litellm_model_name || "-"}
           </div>
         </div>
       );
@@ -82,7 +82,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Credentials</span>,
+    header: () => <span className="text-sm font-semibold">Учетные данные</span>,
     accessorKey: "litellm_credential_name",
     size: 180, // Fixed column width
     cell: ({ row }) => {
@@ -101,13 +101,13 @@ export const columns = (
       ) : (
         <div className="flex items-center space-x-2 max-w-[180px]">
           <KeyIcon className="w-4 h-4 text-gray-300 flex-shrink-0" />
-          <span className="text-xs text-gray-400">No credentials</span>
+          <span className="text-xs text-gray-400">Нет учетных данных</span>
         </div>
       );
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Created By</span>,
+    header: () => <span className="text-sm font-semibold">Создал</span>,
     accessorKey: "model_info.created_by",
     sortingFn: "datetime",
     size: 160, // Fixed column width
@@ -122,23 +122,23 @@ export const columns = (
           {/* Created By - Primary */}
           <div
             className="text-xs font-medium text-gray-900 truncate"
-            title={isConfigModel ? "Defined in config" : createdBy || "Unknown"}
+            title={isConfigModel ? "Определено в конфиге" : createdBy || "Неизвестно"}
           >
-            {isConfigModel ? "Defined in config" : createdBy || "Unknown"}
+            {isConfigModel ? "Определено в конфиге" : createdBy || "Неизвестно"}
           </div>
           {/* Created At - Secondary */}
           <div
             className="text-xs text-gray-500 truncate mt-0.5"
-            title={isConfigModel ? "Config file" : createdAt || "Unknown date"}
+            title={isConfigModel ? "Конфигурационный файл" : createdAt || "Неизвестная дата"}
           >
-            {isConfigModel ? "-" : createdAt || "Unknown date"}
+            {isConfigModel ? "-" : createdAt || "Неизвестная дата"}
           </div>
         </div>
       );
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Updated At</span>,
+    header: () => <span className="text-sm font-semibold">Обновлено</span>,
     accessorKey: "model_info.updated_at",
     sortingFn: "datetime",
     cell: ({ row }) => {
@@ -151,7 +151,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Costs</span>,
+    header: () => <span className="text-sm font-semibold">Стоимость</span>,
     accessorKey: "input_cost",
     size: 120, // Fixed column width
     cell: ({ row }) => {
@@ -169,12 +169,12 @@ export const columns = (
       }
 
       return (
-        <Tooltip title="Cost per 1M tokens">
+          <Tooltip title="Стоимость за 1М токенов">
           <div className="flex flex-col min-w-0 max-w-[120px]">
             {/* Input Cost - Primary */}
-            {inputCost && <div className="text-xs font-medium text-gray-900 truncate">In: ${inputCost}</div>}
+            {inputCost && <div className="text-xs font-medium text-gray-900 truncate">Вход: ${inputCost}</div>}
             {/* Output Cost - Secondary */}
-            {outputCost && <div className="text-xs text-gray-500 truncate mt-0.5">Out: ${outputCost}</div>}
+            {outputCost && <div className="text-xs text-gray-500 truncate mt-0.5">Выход: ${outputCost}</div>}
           </div>
         </Tooltip>
       );
@@ -204,7 +204,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Model Access Group</span>,
+    header: () => <span className="text-sm font-semibold">Группа доступа</span>,
     accessorKey: "model_info.model_access_group",
     enableSorting: false,
     cell: ({ row }) => {
@@ -263,7 +263,7 @@ export const columns = (
     },
   },
   {
-    header: () => <span className="text-sm font-semibold">Status</span>,
+    header: () => <span className="text-sm font-semibold">Статус</span>,
     accessorKey: "model_info.db_model",
     cell: ({ row }) => {
       const model = row.original;
@@ -274,14 +274,14 @@ export const columns = (
           ${model.model_info.db_model ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-600"}
         `}
         >
-          {model.model_info.db_model ? "DB Model" : "Config Model"}
+          {model.model_info.db_model ? "Модель БД" : "Модель конфига"}
         </div>
       );
     },
   },
   {
     id: "actions",
-    header: () => <span className="text-sm font-semibold">Actions</span>,
+    header: () => <span className="text-sm font-semibold">Действия</span>,
     cell: ({ row }) => {
       const model = row.original;
       const canEditModel = userRole === "Admin" || model.model_info?.created_by === userID;
@@ -289,11 +289,11 @@ export const columns = (
       return (
         <div className="flex items-center justify-end gap-2 pr-4">
           {isConfigModel ? (
-            <Tooltip title="Config model cannot be deleted on the dashboard. Please delete it from the config file.">
+            <Tooltip title="Модель конфига не может быть удалена из панели. Пожалуйста, удалите ее из конфигурационного файла.">
               <Icon icon={TrashIcon} size="sm" className="opacity-50 cursor-not-allowed" />
             </Tooltip>
           ) : (
-            <Tooltip title="Delete model">
+            <Tooltip title="Удалить модель">
               <Icon
                 icon={TrashIcon}
                 size="sm"

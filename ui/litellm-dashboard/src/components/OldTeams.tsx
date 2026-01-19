@@ -933,13 +933,13 @@ const Teams: React.FC<TeamProps> = ({
                                               setEditTeam(true);
                                             }}
                                             dataTestId="edit-team-button"
-                                            tooltipText="Edit team"
+                                            tooltipText="Редактировать команду"
                                           />
                                           <TableIconActionButton
                                             variant="Delete"
                                             onClick={() => handleDelete(team)}
                                             dataTestId="delete-team-button"
-                                            tooltipText="Delete team"
+                                            tooltipText="Удалить команду"
                                           />
                                         </>
                                       ) : null}
@@ -950,8 +950,8 @@ const Teams: React.FC<TeamProps> = ({
                               <TableRow>
                                 <TableCell colSpan={9} className="text-center">
                                   <div className="flex flex-col items-center justify-center py-4">
-                                    <Text className="text-lg font-medium mb-2">No teams found</Text>
-                                    <Text className="text-sm">Adjust your filters or create a new team</Text>
+                                    <Text className="text-lg font-medium mb-2">Команды не найдены</Text>
+                                    <Text className="text-sm">Настройте фильтры или создайте новую команду</Text>
                                   </div>
                                 </TableCell>
                               </TableRow>
@@ -960,19 +960,19 @@ const Teams: React.FC<TeamProps> = ({
                         </Table>
                         <DeleteResourceModal
                           isOpen={isDeleteModalOpen}
-                          title="Delete Team?"
+          title="Удалить команду?"
                           alertMessage={
                             teamToDelete?.keys?.length === 0
                               ? undefined
-                              : `Warning: This team has ${teamToDelete?.keys?.length} keys associated with it. Deleting the team will also delete all associated keys. This action is irreversible.`
+                              : `Внимание: У этой команды ${teamToDelete?.keys?.length} связанных ключей. Удаление команды также удалит все связанные ключи. Это действие необратимо.`
                           }
-                          message="Are you sure you want to delete this team and all its keys? This action cannot be undone."
-                          resourceInformationTitle="Team Information"
+          message="Вы уверены, что хотите удалить эту команду и все ее ключи? Это действие нельзя отменить."
+          resourceInformationTitle="Информация о команде"
                           resourceInformation={[
-                            { label: "Team ID", value: teamToDelete?.team_id, code: true },
-                            { label: "Team Name", value: teamToDelete?.team_alias },
-                            { label: "Keys", value: teamToDelete?.keys?.length },
-                            { label: "Members", value: teamToDelete?.members_with_roles?.length },
+            { label: "ID команды", value: teamToDelete?.team_id, code: true },
+            { label: "Название команды", value: teamToDelete?.team_alias },
+            { label: "Ключи", value: teamToDelete?.keys?.length },
+            { label: "Участники", value: teamToDelete?.members_with_roles?.length },
                           ]}
                           requiredConfirmation={teamToDelete?.team_alias}
                           onCancel={cancelDelete}
@@ -996,7 +996,7 @@ const Teams: React.FC<TeamProps> = ({
           )}
           {canCreateOrManageTeams(userRole, userID, organizations) && (
             <Modal
-              title="Create Team"
+              title="Создать команду"
               visible={isTeamModalVisible}
               width={1000}
               footer={null}
@@ -1012,12 +1012,12 @@ const Teams: React.FC<TeamProps> = ({
               >
                 <>
                   <Form.Item
-                    label="Team Name"
+                    label="Название команды"
                     name="team_alias"
                     rules={[
                       {
                         required: true,
-                        message: "Please input a team name",
+                        message: "Введите название команды",
                       },
                     ]}
                   >
@@ -1034,11 +1034,11 @@ const Teams: React.FC<TeamProps> = ({
                         <Form.Item
                           label={
                             <span>
-                              Organization{" "}
+                              Организация{" "}
                               <Tooltip
                                 title={
                                   <span>
-                                    Organizations can have multiple teams. Learn more about{" "}
+                                    Организации могут иметь несколько команд. Узнайте больше о{" "}
                                     <a
                                       href="https://docs.litellm.ai/docs/proxy/user_management_heirarchy"
                                       target="_blank"
@@ -1049,7 +1049,7 @@ const Teams: React.FC<TeamProps> = ({
                                       }}
                                       onClick={(e) => e.stopPropagation()}
                                     >
-                                      user management hierarchy
+                                      иерархии управления пользователями
                                     </a>
                                   </span>
                                 }
@@ -1066,16 +1066,16 @@ const Teams: React.FC<TeamProps> = ({
                               ? [
                                   {
                                     required: true,
-                                    message: "Please select an organization",
+                                    message: "Выберите организацию",
                                   },
                                 ]
                               : []
                           }
                           help={
                             isSingleOrg
-                              ? "You can only create teams within this organization"
+                              ? "Вы можете создавать команды только в этой организации"
                               : isOrgAdmin
-                                ? "required"
+                                ? "обязательно"
                                 : ""
                           }
                         >
@@ -1083,7 +1083,7 @@ const Teams: React.FC<TeamProps> = ({
                             showSearch
                             allowClear={!isOrgAdmin}
                             disabled={isSingleOrg}
-                            placeholder={hasNoOrgs ? "No organizations available" : "Search or select an Organization"}
+                            placeholder={hasNoOrgs ? "Нет доступных организаций" : "Поиск или выбор организации"}
                             onChange={(value) => {
                               form.setFieldValue("organization_id", value);
                               setCurrentOrgForCreateTeam(
@@ -1110,8 +1110,8 @@ const Teams: React.FC<TeamProps> = ({
                         {isOrgAdmin && !isSingleOrg && adminOrgs.length > 1 && (
                           <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
                             <Text className="text-blue-800 text-sm">
-                              Please select an organization to create a team for. You can only create teams within
-                              organizations where you are an admin.
+                              Выберите организацию для создания команды. Вы можете создавать команды только
+                              в организациях, где вы являетесь администратором.
                             </Text>
                           </div>
                         )}
@@ -1121,8 +1121,8 @@ const Teams: React.FC<TeamProps> = ({
                   <Form.Item
                     label={
                       <span>
-                        Models{" "}
-                        <Tooltip title="These are the models that your selected team has access to">
+                        Модели{" "}
+                        <Tooltip title="Это модели, к которым имеет доступ выбранная команда">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
                       </span>

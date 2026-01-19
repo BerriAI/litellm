@@ -8,7 +8,7 @@ export default function LoadingScreen() {
 
       <div className="flex items-center justify-center gap-2">
         <UiLoadingSpinner className="size-4" />
-        <span className="text-gray-600 text-sm">Loading...</span>
+        <span className="text-gray-600 text-sm">Загрузка...</span>
       </div>
     </div>
   );

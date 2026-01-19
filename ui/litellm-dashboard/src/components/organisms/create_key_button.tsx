@@ -484,19 +484,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
         <Button className="mx-auto" onClick={() => setIsModalVisible(true)}>
-          + Create New Key
+          + Создать новый ключ
         </Button>
       )}
       <Modal open={isModalVisible} width={1000} footer={null} onOk={handleOk} onCancel={handleCancel}>
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           {/* Section 1: Key Ownership */}
           <div className="mb-8">
-            <Title className="mb-4">Key Ownership</Title>
+            <Title className="mb-4">Владелец ключа</Title>
             <Form.Item
               label={
                 <span>
-                  Owned By{" "}
-                  <Tooltip title="Select who will own this Virtual Key">
+                  Владелец{" "}
+                  <Tooltip title="Выберите владельца этого виртуального ключа">
                     <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
@@ -504,9 +504,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               className="mb-4"
             >
               <Radio.Group onChange={(e) => setKeyOwner(e.target.value)} value={keyOwner}>
-                <Radio value="you">You</Radio>
-                <Radio value="service_account">Service Account</Radio>
-                {userRole === "Admin" && <Radio value="another_user">Another User</Radio>}
+                <Radio value="you">Вы</Radio>
+                <Radio value="service_account">Сервисный аккаунт</Radio>
+                {userRole === "Admin" && <Radio value="another_user">Другой пользователь</Radio>}
               </Radio.Group>
             </Form.Item>
 
@@ -514,8 +514,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               <Form.Item
                 label={
                   <span>
-                    User ID{" "}
-                    <Tooltip title="The user who will own this key and be responsible for its usage">
+                    ID пользователя{" "}
+                    <Tooltip title="Пользователь, которому будет принадлежать этот ключ">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
@@ -533,7 +533,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   <div style={{ display: "flex", marginBottom: "8px" }}>
                     <Select
                       showSearch
-                      placeholder="Type email to search for users"
+                      placeholder="Введите email для поиска пользователей"
                       filterOption={false}
                       onSearch={handleUserSearch}
                       onSelect={(value, option) => handleUserSelect(value, option as UserOption)}
@@ -541,21 +541,21 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                       loading={userSearchLoading}
                       allowClear
                       style={{ width: "100%" }}
-                      notFoundContent={userSearchLoading ? "Searching..." : "No users found"}
+                      notFoundContent={userSearchLoading ? "Поиск..." : "Пользователи не найдены"}
                     />
                     <Button2 onClick={() => setIsCreateUserModalVisible(true)} style={{ marginLeft: "8px" }}>
-                      Create User
+                      Создать пользователя
                     </Button2>
                   </div>
-                  <div className="text-xs text-gray-500">Search by email to find users</div>
+                  <div className="text-xs text-gray-500">Поиск по email</div>
                 </div>
               </Form.Item>
             )}
             <Form.Item
               label={
                 <span>
-                  Team{" "}
-                  <Tooltip title="The team this key belongs to, which determines available models and budget limits">
+                  Команда{" "}
+                  <Tooltip title="Команда, к которой относится этот ключ. Определяет доступные модели и лимиты бюджета">
                     <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                   </Tooltip>
                 </span>
@@ -566,10 +566,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               rules={[
                 {
                   required: keyOwner === "service_account",
-                  message: "Please select a team for the service account",
+                  message: "Выберите команду для сервисного аккаунта",
                 },
               ]}
-              help={keyOwner === "service_account" ? "required" : ""}
+              help={keyOwner === "service_account" ? "обязательно" : ""}
             >
               <TeamDropdown
                 teams={teams}
@@ -585,8 +585,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
           {isFormDisabled && (
             <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-md">
               <Text className="text-blue-800 text-sm">
-                Please select a team to continue configuring your Virtual Key. If you do not see any teams, please
-                contact your Proxy Admin to either provide you with access to models or to add you to a team.
+                Выберите команду для продолжения настройки виртуального ключа. Если вы не видите команд,
+                свяжитесь с администратором для получения доступа к моделям или добавления в команду.
               </Text>
             </div>
           )}
@@ -594,16 +594,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
           {/* Section 2: Key Details */}
           {!isFormDisabled && (
             <div className="mb-8">
-              <Title className="mb-4">Key Details</Title>
+              <Title className="mb-4">Детали ключа</Title>
               <Form.Item
                 label={
                   <span>
-                    {keyOwner === "you" || keyOwner === "another_user" ? "Key Name" : "Service Account ID"}{" "}
+                    {keyOwner === "you" || keyOwner === "another_user" ? "Название ключа" : "ID сервисного аккаунта"}{" "}
                     <Tooltip
                       title={
                         keyOwner === "you" || keyOwner === "another_user"
-                          ? "A descriptive name to identify this key"
-                          : "Unique identifier for this service account"
+                          ? "Описательное имя для идентификации ключа"
+                          : "Уникальный идентификатор сервисного аккаунта"
                       }
                     >
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
@@ -614,10 +614,10 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 rules={[
                   {
                     required: true,
-                    message: `Please input a ${keyOwner === "you" ? "key name" : "service account ID"}`,
+                    message: `Введите ${keyOwner === "you" ? "название ключа" : "ID сервисного аккаунта"}`,
                   },
                 ]}
-                help="required"
+                help="обязательно"
               >
                 <TextInput placeholder="" />
               </Form.Item>
@@ -625,8 +625,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               <Form.Item
                 label={
                   <span>
-                    Models{" "}
-                    <Tooltip title="Select which models this key can access. Choose 'All Team Models' to grant access to all models available to the team">
+                    Модели{" "}
+                    <Tooltip title="Выберите модели, к которым будет иметь доступ этот ключ. Выберите 'Все модели команды' для доступа ко всем моделям">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
@@ -635,18 +635,18 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                 rules={
                   keyType === "management" || keyType === "read_only"
                     ? []
-                    : [{ required: true, message: "Please select a model" }]
+                    : [{ required: true, message: "Выберите модель" }]
                 }
                 help={
                   keyType === "management" || keyType === "read_only"
-                    ? "Models field is disabled for this key type"
-                    : "required"
+                    ? "Поле моделей отключено для этого типа ключа"
+                    : "обязательно"
                 }
                 className="mt-4"
               >
                 <Select
                   mode="multiple"
-                  placeholder="Select models"
+                  placeholder="Выберите модели"
                   style={{ width: "100%" }}
                   disabled={keyType === "management" || keyType === "read_only"}
                   onChange={(values) => {
@@ -656,7 +656,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   }}
                 >
                   <Option key="all-team-models" value="all-team-models">
-                    All Team Models
+                    Все модели команды
                   </Option>
                   {modelsToPick.map((model: string) => (
                     <Option key={model} value={model}>
@@ -669,8 +669,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               <Form.Item
                 label={
                   <span>
-                    Key Type{" "}
-                    <Tooltip title="Select the type of key to determine what routes and operations this key can access">
+                    Тип ключа{" "}
+                    <Tooltip title="Выберите тип ключа для определения доступных маршрутов и операций">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
@@ -681,7 +681,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
               >
                 <Select
                   defaultValue="default"
-                  placeholder="Select key type"
+                  placeholder="Выберите тип ключа"
                   style={{ width: "100%" }}
                   optionLabelProp="label"
                   onChange={(value) => {
@@ -692,11 +692,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     }
                   }}
                 >
-                  <Option value="default" label="Default">
+                  <Option value="default" label="По умолчанию">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Default</div>
+                      <div style={{ fontWeight: 500 }}>По умолчанию</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call LLM API + Management routes
+                        Доступ к LLM API + Управление
                       </div>
                     </div>
                   </Option>
@@ -704,15 +704,15 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     <div style={{ padding: "4px 0" }}>
                       <div style={{ fontWeight: 500 }}>LLM API</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call only LLM API routes (chat/completions, embeddings, etc.)
+                        Только LLM API маршруты (chat/completions, embeddings, и т.д.)
                       </div>
                     </div>
                   </Option>
-                  <Option value="management" label="Management">
+                  <Option value="management" label="Управление">
                     <div style={{ padding: "4px 0" }}>
-                      <div style={{ fontWeight: 500 }}>Management</div>
+                      <div style={{ fontWeight: 500 }}>Управление</div>
                       <div style={{ fontSize: "11px", color: "#6b7280", marginTop: "2px" }}>
-                        Can call only management routes (user/team/key management)
+                        Только маршруты управления (пользователи/команды/ключи)
                       </div>
                     </div>
                   </Option>
@@ -726,27 +726,27 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
             <div className="mb-8">
               <Accordion className="mt-4 mb-4">
                 <AccordionHeader>
-                  <Title className="m-0">Optional Settings</Title>
+                  <Title className="m-0">Дополнительные настройки</Title>
                 </AccordionHeader>
                 <AccordionBody>
                   <Form.Item
                     className="mt-4"
                     label={
                       <span>
-                        Max Budget (USD){" "}
-                        <Tooltip title="Maximum amount in USD this key can spend. When reached, the key will be blocked from making further requests">
+                        Макс. бюджет (USD){" "}
+                        <Tooltip title="Максимальная сумма в долларах, которую может потратить этот ключ. При достижении лимита ключ блокируется">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
                       </span>
                     }
                     name="max_budget"
-                    help={`Budget cannot exceed team max budget: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "unlimited"}`}
+                    help={`Бюджет не может превышать бюджет команды: $${team?.max_budget !== null && team?.max_budget !== undefined ? team?.max_budget : "неограничен"}`}
                     rules={[
                       {
                         validator: async (_, value) => {
                           if (value && team && team.max_budget !== null && value > team.max_budget) {
                             throw new Error(
-                              `Budget cannot exceed team max budget: $${formatNumberWithCommas(team.max_budget, 4)}`,
+                              `Бюджет не может превышать бюджет команды: $${formatNumberWithCommas(team.max_budget, 4)}`,
                             );
                           }
                         },
@@ -759,14 +759,14 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     label={
                       <span>
-                        Reset Budget{" "}
-                        <Tooltip title="How often the budget should reset. For example, setting 'daily' will reset the budget every 24 hours">
+                        Сброс бюджета{" "}
+                        <Tooltip title="Как часто сбрасывается бюджет. Например, 'ежедневно' сбросит бюджет каждые 24 часа">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
                       </span>
                     }
                     name="budget_duration"
-                    help={`Team Reset Budget: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "None"}`}
+                    help={`Сброс бюджета команды: ${team?.budget_duration !== null && team?.budget_duration !== undefined ? team?.budget_duration : "Нет"}`}
                   >
                     <BudgetDurationDropdown onChange={(value) => form.setFieldValue("budget_duration", value)} />
                   </Form.Item>
@@ -774,19 +774,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     label={
                       <span>
-                        Tokens per minute Limit (TPM){" "}
-                        <Tooltip title="Maximum number of tokens this key can process per minute. Helps control usage and costs">
+                        Лимит токенов в минуту (TPM){" "}
+                        <Tooltip title="Максимальное количество токенов, которое ключ может обработать за минуту. Помогает контролировать использование и расходы">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
                       </span>
                     }
                     name="tpm_limit"
-                    help={`TPM cannot exceed team TPM limit: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "unlimited"}`}
+                    help={`TPM не может превышать лимит команды: ${team?.tpm_limit !== null && team?.tpm_limit !== undefined ? team?.tpm_limit : "неограничен"}`}
                     rules={[
                       {
                         validator: async (_, value) => {
                           if (value && team && team.tpm_limit !== null && value > team.tpm_limit) {
-                            throw new Error(`TPM limit cannot exceed team TPM limit: ${team.tpm_limit}`);
+                            throw new Error(`Лимит TPM не может превышать лимит команды: ${team.tpm_limit}`);
                           }
                         },
                       },
@@ -806,19 +806,19 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     label={
                       <span>
-                        Requests per minute Limit (RPM){" "}
-                        <Tooltip title="Maximum number of API requests this key can make per minute. Helps prevent abuse and manage load">
+                        Лимит запросов в минуту (RPM){" "}
+                        <Tooltip title="Максимальное количество API-запросов, которые ключ может сделать за минуту. Помогает предотвратить злоупотребления и управлять нагрузкой">
                           <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                         </Tooltip>
                       </span>
                     }
                     name="rpm_limit"
-                    help={`RPM cannot exceed team RPM limit: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "unlimited"}`}
+                    help={`RPM не может превышать лимит команды: ${team?.rpm_limit !== null && team?.rpm_limit !== undefined ? team?.rpm_limit : "неограничен"}`}
                     rules={[
                       {
                         validator: async (_, value) => {
                           if (value && team && team.rpm_limit !== null && value > team.rpm_limit) {
-                            throw new Error(`RPM limit cannot exceed team RPM limit: ${team.rpm_limit}`);
+                            throw new Error(`Лимит RPM не может превышать лимит команды: ${team.rpm_limit}`);
                           }
                         },
                       },
@@ -837,8 +837,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   <Form.Item
                     label={
                       <span>
-                        Guardrails{" "}
-                        <Tooltip title="Apply safety guardrails to this key to filter content or enforce policies">
+                        Контрольные барьеры{" "}
+                        <Tooltip title="Применить контрольные барьеры для фильтрации контента или применения политик">
                           <a
                             href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
                             target="_blank"
@@ -854,8 +854,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     className="mt-4"
                     help={
                       premiumUser
-                        ? "Select existing guardrails or enter new ones"
-                        : "Premium feature - Upgrade to set guardrails by key"
+                        ? "Выберите существующие барьеры или введите новые"
+                        : "Премиум-функция - обновитесь для настройки барьеров"
                     }
                   >
                     <Select
@@ -864,8 +864,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                       disabled={!premiumUser}
                       placeholder={
                         !premiumUser
-                          ? "Premium feature - Upgrade to set guardrails by key"
-                          : "Select or enter guardrails"
+                          ? "Премиум-функция - обновитесь для настройки барьеров"
+                          : "Выберите или введите барьеры"
                       }
                       options={guardrailsList.map((name) => ({ value: name, label: name }))}
                     />
@@ -873,8 +873,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   <Form.Item
                     label={
                       <span>
-                        Disable Global Guardrails{" "}
-                        <Tooltip title="When enabled, this key will bypass any guardrails configured to run on every request (global guardrails)">
+                        Отключить глобальные барьеры{" "}
+                        <Tooltip title="При включении этот ключ обойдет все барьеры, настроенные для всех запросов (глобальные барьеры)">
                           <a
                             href="https://docs.litellm.ai/docs/proxy/guardrails/quick_start"
                             target="_blank"
@@ -891,11 +891,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     valuePropName="checked"
                     help={
                       premiumUser
-                        ? "Bypass global guardrails for this key"
-                        : "Premium feature - Upgrade to disable global guardrails by key"
+                        ? "Обойти глобальные барьеры для этого ключа"
+                        : "Премиум-функция - обновитесь для отключения глобальных барьеров"
                     }
                   >
-                    <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                    <Switch disabled={!premiumUser} checkedChildren="Да" unCheckedChildren="Нет" />
                   </Form.Item>
                   <Form.Item
                     label={

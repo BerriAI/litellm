@@ -25,7 +25,7 @@ export const columns = (
   // Backend sortable columns: user_id, user_email, created_at, spend, user_alias, user_role
   const baseColumns: ColumnDef<UserInfo>[] = [
     {
-      header: "User ID",
+      header: "ID пользователя",
       accessorKey: "user_id",
       enableSorting: true,
       cell: ({ row }) => (
@@ -41,19 +41,19 @@ export const columns = (
       cell: ({ row }) => <span className="text-xs">{row.original.user_email || "-"}</span>,
     },
     {
-      header: "Global Proxy Role",
+      header: "Глобальная роль",
       accessorKey: "user_role",
       enableSorting: true,
       cell: ({ row }) => <span className="text-xs">{possibleUIRoles?.[row.original.user_role]?.ui_label || "-"}</span>,
     },
     {
-      header: "User Alias",
+      header: "Псевдоним",
       accessorKey: "user_alias",
       enableSorting: false,
       cell: ({ row }) => <span className="text-xs">{row.original.user_alias || "-"}</span>,
     },
     {
-      header: "Spend (USD)",
+      header: "Расходы (USD)",
       accessorKey: "spend",
       enableSorting: true,
       cell: ({ row }) => (
@@ -61,18 +61,18 @@ export const columns = (
       ),
     },
     {
-      header: "Budget (USD)",
+      header: "Бюджет (USD)",
       accessorKey: "max_budget",
       enableSorting: false,
       cell: ({ row }) => (
-        <span className="text-xs">{row.original.max_budget !== null ? row.original.max_budget : "Unlimited"}</span>
+        <span className="text-xs">{row.original.max_budget !== null ? row.original.max_budget : "Неограничен"}</span>
       ),
     },
     {
       header: () => (
         <div className="flex items-center gap-2">
           <span>SSO ID</span>
-          <Tooltip title="SSO ID is the ID of the user in the SSO provider. If the user is not using SSO, this will be null.">
+          <Tooltip title="SSO ID - это идентификатор пользователя в SSO провайдере. Если пользователь не использует SSO, это поле будет пустым.">
             <InformationCircleIcon className="w-4 h-4" />
           </Tooltip>
         </div>
@@ -84,25 +84,25 @@ export const columns = (
       ),
     },
     {
-      header: "Virtual Keys",
+      header: "Виртуальные ключи",
       accessorKey: "key_count",
       enableSorting: false,
       cell: ({ row }) => (
         <Grid numItems={2}>
           {row.original.key_count > 0 ? (
             <Badge size="xs" color="indigo">
-              {row.original.key_count} {row.original.key_count === 1 ? "Key" : "Keys"}
+              {row.original.key_count} {row.original.key_count === 1 ? "ключ" : "ключей"}
             </Badge>
           ) : (
             <Badge size="xs" color="gray">
-              No Keys
+              Нет ключей
             </Badge>
           )}
         </Grid>
       ),
     },
     {
-      header: "Created At",
+      header: "Создан",
       accessorKey: "created_at",
       enableSorting: true,
       cell: ({ row }) => (
@@ -112,7 +112,7 @@ export const columns = (
       ),
     },
     {
-      header: "Updated At",
+      header: "Обновлен",
       accessorKey: "updated_at",
       enableSorting: false,
       cell: ({ row }) => (
@@ -123,11 +123,11 @@ export const columns = (
     },
     {
       id: "actions",
-      header: "Actions",
+      header: "Действия",
       enableSorting: false,
       cell: ({ row }) => (
         <div className="flex gap-2">
-          <Tooltip title="Edit user details">
+          <Tooltip title="Редактировать пользователя">
             <Icon
               icon={PencilAltIcon}
               size="sm"
@@ -135,7 +135,7 @@ export const columns = (
               className="cursor-pointer hover:text-blue-600"
             />
           </Tooltip>
-          <Tooltip title="Delete user">
+          <Tooltip title="Удалить пользователя">
             <Icon
               icon={TrashIcon}
               size="sm"
@@ -143,7 +143,7 @@ export const columns = (
               className="cursor-pointer hover:text-red-600"
             />
           </Tooltip>
-          <Tooltip title="Reset Password">
+          <Tooltip title="Сбросить пароль">
             <Icon
               icon={RefreshIcon}
               size="sm"

@@ -184,10 +184,10 @@ const Createuser: React.FC<CreateuserProps> = ({
   if (isEmbedded) {
     return (
       <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
-        <Form.Item label="User Email" name="user_email">
+        <Form.Item label="Email пользователя" name="user_email">
           <TextInput placeholder="" />
         </Form.Item>
-        <Form.Item label="User Role" name="user_role">
+        <Form.Item label="Роль пользователя" name="user_role">
           <Select2>
             {possibleUIRoles &&
               Object.entries(possibleUIRoles).map(([role, { ui_label, description }]) => (
@@ -202,18 +202,18 @@ const Createuser: React.FC<CreateuserProps> = ({
               ))}
           </Select2>
         </Form.Item>
-        <Form.Item label="Team" name="team_id">
-          <Select placeholder="Select Team" style={{ width: "100%" }}>
+        <Form.Item label="Команда" name="team_id">
+          <Select placeholder="Выберите команду" style={{ width: "100%" }}>
             <TeamDropdown teams={teams} />
           </Select>
         </Form.Item>
 
-        <Form.Item label="Metadata" name="metadata">
-          <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+        <Form.Item label="Метаданные" name="metadata">
+          <Input.TextArea rows={4} placeholder="Введите метаданные в формате JSON" />
         </Form.Item>
 
         <div style={{ textAlign: "right", marginTop: "10px" }}>
-          <Button htmlType="submit">Create User</Button>
+          <Button htmlType="submit">Создать пользователя</Button>
         </div>
       </Form>
     );
@@ -295,7 +295,7 @@ const Createuser: React.FC<CreateuserProps> = ({
                 name="models"
                 help="Модели, к которым у пользователя есть доступ, вне рамок команды."
               >
-                <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
+                <Select2 mode="multiple" placeholder="Выберите модели" style={{ width: "100%" }}>
                   <Select2.Option key="all-proxy-models" value="all-proxy-models">
                     Все модели прокси
                   </Select2.Option>
