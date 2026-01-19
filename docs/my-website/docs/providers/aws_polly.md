@@ -229,6 +229,101 @@ curl -X POST http://localhost:4000/v1/audio/speech \
   --output speech.mp3
 ```
 
+## Speech Marks Support
+
+AWS Polly can return metadata (speech marks) instead of audio, providing timing information for synchronizing speech with visual elements like subtitles or avatar animations.
+
+### Speech Mark Types
+
+| Type | Description |
+|------|-------------|
+| `sentence` | Indicates sentence boundaries in the input text |
+| `word` | Indicates word boundaries with timing and position |
+| `viseme` | Mouth shapes for lip-syncing (used for avatar animation) |
+| `ssml` | SSML element boundaries (requires SSML input) |
+
+### **LiteLLM SDK**
+
+```python showLineNumbers title="Speech Marks - Word Timing"
+import litellm
+
+# Get word-level timing for creating subtitles
+response = litellm.speech(
+    model="aws_polly/neural",
+    voice="Joanna",
+    input="Hello world, this is a test.",
+    speech_mark_types=["word"],
+    aws_region_name="us-east-1",
+)
+
+# Response is JSON stream with timing information
+# Each line is a JSON object with timing and position data
+marks = response.content.decode('utf-8')
+print(marks)
+# Output (example):
+# {"time":0,"type":"word","start":0,"end":5,"value":"Hello"}
+# {"time":100,"type":"word","start":6,"end":11,"value":"world"}
+```
+
+```python showLineNumbers title="Speech Marks - Visemes for Avatars"
+import litellm
+
+# Get viseme data for lip-syncing an avatar
+response = litellm.speech(
+    model="aws_polly/neural",
+    voice="Matthew",
+    input="The quick brown fox",
+    speech_mark_types=["viseme", "word"],
+    aws_region_name="us-east-1",
+)
+
+# Returns JSON with mouth shapes and timing
+# Use this data to animate avatar facial movements
+```
+
+```python showLineNumbers title="Speech Marks with SSML"
+import litellm
+
+ssml_input = """
+<speak>
+    Hello, <break time="500ms"/>
+    this is <emphasis level="strong">important</emphasis>.
+</speak>
+"""
+
+# Get SSML element boundaries along with words
+response = litellm.speech(
+    model="aws_polly/neural",
+    voice="Joanna",
+    input=ssml_input,
+    speech_mark_types=["ssml", "word", "sentence"],
+    aws_region_name="us-east-1",
+)
+```
+
+### **LiteLLM PROXY**
+
+```bash showLineNumbers title="cURL Request for Speech Marks"
+curl -X POST http://localhost:4000/v1/audio/speech \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "polly-neural",
+    "voice": "Joanna",
+    "input": "Hello world",
+    "speech_mark_types": ["word", "viseme"]
+  }'
+```
+
+### Important Notes
+
+- When `speech_mark_types` is specified, the response format is automatically set to JSON
+- Speech marks return a JSON stream instead of audio data
+- Multiple mark types can be requested simultaneously (up to 4)
+- To get both audio and speech marks, make two separate requests with the same input
+- Speech marks are charged the same as audio synthesis
+- All engines support speech marks: neural, standard, long-form, and generative
+
 ## Supported Parameters
 
 ```python showLineNumbers title="All Parameters"
@@ -237,10 +332,11 @@ response = litellm.speech(
     voice="Joanna",                    # Required: Voice selection
     input="text to convert",           # Required: Input text (or SSML)
     response_format="mp3",             # Optional: mp3, ogg_vorbis, pcm
-    
+
     # AWS-specific parameters
     language_code="en-US",             # Optional: Language code
     sample_rate="22050",               # Optional: Sample rate in Hz
+    speech_mark_types=["word"],        # Optional: Get timing metadata instead of audio
 )
 ```
 

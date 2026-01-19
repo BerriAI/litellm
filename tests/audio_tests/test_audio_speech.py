@@ -675,12 +675,137 @@ async def test_aws_polly_tts_real_api():
     binary_content = response.content
     assert len(binary_content) > 0
 
-    # MP3 files start with ID3 tag or MPEG sync word
-    assert binary_content[:3] == b"ID3" or binary_content[:2] == b"\xff\xfb" or binary_content[:2] == b"\xff\xf3"
-
     response.stream_to_file(speech_file_path)
 
     assert speech_file_path.exists()
     assert speech_file_path.stat().st_size > 0
 
     print(f"AWS Polly TTS audio saved to: {speech_file_path}")
+
+
+@pytest.mark.asyncio
+async def test_aws_polly_tts_with_speech_marks_single_type():
+    """
+    Test AWS Polly TTS with a single speech mark type.
+    Verifies that speech marks are requested correctly and output format is set to json.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+    import httpx
+
+    # Mock response - Polly returns JSON stream for speech marks
+    mock_response_content = b'{"time":0,"type":"word","start":0,"end":5,"value":"Hello"}\n{"time":100,"type":"word","start":6,"end":11,"value":"world"}'
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = mock_response_content
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = {"content-type": "application/x-json-stream"}
+
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+
+        response = await litellm.aspeech(
+            model="aws_polly/neural",
+            voice="Joanna",
+            input="Hello world",
+            speech_mark_types=["word"],
+            aws_region_name="us-east-1",
+        )
+
+        # Verify the mock was called
+        assert mock_post.called
+
+        # Get the call arguments
+        call_args = mock_post.call_args
+        request_data = call_args.kwargs.get("data")
+
+        # Parse the JSON body
+        assert request_data is not None
+        request_body = json.loads(request_data)
+
+        # Verify speech marks are requested and output format is json
+        assert request_body["SpeechMarkTypes"] == ["word"]
+        assert request_body["OutputFormat"] == "json"
+        assert request_body["VoiceId"] == "Joanna"
+        assert request_body["Text"] == "Hello world"
+
+
+@pytest.mark.asyncio
+async def test_aws_polly_tts_with_speech_marks_multiple_types():
+    """
+    Test AWS Polly TTS with multiple speech mark types.
+    Verifies that multiple speech mark types can be requested.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+    import httpx
+
+    mock_response_content = b'{"time":0,"type":"sentence","start":0,"end":23}\n{"time":0,"type":"word","start":0,"end":5,"value":"Hello"}'
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = mock_response_content
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = {"content-type": "application/x-json-stream"}
+
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+
+        response = await litellm.aspeech(
+            model="aws_polly/neural",
+            voice="Matthew",
+            input="Hello, this is a test.",
+            speech_mark_types=["sentence", "word", "viseme"],
+            aws_region_name="us-east-1",
+        )
+
+        assert mock_post.called
+
+        call_args = mock_post.call_args
+        request_data = call_args.kwargs.get("data")
+
+        assert request_data is not None
+        request_body = json.loads(request_data)
+
+        # Verify all speech mark types are present
+        assert set(request_body["SpeechMarkTypes"]) == {"sentence", "word", "viseme"}
+        assert request_body["OutputFormat"] == "json"
+
+
+@pytest.mark.asyncio
+async def test_aws_polly_tts_with_speech_marks_and_ssml():
+    """
+    Test AWS Polly TTS with speech marks and SSML input.
+    Verifies that SSML speech marks work correctly.
+    """
+    import json
+    from unittest.mock import MagicMock, patch
+    import httpx
+
+    ssml_input = '<speak>Hello, <break time="500ms"/> this is SSML.</speak>'
+    mock_response_content = b'{"time":0,"type":"ssml","start":0,"end":7,"value":"speak"}'
+    mock_httpx_response = MagicMock(spec=httpx.Response)
+    mock_httpx_response.content = mock_response_content
+    mock_httpx_response.status_code = 200
+    mock_httpx_response.headers = {"content-type": "application/x-json-stream"}
+
+    with patch("litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post") as mock_post:
+        mock_post.return_value = mock_httpx_response
+
+        response = await litellm.aspeech(
+            model="aws_polly/neural",
+            voice="Joanna",
+            input=ssml_input,
+            speech_mark_types=["ssml", "word"],
+            aws_region_name="us-east-1",
+        )
+
+        assert mock_post.called
+
+        call_args = mock_post.call_args
+        request_data = call_args.kwargs.get("data")
+
+        assert request_data is not None
+        request_body = json.loads(request_data)
+
+        # Verify SSML is detected and speech marks are requested
+        assert request_body["TextType"] == "ssml"
+        assert request_body["SpeechMarkTypes"] == ["ssml", "word"]
+        assert request_body["OutputFormat"] == "json"

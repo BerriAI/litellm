@@ -64,6 +64,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
     # Valid Polly engines
     VALID_ENGINES = {"standard", "neural", "long-form", "generative"}
 
+    # Valid speech mark types
+    VALID_SPEECH_MARK_TYPES = {"sentence", "ssml", "viseme", "word"}
+
     def dispatch_text_to_speech(
         self,
         model: str,
@@ -139,7 +142,7 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         """
         AWS Polly TTS supports these OpenAI parameters
         """
-        return ["voice", "response_format", "speed"]
+        return ["voice", "response_format", "speed", "speech_mark_types"]
 
     def map_openai_params(
         self,
@@ -164,15 +167,33 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
                 # Assume it's already a Polly voice name
                 mapped_voice = voice
 
-        # Map response format
-        if "response_format" in optional_params:
-            format_name = optional_params["response_format"]
-            if format_name in self.FORMAT_MAPPINGS:
-                mapped_params["output_format"] = self.FORMAT_MAPPINGS[format_name]
+        # Handle speech mark types - when present, output format must be json
+        speech_mark_types = optional_params.get("speech_mark_types") or kwargs.get("speech_mark_types")
+        if speech_mark_types:
+            # Validate speech mark types
+            if isinstance(speech_mark_types, list):
+                # Filter to only valid types
+                valid_types = [t for t in speech_mark_types if t in self.VALID_SPEECH_MARK_TYPES]
+                if valid_types:
+                    mapped_params["speech_mark_types"] = valid_types
+                    # Speech marks require json output format
+                    mapped_params["output_format"] = "json"
+            elif isinstance(speech_mark_types, str):
+                # Single speech mark type as string
+                if speech_mark_types in self.VALID_SPEECH_MARK_TYPES:
+                    mapped_params["speech_mark_types"] = [speech_mark_types]
+                    mapped_params["output_format"] = "json"
+
+        # Map response format (only if not overridden by speech marks)
+        if "output_format" not in mapped_params:
+            if "response_format" in optional_params:
+                format_name = optional_params["response_format"]
+                if format_name in self.FORMAT_MAPPINGS:
+                    mapped_params["output_format"] = self.FORMAT_MAPPINGS[format_name]
+                else:
+                    mapped_params["output_format"] = format_name
             else:
-                mapped_params["output_format"] = format_name
-        else:
-            mapped_params["output_format"] = self.DEFAULT_OUTPUT_FORMAT
+                mapped_params["output_format"] = self.DEFAULT_OUTPUT_FORMAT
 
         # Extract engine from model name (e.g., "aws_polly/neural" -> "neural")
         engine = self._extract_engine_from_model(model)
@@ -353,6 +374,10 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
             if key in optional_params:
                 request_body[key] = optional_params[key]
 
+        # Add speech mark types if present
+        if "speech_mark_types" in optional_params:
+            request_body["SpeechMarkTypes"] = optional_params["speech_mark_types"]
+
         # Get endpoint URL
         endpoint_url = self.get_complete_url(
             model=model,
@@ -383,7 +408,9 @@ class AWSPollyTextToSpeechConfig(BaseTextToSpeechConfig, BaseAWSLLM):
         """
         Transform AWS Polly response to standard format.
 
-        Polly returns the audio data directly in the response body.
+        Polly returns:
+        - Audio data directly in the response body for audio requests
+        - JSON-formatted speech marks for speech mark requests (content-type: application/x-json-stream)
         """
         from litellm.types.llms.openai import HttpxBinaryResponseContent
 
