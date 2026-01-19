@@ -715,6 +715,7 @@ const sidebars = {
         "providers/fireworks_ai",
         "providers/friendliai",
         "providers/galadriel",
+        "providers/gigachat",
         "providers/github",
         "providers/github_copilot",
         "providers/gradient_ai",

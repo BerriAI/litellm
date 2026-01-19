@@ -214,6 +214,44 @@ response = embedding(
 print(response)
 ```
 
+## Sample Usage - PDF File Parsing
+
+```python
+import base64
+
+from litellm import completion
+
+def encode_file(file_path):
+    with open(file_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+file_path = "path_to_your_file.pdf"
+
+# Getting the base64 string
+base64_pdf = encode_file(file_path)
+response = completion(
+    model="gigachat/GigaChat-2-Max",
+    ssl_verify=False,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Create a comprehensive summary of this pdf"},
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "Day_2_v6.pdf",
+                        "file_data": f"data:application/pdf;base64,{base64_pdf}"
+                    }
+                },
+            ],
+        }
+    ],
+)
+
+print(response.choices[0].message.content)
+```
 ## Usage with LiteLLM Proxy
 
 ### 1. Set Environment Variables
