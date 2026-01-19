@@ -115,8 +115,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         items_to_process = []
         while len(items_to_process) < self.batch_size:
             try:
-                item = self.log_queue.get_nowait()
-                items_to_process.append(item)
+                items_to_process.append(self.log_queue.get_nowait())
             except asyncio.QueueEmpty:
                 break
         return items_to_process
