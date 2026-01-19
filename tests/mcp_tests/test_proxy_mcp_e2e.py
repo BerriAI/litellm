@@ -25,14 +25,12 @@ CONFIG_TEMPLATE_PATH = Path("tests/mcp_tests/test_configs/test_config_mcp_e2e.ya
 MCP_SERVER_SCRIPT = Path("tests/mcp_tests/mcp_server.py")
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 PROXY_START_TIMEOUT = 30
-MCP_HEADERS = {
-    "Authorization": "Bearer sk-1234",
-    "x-mcp-servers": "math_stdio",
-}
-STREAMABLE_HTTP_HEADERS = {
-    "Authorization": "Bearer sk-1234",
-    "x-mcp-servers": "math_streamable_http",
-}
+
+
+@pytest.fixture(scope="session")
+def proxy_authorization_header() -> str:
+    """Shared Authorization header value for proxy calls."""
+    return "Bearer sk-1234"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -155,10 +153,16 @@ def proxy_server_url(
 
 class TestProxyMcpSimpleConnections:
     @pytest.mark.asyncio
-    async def test_proxy_mcp_stdio_roundtrip(self, proxy_server_url: str) -> None:
+    async def test_proxy_mcp_stdio_roundtrip(
+        self, proxy_server_url: str, proxy_authorization_header: str
+    ) -> None:
         async with asyncio.timeout(20):
             async with streamablehttp_client(
-                url=f"{proxy_server_url}/mcp", headers=MCP_HEADERS
+                url=f"{proxy_server_url}/mcp",
+                headers={
+                    "Authorization": proxy_authorization_header,
+                    "x-mcp-servers": "math_stdio",
+                },
             ) as (read, write, _get_session_id):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
@@ -175,11 +179,15 @@ class TestProxyMcpSimpleConnections:
 
     @pytest.mark.asyncio
     async def test_proxy_mcp_streamable_http_roundtrip(
-        self, proxy_server_url: str
+        self, proxy_server_url: str, proxy_authorization_header: str
     ) -> None:
         async with asyncio.timeout(20):
             async with streamablehttp_client(
-                url=f"{proxy_server_url}/mcp", headers=STREAMABLE_HTTP_HEADERS
+                url=f"{proxy_server_url}/mcp",
+                headers={
+                    "Authorization": proxy_authorization_header,
+                    "x-mcp-servers": "math_streamable_http",
+                },
             ) as (read, write, _get_session_id):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
@@ -196,12 +204,12 @@ class TestProxyMcpSimpleConnections:
 
     @pytest.mark.asyncio
     async def test_proxy_mcp_lists_all_servers_without_header(
-        self, proxy_server_url: str
+        self, proxy_server_url: str, proxy_authorization_header: str
     ) -> None:
         async with asyncio.timeout(20):
             async with streamablehttp_client(
                 url=f"{proxy_server_url}/mcp",
-                headers={"Authorization": "Bearer sk-1234"},
+                headers={"Authorization": proxy_authorization_header},
             ) as (read, write, _get_session_id):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
