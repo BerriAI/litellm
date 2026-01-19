@@ -1,45 +1,76 @@
 # Contributing - UI
 
-Here's how to run the LiteLLM UI locally for making changes: 
+Thanks for contributing to the LiteLLM UI! This guide will help you set up your local development environment.
 
-## 1. Clone the repo 
+
+## 1. Clone the repo
+
 ```bash
 git clone https://github.com/BerriAI/litellm.git
+cd litellm
 ```
 
-## 2. Start the UI + Proxy 
+## 2. Start the Proxy
 
-**2.1 Start the proxy on port 4000** 
+Create a config file (e.g., `config.yaml`):
 
-Tell the proxy where the UI is located
-```bash
-DATABASE_URL = "postgresql://<user>:<password>@<host>:<port>/<dbname>"
-LITELLM_MASTER_KEY = "sk-1234"
-STORE_MODEL_IN_DB = "True"
+```yaml
+model_list:
+  - model_name: gpt-4o
+    litellm_params:
+      model: openai/gpt-4o
+
+general_settings:
+  master_key: sk-1234
+  database_url: postgresql://<user>:<password>@<host>:<port>/<dbname>
+  store_model_in_db: true
 ```
 
+Start the proxy on port 4000:
+
 ```bash
-cd litellm/litellm/proxy
-python3 proxy_cli.py --config /path/to/config.yaml --port 4000
+poetry run litellm --config config.yaml --port 4000
 ```
 
-**2.2 Start the UI**
+The UI comes pre-built in the repo. Access it at `http://localhost:4000/ui`
 
-Set the mode as development (this will assume the proxy is running on localhost:4000)
+## 3. UI Development
+
+There are two options for UI development:
+
+### Option A: Build Mode (Recommended)
+
+This builds the UI and copies it to the proxy. Changes require rebuilding.
+
+1. Make your code changes in `ui/litellm-dashboard/src/`
+
+2. Build the UI
 ```bash
-npm install # install dependencies
+cd ui/litellm-dashboard
+npm install
+npm run build
 ```
 
-```bash
-cd litellm/ui/litellm-dashboard
+After building, copy the output to the proxy:
 
+```bash
+cp -r out/* ../../litellm/proxy/_experimental/out/
+```
+
+Then restart the proxy and access the UI at `http://localhost:4000/ui`
+
+### Option B: Development Mode (Hot Reload)
+
+This runs the UI on port 3000 with hot reload. The proxy runs on port 4000.
+
+```bash
+cd ui/litellm-dashboard
+npm install
 npm run dev
-
-# starts on http://0.0.0.0:3000
 ```
 
-## 3. Go to local UI 
+Access the UI at `http://localhost:3000`
 
-```bash
-http://0.0.0.0:3000
-```
+:::note
+Development mode may have redirect issues between ports 3000 and 4000, if so use Build Mode instead.
+:::
