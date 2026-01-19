@@ -1153,7 +1153,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
+            pip install "mcp==1.21.2"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
