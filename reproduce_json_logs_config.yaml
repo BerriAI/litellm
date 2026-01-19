@@ -1,0 +1,39 @@
+model_list:
+  # OpenAI model with fake key to trigger auth errors
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: sk-fake-key-this-will-fail
+
+  # Azure model without proper config to trigger errors
+  - model_name: azure-gpt-35
+    litellm_params:
+      model: azure/gpt-35-turbo
+      api_base: https://fake-endpoint.openai.azure.com
+      api_key: fake-azure-key
+      api_version: "2023-05-15"
+
+  # Vertex AI model without credentials to trigger vertex error
+  - model_name: vertex-gemini
+    litellm_params:
+      model: vertex_ai/gemini-pro
+      vertex_project: fake-project-12345
+      vertex_location: us-central1
+
+  # Model with invalid base_model to trigger router error
+  - model_name: azure-embedding
+    litellm_params:
+      model: azure/text-embedding-3-small
+      api_base: https://fake-endpoint.openai.azure.com
+      api_key: fake-key
+      api_version: "2023-05-15"
+
+litellm_settings:
+  json_logs: true
+  drop_params: true
+  success_callback: []
+  failure_callback: []
+
+general_settings:
+  master_key: sk-1234567890
+  database_url: null
