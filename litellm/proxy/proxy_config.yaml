@@ -2,7 +2,7 @@ model_list:
   - model_name: gemini/*
     litellm_params:
       model: gemini/*
-  - model_name: claude-sonnet-4-5-20250929
+  - model_name: -claude-sonnet-4-5-20250929
     litellm_params:
       model: bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0
     model_info:
@@ -40,7 +40,7 @@ model_list:
     model_info:
       litellm_provider: bedrock_converse
       mode: chat
-  - model_name: azure-claude-opus-4-5
+  - model_name: claude-sonnet-4-5-20250929
     litellm_params:
       model: azure_ai/claude-opus-4-5
       api_base: https://krish-mh44t553-eastus2.services.ai.azure.com
