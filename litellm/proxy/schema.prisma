@@ -863,3 +863,20 @@ model LiteLLM_SkillsTable {
   updated_at     DateTime @default(now()) @updatedAt
   updated_by     String?
 }
+
+// Claude Code Marketplace - stores plugins for Claude Code integration
+model LiteLLM_ClaudeCodePluginTable {
+  id            String   @id @default(uuid())
+  name          String   @unique  // Plugin name (kebab-case)
+  version       String?           // Semantic version
+  description   String?           // Plugin description
+  manifest_json String            // Full plugin.json as JSON string
+  files_json    String            // All files as JSON: {"path": "content"}
+  enabled       Boolean  @default(true)
+  created_at    DateTime @default(now())
+  updated_at    DateTime @default(now()) @updatedAt
+  created_by    String?
+
+  @@index([name])
+  @@map("litellm_claudecodeplugin")
+}
