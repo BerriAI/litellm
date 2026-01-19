@@ -4,6 +4,7 @@ WORKDIR /app
 
 ENV HOME=/home/litellm
 ENV PATH="${HOME}/venv/bin:$PATH"
+ENV LITELLM_NON_ROOT=true
 
 # Install runtime dependencies
 # Note: Using Python 3.13 for compatibility with ddtrace and other packages
