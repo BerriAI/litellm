@@ -7659,6 +7659,7 @@ class ProviderConfigManager:
             LlmProviders.GITHUB: (lambda: litellm.GithubChatConfig(), False),
             LlmProviders.COMPACTIFAI: (lambda: litellm.CompactifAIChatConfig(), False),
             LlmProviders.GITHUB_COPILOT: (lambda: litellm.GithubCopilotConfig(), False),
+            LlmProviders.CHATGPT: (lambda: litellm.ChatGPTConfig(), False),
             LlmProviders.GIGACHAT: (lambda: litellm.GigaChatConfig(), False),
             LlmProviders.RAGFLOW: (lambda: litellm.RAGFlowConfig(), False),
             LlmProviders.CUSTOM: (lambda: litellm.OpenAILikeChatConfig(), False),
@@ -8028,6 +8029,8 @@ class ProviderConfigManager:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotResponsesAPIConfig()
+        elif litellm.LlmProviders.CHATGPT == provider:
+            return litellm.ChatGPTResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
