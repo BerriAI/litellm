@@ -3350,7 +3350,8 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
         mock_callback.assert_called_once()
         print(mock_callback.call_args.kwargs.keys())
         assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
-        assert mock_callback.call_args.kwargs["kwargs"]["response_cost"] > 0
+        response_cost = mock_callback.call_args.kwargs["kwargs"]["response_cost"]
+        assert response_cost is not None and response_cost > 0
         assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
 
 

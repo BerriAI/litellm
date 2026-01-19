@@ -3,13 +3,31 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
 import { useKeys } from "./useKeys";
-import { keyListCall } from "@/components/networking";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
 
-// Mock the networking function
+// Mock the networking utilities
 vi.mock("@/components/networking", () => ({
-  keyListCall: vi.fn(),
+  getProxyBaseUrl: vi.fn().mockReturnValue(""),
+  getGlobalLitellmHeaderName: vi.fn().mockReturnValue("Authorization"),
+  deriveErrorMessage: vi.fn((errorData: any) => {
+    return (
+      (errorData?.error && (errorData.error.message || errorData.error)) ||
+      errorData?.message ||
+      errorData?.detail ||
+      errorData?.error ||
+      JSON.stringify(errorData)
+    );
+  }),
+  handleError: vi.fn(),
 }));
+
+// Mock global fetch
+const mockFetch = vi.fn();
+global.fetch = mockFetch;
+
+// Mock console methods to avoid noise in tests
+vi.spyOn(console, "log").mockImplementation(() => {});
+vi.spyOn(console, "error").mockImplementation(() => {});
 
 // Mock useAuthorized hook - we can override this in individual tests
 const mockUseAuthorized = vi.fn();
@@ -164,6 +182,9 @@ describe("useKeys", () => {
       disabledPersonalKeyCreation: null,
       showSSOBanner: false,
     });
+
+    // Reset fetch mock
+    mockFetch.mockClear();
   });
 
   const wrapper = ({ children }: { children: ReactNode }) =>
@@ -171,7 +192,10 @@ describe("useKeys", () => {
 
   it("should return keys data when query is successful", async () => {
     // Mock successful API call
-    (keyListCall as any).mockResolvedValue(mockKeysResponse);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
 
     const { result } = renderHook(() => useKeys(1, 10), { wrapper });
 
@@ -187,25 +211,28 @@ describe("useKeys", () => {
 
     expect(result.current.data).toEqual(mockKeysResponse);
     expect(result.current.error).toBeNull();
-    expect(keyListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null, // organizationID
-      null, // teamID
-      null, // selectedKeyAlias
-      null, // userID
-      null, // keyHash
-      1, // page
-      10, // pageSize
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
     );
-    expect(keyListCall).toHaveBeenCalledTimes(1);
   });
 
   it("should handle error when keyListCall fails", async () => {
     const errorMessage = "Failed to fetch keys";
-    const testError = new Error(errorMessage);
+    const errorResponse = { error: errorMessage };
 
     // Mock failed API call
-    (keyListCall as any).mockRejectedValue(testError);
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      json: async () => errorResponse,
+    });
 
     const { result } = renderHook(() => useKeys(1, 10), { wrapper });
 
@@ -218,19 +245,20 @@ describe("useKeys", () => {
       expect(result.current.isError).toBe(true);
     });
 
-    expect(result.current.error).toEqual(testError);
+    expect(result.current.error).toBeDefined();
+    expect(result.current.error?.message).toBe(errorMessage);
     expect(result.current.data).toBeUndefined();
-    expect(keyListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null, // organizationID
-      null, // teamID
-      null, // selectedKeyAlias
-      null, // userID
-      null, // keyHash
-      1, // page
-      10, // pageSize
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
     );
-    expect(keyListCall).toHaveBeenCalledTimes(1);
   });
 
   it("should not execute query when accessToken is missing", async () => {
@@ -254,12 +282,15 @@ describe("useKeys", () => {
     expect(result.current.isFetched).toBe(false);
 
     // API should not be called
-    expect(keyListCall).not.toHaveBeenCalled();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("should pass correct page and pageSize parameters to the API", async () => {
     // Mock successful API call
-    (keyListCall as any).mockResolvedValue(mockKeysResponse);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
 
     const page = 2;
     const pageSize = 20;
@@ -271,15 +302,15 @@ describe("useKeys", () => {
       expect(result.current.isLoading).toBe(false);
     });
 
-    expect(keyListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null, // organizationID
-      null, // teamID
-      null, // selectedKeyAlias
-      null, // userID
-      null, // keyHash
-      page, // page
-      pageSize, // pageSize
+    expect(mockFetch).toHaveBeenCalledWith(
+      `/key/list?page=${page}&size=${pageSize}&return_full_object=true&include_team_keys=true&include_created_by_keys=true`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
     );
   });
 
@@ -291,7 +322,10 @@ describe("useKeys", () => {
       current_page: 1,
       total_pages: 0,
     };
-    (keyListCall as any).mockResolvedValue(emptyResponse);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => emptyResponse,
+    });
 
     const { result } = renderHook(() => useKeys(1, 10), { wrapper });
 
@@ -302,15 +336,15 @@ describe("useKeys", () => {
     });
 
     expect(result.current.data).toEqual(emptyResponse);
-    expect(keyListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null, // organizationID
-      null, // teamID
-      null, // selectedKeyAlias
-      null, // userID
-      null, // keyHash
-      1, // page
-      10, // pageSize
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=1&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
     );
   });
 
@@ -318,7 +352,7 @@ describe("useKeys", () => {
     const timeoutError = new Error("Network timeout");
 
     // Mock network timeout
-    (keyListCall as any).mockRejectedValue(timeoutError);
+    mockFetch.mockRejectedValueOnce(timeoutError);
 
     const { result } = renderHook(() => useKeys(1, 10), { wrapper });
 
@@ -338,7 +372,10 @@ describe("useKeys", () => {
       current_page: 2,
       total_pages: 2,
     };
-    (keyListCall as any).mockResolvedValue(paginatedResponse);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => paginatedResponse,
+    });
 
     const { result } = renderHook(() => useKeys(2, 10), { wrapper });
 
@@ -348,15 +385,15 @@ describe("useKeys", () => {
     });
 
     expect(result.current.data).toEqual(paginatedResponse);
-    expect(keyListCall).toHaveBeenCalledWith(
-      "test-access-token",
-      null, // organizationID
-      null, // teamID
-      null, // selectedKeyAlias
-      null, // userID
-      null, // keyHash
-      2, // page
-      10, // pageSize
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=2&size=10&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
     );
   });
 });

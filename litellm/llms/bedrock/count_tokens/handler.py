@@ -6,6 +6,8 @@ Simplified handler leveraging existing LiteLLM Bedrock infrastructure.
 
 from typing import Any, Dict
 
+import httpx
+
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.bedrock.common_utils import BedrockError
@@ -98,7 +100,7 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
                 verbose_logger.error(f"AWS Bedrock error: {error_text}")
                 raise BedrockError(
                     status_code=response.status_code,
-                    message=f"AWS Bedrock error: {error_text}",
+                    message=error_text,
                 )
 
             bedrock_response = response.json()
@@ -117,6 +119,13 @@ class BedrockCountTokensHandler(BedrockCountTokensConfig):
         except BedrockError:
             # Re-raise Bedrock exceptions as-is
             raise
+        except httpx.HTTPStatusError as e:
+            # HTTP errors - preserve the actual status code
+            verbose_logger.error(f"HTTP error in CountTokens handler: {str(e)}")
+            raise BedrockError(
+                status_code=e.response.status_code,
+                message=e.response.text,
+            )
         except Exception as e:
             verbose_logger.error(f"Error in CountTokens handler: {str(e)}")
             raise BedrockError(

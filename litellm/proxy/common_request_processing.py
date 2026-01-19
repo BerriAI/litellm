@@ -28,6 +28,9 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.llm_response_utils.get_headers import (
+    get_response_headers,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import check_response_size_is_safe
@@ -284,7 +287,12 @@ class ProxyBaseLLMRequestProcessing:
         hidden_params = hidden_params or {}
 
         # Extract discount and margin info from cost_breakdown if available
-        original_cost, discount_amount, margin_total_amount, margin_percent = _get_cost_breakdown_from_logging_obj(
+        (
+            original_cost,
+            discount_amount,
+            margin_total_amount,
+            margin_percent,
+        ) = _get_cost_breakdown_from_logging_obj(
             litellm_logging_obj=litellm_logging_obj
         )
 
@@ -527,12 +535,12 @@ class ProxyBaseLLMRequestProcessing:
         # Apply hierarchical router_settings (Key > Team > Global)
         if llm_router is not None and proxy_config is not None:
             from litellm.proxy.proxy_server import prisma_client
-            
+
             router_settings = await proxy_config._get_hierarchical_router_settings(
                 user_api_key_dict=user_api_key_dict,
                 prisma_client=prisma_client,
             )
-            
+
             # If router_settings found (from key, team, or global), apply them
             # This ensures key/team settings override global settings
             if router_settings is not None and router_settings:
@@ -541,10 +549,7 @@ class ProxyBaseLLMRequestProcessing:
                 if model_list is not None:
                     # Create user_config with model_list and router_settings
                     # This creates a per-request router with the hierarchical settings
-                    user_config = {
-                        "model_list": model_list,
-                        **router_settings
-                    }
+                    user_config = {"model_list": model_list, **router_settings}
                     self.data["user_config"] = user_config
 
         if "messages" in self.data and self.data["messages"]:
@@ -649,9 +654,7 @@ class ProxyBaseLLMRequestProcessing:
             proxy_logging_obj.during_call_hook(
                 data=self.data,
                 user_api_key_dict=user_api_key_dict,
-                call_type=ProxyBaseLLMRequestProcessing._get_pre_call_type(
-                    route_type=route_type  # type: ignore
-                ),
+                call_type=route_type,  # type: ignore
             )
         )
 
@@ -746,19 +749,25 @@ class ProxyBaseLLMRequestProcessing:
                         headers=custom_headers,
                     )
             elif route_type == "anthropic_messages":
-                selected_data_generator = (
-                    ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                        response=response,
-                        user_api_key_dict=user_api_key_dict,
-                        request_data=self.data,
-                        proxy_logging_obj=proxy_logging_obj,
+                # Check if response is actually a streaming response (async generator)
+                # Non-streaming responses (dict) should be returned directly
+                # This handles cases like websearch_interception agentic loop
+                # which returns a non-streaming dict even for streaming requests
+                if self._is_streaming_response(response):
+                    selected_data_generator = (
+                        ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                            response=response,
+                            user_api_key_dict=user_api_key_dict,
+                            request_data=self.data,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
                     )
-                )
-                return await create_response(
-                    generator=selected_data_generator,
-                    media_type="text/event-stream",
-                    headers=custom_headers,
-                )
+                    return await create_response(
+                        generator=selected_data_generator,
+                        media_type="text/event-stream",
+                        headers=custom_headers,
+                    )
+                # Non-streaming response - fall through to normal response handling
             elif select_data_generator:
                 selected_data_generator = select_data_generator(
                     response=response,
@@ -945,7 +954,15 @@ class ProxyBaseLLMRequestProcessing:
             timeout=timeout,
             litellm_logging_obj=_litellm_logging_obj,
         )
-        headers = getattr(e, "headers", {}) or {}
+        # Extract headers from exception - check both e.headers and e.response.headers
+        headers = getattr(e, "headers", None) or {}
+        if not headers:
+            # Try to get headers from e.response.headers (httpx.Response)
+            _response = getattr(e, "response", None)
+            if _response is not None:
+                _response_headers = getattr(_response, "headers", None)
+                if _response_headers:
+                    headers = get_response_headers(dict(_response_headers))
         headers.update(custom_headers)
 
         if isinstance(e, HTTPException):
@@ -1003,19 +1020,6 @@ class ProxyBaseLLMRequestProcessing:
             provider_specific_fields=getattr(e, "provider_specific_fields", None),
             headers=headers,
         )
-
-    @staticmethod
-    def _get_pre_call_type(
-        route_type: Literal["acompletion", "aembedding", "aresponses", "allm_passthrough_route"],
-    ) -> Literal["completion", "embedding", "responses", "allm_passthrough_route"]:
-        if route_type == "acompletion":
-            return "completion"
-        elif route_type == "aembedding":
-            return "embedding"
-        elif route_type == "aresponses":
-            return "responses"
-        elif route_type == "allm_passthrough_route":
-            return "allm_passthrough_route"
 
     #########################################################
     # Proxy Level Streaming Data Generator

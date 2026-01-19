@@ -80,9 +80,7 @@ def _generate_watsonx_token(api_key: Optional[str], token: Optional[str]) -> str
     return token
 
 
-def _get_api_params(
-    params: dict,
-) -> WatsonXAPIParams:
+def _get_api_params(params: dict, model: Optional[str] = None) -> WatsonXAPIParams:
     """
     Find watsonx.ai credentials in the params or environment variables and return the headers for authentication.
     """
@@ -118,10 +116,15 @@ def _get_api_params(
             or get_secret_str("SPACE_ID")
         )
 
-    if project_id is None:
+    if (
+        project_id is None
+        and space_id is None
+        and model is not None
+        and not model.startswith("deployment/")
+    ):
         raise WatsonXAIError(
             status_code=401,
-            message="Error: Watsonx project_id not set. Set WX_PROJECT_ID in environment variables or pass in as a parameter.",
+            message="Error: Watsonx project_id and space_id not set. Set WX_PROJECT_ID or WX_SPACE_ID in environment variables or pass in as a parameter.",
         )
 
     return WatsonXAPIParams(
@@ -146,7 +149,9 @@ async def _aconvert_watsonx_messages_core(
         model_prompt_dict = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get(
+                "role_dict", model_prompt_dict.get("roles")
+            ),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -180,7 +185,9 @@ def _convert_watsonx_messages_core(
         model_prompt_dict = custom_prompt_dict[model]
         return ptf.custom_prompt(
             messages=messages,
-            role_dict=model_prompt_dict.get("role_dict", model_prompt_dict.get("roles")),
+            role_dict=model_prompt_dict.get(
+                "role_dict", model_prompt_dict.get("roles")
+            ),
             initial_prompt_value=model_prompt_dict.get("initial_prompt_value", ""),
             final_prompt_value=model_prompt_dict.get("final_prompt_value", ""),
             bos_token=model_prompt_dict.get("bos_token", ""),
@@ -200,7 +207,10 @@ def _convert_watsonx_messages_core(
 
 
 async def aconvert_watsonx_messages_to_prompt(
-    model: str, messages: List[AllMessageValues], provider: str, custom_prompt_dict: Dict
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
 ) -> str:
     """Async version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -215,7 +225,10 @@ async def aconvert_watsonx_messages_to_prompt(
 
 
 def convert_watsonx_messages_to_prompt(
-    model: str, messages: List[AllMessageValues], provider: str, custom_prompt_dict: Dict
+    model: str,
+    messages: List[AllMessageValues],
+    provider: str,
+    custom_prompt_dict: Dict,
 ) -> str:
     """Sync version of convert_watsonx_messages_to_prompt"""
     from litellm.llms.watsonx.chat.transformation import IBMWatsonXChatConfig
@@ -254,7 +267,8 @@ class IBMWatsonXMixin:
         )
         zen_api_key = cast(
             Optional[str],
-            optional_params.pop("zen_api_key", None) or get_secret_str("WATSONX_ZENAPIKEY"),
+            optional_params.pop("zen_api_key", None)
+            or get_secret_str("WATSONX_ZENAPIKEY"),
         )
         if token:
             headers["Authorization"] = f"Bearer {token}"
@@ -360,5 +374,8 @@ class IBMWatsonXMixin:
                 {}
             )  # Deployment models do not support 'space_id' or 'project_id' in their payload
         payload["model_id"] = model
-        payload["project_id"] = api_params["project_id"]
+        if api_params["project_id"] is not None:
+            payload["project_id"] = api_params["project_id"]
+        else:
+            payload["space_id"] = api_params["space_id"]
         return payload
