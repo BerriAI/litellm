@@ -28,4 +28,4 @@ RUN prisma generate
 EXPOSE 4000/tcp
 
 ENTRYPOINT ["litellm"]
-CMD ["--port", "4000", "--disable_ui_access_control", "--load_enterprise_modules"]
+CMD ["--port", "4000", "--load_enterprise_modules"]
