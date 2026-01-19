@@ -51,7 +51,7 @@ npm run dev
 **Login flow:**
 1. Go to `http://localhost:3000`
 2. You'll be redirected to `http://localhost:4000/ui` for login
-3. After logging in, manually navigate back to `http://localhost:3000/ui`
+3. After logging in, manually navigate back to `http://localhost:3000/`
 4. You're now authenticated and can develop with hot reload
 
 :::note
