@@ -934,8 +934,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
-    def _ensure_context_management_beta_header(self, headers: dict) -> None:
-        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+    def _ensure_beta_header(self, headers: dict, beta_value: str) -> None:
+        """
+        Ensure a beta header value is present in the anthropic-beta header.
+        Merges with existing values instead of overriding them.
+        
+        Args:
+            headers: Dictionary of headers to update
+            beta_value: The beta header value to add
+        """
         existing_beta = headers.get("anthropic-beta")
         if existing_beta is None:
             headers["anthropic-beta"] = beta_value
@@ -943,6 +950,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         existing_values = [beta.strip() for beta in existing_beta.split(",")]
         if beta_value not in existing_values:
             headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+
+    def _ensure_context_management_beta_header(self, headers: dict) -> None:
+        beta_value = ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+        self._ensure_beta_header(headers, beta_value)
 
     def update_headers_with_optional_anthropic_beta(
         self, headers: dict, optional_params: dict
@@ -960,20 +971,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if tool.get("type", None) and tool.get("type").startswith(
                 ANTHROPIC_HOSTED_TOOLS.WEB_FETCH.value
             ):
-                headers["anthropic-beta"] = (
-                    ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
+                self._ensure_beta_header(
+                    headers, ANTHROPIC_BETA_HEADER_VALUES.WEB_FETCH_2025_09_10.value
                 )
             elif tool.get("type", None) and tool.get("type").startswith(
                 ANTHROPIC_HOSTED_TOOLS.MEMORY.value
             ):
-                headers["anthropic-beta"] = (
-                    ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
+                self._ensure_beta_header(
+                    headers, ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value
                 )
         if optional_params.get("context_management") is not None:
             self._ensure_context_management_beta_header(headers)
         if optional_params.get("output_format") is not None:
-            headers["anthropic-beta"] = (
-                ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
+            self._ensure_beta_header(
+                headers, ANTHROPIC_BETA_HEADER_VALUES.STRUCTURED_OUTPUT_2025_09_25.value
             )
         return headers
 
