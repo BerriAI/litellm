@@ -45,6 +45,8 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 
+        print(f"GCS Bucket Logger initialized: bucket_name={bucket_name or 'from env'}, batch_size={self.batch_size}, flush_interval={self.flush_interval}s")
+
         if premium_user is not True:
             raise ValueError(
                 f"GCS Bucket logging is a premium feature. Please upgrade to use it. {CommonProxyErrors.not_premium_user.value}"
@@ -76,8 +78,11 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
                 )
             )
+            queue_size = self.log_queue.qsize()
+            print(f"GCS Bucket: Success event queued. Queue size: {queue_size}")
 
         except Exception as e:
+            print(f"GCS Bucket: Error queueing success event: {str(e)}")
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
@@ -100,8 +105,11 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
                 )
             )
+            queue_size = self.log_queue.qsize()
+            print(f"GCS Bucket: Failure event queued. Queue size: {queue_size}")
 
         except Exception as e:
+            print(f"GCS Bucket: Error queueing failure event: {str(e)}")
             verbose_logger.exception(f"GCS Bucket logging error: {str(e)}")
 
     def _drain_queue_batch(self) -> List[GCSLogQueueItem]:
@@ -141,6 +149,10 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         if not items_to_process:
             return
 
+        print(f"GCS Bucket: Starting batch send. Processing {len(items_to_process)} items")
+        success_count = 0
+        error_count = 0
+
         for log_item in items_to_process:
             logging_payload = log_item["payload"]
             kwargs = log_item["kwargs"]
@@ -164,12 +176,18 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                     object_name=object_name,
                     logging_payload=logging_payload,
                 )
+                success_count += 1
+                print(f"GCS Bucket: Successfully sent log to bucket '{bucket_name}', object '{object_name}'")
             except Exception as e:
                 # don't let one log item fail the entire batch
+                error_count += 1
+                print(f"GCS Bucket: Error sending log item to GCS bucket: {str(e)}")
                 verbose_logger.exception(
                     f"GCS Bucket error logging payload to GCS bucket: {str(e)}"
                 )
                 pass
+
+        print(f"GCS Bucket: Batch send completed. Success: {success_count}, Errors: {error_count}, Remaining queue size: {self.log_queue.qsize()}")
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
