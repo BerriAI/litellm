@@ -1,0 +1,47 @@
+================================================================================
+LITELLM JSON LOGS REPRODUCER - Real Proxy Server Test
+================================================================================
+
+Step 1: Starting litellm proxy with json_logs: true
+Config file: reproduce_json_logs_config.yaml
+
+Proxy started with PID: 6460
+Waiting for proxy to start up...
+ERROR: Proxy failed to start!
+=== Proxy output ===
+Traceback (most recent call last):
+  File "/home/user/litellm/litellm/proxy/proxy_cli.py", line 552, in run_server
+    from .proxy_server import (
+  File "/home/user/litellm/litellm/proxy/proxy_server.py", line 352, in <module>
+    from litellm.proxy.management_endpoints.ui_sso import (
+  File "/home/user/litellm/litellm/proxy/management_endpoints/ui_sso.py", line 67, in <module>
+    from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
+  File "/home/user/litellm/litellm/proxy/management_endpoints/sso/__init__.py", line 7, in <module>
+    from litellm.proxy.management_endpoints.sso.custom_microsoft_sso import (
+  File "/home/user/litellm/litellm/proxy/management_endpoints/sso/custom_microsoft_sso.py", line 20, in <module>
+    from fastapi_sso.sso.base import DiscoveryDocument
+ModuleNotFoundError: No module named 'fastapi_sso'
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/user/litellm/start_proxy.py", line 20, in <module>
+    run_server()
+  File "/usr/local/lib/python3.11/dist-packages/click/core.py", line 1485, in __call__
+    return self.main(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/click/core.py", line 1406, in main
+    rv = self.invoke(ctx)
+         ^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/click/core.py", line 1269, in invoke
+    return ctx.invoke(self.callback, **ctx.params)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/dist-packages/click/core.py", line 824, in invoke
+    return callback(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/litellm/litellm/proxy/proxy_cli.py", line 559, in run_server
+    raise ModuleNotFoundError(
+ModuleNotFoundError: Missing dependency No module named 'fastapi_sso'. Run `pip install 'litellm[proxy]'`
+
+Cleaning up...
+Stopping litellm proxy (PID: 6460)...

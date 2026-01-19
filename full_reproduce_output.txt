@@ -1,0 +1,55 @@
+================================================================================
+LITELLM JSON LOGS REPRODUCER - Real Proxy Server Test
+================================================================================
+
+Step 1: Starting litellm proxy with json_logs: true
+Config file: reproduce_json_logs_config.yaml
+
+Proxy started with PID: 8161
+Waiting for proxy to start up...
+Proxy should be running. Checking logs...
+
+================================================================================
+STARTUP LOGS (first 50 lines):
+================================================================================
+
+... (truncated) ...
+
+✗ Did NOT find 'Using json logs' message
+
+================================================================================
+Step 2: Triggering errors by making requests
+================================================================================
+
+Test 1: Request to gpt-3.5-turbo (will fail with auth error)...
+Test 2: Request to azure-gpt-35 (will fail)...
+Test 3: Request to vertex-gemini (will fail with credential error)...
+Test 4: Request to /model/info (may trigger router errors)...
+Test 5: Request to /health/liveliness...
+
+All test requests completed.
+
+================================================================================
+Step 3: Analyzing logs for JSON vs plain text format
+================================================================================
+
+=== ALL ERROR LOGS FROM PROXY ===
+
+{"message": "No module named 'uvloop'", "level": "ERROR", "timestamp": "2026-01-19T22:49:57.652133", "stacktrace": "Traceback (most recent call last):\n  File \"/home/user/litellm/start_proxy.py\", line 22, in <module>\n    run_server()\n  File \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 1485, in __call__\n    return self.main(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 1406, in main\n    rv = self.invoke(ctx)\n         ^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 1269, in invoke\n    return ctx.invoke(self.callback, **ctx.params)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/dist-packages/click/core.py\", line 824, in invoke\n    return callback(*args, **kwargs)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/user/litellm/litellm/proxy/proxy_cli.py\", line 849, in run_server\n    uvicorn.run(\n  File \"/usr/local/lib/python3.11/dist-packages/uvicorn/main.py\", line 594, in run\n    server.run()\n  File \"/usr/local/lib/python3.11/dist-packages/uvicorn/server.py\", line 67, in run\n    return asyncio_run(self.serve(sockets=sockets), loop_factory=self.config.get_loop_factory())\n                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/dist-packages/uvicorn/config.py\", line 488, in get_loop_factory\n    loop_factory: Callable[..., Any] | None = import_from_string(LOOP_FACTORIES[self.loop])\n                                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/local/lib/python3.11/dist-packages/uvicorn/importer.py\", line 22, in import_from_string\n    raise exc from None\n  File \"/usr/local/lib/python3.11/dist-packages/uvicorn/importer.py\", line 19, in import_from_string\n    module = importlib.import_module(module_str)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/usr/lib/python3.11/importlib/__init__.py\", line 126, in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<frozen importlib._bootstrap>\", line 1204, in _gcd_import\n  File \"<frozen importlib._bootstrap>\", line 1176, in _find_and_load\n  File \"<frozen importlib._bootstrap>\", line 1147, in _find_and_load_unlocked\n  File \"<frozen importlib._bootstrap>\", line 690, in _load_unlocked\n  File \"<frozen importlib._bootstrap_external>\", line 940, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 241, in _call_with_frames_removed\n  File \"/usr/local/lib/python3.11/dist-packages/uvicorn/loops/uvloop.py\", line 6, in <module>\n    import uvloop\nModuleNotFoundError: No module named 'uvloop'"}
+
+================================================================================
+LOG FORMAT ANALYSIS:
+================================================================================
+JSON formatted logs: 1
+Plain text ERROR logs: 0
+Plain text Tracebacks: 0
+
+✓ All logs appear to be in JSON format.
+
+================================================================================
+Full log file saved to: proxy_output.log
+You can inspect it with: less proxy_output.log
+================================================================================
+
+Cleaning up...
+Stopping litellm proxy (PID: 8161)...
