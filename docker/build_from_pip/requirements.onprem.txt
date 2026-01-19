@@ -1,0 +1,7 @@
+prometheus_client
+langfuse
+prisma
+openai==1.99.9
+ddtrace==2.19.0 # for advanced DD tracing / profiling
+# Enterprise dependencies from local source
+# litellm and litellm-enterprise will be installed from local source

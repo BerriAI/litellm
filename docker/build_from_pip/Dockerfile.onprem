@@ -1,0 +1,34 @@
+FROM python:3.13-alpine
+
+WORKDIR /app
+
+ENV HOME=/home/litellm
+ENV PATH="${HOME}/venv/bin:$PATH"
+
+# Install runtime dependencies
+# Note: Using Python 3.13 for compatibility with ddtrace and other packages
+# rust and cargo are required for building ddtrace from source
+# musl-dev and libffi-dev are needed for some Python packages on Alpine
+# nodejs is required for Prisma
+RUN apk update && \
+    apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo nodejs npm
+
+RUN python -m venv ${HOME}/venv
+RUN ${HOME}/venv/bin/pip install --no-cache-dir --upgrade pip
+
+# Copy local litellm source code including enterprise modules
+COPY . /app/litellm-source
+WORKDIR /app/litellm-source
+
+# Install litellm from local source in editable mode to include enterprise features
+# Also install prisma as part of the requirements
+RUN --mount=type=cache,target=${HOME}/.cache/pip \
+    ${HOME}/venv/bin/pip install -e . prisma
+
+# Generate prisma client
+RUN ${HOME}/venv/bin/prisma generate
+
+EXPOSE 4000/tcp
+
+ENTRYPOINT ["litellm"]
+CMD ["--port", "4000"]
