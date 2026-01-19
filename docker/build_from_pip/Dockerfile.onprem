@@ -22,8 +22,9 @@ WORKDIR /app/litellm-source
 
 # Install litellm from local source in editable mode to include enterprise features
 # Also install prisma as part of the requirements
+# Include proxy extras to ensure all dependencies like backoff are installed
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
-    ${HOME}/venv/bin/pip install -e . prisma
+    ${HOME}/venv/bin/pip install -e '.[proxy]' prisma
 
 COPY test_in_docker.sh /app
 

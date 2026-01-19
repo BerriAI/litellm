@@ -3,5 +3,14 @@ langfuse
 prisma
 openai==1.99.9
 ddtrace==2.19.0 # for advanced DD tracing / profiling
+# Proxy dependencies
+backoff
+fastapi
+uvicorn
+gunicorn
+pyyaml
+orjson
+apscheduler
+rich
 # Enterprise dependencies from local source
 # litellm and litellm-enterprise will be installed from local source
