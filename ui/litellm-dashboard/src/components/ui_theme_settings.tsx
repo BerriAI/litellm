@@ -115,14 +115,16 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
   return (
     <div className="w-full mx-auto max-w-4xl px-6 py-8">
       <div className="mb-8">
-        <Title className="text-2xl font-bold mb-2">Logo Customization</Title>
-        <Text className="text-gray-600">Customize your LiteLLM admin dashboard with a custom logo.</Text>
+        <Title className="text-2xl font-bold mb-2">Настройка логотипа</Title>
+        <Text className="text-gray-600">
+          Настройте свой административный дашборд LiteLLM с пользовательским логотипом.
+        </Text>
       </div>
 
       <Card className="shadow-sm p-6">
         <div className="space-y-6">
           <div>
-            <Text className="text-sm font-medium text-gray-700 mb-2 block">Custom Logo URL</Text>
+            <Text className="text-sm font-medium text-gray-700 mb-2 block">URL пользовательского логотипа</Text>
             <TextInput
               placeholder="https://example.com/logo.png"
               value={logoUrlInput}
@@ -134,13 +136,14 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
               className="w-full"
             />
             <Text className="text-xs text-gray-500 mt-1">
-              Enter a URL for your custom logo or leave empty to use the default LiteLLM logo
+              Введите URL пользовательского логотипа или оставьте пустым, чтобы использовать логотип LiteLLM по
+              умолчанию
             </Text>
           </div>
 
           {/* Logo Preview */}
           <div>
-            <Text className="text-sm font-medium text-gray-700 mb-2 block">Current Logo</Text>
+            <Text className="text-sm font-medium text-gray-700 mb-2 block">Текущий логотип</Text>
             <div className="bg-gray-50 rounded-lg p-6 flex items-center justify-center min-h-[120px]">
               {logoUrlInput ? (
                 <img
@@ -157,7 +160,7 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
                   }}
                 />
               ) : (
-                <Text className="text-gray-500 text-sm">Default LiteLLM logo will be used</Text>
+                <Text className="text-gray-500 text-sm">Будет использован логотип LiteLLM по умолчанию</Text>
               )}
             </div>
           </div>
@@ -165,10 +168,10 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
           {/* Action Buttons */}
           <div className="flex gap-3 pt-4">
             <Button onClick={handleSave} loading={loading} disabled={loading} color="indigo">
-              Save Changes
+              Сохранить изменения
             </Button>
             <Button onClick={handleReset} loading={loading} disabled={loading} variant="secondary" color="gray">
-              Reset to Default
+              Сбросить до значения по умолчанию
             </Button>
           </div>
         </div>
