@@ -986,8 +986,7 @@ class OpenTelemetry(CustomLogger):
         # See: https://github.com/open-telemetry/opentelemetry-python/pull/4676
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
-        from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
-        from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
+        from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider, LogRecord
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
