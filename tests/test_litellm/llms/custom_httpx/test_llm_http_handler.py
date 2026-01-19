@@ -215,3 +215,61 @@ async def test_async_anthropic_messages_handler_header_priority():
         assert captured_headers["X-Forwarded-Only"] == "keep"
         assert captured_headers["X-Extra-Only"] == "also-keep"
         assert captured_headers["X-Provider-Only"] == "keep-this-too"
+
+
+@pytest.mark.asyncio
+async def test_async_create_file_handles_binary_data():
+    """
+    Test that async_create_file handles binary file data without decoding as UTF-8.
+    """
+    handler = BaseLLMHTTPHandler()
+
+    # Binary content with invalid UTF-8 bytes (would fail decode)
+    binary_content = bytes([0xFF, 0xFE, 0x00, 0x01, 0x02, 0x03, 0x50, 0x44, 0x46])
+
+    # Mock the provider config
+    mock_provider_config = Mock()
+    mock_provider_config.custom_llm_provider = "vertex_ai"
+    mock_provider_config.file_upload_http_method = "POST"
+    mock_provider_config.transform_file_upload_response = Mock(
+        return_value={"id": "file-123", "object": "file"}
+    )
+
+    # Mock the logging object
+    mock_logging_obj = Mock()
+    mock_logging_obj.pre_call = Mock()
+
+    # Mock the response
+    mock_response = Mock()
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"id": "file-123", "object": "file"}
+    mock_response.headers = {}
+    mock_response.text = '{"id": "file-123", "object": "file"}'
+
+    # Mock the async client
+    mock_async_client = AsyncMock()
+    mock_async_client.post = AsyncMock(return_value=mock_response)
+
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client",
+        return_value=mock_async_client
+    ):
+        await handler.async_create_file(
+            transformed_request=binary_content,
+            litellm_params={},
+            provider_config=mock_provider_config,
+            headers={"Content-Type": "application/octet-stream"},
+            api_base="https://api.example.com/upload",
+            logging_obj=mock_logging_obj,
+            client=None,
+            timeout=30.0,
+        )
+
+    # Verify binary content was passed directly without modification
+    mock_async_client.post.assert_called_once()
+    call_kwargs = mock_async_client.post.call_args.kwargs
+
+    assert call_kwargs["content"] == binary_content
+    assert isinstance(call_kwargs["content"], bytes)
+
+
