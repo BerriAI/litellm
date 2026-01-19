@@ -2,7 +2,8 @@
 Handles transforming from Responses API -> LiteLLM completion  (Chat Completion API)
 """
 
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union, cast
+from collections.abc import Sequence
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
 from openai.types.responses import ResponseFunctionToolCall
 from openai.types.responses.tool_param import FunctionToolParam
@@ -378,6 +379,7 @@ class LiteLLMCompletionResponsesConfig:
         if isinstance(input, str):
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
+            existing_tool_call_ids: Set[str] = set()
             for _input in input:
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                     input_item=_input
@@ -390,11 +392,97 @@ class LiteLLMCompletionResponsesConfig:
                     input_item=_input
                 ):
                     tool_call_output_messages.extend(chat_completion_messages)
-                else:
-                    messages.extend(chat_completion_messages)
+                    continue
 
-        messages.extend(tool_call_output_messages)
+                if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+                    input_item=_input
+                ):
+                    call_id_raw = _input.get("call_id") or _input.get("id") or ""
+                    if call_id_raw:
+                        existing_tool_call_ids.add(str(call_id_raw))
+
+                messages.extend(chat_completion_messages)
+
+            deduped_tool_call_messages = (
+                LiteLLMCompletionResponsesConfig._deduplicate_tool_call_output_messages(
+                    tool_call_output_messages=tool_call_output_messages,
+                    existing_tool_call_ids=existing_tool_call_ids,
+                )
+            )
+            messages.extend(deduped_tool_call_messages)
         return messages
+
+    @staticmethod
+    def _deduplicate_tool_call_output_messages(
+        tool_call_output_messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
+        ],
+        existing_tool_call_ids: Set[str],
+    ) -> List[
+        Union[
+            AllMessageValues,
+            GenericChatCompletionMessage,
+            ChatCompletionMessageToolCall,
+            ChatCompletionResponseMessage,
+        ]
+    ]:
+        """Return tool call outputs after dropping assistant entries with duplicate call_ids."""
+        if not tool_call_output_messages:
+            return []
+
+        filtered_messages: List[
+            Union[
+                AllMessageValues,
+                GenericChatCompletionMessage,
+                ChatCompletionMessageToolCall,
+                ChatCompletionResponseMessage,
+            ]
+        ] = []
+        seen_tool_call_ids: Set[str] = set(existing_tool_call_ids)
+
+        for tool_call_message in tool_call_output_messages:
+            if isinstance(tool_call_message, dict):
+                role = tool_call_message.get("role", "")
+            else:
+                role = getattr(tool_call_message, "role", "")
+            call_id = ""
+
+            if role == "assistant":
+                tool_calls: Any = None
+                if isinstance(tool_call_message, dict):
+                    tool_calls = tool_call_message.get("tool_calls")
+                else:
+                    tool_calls = getattr(tool_call_message, "tool_calls", None)
+
+                if (
+                    isinstance(tool_calls, Sequence)
+                    and not isinstance(tool_calls, (str, bytes))
+                    and len(tool_calls) > 0
+                ):
+                    first_call = tool_calls[0]
+                    call_id_raw = None
+                    if isinstance(first_call, dict):
+                        call_id_raw = first_call.get("id")
+                    else:
+                        call_id_raw = getattr(first_call, "id", None)
+
+                    if call_id_raw:
+                        call_id = str(call_id_raw)
+
+            if call_id and call_id in seen_tool_call_ids and role == "assistant":
+                continue
+
+            if call_id and role == "assistant":
+                seen_tool_call_ids.add(call_id)
+
+            filtered_messages.append(tool_call_message)
+
+        return filtered_messages
 
     @staticmethod
     def _ensure_tool_call_output_has_corresponding_tool_call(
