@@ -112,7 +112,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         Returns:
             List of items to process, up to batch_size items
         """
-        items_to_process = []
+        items_to_process: List[GCSLogQueueItem] = []
         while len(items_to_process) < self.batch_size:
             try:
                 items_to_process.append(self.log_queue.get_nowait())
