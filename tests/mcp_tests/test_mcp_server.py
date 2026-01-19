@@ -1001,34 +1001,39 @@ async def test_mcp_server_manager_access_groups_from_config():
         MCPRequestHandler,
     )
 
-    # Patch global_mcp_server_manager for this test
+    # Patch global_mcp_server_manager for this test and restore afterwards to
+    # avoid leaking state into other tests (e.g. the proxy MCP e2e suite).
     import litellm.proxy._experimental.mcp_server.mcp_server_manager as mcp_server_manager_mod
 
+    original_manager = mcp_server_manager_mod.global_mcp_server_manager
     mcp_server_manager_mod.global_mcp_server_manager = test_manager
-    # Should find config_server for group-a, both for group-b, other_server for group-c
-    import asyncio
+    try:
+        # Should find config_server for group-a, both for group-b, other_server for group-c
+        import asyncio
 
-    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-a"
-    ])
-    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-b"
-    ])
-    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-c"
-    ])
-    assert any(config_server.server_id == sid for sid in server_ids_a)
-    assert set(server_ids_b) == set(
-        [
-            s.server_id
+        server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-a"
+        ])
+        server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-b"
+        ])
+        server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-c"
+        ])
+        assert any(config_server.server_id == sid for sid in server_ids_a)
+        assert set(server_ids_b) == set(
+            [
+                s.server_id
+                for s in test_manager.config_mcp_servers.values()
+                if "group-b" in s.access_groups
+            ]
+        )
+        assert any(
+            s.name == "other_server" and s.server_id in server_ids_c
             for s in test_manager.config_mcp_servers.values()
-            if "group-b" in s.access_groups
-        ]
-    )
-    assert any(
-        s.name == "other_server" and s.server_id in server_ids_c
-        for s in test_manager.config_mcp_servers.values()
-    )
+        )
+    finally:
+        mcp_server_manager_mod.global_mcp_server_manager = original_manager
 
 
 async def test_mcp_server_manager_config_integration_with_database():
