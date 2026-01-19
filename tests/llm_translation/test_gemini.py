@@ -293,7 +293,7 @@ def test_gemini_image_generation():
 @pytest.mark.parametrize(
     "model_name",
     [
-        "gemini/gemini-2.5-flash-image-preview",
+        "gemini/gemini-2.5-flash-image",
         "gemini/gemini-2.0-flash-preview-image-generation",
         "gemini/gemini-3-pro-image-preview",
     ],
@@ -733,7 +733,7 @@ async def test_gemini_image_generation_async():
                 "content": "Generate an image of a banana wearing a costume that says LiteLLM",
             }
         ],
-        model="gemini/gemini-2.5-flash-image-preview",
+        model="gemini/gemini-2.5-flash-image",
     )
 
     CONTENT = response.choices[0].message.content
@@ -762,7 +762,7 @@ async def test_gemini_image_generation_async_stream():
                 "content": "Generate an image of a banana wearing a costume that says LiteLLM",
             }
         ],
-        model="gemini/gemini-2.5-flash-image-preview",
+        model="gemini/gemini-2.5-flash-image",
         stream=True,
     )
 
@@ -1401,3 +1401,37 @@ def test_anthropic_thinking_param_via_map_openai_params():
     assert "thinkingLevel" not in thinking_config_2, "Should NOT have thinkingLevel for Gemini 2"
     assert thinking_config_2["includeThoughts"] is True
     assert thinking_config_2["thinkingBudget"] == 10000
+
+
+def test_gemini_image_size_limit_exceeded():
+    """
+    Test that large images exceeding MAX_IMAGE_URL_DOWNLOAD_SIZE_MB are rejected.
+    
+    This validates that the 50MB default limit prevents downloading very large images
+    that could cause memory issues and pod crashes.
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "What is in this image?"
+                },
+                {
+                    "type": "image_url",
+                    "image_url": "https://upload.wikimedia.org/wikipedia/commons/5/51/Blue_Marble_2002.jpg"
+                }
+            ]
+        }
+    ]
+    
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        completion(
+            model="gemini/gemini-2.5-flash-lite",
+            messages=messages
+        )
+    
+    error_message = str(excinfo.value)
+    assert "Image size" in error_message
+    assert "exceeds maximum allowed size" in error_message

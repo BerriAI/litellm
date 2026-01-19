@@ -87,7 +87,7 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
     def transform_image_edit_request(
         self,
         model: str,
-        prompt: str,
+        prompt: Optional[str],
         image: FileTypes,
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
@@ -99,6 +99,9 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         FLUX 2 uses the same endpoint for generation and editing,
         with the image passed as base64 in the JSON body.
         """
+        if prompt is None:
+            raise ValueError("FLUX 2 image edit requires a prompt.")
+        
         image_b64 = self._convert_image_to_base64(image)
 
         # Build request body with required params

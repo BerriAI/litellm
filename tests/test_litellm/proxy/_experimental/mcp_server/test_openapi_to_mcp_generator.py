@@ -76,6 +76,40 @@ class TestCreateToolFunction:
             )
 
     @pytest.mark.asyncio
+    async def test_leading_digit_parameter(self):
+        """Test function with parameter starting with digit (e.g., 2fa-code)."""
+        operation = {
+            "parameters": [
+                {
+                    "name": "2fa-code",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "string"},
+                }
+            ]
+        }
+
+        func = create_tool_function(
+            path="/verify",
+            method="post",
+            operation=operation,
+            base_url="https://api.example.com",
+        )
+
+        assert callable(func)
+
+        with patch(GET_ASYNC_CLIENT_TARGET) as mock_client:
+            async_client = _create_mock_client("post", "verified")
+            mock_client.return_value = async_client
+
+            result = await func(**{"2fa-code": "123456"})
+            assert result == "verified"
+
+            # Verify query parameter was included
+            call_args = async_client.post.call_args
+            assert call_args[1]["params"]["2fa-code"] == "123456"
+
+    @pytest.mark.asyncio
     async def test_dot_in_parameter_name(self):
         """Test function with dot in parameter name (e.g., user.name)."""
         operation = {
