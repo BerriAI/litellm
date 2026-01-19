@@ -207,8 +207,8 @@ from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_rout
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
     router as anthropic_skills_router,
 )
-from litellm.proxy.anthropic_endpoints.claude_code_marketplace import (
-    router as claude_code_marketplace_router,
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
+    claude_code_marketplace_router,
 )
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
