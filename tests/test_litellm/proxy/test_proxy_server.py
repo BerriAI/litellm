@@ -3036,3 +3036,183 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
 
         # Verify FileResponse was called
         assert mock_file_response.called, "FileResponse should be called"
+
+
+def test_get_config_normalizes_string_callbacks(monkeypatch):
+    """
+    Test that /get/config/callbacks normalizes string callbacks to lists.
+    """
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    config_data = {
+        "litellm_settings": {
+            "success_callback": "langfuse",
+            "failure_callback": None,
+            "callbacks": ["prometheus", "datadog"],
+        },
+        "general_settings": {},
+        "environment_variables": {},
+    }
+
+    mock_router = MagicMock()
+    mock_router.get_settings.return_value = {}
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr(
+        proxy_config, "get_config", AsyncMock(return_value=config_data)
+    )
+
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
+
+    client = TestClient(app)
+    try:
+        response = client.get("/get/config/callbacks")
+    finally:
+        app.dependency_overrides = original_overrides
+
+    assert response.status_code == 200
+    callbacks = response.json()["callbacks"]
+
+    success_callbacks = [cb["name"] for cb in callbacks if cb.get("type") == "success"]
+    failure_callbacks = [cb["name"] for cb in callbacks if cb.get("type") == "failure"]
+    success_and_failure_callbacks = [
+        cb["name"] for cb in callbacks if cb.get("type") == "success_and_failure"
+    ]
+
+    assert "langfuse" in success_callbacks
+    assert len(failure_callbacks) == 0
+    assert "prometheus" in success_and_failure_callbacks
+    assert "datadog" in success_and_failure_callbacks
+
+
+def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
+    """
+    Test that _update_config_fields deep merge skips None values and empty lists.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    current_config = {
+        "general_settings": {
+            "max_parallel_requests": 10,
+            "allowed_models": ["gpt-3.5-turbo", "gpt-4"],
+            "nested": {
+                "key1": "value1",
+                "key2": "value2",
+            },
+        }
+    }
+
+    db_param_value = {
+        "max_parallel_requests": None,
+        "allowed_models": [],
+        "new_key": "new_value",
+        "nested": {
+            "key1": "updated_value1",
+            "key3": "value3",
+        },
+    }
+
+    result = proxy_config._update_config_fields(
+        current_config, "general_settings", db_param_value
+    )
+
+    assert result["general_settings"]["max_parallel_requests"] == 10
+    assert result["general_settings"]["allowed_models"] == ["gpt-3.5-turbo", "gpt-4"]
+    assert result["general_settings"]["new_key"] == "new_value"
+    assert result["general_settings"]["nested"]["key1"] == "updated_value1"
+    assert result["general_settings"]["nested"]["key2"] == "value2"
+    assert result["general_settings"]["nested"]["key3"] == "value3"
+
+
+@pytest.mark.asyncio
+async def test_get_hierarchical_router_settings():
+    """
+    Test _get_hierarchical_router_settings method's priority order: Key > Team > Global
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: Returns None when prisma_client is None
+    result = await proxy_config._get_hierarchical_router_settings(
+        user_api_key_dict=None,
+        prisma_client=None,
+    )
+    assert result is None
+
+    # Test Case 2: Returns key-level router_settings when available (as dict)
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.router_settings = {"routing_strategy": "key-level", "timeout": 10}
+    mock_user_api_key_dict.team_id = None
+
+    mock_prisma_client = MagicMock()
+
+    result = await proxy_config._get_hierarchical_router_settings(
+        user_api_key_dict=mock_user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+    assert result == {"routing_strategy": "key-level", "timeout": 10}
+
+    # Test Case 3: Returns key-level router_settings when available (as YAML string)
+    mock_user_api_key_dict.router_settings = "routing_strategy: key-yaml\ntimeout: 20"
+    result = await proxy_config._get_hierarchical_router_settings(
+        user_api_key_dict=mock_user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+    assert result == {"routing_strategy": "key-yaml", "timeout": 20}
+
+    # Test Case 4: Falls back to team-level router_settings when key-level is not available
+    mock_user_api_key_dict.router_settings = None
+    mock_user_api_key_dict.team_id = "team-123"
+
+    mock_team_obj = MagicMock()
+    mock_team_obj.router_settings = {"routing_strategy": "team-level", "timeout": 30}
+
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+        return_value=mock_team_obj
+    )
+
+    result = await proxy_config._get_hierarchical_router_settings(
+        user_api_key_dict=mock_user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+    assert result == {"routing_strategy": "team-level", "timeout": 30}
+    mock_prisma_client.db.litellm_teamtable.find_unique.assert_called_once_with(
+        where={"team_id": "team-123"}
+    )
+
+    # Test Case 5: Falls back to global router_settings when neither key nor team settings are available
+    mock_user_api_key_dict.router_settings = None
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+
+    mock_db_config = MagicMock()
+    mock_db_config.param_value = {"routing_strategy": "global-level", "timeout": 40}
+
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
+        return_value=mock_db_config
+    )
+
+    result = await proxy_config._get_hierarchical_router_settings(
+        user_api_key_dict=mock_user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+    assert result == {"routing_strategy": "global-level", "timeout": 40}
+    mock_prisma_client.db.litellm_config.find_first.assert_called_once_with(
+        where={"param_name": "router_settings"}
+    )
+
+    # Test Case 6: Returns None when no settings are found
+    mock_user_api_key_dict.router_settings = None
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+
+    result = await proxy_config._get_hierarchical_router_settings(
+        user_api_key_dict=mock_user_api_key_dict,
+        prisma_client=mock_prisma_client,
+    )
+    assert result is None

@@ -804,7 +804,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     verbose_logger.debug(f"Skipping unsupported annotation type: {type(annotation)}")
                     continue
 
-                result.append(annotation_dict)
+                result.append(annotation_dict)  # type: ignore
             except Exception as e:
                 # Skip malformed annotations
                 verbose_logger.debug(f"Skipping malformed annotation: {annotation}, error: {e}")
