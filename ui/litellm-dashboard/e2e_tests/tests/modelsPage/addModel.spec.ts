@@ -14,7 +14,7 @@ test.describe("Add Model", () => {
     await providerInputDropdown.fill("Anthropic");
     await page.waitForTimeout(1000);
     await providerInputDropdown.press("Enter");
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(2000);
 
     const providerModelsDropdown = page.locator(".ant-select-selection-overflow").first();
     await providerModelsDropdown.click();

@@ -38,6 +38,8 @@ import { valueFormatterSpend } from "../../utils/value_formatters";
 import TopKeyView from "./TopKeyView";
 import TopModelView from "./TopModelView";
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import EndpointUsage from "../EndpointUsage/EndpointUsage";
+import NewBadge from "../../../common_components/NewBadge";
 
 interface EntityMetrics {
   metrics: {
@@ -399,11 +401,14 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         filterOptions={getAllTags() || undefined}
       />
       <TabGroup>
-        <TabList variant="solid" className="mt-1">
-          <Tab>Cost</Tab>
-          <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
-          <Tab>Key Activity</Tab>
-        </TabList>
+        <NewBadge>
+          <TabList variant="solid" className="mt-1">
+            <Tab>Cost</Tab>
+            <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
+            <Tab>Key Activity</Tab>
+            <Tab>Endpoint Activity</Tab>
+          </TabList>
+        </NewBadge>
         <TabPanels>
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full">
@@ -681,6 +686,9 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </TabPanel>
           <TabPanel>
             <ActivityMetrics modelMetrics={keyMetrics} hidePromptCachingMetrics={entityType === "agent"} />
+          </TabPanel>
+          <TabPanel>
+            <EndpointUsage userSpendData={spendData} />
           </TabPanel>
         </TabPanels>
       </TabGroup>

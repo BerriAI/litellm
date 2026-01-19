@@ -110,6 +110,8 @@ COPY --from=builder /app/requirements.txt /app/requirements.txt
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
 COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/
+# Copy prisma_migration.py for Helm migrations job compatibility
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets

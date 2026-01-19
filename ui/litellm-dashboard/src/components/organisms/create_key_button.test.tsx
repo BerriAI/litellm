@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { renderWithProviders, screen } from "../../../tests/test-utils";
 import CreateKey from "./create_key_button";
 
 const mockKeyCreateCall = vi.fn().mockResolvedValue({
@@ -58,7 +58,7 @@ describe("CreateKey", () => {
   });
 
   it("should render the CreateKey component", () => {
-    render(<CreateKey {...defaultProps} />);
+    renderWithProviders(<CreateKey {...defaultProps} />);
     expect(screen.getByRole("button", { name: /create new key/i })).toBeInTheDocument();
   });
 });
