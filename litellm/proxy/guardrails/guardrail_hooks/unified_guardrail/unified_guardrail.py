@@ -28,7 +28,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         self,
         **kwargs,
     ):
-
         # store kwargs as optional_params
         self.optional_params = kwargs
 
@@ -63,6 +62,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.pre_mcp_call
+
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
             is not True
@@ -77,8 +79,12 @@ class UnifiedLLMGuardrails(CustomLogger):
             endpoint_guardrail_translation_mappings = (
                 load_guardrail_translation_mappings()
             )
-        if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
-            return data
+
+        try:
+            if CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+                return data
+        except ValueError:
+            return data  # handle unmapped call types
 
         endpoint_translation = endpoint_guardrail_translation_mappings[
             CallTypes(call_type)
@@ -114,6 +120,9 @@ class UnifiedLLMGuardrails(CustomLogger):
             return data
 
         event_type: GuardrailEventHooks = GuardrailEventHooks.during_call
+        if call_type == CallTypes.call_mcp_tool.value:
+            event_type = GuardrailEventHooks.during_mcp_call
+
         if (
             guardrail_to_apply.should_run_guardrail(data=data, event_type=event_type)
             is not True
@@ -128,7 +137,10 @@ class UnifiedLLMGuardrails(CustomLogger):
             endpoint_guardrail_translation_mappings = (
                 load_guardrail_translation_mappings()
             )
-        if call_type is not None and CallTypes(call_type) not in endpoint_guardrail_translation_mappings:
+        if (
+            call_type is not None
+            and CallTypes(call_type) not in endpoint_guardrail_translation_mappings
+        ):
             return data
 
         endpoint_translation = endpoint_guardrail_translation_mappings[
@@ -180,8 +192,8 @@ class UnifiedLLMGuardrails(CustomLogger):
         call_type: Optional[CallTypesLiteral] = None
         if user_api_key_dict.request_route is not None:
             call_types = get_call_types_for_route(user_api_key_dict.request_route)
-            if call_types is not None and len(call_types) > 0: # type: ignore
-                call_type = call_types[0] # type: ignore
+            if call_types is not None and len(call_types) > 0:  # type: ignore
+                call_type = call_types[0]  # type: ignore
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)  # type: ignore
 
@@ -330,7 +342,6 @@ class UnifiedLLMGuardrails(CustomLogger):
 
             # Process chunk based on sampling rate
             if chunk_counter % sampling_rate == 0:
-
                 verbose_proxy_logger.debug(
                     "Processing streaming chunk %s (sampling_rate=%s) with guardrail %s",
                     chunk_counter,

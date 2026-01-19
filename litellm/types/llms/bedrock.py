@@ -190,14 +190,19 @@ class ConverseTokenUsageBlock(TypedDict):
     cacheWriteInputTokens: int
 
 
-class ConverseResponseBlock(TypedDict):
+class ServiceTierBlock(TypedDict):
+    type: Literal["priority", "default", "flex"]
+
+
+class ConverseResponseBlock(TypedDict, total=False):
     additionalModelResponseFields: dict
     metrics: ConverseMetricsBlock
-    output: ConverseResponseOutputBlock
-    stopReason: (
-        str  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
-    )
-    usage: ConverseTokenUsageBlock
+    output: Required[ConverseResponseOutputBlock]
+    stopReason: Required[
+        str
+    ]  # end_turn | tool_use | max_tokens | stop_sequence | content_filtered
+    usage: Required[ConverseTokenUsageBlock]
+    serviceTier: ServiceTierBlock  # Optional - only present when serviceTier was sent in request
 
 
 class ToolJsonSchemaBlock(TypedDict, total=False):
@@ -294,10 +299,6 @@ class ContentBlockDeltaEvent(TypedDict, total=False):
 
 class PerformanceConfigBlock(TypedDict):
     latency: Literal["optimized", "throughput"]
-
-
-class ServiceTierBlock(TypedDict):
-    type: Literal["priority", "default", "flex"]
 
 
 class CommonRequestObject(

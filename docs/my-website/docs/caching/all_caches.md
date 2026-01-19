@@ -105,6 +105,14 @@ Then simply initialize:
 litellm.cache = Cache(type="redis")
 ```
 
+:::info
+Use `REDIS_*` environment variables as the primary mechanism for configuring all Redis client library parameters. This approach automatically maps environment variables to Redis client kwargs and is the suggested way to toggle Redis settings.
+:::
+
+:::warning
+If you need to pass non-string Redis parameters (integers, booleans, complex objects), avoid `REDIS_*` environment variables as they may fail during Redis client initialization. Instead, pass them directly as kwargs to the `Cache()` constructor.
+:::
+
 </TabItem>
 
 <TabItem value="gcs" label="gcs-cache">

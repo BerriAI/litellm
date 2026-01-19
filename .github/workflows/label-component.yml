@@ -11,134 +11,106 @@ jobs:
     permissions:
       issues: write
     steps:
-      - name: Add SDK label
-        if: contains(github.event.issue.body, 'SDK (litellm Python package)')
+      - name: Add component labels
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const labelName = 'sdk';
-            try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName
-              });
-            } catch (error) {
-              if (error.status === 404) {
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: labelName,
-                  color: '0E7C86',
-                  description: 'Issues related to the litellm Python SDK'
-                });
-              } else {
-                throw error;
-              }
-            }
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: [labelName]
-            });
+            const body = context.payload.issue.body;
+            if (!body) return;
 
-      - name: Add Proxy label
-        if: contains(github.event.issue.body, 'Proxy')
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const labelName = 'proxy';
-            try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName
-              });
-            } catch (error) {
-              if (error.status === 404) {
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: labelName,
-                  color: '5319E7',
-                  description: 'Issues related to the LiteLLM Proxy'
-                });
-              } else {
-                throw error;
+            // Define component mappings with regex patterns that handle flexible whitespace
+            const components = [
+              {
+                pattern: /What part of LiteLLM is this about\?\s*SDK \(litellm Python package\)/,
+                label: 'sdk',
+                color: '0E7C86',
+                description: 'Issues related to the litellm Python SDK'
+              },
+              {
+                pattern: /What part of LiteLLM is this about\?\s*Proxy/,
+                label: 'proxy',
+                color: '5319E7',
+                description: 'Issues related to the LiteLLM Proxy'
+              },
+              {
+                pattern: /What part of LiteLLM is this about\?\s*UI Dashboard/,
+                label: 'ui-dashboard',
+                color: 'D876E3',
+                description: 'Issues related to the LiteLLM UI Dashboard'
+              },
+              {
+                pattern: /What part of LiteLLM is this about\?\s*Docs/,
+                label: 'docs',
+                color: 'FBCA04',
+                description: 'Issues related to LiteLLM documentation'
               }
-            }
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: [labelName]
-            });
+            ];
 
-      - name: Add UI Dashboard label
-        if: contains(github.event.issue.body, 'UI Dashboard')
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const labelName = 'ui-dashboard';
-            try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName
-              });
-            } catch (error) {
-              if (error.status === 404) {
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: labelName,
-                  color: 'D876E3',
-                  description: 'Issues related to the LiteLLM UI Dashboard'
-                });
-              } else {
-                throw error;
-              }
-            }
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: [labelName]
-            });
+            // Find matching component
+            for (const component of components) {
+              if (component.pattern.test(body)) {
+                // Ensure label exists
+                try {
+                  await github.rest.issues.getLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: component.label
+                  });
+                } catch (error) {
+                  if (error.status === 404) {
+                    await github.rest.issues.createLabel({
+                      owner: context.repo.owner,
+                      repo: context.repo.repo,
+                      name: component.label,
+                      color: component.color,
+                      description: component.description
+                    });
+                  }
+                }
 
-      - name: Add Docs label
-        if: contains(github.event.issue.body, 'Docs')
-        uses: actions/github-script@v7
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const labelName = 'docs';
-            try {
-              await github.rest.issues.getLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: labelName
-              });
-            } catch (error) {
-              if (error.status === 404) {
-                await github.rest.issues.createLabel({
+                // Add label to issue
+                await github.rest.issues.addLabels({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
-                  name: labelName,
-                  color: 'FBCA04',
-                  description: 'Issues related to LiteLLM documentation'
+                  issue_number: context.issue.number,
+                  labels: [component.label]
                 });
-              } else {
-                throw error;
+
+                break;
               }
             }
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              labels: [labelName]
-            });
+
+            // Check for 'claude code' keyword (can be applied alongside component labels)
+            if (/claude code/i.test(body)) {
+              const claudeLabel = {
+                name: 'claude code',
+                color: '7c3aed',
+                description: 'Issues related to Claude Code usage'
+              };
+
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: claudeLabel.name
+                });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: claudeLabel.name,
+                    color: claudeLabel.color,
+                    description: claudeLabel.description
+                  });
+                }
+              }
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [claudeLabel.name]
+              });
+            }

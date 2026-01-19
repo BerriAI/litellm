@@ -110,6 +110,8 @@ COPY --from=builder /app/requirements.txt /app/requirements.txt
 COPY --from=builder /app/docker/entrypoint.sh /app/docker/prod_entrypoint.sh /app/docker/
 COPY --from=builder /app/docker/supervisord.conf /etc/supervisord.conf
 COPY --from=builder /app/schema.prisma /app/
+# Copy prisma_migration.py for Helm migrations job compatibility
+COPY --from=builder /app/litellm/proxy/prisma_migration.py /app/litellm/proxy/prisma_migration.py
 COPY --from=builder /wheels/ /wheels/
 COPY --from=builder /var/lib/litellm/ui /var/lib/litellm/ui
 COPY --from=builder /var/lib/litellm/assets /var/lib/litellm/assets
@@ -144,7 +146,10 @@ RUN pip install --no-index --find-links=/wheels/ -r requirements.txt && \
     fi
 
 # Permissions, cleanup, and Prisma prep
-RUN chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
+# Convert Windows line endings to Unix for entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && \
+    sed -i 's/\r$//' docker/prod_entrypoint.sh && \
+    chmod +x docker/entrypoint.sh docker/prod_entrypoint.sh && \
     mkdir -p /nonexistent /.npm /var/lib/litellm/assets /var/lib/litellm/ui && \
     chown -R nobody:nogroup /app /var/lib/litellm/ui /var/lib/litellm/assets /nonexistent /.npm && \
     pip uninstall jwt -y || true && \

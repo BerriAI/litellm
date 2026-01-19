@@ -188,6 +188,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         static_headers: staticHeadersList,
         stdio_config: rawStdioConfig,
         credentials: credentialValues,
+        allow_all_keys: allowAllKeysRaw,
         ...restValues
       } = values;
 
@@ -278,6 +279,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
         mcp_access_groups: accessGroups,
         alias: restValues.alias,
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
+        allow_all_keys: Boolean(allowAllKeysRaw),
         static_headers: staticHeaders,
       };
 
@@ -661,7 +663,7 @@ const CreateMCPServer: React.FC<CreateMCPServerProps> = ({
                 </Form.Item>
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
                   <p className="text-sm text-gray-600">
-                    Complete the OAuth authorization flow to fetch an access token and store it as the authentication value.
+                    Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.
                   </p>
                   <Button
                     variant="secondary"

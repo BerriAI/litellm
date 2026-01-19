@@ -21,12 +21,37 @@ from litellm.types.utils import (
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
+    _check_provider_match,
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
 )
 
 # Adds the parent directory to the system path
+
+
+def test_check_provider_match_azure_ai_allows_openai_and_azure():
+    """
+    Test that azure_ai provider can match openai and azure models.
+    This is needed for Azure Model Router which can route to OpenAI models.
+    """
+    # azure_ai should match openai models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "openai"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should match azure models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "azure"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should NOT match other providers
+    assert _check_provider_match(
+        model_info={"litellm_provider": "anthropic"},
+        custom_llm_provider="azure_ai"
+    ) is False
 
 
 def test_get_optional_params_image_gen():
@@ -520,6 +545,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_character": {"type": "number"},
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
@@ -747,6 +773,57 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         error_message = "Cost validation failed:\n" + "\n".join(violations)
         error_message += "\n\nTo add exceptions, add the model ID to the 'exceptions' list in the test function."
         raise AssertionError(error_message)
+
+
+def test_max_tokens_consistency():
+    """
+    Test that max_tokens == max_output_tokens for all models.
+
+    According to the spec in model_prices_and_context_window.json:
+    - max_tokens is a LEGACY parameter
+    - It should be set to max_output_tokens if the provider specifies it
+
+    This test ensures consistency across all model definitions.
+    """
+    import json
+    from pathlib import Path
+
+    # Load the model configuration
+    config_path = Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
+    with open(config_path, 'r') as f:
+        models = json.load(f)
+
+    inconsistencies = []
+
+    for model_name, config in models.items():
+        # Skip the sample_spec
+        if model_name == "sample_spec":
+            continue
+
+        # Check if both max_tokens and max_output_tokens exist
+        if isinstance(config, dict):
+            max_tokens = config.get('max_tokens')
+            max_output_tokens = config.get('max_output_tokens')
+
+            # Only validate if both exist
+            if max_tokens is not None and max_output_tokens is not None:
+                if max_tokens != max_output_tokens:
+                    inconsistencies.append({
+                        'model': model_name,
+                        'max_tokens': max_tokens,
+                        'max_output_tokens': max_output_tokens
+                    })
+
+    if inconsistencies:
+        error_msg = f"\n\n❌ Found {len(inconsistencies)} models with max_tokens != max_output_tokens:\n\n"
+        for item in inconsistencies[:10]:  # Show first 10
+            error_msg += f"  {item['model']}: max_tokens={item['max_tokens']}, max_output_tokens={item['max_output_tokens']}\n"
+
+        if len(inconsistencies) > 10:
+            error_msg += f"\n  ... and {len(inconsistencies) - 10} more\n"
+
+        error_msg += "\nTo fix these inconsistencies, run: poetry run python fix_max_tokens_inconsistencies.py"
+        raise AssertionError(error_msg)
 
 
 def test_get_model_info_gemini():
@@ -2754,3 +2831,117 @@ def test_azure_ai_claude_provider_config():
         provider=LlmProviders.AZURE_AI,
     )
     assert isinstance(config, AzureAIStudioConfig)
+
+
+# Tests for thinking blocks helper functions
+# Related to issue: https://github.com/BerriAI/litellm/issues/18926
+
+
+def test_any_assistant_message_has_thinking_blocks_with_thinking():
+    """Test that function returns True when any assistant message has thinking_blocks."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Let me think..."}],
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+        {"role": "tool", "tool_call_id": "123", "content": "result"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "456", "function": {"name": "test2"}}],
+            # No thinking_blocks here - Claude sometimes doesn't include them
+        },
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is True
+
+
+def test_any_assistant_message_has_thinking_blocks_without_thinking():
+    """Test that function returns False when no assistant message has thinking_blocks."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+        {"role": "tool", "tool_call_id": "123", "content": "result"},
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is False
+
+
+def test_any_assistant_message_has_thinking_blocks_empty_list():
+    """Test that function returns False when thinking_blocks is an empty list."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [],  # Empty list
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is False
+
+
+def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
+    """
+    Test the scenario from issue #18926 where:
+    - First assistant message HAS thinking_blocks
+    - Second assistant message has NO thinking_blocks
+
+    The old logic would drop thinking because the LAST tool_call message
+    has no thinking_blocks, but this breaks because the first message
+    still has thinking blocks in the conversation.
+    """
+    from litellm.utils import (
+        any_assistant_message_has_thinking_blocks,
+        last_assistant_with_tool_calls_has_no_thinking_blocks,
+    )
+
+    messages = [
+        {"role": "user", "content": "Build a feature"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Let me analyze the requirements..."}
+            ],
+            "tool_calls": [
+                {"id": "toolu_1", "function": {"name": "file_editor", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_1",
+            "content": "File contents here...",
+        },
+        {
+            "role": "assistant",
+            # NO thinking_blocks - Claude sometimes doesn't include them
+            "content": [{"type": "text", "text": "Let me explore more..."}],
+            "tool_calls": [
+                {"id": "toolu_2", "function": {"name": "file_editor", "arguments": "{}"}}
+            ],
+        },
+    ]
+
+    # Last assistant with tool_calls has no thinking_blocks
+    assert last_assistant_with_tool_calls_has_no_thinking_blocks(messages) is True
+
+    # But ANY assistant message has thinking_blocks
+    assert any_assistant_message_has_thinking_blocks(messages) is True
+
+    # So we should NOT drop thinking - the combination tells us thinking is in use
+    # The fix uses both checks: only drop if last has none AND no message has any
+    should_drop_thinking = (
+        last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+        and not any_assistant_message_has_thinking_blocks(messages)
+    )
+    assert should_drop_thinking is False

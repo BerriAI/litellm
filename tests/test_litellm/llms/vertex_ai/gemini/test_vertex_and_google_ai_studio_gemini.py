@@ -10,11 +10,14 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
+from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.types.llms.vertex_ai import UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
+from litellm.utils import CustomStreamWrapper
 
 
 def test_top_logprobs():
@@ -516,19 +519,20 @@ def test_vertex_ai_usage_metadata_response_token_count():
 
     v = VertexGeminiConfig()
     usage_metadata = {
-        "promptTokenCount": 57,
+        "promptTokenCount": 66,
         "responseTokenCount": 74,
         "totalTokenCount": 131,
-        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}],
+        "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 57}, {"modality": "IMAGE", "tokenCount": 9}],
         "responseTokensDetails": [{"modality": "TEXT", "tokenCount": 74}],
     }
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     print("result", result)
-    assert result.prompt_tokens == 57
+    assert result.prompt_tokens == 66
     assert result.completion_tokens == 74
     assert result.total_tokens == 131
     assert result.prompt_tokens_details.text_tokens == 57
+    assert result.prompt_tokens_details.image_tokens == 9
     assert result.prompt_tokens_details.audio_tokens is None
     assert result.prompt_tokens_details.cached_tokens is None
     assert result.completion_tokens_details.text_tokens == 74
@@ -1605,6 +1609,39 @@ def test_vertex_ai_annotation_streaming_events():
     assert "Weather information" in annotation["url_citation"]["title"]
 
 
+@pytest.mark.asyncio
+async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
+    class DummyLogging:
+        def __init__(self):
+            self.model_call_details = {"litellm_params": {}}
+            self.optional_params = {}
+            self.messages = []
+            self.completion_start_time = None
+            self.stream_options = None
+
+        def failure_handler(self, *args, **kwargs):
+            return None
+
+        async def async_failure_handler(self, *args, **kwargs):
+            return None
+
+    async def failing_make_call(client=None, **kwargs):
+        raise VertexAIError(status_code=400, message="bad input", headers={})
+
+    stream = CustomStreamWrapper(
+        completion_stream=None,
+        make_call=failing_make_call,
+        model="gemini-3-pro-preview",
+        logging_obj=DummyLogging(),
+        custom_llm_provider="vertex_ai_beta",
+    )
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        await stream.__anext__()
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+
+
 def test_vertex_ai_annotation_conversion():
     """
     Test the conversion of Vertex AI grounding metadata to OpenAI annotations.
@@ -2280,6 +2317,17 @@ def test_partial_json_chunk_on_first_chunk():
     assert iterator.chunk_type == "accumulated_json", "Should switch to accumulated_json mode"
 
 
+
+def test_google_ai_studio_presence_penalty_supported():
+    """
+    Test that presence_penalty is supported for Google AI Studio Gemini.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/14753
+    """
+    config = GoogleAIStudioGeminiConfig()
+    supported_params = config.get_supported_openai_params(model="gemini-2.0-flash")
+
+    assert "presence_penalty" in supported_params
 # ==================== Tool Type Separation Tests ====================
 # These tests verify that each Tool object contains exactly one type per Vertex AI API spec
 # Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1beta1/Tool
@@ -2470,3 +2518,138 @@ def test_vertex_ai_multiple_function_declarations_grouped():
     func_names = [f["name"] for f in tools[0]["function_declarations"]]
     assert "func1" in func_names
     assert "func2" in func_names
+
+
+def test_gemini_3_flash_preview_token_usage_fallback():
+    """Test fallback logic when candidatesTokensDetails is missing (e.g. Gemini 3 Flash Preview)."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 2145,
+        "candidatesTokenCount": 509,
+        "totalTokenCount": 2654,
+        # candidatesTokensDetails intentionally omitted
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 509
+    assert result.prompt_tokens == 2145
+    assert result.total_tokens == 2654
+
+    # Text tokens should be derived from candidatesTokenCount
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.text_tokens == 509
+    assert result.completion_tokens_details.image_tokens is None
+    assert result.completion_tokens_details.audio_tokens is None
+
+
+def test_gemini_no_reasoning_fallback():
+    """Test fallback when reasoning_effort is absent and details are missing."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 264,
+        "totalTokenCount": 364,
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 264
+    assert result.completion_tokens_details is not None
+    assert result.completion_tokens_details.text_tokens == 264
+    assert (
+        result.completion_tokens_details.reasoning_tokens is None
+        or result.completion_tokens_details.reasoning_tokens == 0
+    )
+
+
+def test_gemini_token_usage_standard_response():
+    """Verify that standard responses with details are computed correctly and not overwritten."""
+    v = VertexGeminiConfig()
+
+    usage_metadata_dict = {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 50,
+        "totalTokenCount": 150,
+        "candidatesTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 40},
+            {"modality": "IMAGE", "tokenCount": 10},
+        ],
+    }
+
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+
+    assert result.completion_tokens == 50
+    assert result.completion_tokens_details.text_tokens == 40
+    assert result.completion_tokens_details.image_tokens == 10
+
+
+def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
+    """
+    Test that image generation models correctly separate prompt and completion token details.
+    
+    This is a regression test for the bug where prompt_tokens_details.image_tokens
+    was incorrectly set to the completion's image token count instead of 0.
+    
+    Scenario: Text-only prompt generates an image response
+    - Input: Text prompt (no images)
+    - Output: Generated image + text description
+    
+    Expected behavior:
+    - prompt_tokens_details.image_tokens should be 0 (text-only input)
+    - completion_tokens_details.image_tokens should be 1290 (generated image)
+    
+    Bug behavior (before fix):
+    - prompt_tokens_details.image_tokens was 1290 (incorrect!)
+    - completion_tokens_details.image_tokens was 1290 (correct)
+    
+    The bug was caused by reusing the same variables (image_tokens, audio_tokens, text_tokens)
+    for both prompt and completion token details.
+    """
+    v = VertexGeminiConfig()
+    
+    # Simulate Gemini image generation model response metadata
+    # User sends text-only prompt, model generates image + text
+    usage_metadata_dict = {
+        "promptTokenCount": 101,
+        "candidatesTokenCount": 1290,
+        "totalTokenCount": 1391,
+        # Prompt is text-only (no image tokens in input)
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 101}
+        ],
+        # Response contains generated image + text
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1290}
+        ],
+    }
+    
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+    
+    # Verify basic token counts
+    assert result.prompt_tokens == 101
+    assert result.completion_tokens == 1290
+    assert result.total_tokens == 1391
+    
+    # CRITICAL: Prompt tokens details should show NO image tokens (text-only input)
+    assert result.prompt_tokens_details.text_tokens == 101, \
+        "Prompt text tokens should be 101"
+    assert result.prompt_tokens_details.image_tokens is None, \
+        "Prompt image tokens should be None (text-only input, no images in prompt)"
+    assert result.prompt_tokens_details.audio_tokens is None, \
+        "Prompt audio tokens should be None"
+    
+    # Completion tokens details should show the generated image tokens
+    assert result.completion_tokens_details.image_tokens == 1290, \
+        "Completion image tokens should be 1290 (generated image)"
+    
+    # Verify text_tokens is auto-calculated for completion
+    # candidatesTokenCount (1290) - image_tokens (1290) = 0
+    assert result.completion_tokens_details.text_tokens == 0, \
+        "Completion text tokens should be 0 (image-only response)"

@@ -440,6 +440,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "asearch",
             "avector_store_create",
             "avector_store_search",
+            "acreate_skill",
         ]
     ],
 )
@@ -570,6 +571,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         or call_type == CallTypes.acreate_container
         or call_type == CallTypes.adelete_container
         or call_type == CallTypes.alist_container_files
+        or call_type == CallTypes.aupload_container_file
     ):
         # Skip container call types as they're not supported for Azure (only OpenAI)
         pytest.skip(f"Skipping {call_type.value} because Azure doesn't support container operations")

@@ -1,19 +1,19 @@
 import json
 import os
 import sys
-from litellm._uuid import uuid
+import types
 from datetime import datetime, timedelta
-from typing import List
+from typing import List, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from litellm._uuid import uuid
 
 sys.path.insert(
     0, os.path.abspath("../../../..")
 )  # Adds the parent directory to the system path
-
-from typing import Optional
 
 from litellm.proxy._types import (
     LiteLLM_MCPServerTable,
@@ -116,6 +116,22 @@ def setup_mock_prisma_client(
         return_value=mcp_servers
     )
     return mock_prisma_client
+
+
+def create_mcp_router_test_client() -> TestClient:
+    from litellm.proxy.management_endpoints.mcp_management_endpoints import router
+
+    app = FastAPI()
+    app.include_router(router)
+    return TestClient(app)
+
+
+def patch_proxy_general_settings(settings: dict):
+    fake_proxy_server_module = types.SimpleNamespace(general_settings=settings)
+    return patch.dict(
+        sys.modules,
+        {"litellm.proxy.proxy_server": fake_proxy_server_module},
+    )
 
 
 class TestListMCPServers:
@@ -230,6 +246,40 @@ class TestListMCPServers:
                     assert server.alias == "DeepWiki MCP"
                     assert server.url == "https://mcp.deepwiki.com/mcp"
                     assert server.transport == "http"
+
+    @pytest.mark.asyncio
+    async def test_list_mcp_servers_view_all_mode(self):
+        """Users should see all MCP servers when view_all mode is enabled."""
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        mock_servers = [
+            generate_mock_mcp_server_db_record(server_id="server-1", alias="One"),
+            generate_mock_mcp_server_db_record(server_id="server-2", alias="Two"),
+        ]
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_unfiltered = AsyncMock(
+            return_value=mock_servers
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+            return_value="view_all",
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+                fetch_all_mcp_servers,
+            )
+
+            result = await fetch_all_mcp_servers(user_api_key_dict=mock_user_auth)
+
+            assert len(result) == 2
+            assert {server.server_id for server in result} == {"server-1", "server-2"}
 
     @pytest.mark.asyncio
     async def test_list_mcp_servers_combined_config_and_db(self):
@@ -1048,6 +1098,55 @@ class TestHealthCheckServers:
             assert result[1]["server_id"] == "server-2"
             assert result[1]["status"] == "unhealthy"
 
+
+class TestMCPRegistryEndpoint:
+    def test_registry_returns_404_when_flag_missing(self):
+        client = create_mcp_router_test_client()
+
+        with patch_proxy_general_settings({}):
+            response = client.get("/v1/mcp/registry.json")
+
+        assert response.status_code == 404
+
+    def test_registry_returns_404_when_flag_false(self):
+        client = create_mcp_router_test_client()
+
+        with patch_proxy_general_settings({"enable_mcp_registry": False}):
+            response = client.get("/v1/mcp/registry.json")
+
+        assert response.status_code == 404
+
+    def test_registry_returns_entries_when_enabled(self):
+        client = create_mcp_router_test_client()
+
+        mock_server = generate_mock_mcp_server_config_record(
+            server_id="server-123",
+            name="zapier",
+            url="https://zapier.example.com/mcp",
+            transport="http",
+        )
+
+        mock_manager = MagicMock()
+        mock_manager.get_registry.return_value = {mock_server.server_id: mock_server}
+
+        with patch_proxy_general_settings({"enable_mcp_registry": True}), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            response = client.get("/v1/mcp/registry.json")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["servers"]) == 2  # built-in + custom server
+
+        builtin_entry = data["servers"][0]["server"]
+        assert builtin_entry["name"] == "litellm-mcp-server"
+        assert builtin_entry["remotes"][0]["url"].endswith("/mcp")
+
+        custom_entry = data["servers"][1]["server"]
+        assert custom_entry["name"] == "zapier"
+        assert custom_entry["remotes"][0]["url"].endswith("/zapier/mcp")
+
     @pytest.mark.asyncio
     async def test_health_check_specific_servers(self):
         """
@@ -1095,6 +1194,51 @@ class TestHealthCheckServers:
             assert len(result) == 1
             assert result[0]["server_id"] == "server-1"
             assert result[0]["status"] == "healthy"
+
+    @pytest.mark.asyncio
+    async def test_health_check_view_all_mode(self):
+        """view_all mode should return health info for all MCP servers."""
+
+        from litellm.proxy.management_endpoints.mcp_management_endpoints import (
+            health_check_servers,
+        )
+
+        mock_user_auth = generate_mock_user_api_key_auth(
+            user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+        health_result_one = generate_mock_mcp_server_db_record(
+            server_id="server-1", alias="One"
+        )
+        health_result_one.status = "healthy"
+
+        health_result_two = generate_mock_mcp_server_db_record(
+            server_id="server-2", alias="Two"
+        )
+        health_result_two.status = "unhealthy"
+
+        mock_manager = MagicMock()
+        mock_manager.get_all_mcp_servers_with_health_unfiltered = AsyncMock(
+            return_value=[health_result_one, health_result_two]
+        )
+
+        with patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints._get_user_mcp_management_mode",
+            return_value="view_all",
+        ), patch(
+            "litellm.proxy.management_endpoints.mcp_management_endpoints.global_mcp_server_manager",
+            mock_manager,
+        ):
+            result = await health_check_servers(
+                server_ids=None,
+                user_api_key_dict=mock_user_auth,
+            )
+
+            assert len(result) == 2
+            assert result[0]["server_id"] == "server-1"
+            assert result[0]["status"] == "healthy"
+            assert result[1]["server_id"] == "server-2"
+            assert result[1]["status"] == "unhealthy"
 
     @pytest.mark.asyncio
     async def test_health_check_unauthorized_servers(self):

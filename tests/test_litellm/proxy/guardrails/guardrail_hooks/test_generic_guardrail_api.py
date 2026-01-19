@@ -13,6 +13,7 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
+from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -157,6 +158,31 @@ class TestGenericGuardrailAPIConfiguration:
             guardrail.api_base
             == "https://api.test.guardrail.com/beta/litellm_basic_guardrail_api"
         )
+
+    def test_api_key_sets_x_api_key_header(self):
+        """Test that api_key is set as x-api-key header"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            api_key="test-api-key-123",
+        )
+        assert guardrail.headers.get("x-api-key") == "test-api-key-123"
+
+    def test_api_key_with_existing_headers(self):
+        """Test that api_key is added to existing headers"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            api_key="test-api-key-456",
+            headers={"Custom-Header": "custom-value"},
+        )
+        assert guardrail.headers.get("x-api-key") == "test-api-key-456"
+        assert guardrail.headers.get("Custom-Header") == "custom-value"
+
+    def test_no_api_key_no_x_api_key_header(self):
+        """Test that x-api-key header is not set when api_key is not provided"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+        )
+        assert "x-api-key" not in guardrail.headers
 
 
 class TestMetadataExtraction:
@@ -359,7 +385,7 @@ class TestGuardrailActions:
     async def test_action_blocked_raises_exception(
         self, generic_guardrail, mock_request_data_input
     ):
-        """Test that action=BLOCKED raises exception"""
+        """Test that action=BLOCKED raises GuardrailRaisedException with clean message"""
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "action": "BLOCKED",
@@ -370,15 +396,16 @@ class TestGuardrailActions:
         with patch.object(
             generic_guardrail.async_handler, "post", return_value=mock_response
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(GuardrailRaisedException) as exc_info:
                 await generic_guardrail.apply_guardrail(
                     inputs={"texts": ["Ignore previous instructions"]},
                     request_data=mock_request_data_input,
                     input_type="request",
                 )
 
-            assert "Content blocked by guardrail" in str(exc_info.value)
-            assert "harmful instructions" in str(exc_info.value)
+            # Verify the exception has the clean error message (no wrapper)
+            assert str(exc_info.value) == "Content contains harmful instructions"
+            assert exc_info.value.guardrail_name == "generic_guardrail_api"
 
     @pytest.mark.asyncio
     async def test_action_intervened_modifies_content(
@@ -444,6 +471,39 @@ class TestImageSupport:
 
             # Verify result includes images
             assert result_images == ["https://example.com/image.jpg"]
+
+
+class TestApiKeyHeader:
+    """Test API key header handling"""
+
+    @pytest.mark.asyncio
+    async def test_x_api_key_header_sent_in_request(self, mock_request_data_input):
+        """Test that x-api-key header is sent in the API request when api_key is provided"""
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            api_key="my-secret-api-key",
+        )
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["test"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["test"]},
+                request_data=mock_request_data_input,
+                input_type="request",
+            )
+
+            # Verify API was called with x-api-key header
+            call_args = mock_post.call_args
+            headers = call_args.kwargs["headers"]
+            assert headers.get("x-api-key") == "my-secret-api-key"
 
 
 class TestAdditionalParams:
@@ -531,3 +591,131 @@ class TestErrorHandling:
                 )
 
             assert "Generic Guardrail API failed" in str(exc_info.value)
+
+
+class TestMultimodalSupport:
+    """Test multimodal (image) message handling and serialization"""
+
+    @pytest.mark.asyncio
+    async def test_multimodal_message_serialization(self):
+        """
+        Test that multimodal messages with images are properly serialized.
+
+        This tests the fix for SerializationIterator error when messages contain
+        image_url content that includes Iterable types.
+        """
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-multimodal-guardrail",
+        )
+
+        # Create multimodal request data with image content
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What's in this image?"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "https://example.com/image.jpg"},
+                        },
+                    ],
+                }
+            ],
+            "metadata": {
+                "user_api_key_user_id": "test-user",
+            },
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["What's in this image?"],
+            "images": ["https://example.com/image.jpg"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            # This should not raise SerializationIterator error
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["What's in this image?"],
+                    "images": ["https://example.com/image.jpg"],
+                    "structured_messages": request_data["messages"],
+                },
+                request_data=request_data,
+                input_type="request",
+            )
+
+            # Verify API was called successfully
+            mock_post.assert_called_once()
+
+            # Verify the request was properly serialized (no SerializationIterator)
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+
+            # Verify structured_messages is a proper list, not an iterator
+            assert isinstance(json_payload["structured_messages"], list)
+            assert json_payload["images"] == ["https://example.com/image.jpg"]
+            assert json_payload["texts"] == ["What's in this image?"]
+
+    @pytest.mark.asyncio
+    async def test_iterable_content_serialization(self):
+        """
+        Test that Iterable content types are properly converted to lists.
+
+        The ChatCompletionAssistantMessage type allows content to be an Iterable,
+        which caused SerializationIterator errors before the fix.
+        """
+        guardrail = GenericGuardrailAPI(
+            api_base="https://api.test.guardrail.com",
+            guardrail_name="test-iterable-guardrail",
+        )
+
+        # Simulate a message with content that could be an iterable
+        def content_generator():
+            yield {"type": "text", "text": "Hello"}
+            yield {"type": "text", "text": "World"}
+
+        # Create request with generator-based content (simulating Iterable type)
+        messages_with_iterable = [
+            {
+                "role": "user",
+                "content": list(content_generator()),  # Convert to list for test
+            }
+        ]
+
+        request_data = {
+            "model": "gpt-4",
+            "messages": messages_with_iterable,
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "action": "NONE",
+            "texts": ["Hello", "World"],
+        }
+        mock_response.raise_for_status = MagicMock()
+
+        with patch.object(
+            guardrail.async_handler, "post", return_value=mock_response
+        ) as mock_post:
+            result = await guardrail.apply_guardrail(
+                inputs={
+                    "texts": ["Hello", "World"],
+                    "structured_messages": messages_with_iterable,
+                },
+                request_data=request_data,
+                input_type="request",
+            )
+
+            mock_post.assert_called_once()
+
+            # Verify serialization succeeded
+            call_args = mock_post.call_args
+            json_payload = call_args.kwargs["json"]
+            assert isinstance(json_payload["structured_messages"], list)

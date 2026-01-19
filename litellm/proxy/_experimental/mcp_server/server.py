@@ -709,14 +709,24 @@ if MCP_AVAILABLE:
 
         extra_headers: Optional[Dict[str, str]] = None
         if server.auth_type == MCPAuth.oauth2:
-            extra_headers = oauth2_headers
+            # Copy to avoid mutating the original dict (important for parallel fetching)
+            extra_headers = oauth2_headers.copy() if oauth2_headers else None
 
         if server.extra_headers and raw_headers:
             if extra_headers is None:
                 extra_headers = {}
+
+            normalized_raw_headers = {
+                str(k).lower(): v for k, v in raw_headers.items() if isinstance(k, str)
+            }
+
             for header in server.extra_headers:
-                if header in raw_headers:
-                    extra_headers[header] = raw_headers[header]
+                if not isinstance(header, str):
+                    continue
+                header_value = normalized_raw_headers.get(header.lower())
+                if header_value is None:
+                    continue
+                extra_headers[header] = header_value
 
         if server_auth_header is None:
             server_auth_header = mcp_auth_header
@@ -755,11 +765,10 @@ if MCP_AVAILABLE:
         # Decide whether to add prefix based on number of allowed servers
         add_prefix = not (len(allowed_mcp_servers) == 1)
 
-        # Get tools from each allowed server
-        all_tools = []
-        for server in allowed_mcp_servers:
+        async def _fetch_and_filter_server_tools(server: MCPServer) -> List[MCPTool]:
+            """Fetch and filter tools from a single server with error handling."""
             if server is None:
-                continue
+                return []
 
             server_auth_header, extra_headers = _prepare_mcp_server_headers(
                 server=server,
@@ -786,16 +795,24 @@ if MCP_AVAILABLE:
                     user_api_key_auth=user_api_key_auth,
                 )
 
-                all_tools.extend(filtered_tools)
-
                 verbose_logger.debug(
                     f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
                 )
+                return filtered_tools
             except Exception as e:
                 verbose_logger.exception(
                     f"Error getting tools from server {server.name}: {str(e)}"
                 )
-                # Continue with other servers instead of failing completely
+                return []
+
+        # Fetch tools from all servers in parallel
+        tasks = [
+            _fetch_and_filter_server_tools(server) for server in allowed_mcp_servers
+        ]
+        results = await asyncio.gather(*tasks)
+
+        # Flatten results into single list
+        all_tools: List[MCPTool] = [tool for tools in results for tool in tools]
 
         verbose_logger.info(
             f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
@@ -1183,47 +1200,38 @@ if MCP_AVAILABLE:
 
         return managed_resource_templates
 
-    @client
-    async def call_mcp_tool(
+    async def execute_mcp_tool(
         name: str,
-        arguments: Optional[Dict[str, Any]] = None,
+        arguments: Dict[str, Any],
+        allowed_mcp_servers: List[MCPServer],
+        start_time: datetime,
         user_api_key_auth: Optional[UserAPIKeyAuth] = None,
         mcp_auth_header: Optional[str] = None,
-        mcp_servers: Optional[List[str]] = None,
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
-        Call a specific tool with the provided arguments (handles prefixed tool names)
+        Execute MCP tool.
+
+        This function assumes permission checks have already been performed.
+
+        Args:
+            name: Tool name (may include server prefix)
+            arguments: Tool arguments
+            allowed_mcp_servers: Pre-validated list of servers the user can access
+            start_time: Start time for logging
+            user_api_key_auth: Optional user API key auth for logging
+            mcp_auth_header: Optional MCP auth header
+            mcp_server_auth_headers: Optional server-specific auth headers
+            oauth2_headers: Optional OAuth2 headers
+            raw_headers: Optional raw HTTP headers
+            **kwargs: Additional arguments (e.g., litellm_logging_obj)
+
+        Returns:
+            CallToolResult: Tool execution result
         """
-        start_time = datetime.now()
-        if arguments is None:
-            raise HTTPException(
-                status_code=400, detail="Request arguments are required"
-            )
-
-        ## CHECK IF USER IS ALLOWED TO CALL THIS TOOL
-        allowed_mcp_server_ids = (
-            await global_mcp_server_manager.get_allowed_mcp_servers(
-                user_api_key_auth=user_api_key_auth,
-            )
-        )
-
-        allowed_mcp_servers: List[MCPServer] = []
-        for allowed_mcp_server_id in allowed_mcp_server_ids:
-            allowed_server = global_mcp_server_manager.get_mcp_server_by_id(
-                allowed_mcp_server_id
-            )
-            if allowed_server is not None:
-                allowed_mcp_servers.append(allowed_server)
-
-        allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
-            mcp_servers=mcp_servers,
-            allowed_mcp_servers=allowed_mcp_servers,
-        )
-
         # Track resolved MCP server for both permission checks and dispatch
         mcp_server: Optional[MCPServer] = None
 
@@ -1341,6 +1349,66 @@ if MCP_AVAILABLE:
                 result=response, start_time=start_time, end_time=end_time
             )
         return response
+
+    @client
+    async def call_mcp_tool(
+        name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+        user_api_key_auth: Optional[UserAPIKeyAuth] = None,
+        mcp_auth_header: Optional[str] = None,
+        mcp_servers: Optional[List[str]] = None,
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
+        oauth2_headers: Optional[Dict[str, str]] = None,
+        raw_headers: Optional[Dict[str, str]] = None,
+        **kwargs: Any,
+    ) -> CallToolResult:
+        """
+        Call a specific tool with the provided arguments (handles prefixed tool names).
+        """
+        start_time = datetime.now()
+        if arguments is None:
+            raise HTTPException(
+                status_code=400, detail="Request arguments are required"
+            )
+
+        ## CHECK IF USER IS ALLOWED TO CALL THIS TOOL
+        allowed_mcp_server_ids = (
+            await global_mcp_server_manager.get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+            )
+        )
+
+        allowed_mcp_servers: List[MCPServer] = []
+        for allowed_mcp_server_id in allowed_mcp_server_ids:
+            allowed_server = global_mcp_server_manager.get_mcp_server_by_id(
+                allowed_mcp_server_id
+            )
+            if allowed_server is not None:
+                allowed_mcp_servers.append(allowed_server)
+
+        allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
+            mcp_servers=mcp_servers,
+            allowed_mcp_servers=allowed_mcp_servers,
+        )
+        if not allowed_mcp_servers:
+            raise HTTPException(
+                status_code=403,
+                detail="User not allowed to call this tool.",
+            )
+
+        # Delegate to execute_mcp_tool for execution
+        return await execute_mcp_tool(
+            name=name,
+            arguments=arguments,
+            allowed_mcp_servers=allowed_mcp_servers,
+            start_time=start_time,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=mcp_auth_header,
+            mcp_server_auth_headers=mcp_server_auth_headers,
+            oauth2_headers=oauth2_headers,
+            raw_headers=raw_headers,
+            **kwargs,
+        )
 
     async def mcp_get_prompt(
         name: str,

@@ -25,6 +25,7 @@ from litellm.types.utils import (
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
+    LlmProviders,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -1301,7 +1302,7 @@ class CustomStreamWrapper:
                 if response_obj["is_finished"]:
                     self.received_finish_reason = response_obj["finish_reason"]
             else:  # openai / azure chat model
-                if self.custom_llm_provider == "azure":
+                if self.custom_llm_provider in [LlmProviders.AZURE.value, LlmProviders.AZURE_AI.value]:
                     if isinstance(chunk, BaseModel) and hasattr(chunk, "model"):
                         # for azure, we need to pass the model from the original chunk
                         self.model = getattr(chunk, "model", self.model)
@@ -2000,24 +2001,56 @@ class CustomStreamWrapper:
                 )
             ## Map to OpenAI Exception
             try:
-                raise exception_type(
+                mapped_exception = exception_type(
                     model=self.model,
                     custom_llm_provider=self.custom_llm_provider,
                     original_exception=e,
                     completion_kwargs={},
                     extra_kwargs={},
                 )
-            except Exception as e:
-                from litellm.exceptions import MidStreamFallbackError
+            except Exception as mapping_error:
+                mapped_exception = mapping_error
 
-                raise MidStreamFallbackError(
-                    message=str(e),
-                    model=self.model,
-                    llm_provider=self.custom_llm_provider or "anthropic",
-                    original_exception=e,
-                    generated_content=self.response_uptil_now,
-                    is_pre_first_chunk=not self.sent_first_chunk,
-                )
+            def _normalize_status_code(exc: Exception) -> Optional[int]:
+                """
+                Best-effort status_code extraction.
+                Uses status_code on the exception, then falls back to the response.
+                """
+                try:
+                    code = getattr(exc, "status_code", None)
+                    if code is not None:
+                        return int(code)
+                except Exception:
+                    pass
+
+                response = getattr(exc, "response", None)
+                if response is not None:
+                    try:
+                        status_code = getattr(response, "status_code", None)
+                        if status_code is not None:
+                            return int(status_code)
+                    except Exception:
+                        pass
+                return None
+
+            mapped_status_code = _normalize_status_code(mapped_exception)
+            original_status_code = _normalize_status_code(e)
+
+            if mapped_status_code is not None and 400 <= mapped_status_code < 500:
+                raise mapped_exception
+            if original_status_code is not None and 400 <= original_status_code < 500:
+                raise mapped_exception
+
+            from litellm.exceptions import MidStreamFallbackError
+
+            raise MidStreamFallbackError(
+                message=str(mapped_exception),
+                model=self.model,
+                llm_provider=self.custom_llm_provider or "anthropic",
+                original_exception=mapped_exception,
+                generated_content=self.response_uptil_now,
+                is_pre_first_chunk=not self.sent_first_chunk,
+            )
 
     @staticmethod
     def _strip_sse_data_from_chunk(chunk: Optional[str]) -> Optional[str]:
