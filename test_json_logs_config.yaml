@@ -1,0 +1,23 @@
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+      api_key: fake-key-to-trigger-error
+
+  # Azure model without credentials to trigger error
+  - model_name: azure-gpt
+    litellm_params:
+      model: azure/gpt-35-turbo
+      api_base: https://fake-endpoint.openai.azure.com
+      api_key: fake-key
+
+  # Vertex AI model without credentials to trigger the vertex error
+  - model_name: vertex-test
+    litellm_params:
+      model: vertex_ai/gemini-pro
+      vertex_project: fake-project
+      vertex_location: us-central1
+
+litellm_settings:
+  json_logs: true
+  drop_params: true
