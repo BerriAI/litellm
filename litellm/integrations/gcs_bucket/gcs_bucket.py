@@ -1,10 +1,11 @@
 import asyncio
+import hashlib
 import json
 import os
 import time
 from litellm._uuid import uuid
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import quote
 
 from litellm._logging import verbose_logger
@@ -152,6 +153,52 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         """
         return f"{date_str}/batch-{batch_id}.ndjson"
 
+    def _get_config_key(self, kwargs: Dict[str, Any]) -> str:
+        """
+        Extract a synchronous grouping key from kwargs to group items by GCS config.
+        This allows us to batch items with the same bucket/credentials together.
+        
+        Returns a string key that uniquely identifies the GCS config combination.
+        This key may contain sensitive information (bucket names, paths) - use _sanitize_config_key()
+        for logging purposes.
+        """
+        standard_callback_dynamic_params = kwargs.get("standard_callback_dynamic_params", None) or {}
+        
+        # Extract bucket name (dynamic or default)
+        bucket_name = standard_callback_dynamic_params.get("gcs_bucket_name", None) or self.BUCKET_NAME or "default"
+        
+        # Extract service account path (dynamic or default)
+        path_service_account = standard_callback_dynamic_params.get("gcs_path_service_account", None) or self.path_service_account_json or "default"
+        
+        # Create unique key from both values
+        return f"{bucket_name}|{path_service_account}"
+    
+    def _sanitize_config_key(self, config_key: str) -> str:
+        """
+        Create a sanitized version of the config key for logging.
+        Uses a hash to avoid exposing sensitive bucket names or service account paths.
+        
+        Returns a short hash prefix for safe logging.
+        """
+        # Use hash to avoid exposing sensitive information in logs
+        hash_obj = hashlib.sha256(config_key.encode('utf-8'))
+        return f"config-{hash_obj.hexdigest()[:8]}"
+    
+    def _group_items_by_config(self, items: List[GCSLogQueueItem]) -> Dict[str, List[GCSLogQueueItem]]:
+        """
+        Group items by their GCS config (bucket + credentials).
+        This ensures items with different configs are processed separately.
+        
+        Returns a dict mapping config_key -> list of items with that config.
+        """
+        grouped: Dict[str, List[GCSLogQueueItem]] = {}
+        for item in items:
+            config_key = self._get_config_key(item["kwargs"])
+            if config_key not in grouped:
+                grouped[config_key] = []
+            grouped[config_key].append(item)
+        return grouped
+
     def _combine_payloads_to_ndjson(self, items: List[GCSLogQueueItem]) -> str:
         """
         Combine multiple log payloads into newline-delimited JSON (NDJSON) format.
@@ -165,34 +212,18 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             lines.append(json_line)
         return "\n".join(lines)
 
-    async def async_send_batch(self):
+    async def _send_grouped_batch(self, items: List[GCSLogQueueItem], config_key: str) -> Tuple[int, int]:
         """
-        Process queued logs in batch - sends logs to GCS Bucket as a single batched object
-
-        This implementation batches multiple log payloads into a single GCS object upload,
-        dramatically reducing API calls and improving throughput.
-
-        Strategy:
-            - collect the logs to flush every `GCS_FLUSH_INTERVAL` seconds
-            - combine all payloads in a batch into newline-delimited JSON (NDJSON)
-            - make 1 POST request per batch (instead of 1 per log)
-            - process up to `batch_size` items per flush to prevent unbounded queue growth
-
-        Uses asyncio.Queue for thread-safe concurrent access. Processes up to `batch_size`
-        items per flush, leaving remaining items for the next flush cycle.
-        """
-        items_to_process = self._drain_queue_batch()
-
-        if not items_to_process:
-            return
-
-        print(f"GCS Bucket: Starting batch send. Processing {len(items_to_process)} items as a single batch")
+        Send a batch of items that share the same GCS config.
         
-        # Group items by GCS config (bucket, credentials) since they may differ
-        # For now, we'll use the first item's config for the entire batch
-        # (most common case is all items use the same config)
-        first_item = items_to_process[0]
-        first_kwargs = first_item["kwargs"]
+        Returns:
+            (success_count, error_count)
+        """
+        if not items:
+            return (0, 0)
+        
+        # Use first item's kwargs to get the config (all items in group have same config)
+        first_kwargs = items[0]["kwargs"]
         
         try:
             gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
@@ -211,7 +242,7 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             object_name = self._generate_batch_object_name(current_date, batch_id)
             
             # Combine all payloads into NDJSON format
-            combined_payload = self._combine_payloads_to_ndjson(items_to_process)
+            combined_payload = self._combine_payloads_to_ndjson(items)
             
             # Upload single batched object
             await self._log_json_data_on_gcs(
@@ -221,21 +252,65 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 logging_payload=combined_payload,  # Pass as string (NDJSON)
             )
             
-            success_count = len(items_to_process)
+            success_count = len(items)
             error_count = 0
-            print(f"GCS Bucket: Successfully sent batch of {success_count} logs to bucket '{bucket_name}', object '{object_name}'")
+            sanitized_key = self._sanitize_config_key(config_key)
+            print(f"GCS Bucket: Successfully sent batch of {success_count} logs to bucket '{bucket_name}', object '{object_name}' (config: {sanitized_key})")
+            return (success_count, error_count)
             
         except Exception as e:
             # If batch upload fails, count all items as errors
-            # In the future, we could implement retry or fallback to individual uploads
             success_count = 0
-            error_count = len(items_to_process)
-            print(f"GCS Bucket: Error sending batch to GCS bucket: {str(e)}")
+            error_count = len(items)
+            sanitized_key = self._sanitize_config_key(config_key)
+            print(f"GCS Bucket: Error sending batch to GCS bucket (config: {sanitized_key}): {str(e)}")
             verbose_logger.exception(
-                f"GCS Bucket error logging batch payload to GCS bucket: {str(e)}"
+                f"GCS Bucket error logging batch payload to GCS bucket (config: {sanitized_key}): {str(e)}"
             )
+            return (success_count, error_count)
 
-        print(f"GCS Bucket: Batch send completed. Success: {success_count}, Errors: {error_count}, Remaining queue size: {self.log_queue.qsize()}")
+    async def async_send_batch(self):
+        """
+        Process queued logs in batch - sends logs to GCS Bucket as batched objects
+
+        This implementation batches multiple log payloads into single GCS object uploads,
+        dramatically reducing API calls and improving throughput.
+
+        Strategy:
+            - collect the logs to flush every `GCS_FLUSH_INTERVAL` seconds
+            - group items by GCS config (bucket + credentials) to handle mixed configs
+            - combine payloads in each group into newline-delimited JSON (NDJSON)
+            - make 1 POST request per config group (instead of 1 per log)
+            - process up to `batch_size` items per flush to prevent unbounded queue growth
+
+        Uses asyncio.Queue for thread-safe concurrent access. Processes up to `batch_size`
+        items per flush, leaving remaining items for the next flush cycle.
+        """
+        items_to_process = self._drain_queue_batch()
+
+        if not items_to_process:
+            return
+
+        print(f"GCS Bucket: Starting batch send. Processing {len(items_to_process)} items")
+        
+        # Group items by GCS config (bucket, credentials) to handle mixed configs
+        # This ensures logs go to the correct bucket with correct credentials
+        grouped_items = self._group_items_by_config(items_to_process)
+        
+        if len(grouped_items) > 1:
+            sanitized_keys = [self._sanitize_config_key(key) for key in grouped_items.keys()]
+            print(f"GCS Bucket: Items grouped into {len(grouped_items)} config groups: {sanitized_keys}")
+        
+        total_success = 0
+        total_errors = 0
+        
+        # Process each config group separately
+        for config_key, group_items in grouped_items.items():
+            success_count, error_count = await self._send_grouped_batch(group_items, config_key)
+            total_success += success_count
+            total_errors += error_count
+
+        print(f"GCS Bucket: Batch send completed. Success: {total_success}, Errors: {total_errors}, Remaining queue size: {self.log_queue.qsize()}")
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
