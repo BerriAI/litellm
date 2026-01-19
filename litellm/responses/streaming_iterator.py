@@ -100,7 +100,6 @@ class BaseResponsesAPIStreamingIterator:
         try:
             # Parse the JSON chunk
             parsed_chunk = json.loads(chunk)
-            raise RuntimeError("test")
 
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
