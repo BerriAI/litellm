@@ -18,3 +18,6 @@ mcp_servers:
     command: python3
     args:
       - tests/mcp_tests/mcp_server.py
+  math_streamable_http:
+    transport: http
+    url: http://127.0.0.1:0/mcp
