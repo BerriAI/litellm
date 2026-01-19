@@ -81,21 +81,23 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: Optional[str],
-        image: FileTypes,
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[Dict[str, Any], Optional[RequestFiles]]:
-        inline_parts = self._prepare_inline_image_parts(image)
+        inline_parts = self._prepare_inline_image_parts(image) if image else []
         if not inline_parts:
             raise ValueError("Gemini image edit requires at least one image.")
 
-        if prompt is None:
-            raise ValueError("Gemini image edit requires a prompt.")
+        # Build parts list with image and prompt (if provided)
+        parts = inline_parts.copy()
+        if prompt is not None and prompt != "":
+            parts.append({"text": prompt})
 
         contents = [
             {
-                "parts": inline_parts + [{"text": prompt}],
+                "parts": parts,
             }
         ]
 

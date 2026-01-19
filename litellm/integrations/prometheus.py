@@ -21,7 +21,12 @@ from typing import (
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_DeletedVerificationToken,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
+)
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 from litellm.types.utils import StandardLoggingPayload
@@ -2153,7 +2158,7 @@ class PrometheusLogger(CustomLogger):
         self,
         data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
         set_metrics_function: Callable[[List[Any]], Awaitable[None]],
-        data_type: Literal["teams", "keys"],
+        data_type: Literal["teams", "keys", "users"],
     ):
         """
         Generic method to initialize budget metrics for teams or API keys.
@@ -2245,7 +2250,7 @@ class PrometheusLogger(CustomLogger):
 
         async def fetch_keys(
             page_size: int, page: int
-        ) -> Tuple[List[Union[str, UserAPIKeyAuth]], Optional[int]]:
+        ) -> Tuple[List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]], Optional[int]]:
             key_list_response = await _list_key_helper(
                 prisma_client=prisma_client,
                 page=page,
