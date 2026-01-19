@@ -9,7 +9,7 @@ ENV PATH="${HOME}/venv/bin:$PATH"
 # Note: Using Python 3.13 for compatibility with ddtrace and other packages
 # rust and cargo are required for building ddtrace from source
 # musl-dev and libffi-dev are needed for some Python packages on Alpine
-# nodejs is required for Prisma
+# nodejs is required for Prisma and frontend build
 RUN apk update && \
     apk add --no-cache gcc musl-dev libffi-dev openssl openssl-dev rust cargo nodejs npm
 
@@ -25,6 +25,39 @@ WORKDIR /app/litellm-source
 # Include proxy extras to ensure all dependencies like backoff are installed
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
     ${HOME}/venv/bin/pip install -e '.[proxy]' prisma
+
+# Build frontend
+WORKDIR /app/litellm-source/ui/litellm-dashboard
+
+# Update npm to latest version to avoid compatibility issues
+RUN npm install -g npm@latest
+
+# Clear npm cache to avoid potential issues
+RUN npm cache clean --force
+
+# Create .env.production file to disable ESLint during build
+RUN echo "NEXT_ESLINT_NO_DEV_ERRORS=true" > .env.production
+
+# Install frontend dependencies
+RUN npm install
+
+# Build frontend (with ESLint disabled)
+RUN npm run build
+
+# Prepare built frontend for serving
+RUN mkdir -p /var/lib/litellm/ui && \
+    cp -r ./out/* /var/lib/litellm/ui/ && \
+    cd /var/lib/litellm/ui && \
+    for html_file in *.html; do \
+      if [ "$html_file" != "index.html" ] && [ -f "$html_file" ]; then \
+        folder_name="${html_file%.html}" && \
+        mkdir -p "$folder_name" && \
+        mv "$html_file" "$folder_name/index.html"; \
+      fi; \
+    done
+
+# Return to source directory
+WORKDIR /app/litellm-source
 
 COPY test_in_docker.sh /app
 
