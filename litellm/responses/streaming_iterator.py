@@ -391,11 +391,20 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context"""
-        # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
+        # Create a copy for logging to avoid modifying the response object that will be returned to the user
         # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        import copy
-        logging_response = copy.deepcopy(self.completed_response)
+        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
+        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
+        logging_response = self.completed_response
+        if self.completed_response is not None and hasattr(self.completed_response, 'model_dump'):
+            try:
+                logging_response = type(self.completed_response).model_validate(
+                    self.completed_response.model_dump()
+                )
+            except Exception:
+                # Fallback to original if serialization fails
+                pass
 
         asyncio.create_task(
             self.logging_obj.async_success_handler(
@@ -477,11 +486,20 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in sync context"""
-        # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
+        # Create a copy for logging to avoid modifying the response object that will be returned to the user
         # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        import copy
-        logging_response = copy.deepcopy(self.completed_response)
+        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
+        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
+        logging_response = self.completed_response
+        if self.completed_response is not None and hasattr(self.completed_response, 'model_dump'):
+            try:
+                logging_response = type(self.completed_response).model_validate(
+                    self.completed_response.model_dump()
+                )
+            except Exception:
+                # Fallback to original if serialization fails
+                pass
 
         run_async_function(
             async_function=self.logging_obj.async_success_handler,

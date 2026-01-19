@@ -1052,6 +1052,189 @@ async def test_vector_store_synchronization_across_instances():
 
 
 @pytest.mark.asyncio
+async def test_vector_store_update_and_list_synchronization():
+    """
+    Test that vector store updates are properly synchronized across multiple instances.
+    
+    This test simulates the scenario where:
+    1. Instance 1 creates a vector store
+    2. Instance 2 caches it in memory
+    3. Instance 1 updates the vector store in the database
+    4. Instance 2 should see the updated data when listing (database is source of truth)
+    
+    This is a regression test to prevent the bug where Instance 2 would show
+    stale cached data instead of the updated database version.
+    """
+    from datetime import datetime, timezone
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
+    from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+    # Simulate two instances with separate in-memory registries
+    instance_1_registry = VectorStoreRegistry(vector_stores=[])
+    instance_2_registry = VectorStoreRegistry(vector_stores=[])
+    
+    # Mock database that both instances share
+    mock_db_vector_stores = []
+    
+    async def mock_find_many(order=None):
+        """Mock find_many for listing vector stores"""
+        result = []
+        for vs in mock_db_vector_stores:
+            class MockVectorStore:
+                def __init__(self, data):
+                    for key, value in data.items():
+                        setattr(self, key, value)
+                    self._data = data
+                
+                def __iter__(self):
+                    return iter(self._data.items())
+            result.append(MockVectorStore(vs))
+        return result
+    
+    async def mock_create(data):
+        """Mock create for adding vector store to DB"""
+        vector_store = data.copy()
+        mock_db_vector_stores.append(vector_store)
+        mock_obj = MagicMock()
+        mock_obj.model_dump.return_value = vector_store
+        return mock_obj
+    
+    async def mock_update(where, data):
+        """Mock update for modifying vector store in DB"""
+        vector_store_id = where.get("vector_store_id")
+        for i, vs in enumerate(mock_db_vector_stores):
+            if vs.get("vector_store_id") == vector_store_id:
+                # Update the vector store
+                mock_db_vector_stores[i].update(data)
+                mock_obj = MagicMock()
+                mock_obj.model_dump.return_value = mock_db_vector_stores[i]
+                return mock_obj
+        raise Exception(f"Vector store {vector_store_id} not found")
+    
+    # Create mock prisma client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(
+        side_effect=mock_find_many
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
+        side_effect=mock_create
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
+        side_effect=mock_update
+    )
+    
+    # Test vector store data
+    test_vector_store_id = "test-update-store-001"
+    original_name = "Original Name"
+    updated_name = "Updated Name"
+    
+    test_vector_store: LiteLLM_ManagedVectorStore = {
+        "vector_store_id": test_vector_store_id,
+        "custom_llm_provider": "bedrock",
+        "vector_store_name": original_name,
+        "vector_store_description": "Testing update synchronization",
+        "litellm_params": {
+            "vector_store_id": test_vector_store_id,
+            "custom_llm_provider": "bedrock",
+            "region_name": "us-east-1"
+        },
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    
+    # Step 1: Create vector store on Instance 1
+    await mock_prisma_client.db.litellm_managedvectorstorestable.create(
+        data=test_vector_store
+    )
+    instance_1_registry.add_vector_store_to_registry(vector_store=test_vector_store)
+    
+    # Step 2: Instance 2 fetches and caches the vector store
+    vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+        prisma_client=mock_prisma_client
+    )
+    for vs in vector_stores_from_db:
+        if vs.get("vector_store_id") == test_vector_store_id:
+            instance_2_registry.add_vector_store_to_registry(vector_store=vs)
+    
+    # Verify both instances have the original data
+    instance_1_vs = instance_1_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    )
+    instance_2_vs = instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    )
+    assert instance_1_vs.get("vector_store_name") == original_name
+    assert instance_2_vs.get("vector_store_name") == original_name
+    
+    # Step 3: Instance 1 updates the vector store in the database
+    # (Simulating what happens in update_vector_store endpoint)
+    update_data = {"vector_store_name": updated_name}
+    await mock_prisma_client.db.litellm_managedvectorstorestable.update(
+        where={"vector_store_id": test_vector_store_id},
+        data=update_data
+    )
+    
+    # Instance 1 updates its own cache
+    updated_vs_instance_1 = test_vector_store.copy()
+    updated_vs_instance_1["vector_store_name"] = updated_name
+    instance_1_registry.update_vector_store_in_registry(
+        vector_store_id=test_vector_store_id,
+        updated_data=updated_vs_instance_1
+    )
+    
+    # Verify Instance 1 has the updated data
+    instance_1_vs_after_update = instance_1_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    )
+    assert instance_1_vs_after_update.get("vector_store_name") == updated_name
+    
+    # Verify Instance 2 still has stale data in cache
+    instance_2_vs_before_list = instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    )
+    assert instance_2_vs_before_list.get("vector_store_name") == original_name, (
+        "Instance 2 should still have stale cached data before list operation"
+    )
+    
+    # Step 4: Instance 2 calls list endpoint (which should sync with database)
+    # This simulates what list_vector_stores endpoint does
+    vector_stores_from_db_after_update = await VectorStoreRegistry._get_vector_stores_from_db(
+        prisma_client=mock_prisma_client
+    )
+    
+    # Build map from database vector stores (database is source of truth)
+    vector_store_map = {}
+    for vector_store in vector_stores_from_db_after_update:
+        vector_store_id = vector_store.get("vector_store_id")
+        if vector_store_id:
+            vector_store_map[vector_store_id] = vector_store
+            
+            # Update in-memory registry with database versions (this is the key fix)
+            instance_2_registry.update_vector_store_in_registry(
+                vector_store_id=vector_store_id,
+                updated_data=vector_store
+            )
+    
+    # Step 5: Verify Instance 2 now has the updated data
+    instance_2_vs_after_list = instance_2_registry.get_litellm_managed_vector_store_from_registry(
+        test_vector_store_id
+    )
+    assert instance_2_vs_after_list.get("vector_store_name") == updated_name, (
+        "Instance 2 should have updated data after list operation syncs with database"
+    )
+    
+    # Verify the list returned the correct data
+    combined_vector_stores = list(vector_store_map.values())
+    assert len(combined_vector_stores) == 1
+    assert combined_vector_stores[0].get("vector_store_id") == test_vector_store_id
+    assert combined_vector_stores[0].get("vector_store_name") == updated_name, (
+        "List should return updated data from database"
+    )
+
+
+@pytest.mark.asyncio
 async def test_resolve_embedding_config_from_db():
     """Test that _resolve_embedding_config_from_db correctly resolves embedding config from database."""
     mock_prisma_client = MagicMock()

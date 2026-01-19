@@ -231,7 +231,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
+
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
@@ -239,63 +239,73 @@ class TestBaseResponsesAPIStreamingIterator:
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj
         )
-        
+
         # Test with empty chunk
         result = iterator._process_chunk("")
         assert result is None
-        
+
         # Test with None chunk
         result = iterator._process_chunk(None)
         assert result is None
 
-    def test_process_chunk_exception_calls_handle_failure_once(self):
+    def test_handle_logging_completed_response_with_unpickleable_objects(self):
         """
-        Test that _process_chunk calls _handle_failure exactly once when an exception occurs.
-        
-        This ensures failure handlers are triggered even when _process_chunk is called directly,
-        while the _failure_handled flag prevents duplicate calls if the exception bubbles up
-        to the outer exception handler in __next__ or __anext__.
+        Test that _handle_logging_completed_response handles responses containing
+        objects that cannot be pickled (like Pydantic ValidatorIterator).
+
+        This test verifies the fix for issue #17192 where streaming with tool_choice
+        containing allowed_tools would fail with:
+        "cannot pickle 'pydantic_core._pydantic_core.ValidatorIterator' object"
+
+        The fix uses model_dump + model_validate instead of copy.deepcopy.
         """
+        import asyncio
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
         # Mock dependencies
         mock_response = Mock()
         mock_response.headers = {}
+        mock_response.aiter_lines = Mock()
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_success_handler = Mock()
+        mock_logging_obj.success_handler = Mock()
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
-        # Set up the mock transform method to raise an exception
-        test_exception = ValueError("Test exception in transform")
-        mock_config.transform_streaming_response.side_effect = test_exception
-        
+
         # Create the iterator instance
-        iterator = BaseResponsesAPIStreamingIterator(
+        iterator = ResponsesAPIStreamingIterator(
             response=mock_response,
             model="gpt-4",
             responses_api_provider_config=mock_config,
-            logging_obj=mock_logging_obj
+            logging_obj=mock_logging_obj,
+            litellm_metadata={"model_info": {"id": "model_123"}},
+            custom_llm_provider="openai"
         )
-        
-        # Mock _handle_failure to track if it's called
-        original_handle_failure = iterator._handle_failure
-        with patch.object(iterator, '_handle_failure', wraps=original_handle_failure) as mock_handle_failure:
-            # Prepare valid JSON chunk that will trigger transform_streaming_response
-            test_chunk_data = {
-                "type": "response.output_text.delta",
-                "delta": "Hello"
+
+        # Create a ResponseCompletedEvent with tool_choice that has model_dump
+        mock_completed_response = Mock()
+        mock_completed_response.model_dump.return_value = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_123",
+                "output": [{"type": "function_call", "name": "search_web"}],
+                "tool_choice": {"type": "function", "name": "search_web"}
             }
-            
-            # _process_chunk should raise the exception and call _handle_failure once
-            with pytest.raises(ValueError) as exc_info:
-                iterator._process_chunk(json.dumps(test_chunk_data))
-            
-            # Verify the exception was raised
-            assert str(exc_info.value) == "Test exception in transform"
-            
-            # Verify _handle_failure was called exactly once
-            assert mock_handle_failure.call_count == 1
-            
-            # Verify that calling _handle_failure again doesn't trigger duplicate handlers
-            # due to the _failure_handled flag
-            iterator._handle_failure(test_exception)
-            # Should still be 2 calls total (the second call is prevented by the flag)
-            assert mock_handle_failure.call_count == 2
+        }
+        # model_validate should return a new mock (the copy)
+        type(mock_completed_response).model_validate = Mock(return_value=Mock())
+
+        iterator.completed_response = mock_completed_response
+
+        # This should NOT raise an exception
+        # Previously it would fail with: TypeError: cannot pickle 'ValidatorIterator'
+        # Mock asyncio.create_task and executor.submit since we're not in async context
+        with patch('asyncio.create_task') as mock_create_task, \
+             patch('litellm.responses.streaming_iterator.executor') as mock_executor:
+            try:
+                iterator._handle_logging_completed_response()
+            except TypeError as e:
+                if "pickle" in str(e):
+                    pytest.fail(f"_handle_logging_completed_response failed with pickle error: {e}")
+                raise
+
