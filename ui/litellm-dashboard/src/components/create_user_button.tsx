@@ -223,27 +223,27 @@ const Createuser: React.FC<CreateuserProps> = ({
   return (
     <div className="flex gap-2">
       <Button2 className="mb-0" onClick={() => setIsModalVisible(true)}>
-        + Invite User
+        + Пригласить пользователя
       </Button2>
       <BulkCreateUsers accessToken={accessToken} teams={teams} possibleUIRoles={possibleUIRoles} />
       <Modal
-        title="Invite User"
+        title="Пригласить пользователя"
         visible={isModalVisible}
         width={800}
         footer={null}
         onOk={handleOk}
         onCancel={handleCancel}
       >
-        <Text className="mb-1">Create a User who can own keys</Text>
+        <Text className="mb-1">Создать пользователя, который сможет владеть ключами</Text>
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
-          <Form.Item label="User Email" name="user_email">
+          <Form.Item label="Почта пользователя" name="user_email">
             <TextInput placeholder="" />
           </Form.Item>
           <Form.Item
             label={
               <span>
-                Global Proxy Role{" "}
-                <Tooltip title="This is the role that the user will globally on the proxy. This role is independent of any team/org specific roles.">
+                Глобальная роль в прокси{" "}
+                <Tooltip title="Это роль, которую пользователь получит глобально в прокси. Эта роль не зависит от ролей команды или организации.">
                   <InfoCircleOutlined />
                 </Tooltip>
               </span>
@@ -266,41 +266,41 @@ const Createuser: React.FC<CreateuserProps> = ({
           </Form.Item>
 
           <Form.Item
-            label="Team"
+            label="Команда"
             className="gap-2"
             name="team_id"
-            help="If selected, user will be added as a 'user' role to the team."
+            help="Если выбрана, пользователь будет добавлен в команду с ролью 'пользователь'."
           >
             <TeamDropdown teams={teams} />
           </Form.Item>
 
-          <Form.Item label="Metadata" name="metadata">
-            <Input.TextArea rows={4} placeholder="Enter metadata as JSON" />
+          <Form.Item label="Метаданные" name="metadata">
+            <Input.TextArea rows={4} placeholder="Введите метаданные в формате JSON" />
           </Form.Item>
           <Accordion>
             <AccordionHeader>
-              <Title>Personal Key Creation</Title>
+              <Title>Создание личного ключа</Title>
             </AccordionHeader>
             <AccordionBody>
               <Form.Item
                 className="gap-2"
                 label={
                   <span>
-                    Models{" "}
-                    <Tooltip title="Models user has access to, outside of team scope.">
+                    Модели{" "}
+                    <Tooltip title="Модели, к которым у пользователя есть доступ, вне рамок команды.">
                       <InfoCircleOutlined style={{ marginLeft: "4px" }} />
                     </Tooltip>
                   </span>
                 }
                 name="models"
-                help="Models user has access to, outside of team scope."
+                help="Модели, к которым у пользователя есть доступ, вне рамок команды."
               >
                 <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
                   <Select2.Option key="all-proxy-models" value="all-proxy-models">
-                    All Proxy Models
+                    Все модели прокси
                   </Select2.Option>
                   <Select2.Option key="no-default-models" value="no-default-models">
-                    No Default Models
+                    Нет моделей по умолчанию
                   </Select2.Option>
                   {userModels.map((model) => (
                     <Select2.Option key={model} value={model}>
@@ -312,7 +312,7 @@ const Createuser: React.FC<CreateuserProps> = ({
             </AccordionBody>
           </Accordion>
           <div style={{ textAlign: "right", marginTop: "10px" }}>
-            <Button htmlType="submit">Create User</Button>
+            <Button htmlType="submit">Создать пользователя</Button>
           </div>
         </Form>
       </Modal>

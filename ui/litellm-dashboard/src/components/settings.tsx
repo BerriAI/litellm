@@ -280,14 +280,14 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     }
   };
   const alerts_to_UI_NAME: Record<string, string> = {
-    llm_exceptions: "LLM Exceptions",
-    llm_too_slow: "LLM Responses Too Slow",
-    llm_requests_hanging: "LLM Requests Hanging",
-    budget_alerts: "Budget Alerts (API Keys, Users)",
-    db_exceptions: "Database Exceptions (Read/Write)",
-    daily_reports: "Weekly/Monthly Spend Reports",
-    outage_alerts: "Outage Alerts",
-    region_outage_alerts: "Region Outage Alerts",
+    llm_exceptions: "Исключения LLM",
+    llm_too_slow: "Ответы LLM слишком медленные",
+    llm_requests_hanging: "Зависшие запросы LLM",
+    budget_alerts: "Предупреждения о бюджете (API-ключи, пользователи)",
+    db_exceptions: "Исключения базы данных (чтение/запись)",
+    daily_reports: "Еженедельные/ежемесячные отчёты о расходах",
+    outage_alerts: "Предупреждения об отключении",
+    region_outage_alerts: "Предупреждения об отключении в регионе",
   };
 
   useEffect(() => {
@@ -712,7 +712,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
           style={{ color: "blue" }}
         >
           {" "}
-          LiteLLM Docs: Logging
+          Документация LiteLLM: Журналирование
         </a>
 
         <Form
@@ -744,10 +744,10 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               }}
               disabled={isAddingCallback}
             >
-              Cancel
+              Отмена
             </Button2>
             <Button2 htmlType="submit" loading={isAddingCallback} disabled={isAddingCallback}>
-              {isAddingCallback ? "Adding..." : "Add Callback"}
+              {isAddingCallback ? "Добавление..." : "Добавить обратный вызов"}
             </Button2>
           </div>
         </Form>
@@ -756,7 +756,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
       <Modal
         open={showEditCallback}
         width={800}
-        title={"Edit Callback Settings"}
+        title={"Редактирование настроек обратного вызова"}
         onCancel={() => {
           setShowEditCallback(false);
           setSelectedEditCallback(null);
@@ -801,7 +801,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               }}
               disabled={isUpdatingCallback}
             >
-              Cancel
+              Отмена
             </Button2>
             <Button2
               onClick={() => {
@@ -810,7 +810,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
               loading={isUpdatingCallback}
               disabled={isUpdatingCallback}
             >
-              {isUpdatingCallback ? "Saving..." : "Save Changes"}
+              {isUpdatingCallback ? "Сохранение..." : "Сохранить изменения"}
             </Button2>
           </div>
         </Form>
@@ -818,12 +818,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
 
       <DeleteResourceModal
         isOpen={showDeleteConfirmModal}
-        title="Delete Callback"
-        message="Are you sure you want to delete this callback? This action cannot be undone."
-        resourceInformationTitle="Callback Information"
+        title="Удалить обратный вызов"
+        message="Вы уверены, что хотите удалить этот обратный вызов? Это действие нельзя отменить."
+        resourceInformationTitle="Информация об обратном вызове"
         resourceInformation={[
-          { label: "Callback Name", value: callbackToDelete?.name },
-          { label: "Mode", value: callbackToDelete?.mode || "success" },
+          { label: "Название обратного вызова", value: callbackToDelete?.name },
+          { label: "Режим", value: callbackToDelete?.mode || "success" },
         ]}
         onCancel={() => {
           setShowDeleteConfirmModal(false);

@@ -66,14 +66,14 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
 
   return (
     <div className="mt-5 mb-5">
-      <Title>Select Team</Title>
+      <Title>Выберите команду</Title>
 
       <Text>
-        If you belong to multiple teams, this setting controls which team is used by default when creating new Virtual
-        Keys.
+        Если вы принадлежите нескольким командам, эта настройка определяет, какая команда будет использоваться по
+        умолчанию при создании новых виртуальных ключей. Keys.
       </Text>
       <Text className="mt-3 mb-3">
-        <b>Default Team:</b> If no team_id is set for a key, it will be grouped under here.
+        <b>Команда по умолчанию:</b> Если для ключа не указан team_id, он будет группироваться здесь.
       </Text>
 
       {updatedTeams && updatedTeams.length > 0 ? (
@@ -93,7 +93,7 @@ const DashboardTeam: React.FC<DashboardTeamProps> = ({
         </Select>
       ) : (
         <Text>
-          No team created. <b>Defaulting to personal account.</b>
+          Команда не создана. <b>Используется личный аккаунт.</b>
         </Text>
       )}
     </div>

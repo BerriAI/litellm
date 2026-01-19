@@ -187,7 +187,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       const response = await teamInfoCall(accessToken, teamId);
       setTeamData(response);
     } catch (error) {
-      NotificationsManager.fromBackend("Failed to load team information");
+      NotificationsManager.fromBackend("Не удалось загрузить информацию о команде");
       console.error("Error fetching team info:", error);
     } finally {
       setLoading(false);
@@ -231,7 +231,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       setMcpAccessGroups(groups);
       setMcpAccessGroupsLoaded(true);
     } catch (error) {
-      console.error("Failed to fetch MCP access groups:", error);
+      console.error("Не удалось получить группы доступа MCP:", error);
     }
   };
 
@@ -243,7 +243,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         const guardrailNames = response.guardrails.map((g: { guardrail_name: string }) => g.guardrail_name);
         setGuardrailsList(guardrailNames);
       } catch (error) {
-        console.error("Failed to fetch guardrails:", error);
+        console.error("Не удалось получить контрольные барьеры:", error);
       }
     };
 
@@ -262,7 +262,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       await teamMemberAddCall(accessToken, teamId, member);
 
-      NotificationsManager.success("Team member added successfully");
+      NotificationsManager.success("Участник команды добавлен успешно");
       setIsAddMemberModalVisible(false);
       form.resetFields();
 
@@ -273,10 +273,11 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       // Notify parent component of the update
       onUpdate(updatedTeamData);
     } catch (error: any) {
-      let errMsg = "Failed to add team member";
+      let errMsg = "Не удалось добавить участника команды";
 
       if (error?.raw?.detail?.error?.includes("Assigning team admins is a premium feature")) {
-        errMsg = "Assigning admins is an enterprise-only feature. Please upgrade your LiteLLM plan to enable this.";
+        errMsg =
+          "Назначение администраторов команды — функция премиум-версии. Обновите план LiteLLM, чтобы включить эту функцию.";
       } else if (error?.message) {
         errMsg = error.message;
       }
@@ -686,17 +687,17 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   layout="vertical"
                 >
                   <Form.Item
-                    label="Team Name"
+                    label="Название команды"
                     name="team_alias"
-                    rules={[{ required: true, message: "Please input a team name" }]}
+                    rules={[{ required: true, message: "Введите название команды" }]}
                   >
                     <Input type="" />
                   </Form.Item>
 
                   <Form.Item
-                    label="Models"
+                    label="Модели"
                     name="models"
-                    rules={[{ required: true, message: "Please select at least one model" }]}
+                    rules={[{ required: true, message: "Выберите хотя бы одну модель" }]}
                   >
                     <ModelSelect
                       value={form.getFieldValue("models") || []}

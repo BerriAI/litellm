@@ -161,7 +161,7 @@ const Navbar: React.FC<NavbarProps> = ({
       label: (
         <div className="flex items-center py-2 px-3 hover:bg-gray-50 rounded-md mx-1 my-1" onClick={handleLogout}>
           <LogoutOutlined className="mr-3 text-gray-600" />
-          <span className="text-gray-800">Logout</span>
+          <span className="text-gray-800">Выйти</span>
         </div>
       ),
     },
@@ -216,7 +216,7 @@ const Navbar: React.FC<NavbarProps> = ({
               icon={<SlackOutlined />}
               className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
             >
-              Join Slack
+              Присоединиться к Slack
             </Button>
             <Button
               href="https://github.com/BerriAI/litellm"
@@ -225,7 +225,7 @@ const Navbar: React.FC<NavbarProps> = ({
               className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
               icon={<GithubOutlined />}
             >
-              Star us on GitHub
+              Поставьте звезду на GitHub
             </Button>
             <a
               href="https://docs.litellm.ai/docs/"
@@ -233,7 +233,7 @@ const Navbar: React.FC<NavbarProps> = ({
               rel="noopener noreferrer"
               className="text-sm text-gray-600 hover:text-gray-900 transition-colors"
             >
-              Docs
+              Документация
             </a>
 
             {!isPublicPage && (
@@ -253,7 +253,7 @@ const Navbar: React.FC<NavbarProps> = ({
                 }}
               >
                 <button className="inline-flex items-center text-sm text-gray-600 hover:text-gray-900 transition-colors">
-                  User
+                  Пользователь
                   <svg className="ml-1 w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 9l-7 7-7-7" />
                   </svg>
