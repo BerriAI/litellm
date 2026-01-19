@@ -35,8 +35,10 @@ IGNORE_FUNCTIONS = [
     "_fix_enum_types",  # max depth set.
     "_collect_argument_paths",  # max depth set.
     "_split_text",  # max depth set.
+    "_mask_sequence",  # max depth set.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
+    "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
 ]
 
 

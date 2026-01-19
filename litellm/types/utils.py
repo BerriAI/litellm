@@ -142,6 +142,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     ]  # only for vertex ai models
     input_cost_per_query: Optional[float]  # only for rerank models
     input_cost_per_image: Optional[float]  # only for vertex ai models
+    input_cost_per_image_token: Optional[float]  # for gpt-image-1 and similar models
     input_cost_per_audio_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_video_per_second: Optional[float]  # only for vertex ai models
     input_cost_per_second: Optional[float]  # for OpenAI Speech models
@@ -323,6 +324,8 @@ class CallTypes(str, Enum):
     adelete_container = "adelete_container"
     list_container_files = "list_container_files"
     alist_container_files = "alist_container_files"
+    upload_container_file = "upload_container_file"
+    aupload_container_file = "aupload_container_file"
 
     acancel_fine_tuning_job = "acancel_fine_tuning_job"
     cancel_fine_tuning_job = "cancel_fine_tuning_job"
@@ -1247,6 +1250,14 @@ class Choices(OpenAIObject):
                 params["message"] = message
             elif isinstance(message, dict):
                 params["message"] = Message(**message)
+            elif isinstance(message, BaseModel):
+                # Normalize provider/OpenAI SDK message models into LiteLLM's Message type.
+                dump = (
+                    message.model_dump()
+                    if hasattr(message, "model_dump")
+                    else message.dict()
+                )
+                params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
                 params["logprobs"] = ChoiceLogprobs(**logprobs)
@@ -1300,7 +1311,7 @@ class CacheCreationTokenDetails(BaseModel):
 
 class PromptTokensDetailsWrapper(
     PromptTokensDetails
-):  # wrapper for older openai versions
+):  # extends with image generation fields (text_tokens, image_tokens)
     text_tokens: Optional[int] = None
     """Text tokens sent to the model."""
 
@@ -1609,6 +1620,12 @@ class ModelResponseBase(OpenAIObject):
 
     _response_headers: Optional[dict] = None
 
+    def model_dump(self, **kwargs):
+        """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
+        if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
+            kwargs["exclude_unset"] = True
+        return super().model_dump(**kwargs)
+
 
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
@@ -1648,12 +1665,16 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
-        if (
-            "usage" in kwargs
-            and kwargs["usage"] is not None
-            and isinstance(kwargs["usage"], dict)
-        ):
-            kwargs["usage"] = Usage(**kwargs["usage"])
+        if "usage" in kwargs and kwargs["usage"] is not None:
+            if isinstance(kwargs["usage"], dict):
+                kwargs["usage"] = Usage(**kwargs["usage"])
+            elif isinstance(kwargs["usage"], BaseModel):
+                dump = (
+                    kwargs["usage"].model_dump()
+                    if hasattr(kwargs["usage"], "model_dump")
+                    else kwargs["usage"].dict()
+                )
+                kwargs["usage"] = Usage(**dump)
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1727,6 +1748,13 @@ class ModelResponse(ModelResponseBase):
                         _new_choice = choice  # type: ignore
                     elif isinstance(choice, dict):
                         _new_choice = Choices(**choice)  # type: ignore
+                    elif isinstance(choice, BaseModel):
+                        dump = (
+                            choice.model_dump()
+                            if hasattr(choice, "model_dump")
+                            else choice.dict()
+                        )
+                        _new_choice = Choices(**dump)  # type: ignore
                     else:
                         _new_choice = choice
                     new_choices.append(_new_choice)
@@ -1745,6 +1773,11 @@ class ModelResponse(ModelResponseBase):
         if usage is not None:
             if isinstance(usage, dict):
                 usage = Usage(**usage)
+            elif isinstance(usage, BaseModel):
+                dump = (
+                    usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
+                )
+                usage = Usage(**dump)
             else:
                 usage = usage
         elif stream is None or stream is False:
@@ -2564,6 +2597,9 @@ class CostBreakdown(TypedDict, total=False):
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
     discount_amount: float  # Discount amount in USD (optional)
+    margin_percent: float  # Margin percentage applied (e.g., 0.10 = 10%) (optional)
+    margin_fixed_amount: float  # Fixed margin amount in USD (optional)
+    margin_total_amount: float  # Total margin added in USD (optional)
 
 
 class StandardLoggingPayloadStatusFields(TypedDict, total=False):
@@ -2673,6 +2709,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     langsmith_project: Optional[str]
     langsmith_base_url: Optional[str]
     langsmith_sampling_rate: Optional[float]
+    langsmith_tenant_id: Optional[str]
 
     # Humanloop dynamic params
     humanloop_api_key: Optional[str]
@@ -2852,6 +2889,7 @@ all_litellm_params = (
         "prompt_label",
         "shared_session",
         "search_tool_name",
+        "order",
     ]
     + list(StandardCallbackDynamicParams.__annotations__.keys())
     + list(CustomPricingLiteLLMParams.model_fields.keys())
@@ -2914,6 +2952,7 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     RUNWAYML = "runwayml"
+    AWS_POLLY = "aws_polly"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -2941,6 +2980,7 @@ class LlmProviders(str, Enum):
     MISTRAL = "mistral"
     MILVUS = "milvus"
     GROQ = "groq"
+    GIGACHAT = "gigachat"
     NVIDIA_NIM = "nvidia_nim"
     CEREBRAS = "cerebras"
     AI21_CHAT = "ai21_chat"
@@ -3007,12 +3047,20 @@ class LlmProviders(str, Enum):
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
     DOTPROMPT = "dotprompt"
+    MANUS = "manus"
     WANDB = "wandb"
     OVHCLOUD = "ovhcloud"
     LEMONADE = "lemonade"
     AMAZON_NOVA = "amazon_nova"
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
+    MINIMAX = "minimax"
+    SYNTHETIC = "synthetic"
+    APERTIS = "apertis"
+    NANOGPT = "nano-gpt"
+    POE = "poe"
+    CHUTES = "chutes"
+    XIAOMI_MIMO = "xiaomi_mimo"
 
 
 # Create a set of all provider values for quick lookup
@@ -3039,6 +3087,7 @@ class SearchProviders(str, Enum):
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
     SEARXNG = "searxng"
+    LINKUP = "linkup"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3070,6 +3119,12 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     """
     Original Response from upstream API call - if an API call was made for token counting
     """
+    error: bool = False
+    error_message: Optional[str] = None
+    """
+    HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
+    """
+    status_code: Optional[int] = None
 
 
 class CustomHuggingfaceTokenizer(TypedDict):

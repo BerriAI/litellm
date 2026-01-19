@@ -33,6 +33,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         breakdown: Optional[bool] = True,
         metadata: Optional[Dict] = None,
         dev_info: Optional[bool] = True,
+        on_flagged: Optional[str] = "block",
         **kwargs,
     ):
         """
@@ -48,6 +49,7 @@ class LakeraAIGuardrail(CustomGuardrail):
             breakdown: Optional[bool] = True,
             metadata: Optional[Dict] = None,
             dev_info: Optional[bool] = True,
+            on_flagged: Optional[str] = "block", Action to take when content is flagged: "block" or "monitor"
         """
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback
@@ -61,12 +63,14 @@ class LakeraAIGuardrail(CustomGuardrail):
         self.breakdown: Optional[bool] = breakdown
         self.metadata: Optional[Dict] = metadata
         self.dev_info: Optional[bool] = dev_info
+        self.on_flagged = on_flagged or "block"
         super().__init__(**kwargs)
 
     async def call_v2_guard(
         self,
         messages: List[AllMessageValues],
         request_data: Dict,
+        event_type: GuardrailEventHooks,
     ) -> Tuple[LakeraAIResponse, Dict]:
         """
         Call the Lakera AI v2 guard API.
@@ -125,6 +129,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 masked_entity_count=masked_entity_count,
+                event_type=event_type,
             )
 
     def _mask_pii_in_messages(
@@ -211,6 +216,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
             messages=new_messages,
             request_data=data,
+            event_type=GuardrailEventHooks.pre_call,
         )
 
         #########################################################
@@ -228,10 +234,17 @@ class LakeraAIGuardrail(CustomGuardrail):
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
             else:
-                # If there are other violations or not set to mask PII, raise exception
-                raise self._get_http_exception_for_blocked_guardrail(
-                    lakera_guardrail_response
-                )
+                # Check on_flagged setting
+                if self.on_flagged == "monitor":
+                    verbose_proxy_logger.warning(
+                        "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
+                    )
+                    # Log violation but continue
+                elif self.on_flagged == "block":
+                    # If there are other violations or not set to mask PII, raise exception
+                    raise self._get_http_exception_for_blocked_guardrail(
+                        lakera_guardrail_response
+                    )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########
@@ -269,6 +282,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
             messages=new_messages,
             request_data=data,
+            event_type=GuardrailEventHooks.during_call,
         )
 
         #########################################################
@@ -286,10 +300,17 @@ class LakeraAIGuardrail(CustomGuardrail):
                     "Lakera AI: Masked PII in messages instead of blocking request"
                 )
             else:
-                # If there are other violations or not set to mask PII, raise exception
-                raise self._get_http_exception_for_blocked_guardrail(
-                    lakera_guardrail_response
-                )
+                # Check on_flagged setting
+                if self.on_flagged == "monitor":
+                    verbose_proxy_logger.warning(
+                        "Lakera Guardrail: Monitoring mode - violation detected but allowing request"
+                    )
+                    # Log violation but continue
+                elif self.on_flagged == "block":
+                    # If there are other violations or not set to mask PII, raise exception
+                    raise self._get_http_exception_for_blocked_guardrail(
+                        lakera_guardrail_response
+                    )
 
         #########################################################
         ########## 3. Add the guardrail to the applied guardrails header ##########

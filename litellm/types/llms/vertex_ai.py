@@ -169,7 +169,7 @@ class SafetSettingsConfig(TypedDict, total=False):
 class GeminiThinkingConfig(TypedDict, total=False):
     includeThoughts: bool
     thinkingBudget: int
-    thinkingLevel: Literal["low", "medium", "high"]
+    thinkingLevel: Literal["minimal", "low", "medium", "high"]
 
 
 GeminiResponseModalities = Literal["TEXT", "IMAGE", "AUDIO", "VIDEO"]
@@ -260,6 +260,7 @@ class UsageMetadata(TypedDict, total=False):
     responseTokenCount: int
     cachedContentTokenCount: int
     promptTokensDetails: List[PromptTokensDetails]
+    cacheTokensDetails: List[PromptTokensDetails]
     thoughtsTokenCount: int
     responseTokensDetails: List[PromptTokensDetails]
     candidatesTokensDetails: List[PromptTokensDetails]  # Alternative key name used in some responses

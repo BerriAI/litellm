@@ -1,5 +1,6 @@
 import * as networking from "@/components/networking";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders } from "../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import TeamInfoView from "./team_info";
 
@@ -62,7 +63,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -124,7 +125,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -219,7 +220,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -273,5 +274,214 @@ describe("TeamInfoView", () => {
         expect(optionTexts).not.toContain(model);
       });
     });
+  }, 10000);
+
+  it("should disable secret manager settings for non-premium users", async () => {
+    const teamResponse = {
+      team_id: "123",
+      team_info: {
+        team_alias: "Test Team",
+        team_id: "123",
+        organization_id: null,
+        admins: ["admin@test.com"],
+        members: [],
+        members_with_roles: [],
+        metadata: {
+          secret_manager_settings: { provider: "aws", secret_id: "abc" },
+        },
+        tpm_limit: null,
+        rpm_limit: null,
+        max_budget: null,
+        budget_duration: null,
+        models: ["gpt-4"],
+        blocked: false,
+        spend: 0,
+        max_parallel_requests: null,
+        budget_reset_at: null,
+        model_id: null,
+        litellm_model_table: null,
+        created_at: "2024-01-01T00:00:00Z",
+        team_member_budget_table: null,
+      },
+      keys: [],
+      team_memberships: [],
+    };
+
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamResponse as any);
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+
+    renderWithProviders(
+      <TeamInfoView
+        teamId="123"
+        onUpdate={() => {}}
+        onClose={() => {}}
+        accessToken="123"
+        is_team_admin={true}
+        is_proxy_admin={true}
+        userModels={["gpt-4"]}
+        editTeam={false}
+        premiumUser={false}
+      />,
+    );
+
+    const settingsTab = await screen.findByRole("tab", { name: "Settings" });
+    act(() => fireEvent.click(settingsTab));
+
+    const editButton = await screen.findByRole("button", { name: "Edit Settings" });
+    act(() => fireEvent.click(editButton));
+
+    const secretField = await screen.findByPlaceholderText(
+      '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
+    );
+    expect(secretField).toBeDisabled();
+    expect(secretField).toHaveValue(JSON.stringify(teamResponse.team_info.metadata.secret_manager_settings, null, 2));
+  }, 10000);
+
+  it("should allow premium users to update secret manager settings", async () => {
+    const teamResponse = {
+      team_id: "123",
+      team_info: {
+        team_alias: "Test Team",
+        team_id: "123",
+        organization_id: null,
+        admins: ["admin@test.com"],
+        members: [],
+        members_with_roles: [],
+        metadata: {
+          secret_manager_settings: { provider: "aws", secret_id: "abc" },
+        },
+        tpm_limit: null,
+        rpm_limit: null,
+        max_budget: null,
+        budget_duration: null,
+        models: ["gpt-4"],
+        blocked: false,
+        spend: 0,
+        max_parallel_requests: null,
+        budget_reset_at: null,
+        model_id: null,
+        litellm_model_table: null,
+        created_at: "2024-01-01T00:00:00Z",
+        team_member_budget_table: null,
+      },
+      keys: [],
+      team_memberships: [],
+    };
+
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamResponse as any);
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: teamResponse.team_info, team_id: "123" } as any);
+
+    renderWithProviders(
+      <TeamInfoView
+        teamId="123"
+        onUpdate={() => {}}
+        onClose={() => {}}
+        accessToken="123"
+        is_team_admin={true}
+        is_proxy_admin={true}
+        userModels={["gpt-4"]}
+        editTeam={false}
+        premiumUser={true}
+      />,
+    );
+
+    const settingsTab = await screen.findByRole("tab", { name: "Settings" });
+    act(() => fireEvent.click(settingsTab));
+
+    const editButton = await screen.findByRole("button", { name: "Edit Settings" });
+    act(() => fireEvent.click(editButton));
+
+    const secretField = await screen.findByPlaceholderText(
+      '{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}',
+    );
+    expect(secretField).not.toBeDisabled();
+
+    act(() => {
+      fireEvent.change(secretField, { target: { value: '{"provider":"azure","secret_id":"xyz"}' } });
+    });
+
+    const saveButton = await screen.findByRole("button", { name: "Save Changes" });
+    act(() => fireEvent.click(saveButton));
+
+    await waitFor(() => {
+      expect(networking.teamUpdateCall).toHaveBeenCalled();
+    });
+
+    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+    expect(payload.metadata.secret_manager_settings).toEqual({ provider: "azure", secret_id: "xyz" });
+  }, 10000);
+
+  it("should include vector stores in object_permission when updating team", async () => {
+    const teamResponse = {
+      team_id: "123",
+      team_info: {
+        team_alias: "Test Team",
+        team_id: "123",
+        organization_id: null,
+        admins: ["admin@test.com"],
+        members: [],
+        members_with_roles: [],
+        metadata: {},
+        tpm_limit: null,
+        rpm_limit: null,
+        max_budget: null,
+        budget_duration: null,
+        models: ["gpt-4"],
+        blocked: false,
+        spend: 0,
+        max_parallel_requests: null,
+        budget_reset_at: null,
+        model_id: null,
+        litellm_model_table: null,
+        created_at: "2024-01-01T00:00:00Z",
+        team_member_budget_table: null,
+        object_permission: {
+          vector_stores: ["store1", "store2"],
+        },
+      },
+      keys: [],
+      team_memberships: [],
+    };
+
+    vi.mocked(networking.teamInfoCall).mockResolvedValue(teamResponse as any);
+    vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
+    vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
+    vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: teamResponse.team_info, team_id: "123" } as any);
+
+    renderWithProviders(
+      <TeamInfoView
+        teamId="123"
+        onUpdate={() => {}}
+        onClose={() => {}}
+        accessToken="123"
+        is_team_admin={true}
+        is_proxy_admin={true}
+        userModels={["gpt-4"]}
+        editTeam={false}
+        premiumUser={true}
+      />,
+    );
+
+    const settingsTab = await screen.findByRole("tab", { name: "Settings" });
+    act(() => fireEvent.click(settingsTab));
+
+    const editButton = await screen.findByRole("button", { name: "Edit Settings" });
+    act(() => fireEvent.click(editButton));
+
+    // Verify that Vector Stores field is present
+    expect(screen.getByLabelText("Vector Stores")).toBeInTheDocument();
+
+    const saveButton = await screen.findByRole("button", { name: "Save Changes" });
+    act(() => fireEvent.click(saveButton));
+
+    await waitFor(() => {
+      expect(networking.teamUpdateCall).toHaveBeenCalled();
+    });
+
+    const payload = vi.mocked(networking.teamUpdateCall).mock.calls[0][1];
+    expect(payload.object_permission.vector_stores).toEqual(["store1", "store2"]);
   }, 10000);
 });

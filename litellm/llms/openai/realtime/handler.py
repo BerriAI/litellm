@@ -59,7 +59,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
             ssl_context = get_shared_realtime_ssl_context()
             async with websockets.connect(  # type: ignore
                 url,
-                extra_headers={
+                additional_headers={
                     "Authorization": f"Bearer {api_key}",  # type: ignore
                     "OpenAI-Beta": "realtime=v1",
                 },

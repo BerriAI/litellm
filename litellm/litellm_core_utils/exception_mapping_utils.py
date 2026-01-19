@@ -78,9 +78,7 @@ class ExceptionCheckers:
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
-            # Gemini pattern: "The input token count exceeds the maximum number of tokens allowed"
-            # See: https://github.com/BerriAI/litellm/issues/XXXX
-            "input token count exceeds the maximum number of tokens allowed",
+            "exceeds the maximum number of tokens allowed",  # Gemini
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
@@ -199,12 +197,22 @@ def extract_and_raise_litellm_exception(
         exception_name = exception_name.strip().replace("litellm.", "")
         raised_exception_obj = getattr(litellm, exception_name, None)
         if raised_exception_obj:
-            raise raised_exception_obj(
-                message=error_str,
-                llm_provider=custom_llm_provider,
-                model=model,
-                response=response,
-            )
+            # Try with response parameter first, fall back to without it
+            # Some exceptions (e.g., APIConnectionError) don't accept response param
+            try:
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    response=response,
+                )
+            except TypeError:
+                # Exception doesn't accept response parameter
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
 
 
 def exception_type(  # type: ignore  # noqa: PLR0915
@@ -1261,6 +1269,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message=f"{custom_llm_provider.capitalize()}Exception - {error_str}",
                         model=model,
                         llm_provider=custom_llm_provider,
+                    )
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"ContextWindowExceededError: {custom_llm_provider.capitalize()}Exception - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        litellm_debug_info=extra_information,
                     )
                 elif (
                     "None Unknown Error." in error_str

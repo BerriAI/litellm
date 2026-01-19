@@ -10,15 +10,16 @@ enable_preview_features=True to be enabled.
 """
 
 import pytest
+
 import litellm
-from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
-    VertexGeminiConfig,
-)
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
-    convert_to_gemini_tool_call_invoke,
     _encode_tool_call_id_with_signature,
     _get_thought_signature_from_tool,
+    convert_to_gemini_tool_call_invoke,
+)
+from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+    VertexGeminiConfig,
 )
 from litellm.types.llms.vertex_ai import HttpxPartType
 
@@ -71,52 +72,36 @@ def test_tool_call_id_includes_signature_in_response(enable_preview_features):
     """Test that tool call IDs in responses include embedded thought signatures only when preview features are enabled"""
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
 
-    # Save original state
-    original_flag = litellm.enable_preview_features
-    litellm.enable_preview_features = enable_preview_features
-
-    try:
-        parts_with_signature = [
-            HttpxPartType(
-                functionCall={
-                    "name": "get_current_temperature",
-                    "args": {"location": "Paris"},
-                },
-                thoughtSignature=test_signature,
-            )
-        ]
-
-        function, tools, _ = VertexGeminiConfig._transform_parts(
-            parts=parts_with_signature,
-            cumulative_tool_call_idx=0,
-            is_function_call=False,
+    parts_with_signature = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_temperature",
+                "args": {"location": "Paris"},
+            },
+            thoughtSignature=test_signature,
         )
+    ]
 
-        # Verify tool call exists
-        assert tools is not None
-        assert len(tools) == 1
-        tool_call_id = tools[0]["id"]
-        
-        # Verify signature is always in provider_specific_fields
-        assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == test_signature
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=parts_with_signature,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
 
-        if enable_preview_features:
-            # When preview features enabled, signature should be embedded in ID
-            assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
-            # Verify we can decode it using the factory function
-            tool_obj = {"id": tool_call_id, "type": "function"}
-            decoded_sig = _get_thought_signature_from_tool(tool_obj)
-            assert decoded_sig == test_signature
-        else:
-            # When preview features disabled, signature should NOT be embedded in ID
-            assert THOUGHT_SIGNATURE_SEPARATOR not in tool_call_id
-            # But we can still extract from provider_specific_fields
-            tool_obj = {"id": tool_call_id, "type": "function", "provider_specific_fields": {"thought_signature": test_signature}}
-            decoded_sig = _get_thought_signature_from_tool(tool_obj)
-            assert decoded_sig == test_signature
-    finally:
-        # Restore original state
-        litellm.enable_preview_features = original_flag
+    # Verify tool call exists
+    assert tools is not None
+    assert len(tools) == 1
+    tool_call_id = tools[0]["id"]
+    
+    # Verify signature is always in provider_specific_fields
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == test_signature
+
+    # When preview features enabled, signature should be embedded in ID
+    assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
+    # Verify we can decode it using the factory function
+    tool_obj = {"id": tool_call_id, "type": "function"}
+    decoded_sig = _get_thought_signature_from_tool(tool_obj)
+    assert decoded_sig == test_signature
 
 
 def test_get_thought_signature_backward_compatibility():
@@ -204,90 +189,57 @@ def test_openai_client_e2e_flow(enable_preview_features):
     """
     test_signature = "Co4CAdHtim/rWgXbz2Ghp4tShzLeMASrPw6JJyYIC3cbVyZnKzU3uv8/wVzyS2sKRPL2m8QQHHXbNQhEEz500G7n/4ZMmksdTtfQcJMoT76S1DGwhnAiLwTgWCNXs3lEb4M19EVYoWFxhrH5Lr9YMIquoU9U4paydGwvZyIyigamIg4B6WnxrRsf0KZV12gJed0DZuKczvOFtHz3zUnmZRlOiTzd5gBVyQM+5jv1VI8m4WUKd6cN/5a5ZvaA0ggiO6kdVhlpIVs7GczSEVJD8KH4u02X7VSnb7CvykqDntZzV0y8rZFBEFGKrChmeHlWXP4D1IB3F9KQyhuLgWImMzg4BajKVxxMU737JGnNISy5"
 
-    # Save original state
-    original_flag = litellm.enable_preview_features
-    litellm.enable_preview_features = enable_preview_features
+    # Step 1: Gemini returns function call with thought signature
+    gemini_parts = [
+        HttpxPartType(
+            functionCall={
+                "name": "get_current_temperature",
+                "args": {"location": "Paris"},
+            },
+            thoughtSignature=test_signature,
+        )
+    ]
 
-    try:
-        # Step 1: Gemini returns function call with thought signature
-        gemini_parts = [
-            HttpxPartType(
-                functionCall={
+    # Step 2: LiteLLM transforms to OpenAI format
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=gemini_parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
+
+    assert tools is not None
+    assert len(tools) == 1
+    tool_call_id = tools[0]["id"]
+
+    assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
+
+    # Step 3: OpenAI client sends back assistant message
+    # For the disabled case, we simulate that the client might have provider_specific_fields
+    # or we use the embedded ID if preview features were enabled
+    openai_assistant_message = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": tool_call_id,  # Preserved from response (with embedded signature)
+                "type": "function",
+                "function": {
                     "name": "get_current_temperature",
-                    "args": {"location": "Paris"},
+                    "arguments": '{"location": "Paris"}',
                 },
-                thoughtSignature=test_signature,
-            )
-        ]
-
-        # Step 2: LiteLLM transforms to OpenAI format
-        function, tools, _ = VertexGeminiConfig._transform_parts(
-            parts=gemini_parts,
-            cumulative_tool_call_idx=0,
-            is_function_call=False,
-        )
-
-        assert tools is not None
-        assert len(tools) == 1
-        tool_call_id = tools[0]["id"]
-        
-        if enable_preview_features:
-            # When preview features enabled, signature should be embedded in ID
-            assert THOUGHT_SIGNATURE_SEPARATOR in tool_call_id
-        else:
-            # When preview features disabled, signature should NOT be embedded in ID
-            assert THOUGHT_SIGNATURE_SEPARATOR not in tool_call_id
-
-        # Step 3: OpenAI client sends back assistant message
-        # For the disabled case, we simulate that the client might have provider_specific_fields
-        # or we use the embedded ID if preview features were enabled
-        if enable_preview_features:
-            openai_assistant_message = {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": tool_call_id,  # Preserved from response (with embedded signature)
-                        "type": "function",
-                        "function": {
-                            "name": "get_current_temperature",
-                            "arguments": '{"location": "Paris"}',
-                        },
-                    }
-                ],
             }
-        else:
-            # When preview features disabled, simulate that provider_specific_fields might be preserved
-            # (though in real OpenAI client usage, this might not happen)
-            # For this test, we'll use provider_specific_fields to show extraction still works
-            openai_assistant_message = {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": tool_call_id,  # ID without embedded signature
-                        "type": "function",
-                        "function": {
-                            "name": "get_current_temperature",
-                            "arguments": '{"location": "Paris"}',
-                        },
-                        "provider_specific_fields": {"thought_signature": test_signature},
-                    }
-                ],
-            }
+        ],
+    }
+    # Step 4: LiteLLM converts back to Gemini format, extracting signature
+    gemini_parts_converted = convert_to_gemini_tool_call_invoke(
+        openai_assistant_message
+    )
 
-        # Step 4: LiteLLM converts back to Gemini format, extracting signature
-        gemini_parts_converted = convert_to_gemini_tool_call_invoke(
-            openai_assistant_message
-        )
+    # Verify signature is preserved through the round trip
+    assert len(gemini_parts_converted) == 1
+    assert "thoughtSignature" in gemini_parts_converted[0]
+    assert gemini_parts_converted[0]["thoughtSignature"] == test_signature
 
-        # Verify signature is preserved through the round trip
-        assert len(gemini_parts_converted) == 1
-        assert "thoughtSignature" in gemini_parts_converted[0]
-        assert gemini_parts_converted[0]["thoughtSignature"] == test_signature
-    finally:
-        # Restore original state
-        litellm.enable_preview_features = original_flag
 
 
 @pytest.mark.parametrize("enable_preview_features", [True, False])
@@ -296,54 +248,36 @@ def test_parallel_tool_calls_with_signatures(enable_preview_features):
     signature1 = "signature_for_first_call"
     # Only first call has signature (Gemini behavior for parallel calls)
 
-    # Save original state
-    original_flag = litellm.enable_preview_features
-    litellm.enable_preview_features = enable_preview_features
+    gemini_parts = [
+        HttpxPartType(
+            functionCall={"name": "get_temperature", "args": {"location": "Paris"}},
+            thoughtSignature=signature1,
+        ),
+        HttpxPartType(
+            functionCall={"name": "get_temperature", "args": {"location": "London"}},
+            # No signature for second parallel call
+        ),
+    ]
 
-    try:
-        gemini_parts = [
-            HttpxPartType(
-                functionCall={"name": "get_temperature", "args": {"location": "Paris"}},
-                thoughtSignature=signature1,
-            ),
-            HttpxPartType(
-                functionCall={"name": "get_temperature", "args": {"location": "London"}},
-                # No signature for second parallel call
-            ),
-        ]
+    function, tools, _ = VertexGeminiConfig._transform_parts(
+        parts=gemini_parts,
+        cumulative_tool_call_idx=0,
+        is_function_call=False,
+    )
 
-        function, tools, _ = VertexGeminiConfig._transform_parts(
-            parts=gemini_parts,
-            cumulative_tool_call_idx=0,
-            is_function_call=False,
-        )
+    assert tools is not None
+    assert len(tools) == 2
 
-        assert tools is not None
-        assert len(tools) == 2
+    # First tool call should have signature in provider_specific_fields
+    assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == signature1
+    
+    # When preview features enabled, first tool call has signature in ID
+    assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]
+    sig1 = _get_thought_signature_from_tool({"id": tools[0]["id"], "type": "function"})
+    assert sig1 == signature1
 
-        # First tool call should have signature in provider_specific_fields
-        assert tools[0].get("provider_specific_fields", {}).get("thought_signature") == signature1
-        
-        if enable_preview_features:
-            # When preview features enabled, first tool call has signature in ID
-            assert THOUGHT_SIGNATURE_SEPARATOR in tools[0]["id"]
-            sig1 = _get_thought_signature_from_tool({"id": tools[0]["id"], "type": "function"})
-            assert sig1 == signature1
-        else:
-            # When preview features disabled, signature should NOT be in ID
-            assert THOUGHT_SIGNATURE_SEPARATOR not in tools[0]["id"]
-            # But we can extract from provider_specific_fields
-            sig1 = _get_thought_signature_from_tool({
-                "id": tools[0]["id"], 
-                "type": "function",
-                "provider_specific_fields": {"thought_signature": signature1}
-            })
-            assert sig1 == signature1
 
-        # Second tool call has no signature in ID (regardless of flag)
-        assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
-        sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
-        assert sig2 is None
-    finally:
-        # Restore original state
-        litellm.enable_preview_features = original_flag
+    # Second tool call has no signature in ID (regardless of flag)
+    assert THOUGHT_SIGNATURE_SEPARATOR not in tools[1]["id"]
+    sig2 = _get_thought_signature_from_tool({"id": tools[1]["id"], "type": "function"})
+    assert sig2 is None

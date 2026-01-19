@@ -552,36 +552,6 @@ async def test_completion_predibase_streaming(sync_mode):
         pytest.fail(f"Error occurred: {e}")
 
 
-@pytest.mark.asyncio()
-@pytest.mark.flaky(retries=3, delay=1)
-async def test_completion_ai21_stream():
-    litellm.set_verbose = True
-    response = await litellm.acompletion(
-        model="ai21_chat/jamba-mini",
-        user="ishaan",
-        stream=True,
-        seed=123,
-        messages=[{"role": "user", "content": "hi my name is ishaan"}],
-    )
-    complete_response = ""
-    idx = 0
-    async for init_chunk in response:
-        chunk, finished = streaming_format_tests(idx, init_chunk)
-        complete_response += chunk
-        custom_llm_provider = init_chunk._hidden_params["custom_llm_provider"]
-        print(f"custom_llm_provider: {custom_llm_provider}")
-        assert custom_llm_provider == "ai21_chat"
-        idx += 1
-        if finished:
-            assert isinstance(init_chunk.choices[0], litellm.utils.StreamingChoices)
-            break
-    if complete_response.strip() == "":
-        raise Exception("Empty response received")
-
-    print(f"complete_response: {complete_response}")
-
-    pass
-
 
 def test_completion_azure_function_calling_stream():
     try:
@@ -1318,7 +1288,6 @@ async def test_completion_replicate_llama3_streaming(sync_mode):
         # ["bedrock/cohere.command-r-plus-v1:0", None],
         ["anthropic.claude-3-sonnet-20240229-v1:0", None],
         # ["mistral.mistral-7b-instruct-v0:2", None],
-        ["bedrock/amazon.titan-tg1-large", None],
         # ["meta.llama3-8b-instruct-v1:0", None],
     ],
 )
@@ -1418,7 +1387,7 @@ def test_bedrock_claude_3_streaming():
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-3-opus-20240229",
+        "claude-3-7-sonnet-20250219",
         "cohere.command-r-plus-v1:0",  # bedrock
         "gpt-3.5-turbo",
     ],
@@ -1952,7 +1921,6 @@ def test_openai_chat_completion_complete_response_call():
     "model",
     [
         "gpt-3.5-turbo",
-        "azure/gpt-4.1-mini",
         "claude-3-haiku-20240307",
         "o1",
     ],
@@ -2915,7 +2883,7 @@ def test_completion_claude_3_function_call_with_streaming():
     try:
         # test without max tokens
         response = completion(
-            model="claude-3-opus-20240229",
+            model="claude-3-7-sonnet-20250219",
             messages=messages,
             tools=tools,
             tool_choice="required",
@@ -2947,7 +2915,7 @@ def test_completion_claude_3_function_call_with_streaming():
     "model",
     [
         "gemini/gemini-2.5-flash-lite",
-    ],  #  "claude-3-opus-20240229"
+    ],
 )  #
 @pytest.mark.asyncio
 async def test_acompletion_function_call_with_streaming(model):

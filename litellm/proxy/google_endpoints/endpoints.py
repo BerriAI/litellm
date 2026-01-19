@@ -1,6 +1,4 @@
-from typing import Optional
-
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse, StreamingResponse
 
 from litellm.proxy._types import *
@@ -38,6 +36,11 @@ async def google_generate_content(
     data = await _read_request_body(request=request)
     if "model" not in data:
         data["model"] = model_name
+    
+    # Extract generationConfig and pass it as config parameter
+    generation_config = data.pop("generationConfig", None)
+    if generation_config:
+        data["config"] = generation_config
     
     # Add user authentication metadata for cost tracking
     data = await add_litellm_data_to_request(
@@ -84,6 +87,11 @@ async def google_stream_generate_content(
         data["model"] = model_name
 
     data["stream"] = True  # enforce streaming for this endpoint
+
+    # Extract generationConfig and pass it as config parameter
+    generation_config = data.pop("generationConfig", None)
+    if generation_config:
+        data["config"] = generation_config
 
     # Add user authentication metadata for cost tracking
     data = await add_litellm_data_to_request(

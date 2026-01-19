@@ -25,6 +25,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import StandardLoggingPayload
 
 API_EVENT_TYPES = Literal["llm_api_success", "llm_api_failure"]
+LOG_FORMAT_TYPES = Literal["json_array", "ndjson", "single"]
 
 
 def load_compatible_callbacks() -> Dict:
@@ -101,6 +102,7 @@ class GenericAPILogger(CustomBatchLogger):
         headers: Optional[dict] = None,
         event_types: Optional[List[API_EVENT_TYPES]] = None,
         callback_name: Optional[str] = None,
+        log_format: Optional[LOG_FORMAT_TYPES] = None,
         **kwargs,
     ):
         """
@@ -111,6 +113,7 @@ class GenericAPILogger(CustomBatchLogger):
             headers: Optional[dict] = None,
             event_types: Optional[List[API_EVENT_TYPES]] = None,
             callback_name: Optional[str] = None - If provided, loads config from generic_api_compatible_callbacks.json
+            log_format: Optional[LOG_FORMAT_TYPES] = None - Format for log output: "json_array" (default), "ndjson", or "single"
         """
         #########################################################
         # Check if callback_name is provided and load config
@@ -135,6 +138,9 @@ class GenericAPILogger(CustomBatchLogger):
 
                     if event_types is None and "event_types" in callback_config:
                         event_types = callback_config["event_types"]
+
+                    if log_format is None and "log_format" in callback_config:
+                        log_format = callback_config["log_format"]
             else:
                 verbose_logger.warning(
                     f"callback_name '{callback_name}' not found in generic_api_compatible_callbacks.json"
@@ -156,8 +162,16 @@ class GenericAPILogger(CustomBatchLogger):
         self.endpoint: str = endpoint
         self.event_types: Optional[List[API_EVENT_TYPES]] = event_types
         self.callback_name: Optional[str] = callback_name
+
+        # Validate and store log_format
+        if log_format is not None and log_format not in ["json_array", "ndjson", "single"]:
+            raise ValueError(
+                f"Invalid log_format: {log_format}. Must be one of: 'json_array', 'ndjson', 'single'"
+            )
+        self.log_format: LOG_FORMAT_TYPES = log_format or "json_array"
+
         verbose_logger.debug(
-            f"in init GenericAPILogger, callback_name: {self.callback_name}, endpoint {self.endpoint}, headers {self.headers}, event_types: {self.event_types}"
+            f"in init GenericAPILogger, callback_name: {self.callback_name}, endpoint {self.endpoint}, headers {self.headers}, event_types: {self.event_types}, log_format: {self.log_format}"
         )
 
         #########################################################
@@ -289,25 +303,65 @@ class GenericAPILogger(CustomBatchLogger):
     async def async_send_batch(self):
         """
         Sends the batch of messages to Generic API Endpoint
+
+        Supports three formats:
+        - json_array: Sends all logs as a JSON array (default)
+        - ndjson: Sends logs as newline-delimited JSON
+        - single: Sends each log as individual HTTP request in parallel
         """
         try:
             if not self.log_queue:
                 return
 
             verbose_logger.debug(
-                f"Generic API Logger - about to flush {len(self.log_queue)} events"
+                f"Generic API Logger - about to flush {len(self.log_queue)} events in '{self.log_format}' format"
             )
 
-            # make POST request to Generic API Endpoint
-            response = await self.async_httpx_client.post(
-                url=self.endpoint,
-                headers=self.headers,
-                data=safe_dumps(self.log_queue),
-            )
+            if self.log_format == "single":
+                # Send each log as individual HTTP request in parallel
+                tasks = []
+                for log_entry in self.log_queue:
+                    task = self.async_httpx_client.post(
+                        url=self.endpoint,
+                        headers=self.headers,
+                        data=safe_dumps(log_entry),
+                    )
+                    tasks.append(task)
 
-            verbose_logger.debug(
-                f"Generic API Logger - sent batch to {self.endpoint}, status code {response.status_code}"
-            )
+                # Execute all requests in parallel
+                responses = await asyncio.gather(*tasks, return_exceptions=True)
+
+                # Log results
+                for idx, result in enumerate(responses):
+                    if isinstance(result, Exception):
+                        verbose_logger.exception(
+                            f"Generic API Logger - Error sending log {idx}: {result}"
+                        )
+                    else:
+                        # result is a Response object
+                        verbose_logger.debug(
+                            f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
+                        )
+            else:
+                # Format the payload based on log_format
+                if self.log_format == "json_array":
+                    data = safe_dumps(self.log_queue)
+                elif self.log_format == "ndjson":
+                    data = "\n".join(safe_dumps(log) for log in self.log_queue)
+                else:
+                    raise ValueError(f"Unknown log_format: {self.log_format}")
+
+                # Make POST request
+                response = await self.async_httpx_client.post(
+                    url=self.endpoint,
+                    headers=self.headers,
+                    data=data,
+                )
+
+                verbose_logger.debug(
+                    f"Generic API Logger - sent batch to {self.endpoint}, "
+                    f"status: {response.status_code}, format: {self.log_format}"
+                )
 
         except Exception as e:
             verbose_logger.exception(

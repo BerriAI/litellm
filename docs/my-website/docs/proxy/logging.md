@@ -16,6 +16,7 @@ Log Proxy input, output, and exceptions using:
 - Custom Callbacks - Custom code and API endpoints
 - Langsmith
 - DataDog
+- Azure Sentinel
 - DynamoDB
 - etc.
 
@@ -66,7 +67,7 @@ Set `litellm.turn_off_message_logging=True` This will prevent the messages and r
 
 <TabItem value="global" label="Global">
 
-**1. Setup config.yaml **
+**1. Setup config.yaml**
 ```yaml
 model_list:
  - model_name: gpt-3.5-turbo
@@ -1574,6 +1575,10 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 👉 Go here for using [Datadog LLM Observability](../observability/datadog) with LiteLLM Proxy
 
+## [Azure Sentinel](../observability/azure_sentinel)
+
+👉 Go here for using [Azure Sentinel](../observability/azure_sentinel) with LiteLLM Proxy
+
 
 ## Lunary
 #### Step1: Install dependencies and set your environment variables 
@@ -1731,7 +1736,6 @@ class MyCustomHandler(CustomLogger):
 proxy_handler_instance = MyCustomHandler()
 
 # Set litellm.callbacks = [proxy_handler_instance] on the proxy
-# need to set litellm.callbacks = [proxy_handler_instance] # on the proxy
 ```
 
 #### Step 2 - Pass your custom callback class in `config.yaml`
