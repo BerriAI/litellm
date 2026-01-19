@@ -25,6 +25,8 @@ WORKDIR /app/litellm-source
 RUN --mount=type=cache,target=${HOME}/.cache/pip \
     ${HOME}/venv/bin/pip install -e . prisma
 
+COPY test_in_docker.sh /app
+
 # Generate prisma client
 RUN ${HOME}/venv/bin/prisma generate
 
