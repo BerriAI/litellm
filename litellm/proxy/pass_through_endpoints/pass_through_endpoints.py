@@ -1979,6 +1979,22 @@ class InitPassThroughEndpointHelpers:
         return list(_registered_pass_through_routes.keys())
 
     @staticmethod
+    def _build_full_path_with_root(path: str) -> str:
+        """
+        Build full path by prepending server root path if needed.
+
+        Args:
+            path: The relative path to build
+
+        Returns:
+            Full path with server root prepended (if root is not "/")
+        """
+        root_path = get_server_root_path()
+        if root_path == "/":
+            return path
+        return f"{root_path}{path}"
+
+    @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
         """
         Check if route is a registered pass-through endpoint from DB
@@ -2004,7 +2020,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2] if get_server_root_path() == "/" else f"{get_server_root_path()}{parts[2]}"
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -2022,7 +2040,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2] if get_server_root_path() == "/" else f"{get_server_root_path()}{parts[2]}"
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
 
                 if route_type == "exact" and route == registered_path:
                     return _registered_pass_through_routes[key]
