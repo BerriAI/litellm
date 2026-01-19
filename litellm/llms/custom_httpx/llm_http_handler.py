@@ -3080,10 +3080,8 @@ class BaseLLMHTTPHandler:
             transformed_request, bytes
         ):
             # Handle traditional file uploads
-            # Ensure transformed_request is a string for httpx compatibility
-            if isinstance(transformed_request, bytes):
-                transformed_request = transformed_request.decode("utf-8")
-
+            # Note: transformed_request can be bytes (for binary files like PDFs)
+            # or str (for text files like JSONL). httpx handles both correctly.
             # Use the HTTP method specified by the provider config
             http_method = provider_config.file_upload_http_method.upper()
             if http_method == "PUT":
