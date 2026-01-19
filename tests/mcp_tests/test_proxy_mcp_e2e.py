@@ -198,7 +198,6 @@ class TestProxyMcpSimpleConnections:
                     assert text == "11"
 
     @pytest.mark.asyncio
-    @pytest.mark.skip
     async def test_proxy_mcp_lists_all_servers_without_header(
         self, proxy_server_url: str
     ) -> None:
