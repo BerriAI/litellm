@@ -218,10 +218,10 @@ if MCP_AVAILABLE:
         from fastapi import HTTPException
 
         from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
-        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCPRequestHandler,
         )
+        from litellm.proxy.proxy_server import add_litellm_data_to_request, proxy_config
 
         try:
             data = await request.json()
@@ -252,7 +252,12 @@ if MCP_AVAILABLE:
             if mcp_server_auth_headers:
                 data["mcp_server_auth_headers"] = mcp_server_auth_headers
             data["raw_headers"] = raw_headers_from_request
-
+            
+            # Extract user_api_key_auth from metadata and add to top level
+            # call_mcp_tool expects user_api_key_auth as a top-level parameter
+            if "metadata" in data and "user_api_key_auth" in data["metadata"]:
+                data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
+            
             result = await call_mcp_tool(**data)
             return result
         except BlockedPiiEntityError as e:

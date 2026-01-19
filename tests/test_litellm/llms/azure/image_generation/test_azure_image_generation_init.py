@@ -164,3 +164,90 @@ def test_azure_image_generation_headers_without_api_key():
     # Verify api-key is added when api_key is valid
     assert "api-key" in default_headers_with_key
     assert default_headers_with_key["api-key"] == "valid-key-123"
+
+
+def test_azure_image_generation_drop_params_response_format():
+    """
+    Test that unsupported params like response_format are dropped when drop_params=True.
+    
+    Azure gpt-image-1.5 doesn't support response_format parameter. When drop_params=True,
+    this parameter should be completely removed and not appear in the final request body,
+    including not being added to extra_body.
+    
+    This test verifies the fix where:
+    1. Unsupported params are removed from non_default_params in _check_valid_arg
+    2. Unsupported params are also removed from passed_params to prevent them from
+       being re-added via extra_body in add_provider_specific_params_to_optional_params
+    
+    Without the fix, response_format would be added to extra_body and cause Azure to
+    return a 400 Bad Request error due to strict schema validation.
+    """
+    from litellm.llms.openai.image_generation.gpt_transformation import (
+        GPTImageGenerationConfig,
+    )
+
+    # Test with gpt-image-1.5 which doesn't support response_format
+    config = GPTImageGenerationConfig()
+    supported_params = config.get_supported_openai_params(model="gpt-image-1.5")
+    
+    # Verify response_format is NOT in supported params for gpt-image-1.5
+    assert "response_format" not in supported_params
+    assert "n" in supported_params
+    assert "size" in supported_params
+    
+    # Test get_optional_params_image_gen with drop_params=True
+    optional_params = get_optional_params_image_gen(
+        model="gpt-image-1.5",
+        n=1,
+        size="1024x1024",
+        response_format="b64_json",  # This should be dropped
+        custom_llm_provider="azure",
+        provider_config=config,
+        drop_params=True,
+    )
+    
+    # Verify response_format is NOT in optional_params
+    assert "response_format" not in optional_params, (
+        "response_format should be dropped from optional_params"
+    )
+    
+    # Verify response_format is NOT in extra_body either
+    if "extra_body" in optional_params:
+        assert "response_format" not in optional_params["extra_body"], (
+            "response_format should not be in extra_body"
+        )
+    
+    # Verify supported params ARE in optional_params
+    assert "n" in optional_params
+    assert optional_params["n"] == 1
+    assert "size" in optional_params
+    assert optional_params["size"] == "1024x1024"
+
+
+def test_azure_image_generation_drop_params_false_raises_error():
+    """
+    Test that unsupported params raise an error when drop_params=False.
+    
+    This verifies that the error handling still works correctly when drop_params
+    is not enabled.
+    """
+    from litellm.exceptions import UnsupportedParamsError
+    from litellm.llms.openai.image_generation.gpt_transformation import (
+        GPTImageGenerationConfig,
+    )
+
+    config = GPTImageGenerationConfig()
+    
+    # Test that passing unsupported param with drop_params=False raises error
+    with pytest.raises(UnsupportedParamsError) as exc_info:
+        optional_params = get_optional_params_image_gen(
+            model="gpt-image-1.5",
+            n=1,
+            response_format="b64_json",  # Unsupported param
+            custom_llm_provider="azure",
+            provider_config=config,
+            drop_params=False,
+        )
+    
+    # Verify the error message mentions the unsupported parameter
+    assert "response_format" in str(exc_info.value)

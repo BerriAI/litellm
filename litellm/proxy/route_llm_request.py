@@ -181,24 +181,26 @@ async def route_request(
         else:
             return getattr(litellm, f"{route_type}")(**data)
 
-    elif "user_config" in data:
-        router_config = data.pop("user_config")
-        user_router = litellm.Router(**router_config)
-        ret_val = getattr(user_router, f"{route_type}")(**data)
-        user_router.discard()
-        return ret_val
-
     elif (
         route_type == "acompletion"
         and data.get("model", "") is not None
         and "," in data.get("model", "")
         and llm_router is not None
     ):
+        # Handle batch completions with comma-separated models BEFORE user_config check
+        # This ensures batch completion logic is applied even when user_config is set
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
         else:
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
+
+    elif "user_config" in data:
+        router_config = data.pop("user_config")
+        user_router = litellm.Router(**router_config)
+        ret_val = getattr(user_router, f"{route_type}")(**data)
+        user_router.discard()
+        return ret_val
     elif llm_router is not None:
         # Skip model-based routing for container operations
         if route_type in [
@@ -258,12 +260,9 @@ async def route_request(
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif data["model"] in llm_router.deployment_names:
-            return getattr(llm_router, f"{route_type}")(
-                **data, specific_deployment=True
-            )
-
         elif data["model"] not in router_model_names:
+            # Check wildcards before checking deployment_names
+            # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
@@ -271,6 +270,11 @@ async def route_request(
                 or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
+            elif data["model"] in llm_router.deployment_names:
+                # Only match deployment_names if no wildcard matched
+                return getattr(llm_router, f"{route_type}")(
+                    **data, specific_deployment=True
+                )
             elif route_type in [
                 "amoderation",
                 "aget_responses",

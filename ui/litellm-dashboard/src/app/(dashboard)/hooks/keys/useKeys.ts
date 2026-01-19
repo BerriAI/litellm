@@ -4,7 +4,7 @@ import { keyListCall } from "@/components/networking";
 import { KeyResponse } from "@/components/key_team_helpers/key_list";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
-const keyKeys = createQueryKeys("keys");
+export const keyKeys = createQueryKeys("keys");
 
 export interface KeysResponse {
   keys: KeyResponse[];

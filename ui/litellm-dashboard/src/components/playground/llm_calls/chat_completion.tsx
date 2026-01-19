@@ -24,6 +24,7 @@ export async function makeOpenAIChatCompletionRequest(
   temperature?: number,
   max_tokens?: number,
   onTotalLatency?: (latency: number) => void,
+  customBaseUrl?: string,
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
 ) {
@@ -33,7 +34,7 @@ export async function makeOpenAIChatCompletionRequest(
     console.log = function () {};
   }
   console.log("isLocal:", isLocal);
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {

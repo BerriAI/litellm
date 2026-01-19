@@ -131,6 +131,7 @@ else:
 
 unified_guardrail = UnifiedLLMGuardrails()
 
+_anthropic_async_clients = {}
 
 def print_verbose(print_statement):
     """
@@ -961,6 +962,7 @@ class ProxyLogging:
             Updated data dictionary if guardrail passes, None if guardrail should be skipped
         """
         from litellm.types.guardrails import GuardrailEventHooks
+        from litellm.integrations.prometheus import PrometheusLogger
 
         # Determine the event type based on call type
         event_type = GuardrailEventHooks.pre_call
@@ -973,30 +975,62 @@ class ProxyLogging:
 
         guardrail_name = callback.guardrail_name
 
-        # Check if load balancing should be used
-        if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
-            response = await self._execute_guardrail_with_load_balancing(
-                guardrail_name=guardrail_name,
-                hook_type="pre_call",
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-            )
-        else:
-            # Single guardrail - execute directly
-            response = await self._execute_guardrail_hook(
-                callback=callback,
-                hook_type="pre_call",
-                data=data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=call_type,
-            )
+        # Track timing and errors for prometheus metrics
+        # Use time.perf_counter() for more accurate duration measurements
+        guardrail_start_time = time.perf_counter()
+        status = "success"
+        error_type = None
 
-        # Process the response if one was returned
-        if response is not None:
-            data = await self.process_pre_call_hook_response(
-                response=response, data=data, call_type=call_type
-            )
+        try:
+            # Check if load balancing should be used
+            if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
+                response = await self._execute_guardrail_with_load_balancing(
+                    guardrail_name=guardrail_name,
+                    hook_type="pre_call",
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+            else:
+                # Single guardrail - execute directly
+                response = await self._execute_guardrail_hook(
+                    callback=callback,
+                    hook_type="pre_call",
+                    data=data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=call_type,
+                )
+
+            # Process the response if one was returned
+            if response is not None:
+                data = await self.process_pre_call_hook_response(
+                    response=response, data=data, call_type=call_type
+                )
+
+        except Exception as e:
+            status = "error"
+            error_type = type(e).__name__
+            # Re-raise the exception to maintain existing behavior
+            raise
+        finally:
+            # Record prometheus metrics
+            guardrail_end_time = time.perf_counter()
+            latency_seconds = guardrail_end_time - guardrail_start_time
+
+            # Get guardrail name for metrics (fallback if not set)
+            metrics_guardrail_name = guardrail_name or getattr(callback, "guardrail_name", callback.__class__.__name__) or "unknown"
+
+            # Find PrometheusLogger in callbacks and record metrics
+            for prom_callback in litellm.callbacks:
+                if isinstance(prom_callback, PrometheusLogger):
+                    prom_callback._record_guardrail_metrics(
+                        guardrail_name=metrics_guardrail_name,
+                        latency_seconds=latency_seconds,
+                        status=status,
+                        error_type=error_type,
+                        hook_type="pre_call",
+                    )
+                    break
 
         return data
 
@@ -1195,7 +1229,7 @@ class ProxyLogging:
                     and _callback.__class__.async_pre_call_hook
                     != CustomLogger.async_pre_call_hook
                 ):
-                    if call_type == "mcp_call" and user_api_key_dict is None:
+                    if call_type == "call_mcp_tool" and user_api_key_dict is None:
                         continue
 
                     response = await _callback.async_pre_call_hook(
@@ -4254,11 +4288,16 @@ async def count_tokens_with_anthropic_api(
 
         if anthropic_api_key and messages:
             # Call Anthropic API directly for more accurate token counting
-            client = anthropic.Anthropic(api_key=anthropic_api_key)
+            
+            # Use cached client if available to avoid socket exhaustion
+            if anthropic_api_key not in _anthropic_async_clients:
+                _anthropic_async_clients[anthropic_api_key] = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
+            
+            client = _anthropic_async_clients[anthropic_api_key]
 
             # Call with explicit parameters to satisfy type checking
             # Type ignore for now since messages come from generic dict input
-            response = client.beta.messages.count_tokens(
+            response = await client.beta.messages.count_tokens(
                 model=model_to_use,
                 messages=messages,  # type: ignore
                 betas=["token-counting-2024-11-01"],
@@ -4440,21 +4479,35 @@ def validate_model_access(
 ) -> None:
     """
     Validate that a model is accessible to the user.
+    Supports batch requests with comma-separated model IDs.
 
     Args:
-        model_id: The model ID to validate
+        model_id: The model ID to validate (can be comma-separated for batch requests)
         available_models: List of models available to the user
 
     Raises:
         HTTPException: If the model is not accessible
     """
-    if model_id not in available_models:
-        raise HTTPException(
-            status_code=404,
-            detail="The model `{}` does not exist or is not accessible".format(
-                model_id
-            ),
-        )
+    # Handle batch requests with comma-separated models
+    if "," in model_id:
+        models = [m.strip() for m in model_id.split(",")]
+        inaccessible_models = [m for m in models if m not in available_models]
+        if inaccessible_models:
+            raise HTTPException(
+                status_code=404,
+                detail="The following model(s) do not exist or are not accessible: {}".format(
+                    ", ".join(inaccessible_models)
+                ),
+            )
+    else:
+        # Single model validation
+        if model_id not in available_models:
+            raise HTTPException(
+                status_code=404,
+                detail="The model `{}` does not exist or is not accessible".format(
+                    model_id
+                ),
+            )
 
 
 def _path_matches_pattern(path: str, pattern: str) -> bool:

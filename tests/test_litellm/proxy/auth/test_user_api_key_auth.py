@@ -338,6 +338,17 @@ async def test_proxy_admin_expired_key_from_cache():
                 f"Exception message should mention 'Expired Key', got: {exc_info.value.message}"
             )
             
+            # Verify that the param field does NOT leak the full API key (Issue #18731)
+            # The param should be abbreviated like "sk-...XXXX" not the full plaintext key
+            assert exc_info.value.param is not None, "Exception should have 'param' attribute"
+            assert exc_info.value.param != api_key, (
+                f"SECURITY: Full API key should NOT be in param field! "
+                f"Got: {exc_info.value.param}, Expected abbreviated format like 'sk-...XXXX'"
+            )
+            assert exc_info.value.param.startswith("sk-..."), (
+                f"Param should be abbreviated to 'sk-...XXXX' format. Got: {exc_info.value.param}"
+            )
+            
             # Verify that cache deletion was called
             mock_delete_cache.assert_called_once()
             call_args = mock_delete_cache.call_args
@@ -347,3 +358,4 @@ async def test_proxy_admin_expired_key_from_cache():
         finally:
             # Clean up - restore original values if needed
             pass
+

@@ -32,6 +32,23 @@
     }
   },
   "providers": {
+    "abliteration": {
+      "display_name": "Abliteration (`abliteration`)",
+      "url": "https://docs.litellm.ai/docs/providers/abliteration",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "aiml": {
       "display_name": "AI/ML API (`aiml`)",
       "url": "https://docs.litellm.ai/docs/providers/aiml",
@@ -1559,7 +1576,7 @@
         "chat_completions": true,
         "messages": true,
         "responses": true,
-        "embeddings": false,
+        "embeddings": true,
         "image_generations": false,
         "audio_transcriptions": false,
         "audio_speech": false,
@@ -2303,6 +2320,25 @@
         "chat_completions": true,
         "messages": true,
         "responses": true
+      }
+    },
+    "manus": {
+      "display_name": "Manus (`manus`)",
+      "url": "https://docs.litellm.ai/docs/providers/manus",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "files": true,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
       }
     }
   },

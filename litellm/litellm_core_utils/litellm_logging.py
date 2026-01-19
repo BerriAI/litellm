@@ -3756,6 +3756,15 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
             cloudzero_logger = CloudZeroLogger()
             _in_memory_loggers.append(cloudzero_logger)
             return cloudzero_logger  # type: ignore
+        elif logging_integration == "focus":
+            from litellm.integrations.focus.focus_logger import FocusLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, FocusLogger):
+                    return callback  # type: ignore
+            focus_logger = FocusLogger()
+            _in_memory_loggers.append(focus_logger)
+            return focus_logger  # type: ignore
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
                 if isinstance(callback, DeepEvalLogger):
@@ -4075,6 +4084,12 @@ def get_custom_logger_compatible_class(  # noqa: PLR0915
 
             for callback in _in_memory_loggers:
                 if isinstance(callback, CloudZeroLogger):
+                    return callback
+        elif logging_integration == "focus":
+            from litellm.integrations.focus.focus_logger import FocusLogger
+
+            for callback in _in_memory_loggers:
+                if isinstance(callback, FocusLogger):
                     return callback
         elif logging_integration == "deepeval":
             for callback in _in_memory_loggers:
@@ -4800,7 +4815,7 @@ class StandardLoggingPayloadSetup:
         """
         Extract additional header tags for spend tracking based on config.
         """
-        extra_headers: List[str] = litellm.extra_spend_tag_headers or []
+        extra_headers: List[str] = getattr(litellm, "extra_spend_tag_headers", None) or []
         if not extra_headers:
             return None
 
@@ -4824,9 +4839,9 @@ class StandardLoggingPayloadSetup:
         metadata = litellm_params.get("metadata") or {}
         litellm_metadata = litellm_params.get("litellm_metadata") or {}
         if metadata.get("tags", []):
-            request_tags = metadata.get("tags", [])
+            request_tags = metadata.get("tags", []).copy()
         elif litellm_metadata.get("tags", []):
-            request_tags = litellm_metadata.get("tags", [])
+            request_tags = litellm_metadata.get("tags", []).copy()
         else:
             request_tags = []
         user_agent_tags = StandardLoggingPayloadSetup._get_user_agent_tags(

@@ -130,6 +130,9 @@ class GenerateContentHelper:
             api_key=litellm_params.api_key,
         )
 
+        if litellm_params.custom_llm_provider is None:
+            litellm_params.custom_llm_provider = custom_llm_provider
+
         # get provider config
         generate_content_provider_config: Optional[
             BaseGoogleGenAIGenerateContentConfig
@@ -327,6 +330,7 @@ def generate_content(
                 tools=tools,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
+                extra_headers=extra_headers,
                 **kwargs,
             )
 
@@ -407,6 +411,9 @@ async def agenerate_content_stream(
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
+            if "stream" in kwargs:
+                kwargs.pop("stream", None)
+
             # Use the adapter to convert to completion format
             return (
                 await GenerateContentToCompletionHandler.async_generate_content_handler(
@@ -416,6 +423,7 @@ async def agenerate_content_stream(
                     litellm_params=setup_result.litellm_params,
                     tools=tools,
                     stream=True,
+                    extra_headers=extra_headers,
                     **kwargs,
                 )
             )
@@ -490,6 +498,9 @@ def generate_content_stream(
 
         # Check if we should use the adapter (when provider config is None)
         if setup_result.generate_content_provider_config is None:
+            if "stream" in kwargs:
+                kwargs.pop("stream", None)
+
             # Use the adapter to convert to completion format
             return GenerateContentToCompletionHandler.generate_content_handler(
                 model=model,
@@ -498,6 +509,7 @@ def generate_content_stream(
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
                 stream=True,
+                extra_headers=extra_headers,
                 **kwargs,
             )
 
