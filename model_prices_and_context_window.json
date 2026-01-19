@@ -3634,6 +3634,37 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "azure/gpt-5.2-codex": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "azure",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "azure/gpt-5.2-pro": {
         "input_cost_per_token": 2.1e-05,
         "litellm_provider": "azure",
@@ -5427,28 +5458,28 @@
         "supports_web_search": true
     },
     "azure_ai/grok-3": {
-        "input_cost_per_token": 3.3e-06,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.65e-05,
-        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/grok/",
         "supports_function_calling": true,
         "supports_response_schema": false,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
     "azure_ai/grok-3-mini": {
-        "input_cost_per_token": 2.75e-07,
+        "input_cost_per_token": 2.5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.38e-06,
-        "source": "https://devblogs.microsoft.com/foundry/announcing-grok-3-and-grok-3-mini-on-azure-ai-foundry/",
+        "output_cost_per_token": 1.27e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/grok/",
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": false,
@@ -5456,22 +5487,22 @@
         "supports_web_search": true
     },
     "azure_ai/grok-4": {
-        "input_cost_per_token": 5.5e-06,
+        "input_cost_per_token": 3e-06,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 2.75e-05,
-        "source": "https://azure.microsoft.com/en-us/blog/grok-4-is-now-available-in-azure-ai-foundry-unlock-frontier-intelligence-and-business-ready-capabilities/",
+        "output_cost_per_token": 1.5e-05,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/grok/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
     "azure_ai/grok-4-fast-non-reasoning": {
-        "input_cost_per_token": 4.3e-07,
-        "output_cost_per_token": 1.73e-06,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
@@ -5483,28 +5514,28 @@
         "supports_web_search": true
     },
     "azure_ai/grok-4-fast-reasoning": {
-        "input_cost_per_token": 4.3e-07,
-        "output_cost_per_token": 1.73e-06,
+        "input_cost_per_token": 2e-07,
+        "output_cost_per_token": 5e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/announcing-the-grok-4-fast-models-from-xai-now-available-in-azure-ai-foundry/4456701",
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/grok/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_web_search": true
     },
     "azure_ai/grok-code-fast-1": {
-        "input_cost_per_token": 3.5e-06,
+        "input_cost_per_token": 2e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.75e-05,
-        "source": "https://azure.microsoft.com/en-us/blog/grok-4-is-now-available-in-azure-ai-foundry-unlock-frontier-intelligence-and-business-ready-capabilities/",
+        "output_cost_per_token": 1.5e-06,
+        "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/grok/",
         "supports_function_calling": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
@@ -15901,6 +15932,63 @@
         "max_tokens": 8191,
         "mode": "embedding"
     },
+    "chatgpt/gpt-5.2-codex": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.2": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.1-codex-max": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.1-codex-mini": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
     "gigachat/GigaChat-2-Lite": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
@@ -18078,6 +18166,39 @@
         "mode": "responses",
         "output_cost_per_token": 2e-06,
         "output_cost_per_token_priority": 3.6e-06,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_function_calling": true,
+        "supports_native_streaming": true,
+        "supports_parallel_function_calling": true,
+        "supports_pdf_input": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_system_messages": false,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "gpt-5.2-codex": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "cache_read_input_token_cost_priority": 3.5e-07,
+        "input_cost_per_token": 1.75e-06,
+        "input_cost_per_token_priority": 3.5e-06,
+        "litellm_provider": "openai",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "output_cost_per_token": 1.4e-05,
+        "output_cost_per_token_priority": 2.8e-05,
         "supported_endpoints": [
             "/v1/responses"
         ],
@@ -23266,6 +23387,25 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
+    "openrouter/openai/gpt-5.2-codex": {
+        "cache_read_input_token_cost": 1.75e-07,
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 400000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
     "openrouter/openai/gpt-5": {
         "cache_read_input_token_cost": 1.25e-07,
         "input_cost_per_token": 1.25e-06,
@@ -25474,13 +25614,13 @@
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
         "mode": "image_edit",
-        "output_cost_per_image": 0.4
+        "output_cost_per_image": 0.40
     },
     "stability.stable-creative-upscale-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
         "mode": "image_edit",
-        "output_cost_per_image": 0.6
+        "output_cost_per_image": 0.60
     },
     "stability.stable-fast-upscale-v1:0": {
         "litellm_provider": "bedrock",
@@ -28730,13 +28870,13 @@
         "supports_web_search": true
     },
     "vertex_ai/zai-org/glm-4.7-maas": {
-        "input_cost_per_token": 3e-07,
+        "input_cost_per_token": 6e-07,
         "litellm_provider": "vertex_ai-zai_models",
         "max_input_tokens": 200000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 1.2e-06,
+        "output_cost_per_token": 2.2e-06,
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
         "supports_function_calling": true,
         "supports_reasoning": true,
