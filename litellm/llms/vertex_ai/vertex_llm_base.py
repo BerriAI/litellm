@@ -20,7 +20,6 @@ from .common_utils import (
     _get_vertex_url,
     all_gemini_url_modes,
     get_vertex_base_model_name,
-    is_global_only_vertex_model,
 )
 
 if TYPE_CHECKING:
