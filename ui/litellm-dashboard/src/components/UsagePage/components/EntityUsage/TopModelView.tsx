@@ -1,6 +1,7 @@
 import { BarChart } from "@tremor/react";
-import { formatNumberWithCommas } from "../../../../utils/dataUtils";
+import { Segmented } from "antd";
 import { useState } from "react";
+import { formatNumberWithCommas } from "../../../../utils/dataUtils";
 import { DataTable } from "../../../view_logs/table";
 
 interface TopModel {
@@ -13,9 +14,11 @@ interface TopModel {
 
 interface TopModelViewProps {
   topModels: TopModel[];
+  topModelsLimit: number;
+  setTopModelsLimit: (limit: number) => void;
 }
 
-export default function TopModelView({ topModels }: TopModelViewProps) {
+export default function TopModelView({ topModels, topModelsLimit, setTopModelsLimit }: TopModelViewProps) {
   const [modelViewMode, setModelViewMode] = useState<"chart" | "table">("table");
 
   const columns = [
@@ -48,9 +51,21 @@ export default function TopModelView({ topModels }: TopModelViewProps) {
       cell: (info: any) => info.getValue()?.toLocaleString() || 0,
     },
   ];
+  const processedTopModels = topModels.slice(0, topModelsLimit);
+
   return (
     <>
-      <div className="mb-4 flex justify-end items-center">
+      <div className="mb-4 flex justify-between items-center">
+        <Segmented
+          options={[
+            { label: "5", value: 5 },
+            { label: "10", value: 10 },
+            { label: "25", value: 25 },
+            { label: "50", value: 50 },
+          ]}
+          value={topModelsLimit}
+          onChange={(value) => setTopModelsLimit(value as number)}
+        />
         <div className="flex space-x-2">
           <button
             onClick={() => setModelViewMode("table")}
@@ -67,26 +82,29 @@ export default function TopModelView({ topModels }: TopModelViewProps) {
         </div>
       </div>
       {modelViewMode === "chart" ? (
-        <div className="relative">
+        <div className="relative max-h-[600px] overflow-y-auto">
           <BarChart
-            className="mt-4 h-40"
-            data={topModels}
+            className="mt-4 cursor-pointer hover:opacity-90"
+            style={{ height: Math.min(processedTopModels.length, topModelsLimit) * 52 }}
+            data={processedTopModels}
             index="key"
             categories={["spend"]}
             colors={["cyan"]}
             valueFormatter={(value) => `$${formatNumberWithCommas(value, 2)}`}
             layout="vertical"
             yAxisWidth={200}
+            tickGap={5}
             showLegend={false}
           />
         </div>
       ) : (
-        <div className="border rounded-lg overflow-auto">
+        <div className="border rounded-lg overflow-hidden max-h-[600px] overflow-y-auto">
           <DataTable
             columns={columns}
-            data={topModels}
+            data={processedTopModels}
             renderSubComponent={() => <></>}
             getRowCanExpand={() => false}
+            isLoading={false}
           />
         </div>
       )}

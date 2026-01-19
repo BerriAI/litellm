@@ -1,11 +1,13 @@
 import os
 import sys
+import time
+from unittest.mock import Mock, patch
 
 sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 
-from litellm_proxy_extras.utils import ProxyExtrasDBManager
+from litellm_proxy_extras.utils import ProxyExtrasDBManager, MigrationLockManager
 
 
 def test_custom_prisma_dir(monkeypatch):
@@ -125,3 +127,213 @@ class TestErrorClassificationPriority:
         error_message = "connection timeout"
         assert ProxyExtrasDBManager._is_permission_error(error_message) is False
         assert ProxyExtrasDBManager._is_idempotent_error(error_message) is False
+
+
+class TestMigrationLockManager:
+    """Test cases for MigrationLockManager"""
+
+    def test_acquire_lock_success(self):
+        """Test successful lock acquisition using Redis SET NX"""
+        mock_redis = Mock()
+        # FIX VERIFICATION: redis_client.set() returns True for successful SET NX
+        mock_redis.redis_client.set.return_value = True
+
+        lock_manager = MigrationLockManager(mock_redis)
+        result = lock_manager.acquire_lock()
+
+        assert result is True
+        assert lock_manager.lock_acquired is True
+        # Verify SET NX was called with correct parameters
+        mock_redis.redis_client.set.assert_called_once()
+        call_args = mock_redis.redis_client.set.call_args
+        assert call_args[1]["nx"] is True  # SET NX parameter
+        assert call_args[1]["ex"] == 300  # TTL
+
+    def test_acquire_lock_failure(self):
+        """Test lock acquisition failure when lock is already held"""
+        mock_redis = Mock()
+        # FIX VERIFICATION: redis_client.set() returns False when key exists
+        mock_redis.redis_client.set.return_value = False
+
+        lock_manager = MigrationLockManager(mock_redis)
+        result = lock_manager.acquire_lock()
+
+        assert result is False
+        assert lock_manager.lock_acquired is False
+
+    def test_acquire_lock_without_redis(self):
+        """Test lock acquisition without Redis (graceful fallback)"""
+        lock_manager = MigrationLockManager(redis_cache=None)
+        result = lock_manager.acquire_lock()
+
+        assert result is True
+        assert lock_manager.lock_acquired is True
+
+    def test_release_lock_success(self):
+        """Test successful lock release using Lua script"""
+        mock_redis = Mock()
+        # FIX VERIFICATION: Lua script returns 1 for successful delete
+        mock_redis.redis_client.eval.return_value = 1
+
+        lock_manager = MigrationLockManager(mock_redis)
+        lock_manager.pod_id = "pod_123_456"
+        lock_manager.lock_acquired = True
+
+        lock_manager.release_lock()
+
+        # Verify Lua script was called for atomic compare-and-delete
+        mock_redis.redis_client.eval.assert_called_once()
+        call_args = mock_redis.redis_client.eval.call_args
+        # Verify Lua script contains atomic compare-and-delete logic
+        lua_script = call_args[0][0]
+        assert "GET" in lua_script
+        assert "DEL" in lua_script
+        assert lock_manager.lock_acquired is False
+
+    def test_release_lock_wrong_owner(self):
+        """Test releasing lock when not the owner"""
+        mock_redis = Mock()
+        # FIX VERIFICATION: Lua script returns 0 when ownership check fails
+        mock_redis.redis_client.eval.return_value = 0
+
+        lock_manager = MigrationLockManager(mock_redis)
+        lock_manager.pod_id = "pod_123_456"
+        lock_manager.lock_acquired = True
+
+        lock_manager.release_lock()
+
+        mock_redis.redis_client.eval.assert_called_once()
+        assert lock_manager.lock_acquired is False
+
+    def test_context_manager(self):
+        """Test MigrationLockManager as context manager"""
+        mock_redis = Mock()
+        mock_redis.redis_client.set.return_value = True
+        mock_redis.redis_client.eval.return_value = 1
+
+        lock_manager = MigrationLockManager(mock_redis)
+        lock_manager.pod_id = "pod_123_456"
+
+        with lock_manager:
+            assert lock_manager.lock_acquired is True
+
+        # Should call release_lock when exiting context
+        mock_redis.redis_client.eval.assert_called_once()
+
+    def test_wait_for_lock_release_success(self):
+        """Test waiting for lock release and acquiring it"""
+        mock_redis = Mock()
+        # First call fails, second call succeeds
+        mock_redis.redis_client.set.side_effect = [False, True]
+
+        lock_manager = MigrationLockManager(mock_redis)
+        result = lock_manager.wait_for_lock_release(check_interval=0.1, max_wait=1)
+
+        assert result is True
+        assert lock_manager.lock_acquired is True
+        assert mock_redis.redis_client.set.call_count == 2
+
+    def test_wait_for_lock_release_timeout(self):
+        """Test timeout when waiting for lock release"""
+        mock_redis = Mock()
+        # Always fails to acquire lock
+        mock_redis.redis_client.set.return_value = False
+
+        lock_manager = MigrationLockManager(mock_redis)
+        start_time = time.time()
+        result = lock_manager.wait_for_lock_release(check_interval=0.1, max_wait=0.5)
+        end_time = time.time()
+
+        assert result is False
+        assert lock_manager.lock_acquired is False
+        assert end_time - start_time >= 0.5  # Should wait at least max_wait time
+        assert mock_redis.redis_client.set.call_count > 1  # Multiple attempts
+
+
+class TestProxyExtrasDBManagerMigrationLock:
+    """Test cases for ProxyExtrasDBManager with migration locking"""
+
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._execute_migration")
+    def test_setup_database_with_redis_lock_success(
+        self, mock_execute_migration, monkeypatch
+    ):
+        """Test successful database setup with Redis lock"""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+        mock_execute_migration.return_value = True
+
+        # Mock Redis cache
+        mock_redis = Mock()
+        mock_redis.redis_client.set.return_value = True  # Lock acquired
+        mock_redis.redis_client.eval.return_value = 1  # Lock released
+
+        result = ProxyExtrasDBManager.setup_database(
+            use_migrate=True, redis_cache=mock_redis
+        )
+
+        assert result is True
+        mock_execute_migration.assert_called_once()
+        # Verify lock was acquired
+        mock_redis.redis_client.set.assert_called_once()
+
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._execute_migration")
+    def test_setup_database_with_redis_lock_wait_and_acquire(
+        self, mock_execute_migration, monkeypatch
+    ):
+        """Test database setup when lock is held, then acquired after waiting"""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+        mock_execute_migration.return_value = True
+
+        # Mock Redis cache - first call fails, second call succeeds
+        mock_redis = Mock()
+        mock_redis.redis_client.set.side_effect = [False, True]
+        mock_redis.redis_client.eval.return_value = 1
+
+        result = ProxyExtrasDBManager.setup_database(
+            use_migrate=True, redis_cache=mock_redis
+        )
+
+        assert result is True
+        mock_execute_migration.assert_called_once()
+        # Should have tried to acquire lock twice
+        assert mock_redis.redis_client.set.call_count == 2
+
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._execute_migration")
+    def test_setup_database_without_redis(self, mock_execute_migration, monkeypatch):
+        """Test database setup without Redis cache (single instance mode)"""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+        mock_execute_migration.return_value = True
+
+        result = ProxyExtrasDBManager.setup_database(use_migrate=True, redis_cache=None)
+
+        assert result is True
+        mock_execute_migration.assert_called_once()
+
+    def test_setup_database_no_database_url(self):
+        """Test database setup without DATABASE_URL"""
+        with patch.dict(os.environ, {}, clear=True):
+            result = ProxyExtrasDBManager.setup_database(
+                use_migrate=True, redis_cache=None
+            )
+
+        assert result is False
+
+    @patch("litellm_proxy_extras.utils.ProxyExtrasDBManager._execute_migration")
+    def test_setup_database_lock_timeout(self, mock_execute_migration, monkeypatch):
+        """Test database setup when lock acquisition times out"""
+        monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost/test")
+
+        # Mock Redis cache - always fails to acquire lock
+        mock_redis = Mock()
+        mock_redis.redis_client.set.return_value = False
+
+        # Patch wait_for_lock_release to simulate timeout
+        with patch.object(MigrationLockManager, "wait_for_lock_release") as mock_wait:
+            mock_wait.return_value = False  # Simulate timeout
+
+            result = ProxyExtrasDBManager.setup_database(
+                use_migrate=True, redis_cache=mock_redis
+            )
+
+        assert result is False
+        mock_execute_migration.assert_not_called()  # Should not run migration
+        mock_wait.assert_called_once()
