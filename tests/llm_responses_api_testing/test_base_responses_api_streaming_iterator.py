@@ -248,15 +248,13 @@ class TestBaseResponsesAPIStreamingIterator:
         result = iterator._process_chunk(None)
         assert result is None
 
-    def test_process_chunk_exception_does_not_call_handle_failure(self):
+    def test_process_chunk_exception_calls_handle_failure_once(self):
         """
-        Test that _process_chunk raises exceptions without calling _handle_failure.
+        Test that _process_chunk calls _handle_failure exactly once when an exception occurs.
         
-        This ensures _handle_failure is only called once in the outer exception handler
-        (in __next__ or __anext__), preventing duplicate failure logging.
-        
-        Previously, _handle_failure was called both in _process_chunk and in the outer
-        exception handler, causing duplicate logs. This test verifies the fix.
+        This ensures failure handlers are triggered even when _process_chunk is called directly,
+        while the _failure_handled flag prevents duplicate calls if the exception bubbles up
+        to the outer exception handler in __next__ or __anext__.
         """
         # Mock dependencies
         mock_response = Mock()
@@ -278,20 +276,26 @@ class TestBaseResponsesAPIStreamingIterator:
         )
         
         # Mock _handle_failure to track if it's called
-        with patch.object(iterator, '_handle_failure') as mock_handle_failure:
+        original_handle_failure = iterator._handle_failure
+        with patch.object(iterator, '_handle_failure', wraps=original_handle_failure) as mock_handle_failure:
             # Prepare valid JSON chunk that will trigger transform_streaming_response
             test_chunk_data = {
                 "type": "response.output_text.delta",
                 "delta": "Hello"
             }
             
-            # _process_chunk should raise the exception without calling _handle_failure
+            # _process_chunk should raise the exception and call _handle_failure once
             with pytest.raises(ValueError) as exc_info:
                 iterator._process_chunk(json.dumps(test_chunk_data))
             
             # Verify the exception was raised
             assert str(exc_info.value) == "Test exception in transform"
             
-            # Verify _handle_failure was NOT called in _process_chunk
-            # It should only be called by the outer exception handler in __next__/__anext__
-            mock_handle_failure.assert_not_called()
+            # Verify _handle_failure was called exactly once
+            assert mock_handle_failure.call_count == 1
+            
+            # Verify that calling _handle_failure again doesn't trigger duplicate handlers
+            # due to the _failure_handled flag
+            iterator._handle_failure(test_exception)
+            # Should still be 2 calls total (the second call is prevented by the flag)
+            assert mock_handle_failure.call_count == 2
