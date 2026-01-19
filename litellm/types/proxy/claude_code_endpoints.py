@@ -76,6 +76,11 @@ class PluginListItem(BaseModel):
     name: str
     version: Optional[str]
     description: Optional[str]
+    source: Dict[str, str]
+    author: Optional[PluginAuthor] = None
+    homepage: Optional[str] = None
+    keywords: Optional[List[str]] = None
+    category: Optional[str] = None
     enabled: bool
     created_at: Optional[str]
     updated_at: Optional[str]
