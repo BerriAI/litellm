@@ -8360,6 +8360,12 @@ class ProviderConfigManager:
             )
 
             return get_vertex_ai_image_generation_config(model)
+        elif LlmProviders.OPENROUTER == provider:
+            from litellm.llms.openrouter.image_generation import (
+                get_openrouter_image_generation_config,
+            )
+
+            return get_openrouter_image_generation_config(model)
         return None
 
     @staticmethod

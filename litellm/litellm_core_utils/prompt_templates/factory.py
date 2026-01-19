@@ -45,7 +45,6 @@ from .common_utils import (
     infer_content_type_from_url_and_content,
     is_non_content_values_set,
     parse_tool_call_arguments,
-    unpack_defs,
 )
 from .image_handling import convert_url_to_base64
 
@@ -904,11 +903,11 @@ def convert_to_anthropic_image_obj(
             media_type=media_type,
             data=base64_data,
         )
+    except litellm.ImageFetchError:
+        raise
     except Exception as e:
-        if "Error: Unable to fetch image from URL" in str(e):
-            raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {str(e)}"""
         )
 
 
@@ -1463,56 +1462,6 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def _clean_refs_for_gemini(obj: Any) -> None:
-    """
-    Recursively clean $defs, $ref, and definitions from a dict for Gemini compatibility.
-    
-    Gemini rejects:
-    - $defs sections (even after $ref has been inlined)
-    - Any remaining $ref (circular refs, external URLs)
-    
-    This function:
-    1. Removes all $defs/definitions keys
-    2. Replaces any remaining $ref with a placeholder object
-    """
-    if isinstance(obj, dict):
-        # Remove $defs and definitions at this level
-        obj.pop("$defs", None)
-        obj.pop("definitions", None)
-        
-        # Check for and handle remaining $ref (circular or external)
-        if "$ref" in obj:
-            ref_value = obj.pop("$ref")
-            # Replace with a generic object type as placeholder
-            obj["type"] = "object"
-            obj["description"] = f"(schema reference: {ref_value})"
-        
-        # Recurse into values
-        for value in obj.values():
-            _clean_refs_for_gemini(value)
-    elif isinstance(obj, list):
-        for item in obj:
-            _clean_refs_for_gemini(item)
-
-
-def _prepare_response_for_gemini(response_data: dict) -> dict:
-    """
-    Prepare a tool response dict for Gemini by inlining $ref and removing $defs.
-    
-    Gemini rejects JSON schemas with $defs/$ref in function_response content.
-    This function applies unpack_defs to inline references, then cleans up
-    any remaining $defs sections and unresolved $refs (circular or external).
-    
-    Returns a new dict (does not mutate the input).
-    """
-    import copy
-
-    result = copy.deepcopy(response_data)
-    unpack_defs(result, {})
-    _clean_refs_for_gemini(result)
-    return result
-
-
 def convert_to_gemini_tool_call_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
@@ -1606,8 +1555,6 @@ def convert_to_gemini_tool_call_result(
     # For Computer Use, the response should contain structured data like {"url": "..."}
     response_data: dict
     try:
-        import json
-
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed = json.loads(content_str)
@@ -1620,11 +1567,6 @@ def convert_to_gemini_tool_call_result(
     except (json.JSONDecodeError, ValueError):
         # Not valid JSON, wrap in content field
         response_data = {"content": content_str}
-
-    # Gemini rejects JSON schemas with $defs/$ref in function_response content.
-    # Inline $refs and clean up for Gemini compatibility.
-    if isinstance(response_data, dict):
-        response_data = _prepare_response_for_gemini(response_data)
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
@@ -1728,7 +1670,7 @@ def convert_to_anthropic_tool_result(
                     anthropic_content_element=_anthropic_image_param,
                     original_content_element=content,
                 )
-                anthropic_content_list.append(_anthropic_image_param)
+                anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -4468,9 +4410,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
-        # flatten the defs
-        for _, value in defs_copy.items():
-            unpack_defs(value, defs_copy)
+        # Expand $ref references in parameters using the definitions
+        # Note: We don't pre-flatten defs as that causes exponential memory growth
+        # with circular references (see issue #19098). unpack_defs handles nested
+        # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(

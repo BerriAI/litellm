@@ -20,12 +20,11 @@ The command used to start LiteLLM (e.g., `litellm --config config.yaml --num_wor
 
 ### 4. Environment Variables
 
-Non-sensitive environment variables not in your config (e.g., `NUM_WORKERS`, `LITELLM_LOG`, `LITELLM_MODE`, `HOST`, `PORT`, `REDIS_HOST`, `REDIS_PORT`). Do not include passwords or API keys.
+Non-sensitive environment variables not in your config (e.g., `NUM_WORKERS`, `LITELLM_LOG`, `LITELLM_MODE`). Do not include passwords or API keys.
 
 ### 5. Server Specifications
 
-- **Testing/Development:** CPU cores, RAM, OS, Python version
-- **Production (if different):** CPU cores, RAM, deployment method, number of instances/replicas
+CPU cores, RAM, OS, number of instances/replicas, etc.
 
 ### 6. Database and Redis Usage
 

@@ -57,6 +57,19 @@ class OpenAIRealtime(OpenAIChatCompletion):
 
         try:
             ssl_context = get_shared_realtime_ssl_context()
+            # Log a masked request preview consistent with other endpoints.
+            logging_obj.pre_call(
+                input=None,
+                api_key=api_key,
+                additional_args={
+                    "api_base": url,
+                    "headers": {
+                        "Authorization": f"Bearer {api_key}",
+                        "OpenAI-Beta": "realtime=v1",
+                    },
+                    "complete_input_dict": {"query_params": query_params},
+                },
+            )
             async with websockets.connect(  # type: ignore
                 url,
                 additional_headers={
