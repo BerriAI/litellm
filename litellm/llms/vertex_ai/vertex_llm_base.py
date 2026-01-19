@@ -21,7 +21,6 @@ from .common_utils import (
     all_gemini_url_modes,
     get_vertex_base_model_name,
     get_vertex_base_url,
-    is_global_only_vertex_model,
 )
 
 GOOGLE_IMPORT_ERROR_MESSAGE = (
