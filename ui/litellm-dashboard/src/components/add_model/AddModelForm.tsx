@@ -92,6 +92,11 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
     "OpenAI_Text",
     "OpenAI_Compatible",
     "OpenAI_Text_Compatible",
+    "ANTHROPIC_TEXT",
+    "AZURE_TEXT",
+    "COHERE_CHAT",
+    "OLLAMA_CHAT",
+    "VERTEX_AI_BETA",
   ]);
 
   const sortedProviderMetadata: ProviderCreateInfo[] = useMemo(() => {
