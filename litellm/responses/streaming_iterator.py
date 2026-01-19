@@ -55,6 +55,7 @@ class BaseResponsesAPIStreamingIterator:
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
+        self._failure_handled = False  # Track if failure handler has been called
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -99,6 +100,7 @@ class BaseResponsesAPIStreamingIterator:
         try:
             # Parse the JSON chunk
             parsed_chunk = json.loads(chunk)
+            raise RuntimeError("test")
 
             # Format as ResponsesAPIStreamingResponse
             if isinstance(parsed_chunk, dict):
@@ -169,7 +171,9 @@ class BaseResponsesAPIStreamingIterator:
             # If we can't parse the chunk, continue
             return None
         except Exception as e:
-            # Ensure failures trigger failure hooks
+            # Trigger failure hooks before re-raising
+            # This ensures failures are logged even when _process_chunk is called directly
+            self._handle_failure(e)
             raise
 
     def _handle_logging_completed_response(self):
@@ -286,7 +290,13 @@ class BaseResponsesAPIStreamingIterator:
     def _handle_failure(self, exception: Exception):
         """
         Trigger failure handlers before bubbling the exception.
+        Only calls handlers once even if called multiple times.
         """
+        # Prevent double-calling failure handlers
+        if self._failure_handled:
+            return
+        self._failure_handled = True
+        
         traceback_exception = traceback.format_exc()
         try:
             run_async_function(
