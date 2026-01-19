@@ -514,29 +514,28 @@ class PromptSecurityGuardrail(CustomGuardrail):
             "Prompt Security Guardrail: Processing %d messages", len(messages)
         )
 
-        # First, sanitize any files in the messages
+        # First, sanitize any files in the messages (these modifications should persist)
         messages = await self.process_message_files(
             messages, user_api_key_alias=user_api_key_alias
         )
+        data["messages"] = messages  # Update with sanitized files
 
-        # Second, filter messages by role
-        messages = self.filter_messages_by_role(messages)
+        # Second, filter messages by role for the API call (don't persist to data)
+        filtered_messages = self.filter_messages_by_role(messages)
 
-        data["messages"] = messages
-
-        # Then, run the regular prompt security check
+        # Then, run the regular prompt security check with filtered messages
         headers = self._build_headers(user_api_key_alias)
         self._log_api_request(
             method="POST",
             url=f"{self.api_base}/api/protect",
             headers=headers,
-            payload={"messages": messages},
+            payload={"messages": filtered_messages},
         )
         response = await self.async_handler.post(
             f"{self.api_base}/api/protect",
             headers=headers,
             json={
-                "messages": messages,
+                "messages": filtered_messages,
                 "user": user_api_key_alias or self.user,
                 "system_prompt": self.system_prompt,
             },
