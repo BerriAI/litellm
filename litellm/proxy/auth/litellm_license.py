@@ -98,6 +98,10 @@ class LicenseCheck:
         1. verify_license_without_api_request: checks if license was generate using private / public key pair
         2. _verify: checks if license is valid calling litellm API. This is the old way we were generating/validating license
         """
+        # Check if we're in on-prem mode - bypass license check
+        if os.getenv("LITELLM_MODE", "").lower() == "onprem":
+            return True
+
         try:
             verbose_proxy_logger.debug(
                 "litellm.proxy.auth.litellm_license.py::is_premium() - ENTERING 'IS_PREMIUM' - LiteLLM License={}".format(
@@ -140,7 +144,7 @@ class LicenseCheck:
         ):
             return False
         return total_users > self.airgapped_license_data["max_users"]
-    
+
     def is_team_count_over_limit(self, team_count: int) -> bool:
         """
         Check if the license is over the limit
@@ -167,7 +171,7 @@ class LicenseCheck:
             padding_needed = len(license_key) % 4
             if padding_needed:
                 license_key += "=" * (4 - padding_needed)
-            
+
             decoded = base64.b64decode(license_key)
             message, signature = decoded.split(b".", 1)
 
