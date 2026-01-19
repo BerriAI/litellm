@@ -1435,6 +1435,11 @@ class AWSEventStreamDecoder:
                 and reasoning_content is None
             ):
                 reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
+        elif "citationsContent" in delta_obj:
+            # Handle Nova grounding citations in streaming responses
+            provider_specific_fields = {
+                "citationsContent": delta_obj["citationsContent"],
+            }
         return text, tool_use, provider_specific_fields, reasoning_content, thinking_blocks
 
     def _handle_converse_stop_event(

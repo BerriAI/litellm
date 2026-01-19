@@ -4364,9 +4364,19 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
             }
         }
     ]
+
+    Nova grounding tools (systemTool) look like:
+    tools = [
+        {
+            "type": "system_tool",
+            "system_tool": {
+                "name": "nova_grounding"
+            }
+        }
+    ]
     """
     """
-    Bedrock toolConfig looks like: 
+    Bedrock toolConfig looks like:
     "tools": [
         {
             "toolSpec": {
@@ -4389,11 +4399,39 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
             }
         }
     ]
+
+    Bedrock systemTool (for Nova grounding) looks like:
+    "tools": [
+        {
+            "systemTool": {
+                "name": "nova_grounding"
+            }
+        }
+    ]
     """
     from litellm.litellm_core_utils.prompt_templates.common_utils import unpack_defs
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
+        tool_type = tool.get("type", "function")
+
+        # Handle system tools (e.g., Nova grounding)
+        # These can come in two formats:
+        # 1. OpenAI-style: {"type": "system_tool", "system_tool": {"name": "nova_grounding"}}
+        # 2. Native Bedrock format: {"systemTool": {"name": "nova_grounding"}}
+        if tool_type == "system_tool" or "systemTool" in tool:
+            if "systemTool" in tool:
+                # Already in Bedrock format, pass through
+                tool_block_list.append(BedrockToolBlock(systemTool=tool["systemTool"]))
+            elif "system_tool" in tool:
+                # OpenAI-style format, convert to Bedrock format
+                system_tool_data = tool["system_tool"]
+                tool_block_list.append(
+                    BedrockToolBlock(systemTool={"name": system_tool_data.get("name", "")})
+                )
+            continue
+
+        # Handle regular function tools
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )
