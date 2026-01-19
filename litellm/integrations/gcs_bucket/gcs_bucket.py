@@ -38,14 +38,15 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             batch_size=self.batch_size,
             flush_interval=self.flush_interval,
         )
-        # Override log_queue with asyncio.Queue for thread-safe concurrent access
-        # Must be done after super().__init__() which sets it to List
-        # Type override is intentional for thread-safety - using asyncio.Queue instead of List
-        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue()  # type: ignore[assignment]
+        # Override log_queue with bounded asyncio.Queue for thread-safe concurrent access
+        # Bounded queue prevents OOM when GCS is slower than log accumulation
+        # Default maxsize is 10x batch_size to allow buffering during slow periods
+        queue_maxsize = int(os.getenv("GCS_QUEUE_MAXSIZE", str(self.batch_size * 10)))
+        self.log_queue: asyncio.Queue[GCSLogQueueItem] = asyncio.Queue(maxsize=queue_maxsize)  # type: ignore[assignment]
         asyncio.create_task(self.periodic_flush())
         AdditionalLoggingUtils.__init__(self)
 
-        print(f"GCS Bucket Logger initialized: bucket_name={bucket_name or 'from env'}, batch_size={self.batch_size}, flush_interval={self.flush_interval}s")
+        print(f"GCS Bucket Logger initialized: bucket_name={bucket_name or 'from env'}, batch_size={self.batch_size}, flush_interval={self.flush_interval}s, queue_maxsize={queue_maxsize}")
 
         if premium_user is not True:
             raise ValueError(
@@ -73,13 +74,20 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 raise ValueError("standard_logging_object not found in kwargs")
             # Add to logging queue - this will be flushed periodically
             # Use asyncio.Queue.put() for thread-safe concurrent access
+            # If queue is full, this will block until space is available (backpressure)
             await self.log_queue.put(
                 GCSLogQueueItem(
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
                 )
             )
             queue_size = self.log_queue.qsize()
-            print(f"GCS Bucket: Success event queued. Queue size: {queue_size}")
+            queue_maxsize = self.log_queue.maxsize if hasattr(self.log_queue, 'maxsize') else None
+            # Warn if queue is getting full (>80% capacity)
+            if queue_maxsize and queue_size > queue_maxsize * 0.8:
+                print(f"GCS Bucket: Success event queued. Queue size: {queue_size}/{queue_maxsize} (WARNING: queue nearly full)")
+                verbose_logger.warning(f"GCS Bucket queue is {queue_size}/{queue_maxsize} full, processing may be slow")
+            else:
+                print(f"GCS Bucket: Success event queued. Queue size: {queue_size}")
 
         except Exception as e:
             print(f"GCS Bucket: Error queueing success event: {str(e)}")
@@ -100,13 +108,20 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 raise ValueError("standard_logging_object not found in kwargs")
             # Add to logging queue - this will be flushed periodically
             # Use asyncio.Queue.put() for thread-safe concurrent access
+            # If queue is full, this will block until space is available (backpressure)
             await self.log_queue.put(
                 GCSLogQueueItem(
                     payload=logging_payload, kwargs=kwargs, response_obj=response_obj
                 )
             )
             queue_size = self.log_queue.qsize()
-            print(f"GCS Bucket: Failure event queued. Queue size: {queue_size}")
+            queue_maxsize = self.log_queue.maxsize if hasattr(self.log_queue, 'maxsize') else None
+            # Warn if queue is getting full (>80% capacity)
+            if queue_maxsize and queue_size > queue_maxsize * 0.8:
+                print(f"GCS Bucket: Failure event queued. Queue size: {queue_size}/{queue_maxsize} (WARNING: queue nearly full)")
+                verbose_logger.warning(f"GCS Bucket queue is {queue_size}/{queue_maxsize} full, processing may be slow")
+            else:
+                print(f"GCS Bucket: Failure event queued. Queue size: {queue_size}")
 
         except Exception as e:
             print(f"GCS Bucket: Error queueing failure event: {str(e)}")
@@ -130,15 +145,37 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
                 break
         return items_to_process
 
+    def _generate_batch_object_name(self, date_str: str, batch_id: str) -> str:
+        """
+        Generate object name for a batched log file.
+        Format: {date}/batch-{batch_id}.ndjson
+        """
+        return f"{date_str}/batch-{batch_id}.ndjson"
+
+    def _combine_payloads_to_ndjson(self, items: List[GCSLogQueueItem]) -> str:
+        """
+        Combine multiple log payloads into newline-delimited JSON (NDJSON) format.
+        Each line is a valid JSON object representing one log entry.
+        """
+        lines = []
+        for item in items:
+            logging_payload = item["payload"]
+            # Serialize each payload as a JSON line
+            json_line = json.dumps(logging_payload, default=str, ensure_ascii=False)
+            lines.append(json_line)
+        return "\n".join(lines)
+
     async def async_send_batch(self):
         """
-        Process queued logs in batch - sends logs to GCS Bucket
+        Process queued logs in batch - sends logs to GCS Bucket as a single batched object
 
-        GCS Bucket does not have a Batch endpoint to batch upload logs
+        This implementation batches multiple log payloads into a single GCS object upload,
+        dramatically reducing API calls and improving throughput.
 
-        Instead, we
+        Strategy:
             - collect the logs to flush every `GCS_FLUSH_INTERVAL` seconds
-            - during async_send_batch, we make 1 POST request per log to GCS Bucket
+            - combine all payloads in a batch into newline-delimited JSON (NDJSON)
+            - make 1 POST request per batch (instead of 1 per log)
             - process up to `batch_size` items per flush to prevent unbounded queue growth
 
         Uses asyncio.Queue for thread-safe concurrent access. Processes up to `batch_size`
@@ -149,43 +186,54 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         if not items_to_process:
             return
 
-        print(f"GCS Bucket: Starting batch send. Processing {len(items_to_process)} items")
-        success_count = 0
-        error_count = 0
+        print(f"GCS Bucket: Starting batch send. Processing {len(items_to_process)} items as a single batch")
+        
+        # Group items by GCS config (bucket, credentials) since they may differ
+        # For now, we'll use the first item's config for the entire batch
+        # (most common case is all items use the same config)
+        first_item = items_to_process[0]
+        first_kwargs = first_item["kwargs"]
+        
+        try:
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+                first_kwargs
+            )
 
-        for log_item in items_to_process:
-            logging_payload = log_item["payload"]
-            kwargs = log_item["kwargs"]
-            response_obj = log_item.get("response_obj", None) or {}
-
-            try:
-                gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
-                    kwargs
-                )
-
-                headers = await self.construct_request_headers(
-                    vertex_instance=gcs_logging_config["vertex_instance"],
-                    service_account_json=gcs_logging_config["path_service_account"],
-                )
-                bucket_name = gcs_logging_config["bucket_name"]
-                object_name = self._get_object_name(kwargs, logging_payload, response_obj)
-
-                await self._log_json_data_on_gcs(
-                    headers=headers,
-                    bucket_name=bucket_name,
-                    object_name=object_name,
-                    logging_payload=logging_payload,
-                )
-                success_count += 1
-                print(f"GCS Bucket: Successfully sent log to bucket '{bucket_name}', object '{object_name}'")
-            except Exception as e:
-                # don't let one log item fail the entire batch
-                error_count += 1
-                print(f"GCS Bucket: Error sending log item to GCS bucket: {str(e)}")
-                verbose_logger.exception(
-                    f"GCS Bucket error logging payload to GCS bucket: {str(e)}"
-                )
-                pass
+            headers = await self.construct_request_headers(
+                vertex_instance=gcs_logging_config["vertex_instance"],
+                service_account_json=gcs_logging_config["path_service_account"],
+            )
+            bucket_name = gcs_logging_config["bucket_name"]
+            
+            # Generate batch object name with timestamp and unique ID
+            current_date = self._get_object_date_from_datetime(datetime.now(timezone.utc))
+            batch_id = f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}"
+            object_name = self._generate_batch_object_name(current_date, batch_id)
+            
+            # Combine all payloads into NDJSON format
+            combined_payload = self._combine_payloads_to_ndjson(items_to_process)
+            
+            # Upload single batched object
+            await self._log_json_data_on_gcs(
+                headers=headers,
+                bucket_name=bucket_name,
+                object_name=object_name,
+                logging_payload=combined_payload,  # Pass as string (NDJSON)
+            )
+            
+            success_count = len(items_to_process)
+            error_count = 0
+            print(f"GCS Bucket: Successfully sent batch of {success_count} logs to bucket '{bucket_name}', object '{object_name}'")
+            
+        except Exception as e:
+            # If batch upload fails, count all items as errors
+            # In the future, we could implement retry or fallback to individual uploads
+            success_count = 0
+            error_count = len(items_to_process)
+            print(f"GCS Bucket: Error sending batch to GCS bucket: {str(e)}")
+            verbose_logger.exception(
+                f"GCS Bucket error logging batch payload to GCS bucket: {str(e)}"
+            )
 
         print(f"GCS Bucket: Batch send completed. Success: {success_count}, Errors: {error_count}, Remaining queue size: {self.log_queue.qsize()}")
 
