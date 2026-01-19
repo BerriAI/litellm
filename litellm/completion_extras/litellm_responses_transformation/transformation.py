@@ -31,6 +31,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionToolParamFunctionChunk,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
@@ -778,17 +779,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     @staticmethod
     def _convert_annotations_to_chat_format(
         annotations: Optional[List[Any]],
-    ) -> Optional[List[Dict[str, Any]]]:
+    ) -> Optional[List[ChatCompletionAnnotation]]:
         """
         Convert annotations from Responses API to Chat Completions format.
-        
+
         Annotations are already in compatible format between both APIs,
         so we just need to convert Pydantic models to dicts.
         """
         if not annotations:
             return None
 
-        result: List[Dict[str, Any]] = []
+        result: List[ChatCompletionAnnotation] = []
         for annotation in annotations:
             try:
                 # Convert Pydantic models to dicts (handles both v1 and v2)
