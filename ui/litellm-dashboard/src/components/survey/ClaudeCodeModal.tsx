@@ -45,7 +45,7 @@ export function ClaudeCodeModal({ isOpen, onClose, onComplete }: ClaudeCodeModal
             Help us improve your experience
           </h2>
           <p className="text-gray-600 mb-6">
-            We'd love to hear about your experience using LiteLLM with Claude Code. Your feedback helps us improve the product for everyone.
+            We&apos;d love to hear about your experience using LiteLLM with Claude Code. Your feedback helps us improve the product for everyone.
           </p>
           <p className="text-sm text-gray-500 mb-6">
             This brief survey takes about 2-3 minutes to complete.
