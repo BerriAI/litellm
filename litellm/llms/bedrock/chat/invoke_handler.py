@@ -197,7 +197,12 @@ async def make_call(
     try:
         if client is None:
             client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders.BEDROCK
+                llm_provider=litellm.LlmProviders.BEDROCK,
+                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                if logging_obj
+                and logging_obj.litellm_params
+                and logging_obj.litellm_params.get("ssl_verify")
+                else None,
             )  # Create a new client if none provided
 
         response = await client.post(
@@ -286,7 +291,13 @@ def make_sync_call(
 ):
     try:
         if client is None:
-            client = _get_httpx_client(params={})
+            client = _get_httpx_client(
+                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                if logging_obj
+                and logging_obj.litellm_params
+                and logging_obj.litellm_params.get("ssl_verify")
+                else None
+            )
 
         response = client.post(
             api_base,
@@ -323,16 +334,22 @@ def make_sync_call(
                 sync_stream=True,
                 json_mode=json_mode,
             )
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+            completion_stream = decoder.iter_bytes(
+                response.iter_bytes(chunk_size=stream_chunk_size)
+            )
         elif bedrock_invoke_provider == "deepseek_r1":
             decoder = AmazonDeepSeekR1StreamDecoder(
                 model=model,
                 sync_stream=True,
             )
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+            completion_stream = decoder.iter_bytes(
+                response.iter_bytes(chunk_size=stream_chunk_size)
+            )
         else:
             decoder = AWSEventStreamDecoder(model=model)
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+            completion_stream = decoder.iter_bytes(
+                response.iter_bytes(chunk_size=stream_chunk_size)
+            )
 
         # LOGGING
         logging_obj.post_call(
@@ -589,19 +606,22 @@ class BedrockLLM(BaseAWSLLM):
                 outputText = completion_response["generation"]
             elif provider == "openai":
                 # OpenAI imported models use OpenAI Chat Completions format
-                if "choices" in completion_response and len(completion_response["choices"]) > 0:
+                if (
+                    "choices" in completion_response
+                    and len(completion_response["choices"]) > 0
+                ):
                     choice = completion_response["choices"][0]
                     if "message" in choice:
                         outputText = choice["message"].get("content")
                     elif "text" in choice:  # fallback for completion format
                         outputText = choice["text"]
-                    
+
                     # Set finish reason
                     if "finish_reason" in choice:
                         model_response.choices[0].finish_reason = map_finish_reason(
                             choice["finish_reason"]
                         )
-                    
+
                     # Set usage if available
                     if "usage" in completion_response:
                         usage = completion_response["usage"]
@@ -675,7 +695,10 @@ class BedrockLLM(BaseAWSLLM):
 
         ## CALCULATING USAGE - bedrock returns usage in the headers
         # Skip if usage was already set (e.g., from JSON response for OpenAI provider)
-        if not hasattr(model_response, "usage") or getattr(model_response, "usage", None) is None:
+        if (
+            not hasattr(model_response, "usage")
+            or getattr(model_response, "usage", None) is None
+        ):
             bedrock_input_tokens = response.headers.get(
                 "x-amzn-bedrock-input-token-count", None
             )
@@ -758,6 +781,7 @@ class BedrockLLM(BaseAWSLLM):
         )  # https://bedrock-runtime.{region_name}.amazonaws.com
         aws_web_identity_token = optional_params.pop("aws_web_identity_token", None)
         aws_sts_endpoint = optional_params.pop("aws_sts_endpoint", None)
+        ssl_verify = optional_params.pop("ssl_verify", None)
 
         ### SET REGION NAME ###
         if aws_region_name is None:
@@ -788,6 +812,7 @@ class BedrockLLM(BaseAWSLLM):
             aws_role_name=aws_role_name,
             aws_web_identity_token=aws_web_identity_token,
             aws_sts_endpoint=aws_sts_endpoint,
+            ssl_verify=ssl_verify,
         )
 
         ### SET RUNTIME ENDPOINT ###
@@ -936,13 +961,12 @@ class BedrockLLM(BaseAWSLLM):
             # Use AmazonBedrockOpenAIConfig for proper OpenAI transformation
             openai_config = AmazonBedrockOpenAIConfig()
             supported_params = openai_config.get_supported_openai_params(model=model)
-            
+
             # Filter to only supported OpenAI params
             filtered_params = {
-                k: v for k, v in inference_params.items() 
-                if k in supported_params
+                k: v for k, v in inference_params.items() if k in supported_params
             }
-            
+
             # OpenAI uses messages format, not prompt
             data = json.dumps({"messages": messages, **filtered_params})
         else:
@@ -1053,7 +1077,9 @@ class BedrockLLM(BaseAWSLLM):
 
             decoder = AWSEventStreamDecoder(model=model)
 
-            completion_stream = decoder.iter_bytes(response.iter_bytes(chunk_size=stream_chunk_size))
+            completion_stream = decoder.iter_bytes(
+                response.iter_bytes(chunk_size=stream_chunk_size)
+            )
             streaming_response = CustomStreamWrapper(
                 completion_stream=completion_stream,
                 model=model,
@@ -1321,9 +1347,7 @@ class AWSEventStreamDecoder:
         dict,
         Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ],
     ]:
@@ -1332,9 +1356,7 @@ class AWSEventStreamDecoder:
         provider_specific_fields: dict = {}
         thinking_blocks: Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None
 
@@ -1347,9 +1369,7 @@ class AWSEventStreamDecoder:
                     response_tool_name=_response_tool_name
                 )
                 self.tool_calls_index = (
-                    0
-                    if self.tool_calls_index is None
-                    else self.tool_calls_index + 1
+                    0 if self.tool_calls_index is None else self.tool_calls_index + 1
                 )
                 tool_use = {
                     "id": start_obj["toolUse"]["toolUseId"],
@@ -1383,9 +1403,7 @@ class AWSEventStreamDecoder:
         Optional[str],
         Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ],
     ]:
@@ -1396,9 +1414,7 @@ class AWSEventStreamDecoder:
         reasoning_content: Optional[str] = None
         thinking_blocks: Optional[
             List[
-                Union[
-                    ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock
-                ]
+                Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ]
         ] = None
 
@@ -1434,8 +1450,16 @@ class AWSEventStreamDecoder:
                 and len(thinking_blocks) > 0
                 and reasoning_content is None
             ):
-                reasoning_content = ""  # set to non-empty string to ensure consistency with Anthropic
-        return text, tool_use, provider_specific_fields, reasoning_content, thinking_blocks
+                reasoning_content = (
+                    ""  # set to non-empty string to ensure consistency with Anthropic
+                )
+        return (
+            text,
+            tool_use,
+            provider_specific_fields,
+            reasoning_content,
+            thinking_blocks,
+        )
 
     def _handle_converse_stop_event(
         self, index: int
@@ -1483,9 +1507,11 @@ class AWSEventStreamDecoder:
             index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
-                tool_use, provider_specific_fields, thinking_blocks = (
-                    self._handle_converse_start_event(start_obj)
-                )
+                (
+                    tool_use,
+                    provider_specific_fields,
+                    thinking_blocks,
+                ) = self._handle_converse_start_event(start_obj)
             elif "delta" in chunk_data:
                 delta_obj = ContentBlockDeltaEvent(**chunk_data["delta"])
                 (
