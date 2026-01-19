@@ -385,14 +385,9 @@ class LiteLLMCompletionResponsesConfig:
                         existing_tool_call_ids.add(str(call_id_raw))
 
                 #########################################################
-                # IMPORTANT: preserve ordering of tool call outputs.
-                #
-                # Gemini/Vertex requires the tool result to immediately follow the
-                # assistant tool call. Previously we collected tool outputs and appended
-                # them at the end, which breaks that requirement.
-                #
-                # We still dedupe *assistant wrapper* messages that re-announce a tool_call
-                # we've already seen, but we keep the tool output message in-place.
+                # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
+                # preserving the ordering of tool call outputs. Some models require the tool 
+                # result to immediately follow the assistant tool call. 
                 #########################################################
                 if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
                     input_item=_input
