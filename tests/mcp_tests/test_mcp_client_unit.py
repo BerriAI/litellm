@@ -82,7 +82,7 @@ class TestMCPClientUnitTests:
         assert headers == {}
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
+    @patch("litellm.experimental_mcp_client.client.streamable_http_client")
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_run_with_session(self, mock_session_class, mock_transport):
         """Test run_with_session establishes session with auth headers."""
@@ -110,15 +110,14 @@ class TestMCPClientUnitTests:
 
         # Verify transport was created with auth headers
         call_args = mock_transport.call_args
-        assert call_args[1]["headers"] == {
-            "Authorization": "Bearer test_token",
-        }
+        http_client = call_args[1]["http_client"]
+        assert http_client.headers.get("Authorization") == "Bearer test_token"
 
         # Verify session was initialized
         mock_session_instance.initialize.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
+    @patch("litellm.experimental_mcp_client.client.streamable_http_client")
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_list_tools(self, mock_session_class, mock_transport):
         """Test listing tools from the server."""
@@ -156,7 +155,7 @@ class TestMCPClientUnitTests:
         mock_session_instance.list_tools.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
+    @patch("litellm.experimental_mcp_client.client.streamable_http_client")
     @patch("litellm.experimental_mcp_client.client.ClientSession")
     async def test_call_tool(self, mock_session_class, mock_transport):
         """Test calling a tool."""
