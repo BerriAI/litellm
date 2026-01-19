@@ -102,7 +102,7 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: Optional[str],
-        image: FileTypes,
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -114,15 +114,15 @@ class RecraftImageEditConfig(BaseImageEditConfig):
         https://www.recraft.ai/docs#image-to-image
         """
         
-        if prompt is None:
-            raise ValueError("Recraft image edit requires a prompt.")
-        
-        request_body: RecraftImageEditRequestParams = RecraftImageEditRequestParams(
-            model=model,
-            prompt=prompt,
-            strength=image_edit_optional_request_params.pop("strength", self.DEFAULT_STRENGTH),
+        request_params = {
+            "model": model,
+            "strength": image_edit_optional_request_params.pop("strength", self.DEFAULT_STRENGTH),
             **image_edit_optional_request_params,
-        )
+        }
+        if prompt is not None:
+            request_params["prompt"] = prompt
+            
+        request_body = RecraftImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request_body)
         #########################################################
         # Reuse OpenAI logic: Separate images as `files` and send other parameters as `data`
