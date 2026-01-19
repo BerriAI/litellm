@@ -385,6 +385,10 @@ def create_ui_token_object(
     Returns:
         ReturnedUITokenObject: Token object ready for JWT encoding
     """
+    # Check if we're in on-prem mode - bypass license check
+    if os.getenv("LITELLM_MODE", "").lower() == "onprem":
+        premium_user = True
+
     disabled_non_admin_personal_key_creation = (
         get_disabled_non_admin_personal_key_creation()
     )
@@ -402,4 +406,3 @@ def create_ui_token_object(
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
     )
-
