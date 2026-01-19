@@ -8,7 +8,7 @@ and following LiteLLM testing patterns and best practices.
 # Standard library imports
 import os
 import sys
-from typing import Dict, Any
+from typing import Dict
 from unittest.mock import Mock, patch
 
 # Add parent directory to path for imports
@@ -41,6 +41,33 @@ from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 # ============================================================================
 # FIXTURES
 # ============================================================================
+
+
+@pytest.fixture(scope="function", autouse=True)
+def setup_and_teardown():
+    """
+    Standard LiteLLM fixture that reloads litellm before every function
+    to speed up testing by removing callbacks being chained.
+    """
+    import importlib
+    import asyncio
+
+    # Reload litellm to ensure clean state
+    importlib.reload(litellm)
+
+    # Set up async loop
+    loop = asyncio.get_event_loop_policy().new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Set up litellm state
+    litellm.set_verbose = True
+    litellm.guardrail_name_config_map = {}
+
+    yield
+
+    # Teardown
+    loop.close()
+    asyncio.set_event_loop(None)
 
 
 @pytest.fixture

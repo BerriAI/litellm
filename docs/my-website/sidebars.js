@@ -108,13 +108,23 @@ const sidebars = {
     {
       type: "category",
       label: "AI Tools (OpenWebUI, Claude Code, etc.)",
+      link: {
+        type: "generated-index",
+        title: "AI Tools",
+        description: "Integrate LiteLLM with AI tools like OpenWebUI, Claude Code, and more",
+        slug: "/ai_tools"
+      },
       items: [
+        "tutorials/openweb_ui",
         {
           type: "category",
           label: "Claude Code",
           items: [
             "tutorials/claude_responses_api",
+            "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
+            "tutorials/claude_non_anthropic_models",
           ]
         },
         "tutorials/cost_tracking_coding",
@@ -122,8 +132,7 @@ const sidebars = {
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
-        "tutorials/openai_codex",
-        "tutorials/openweb_ui"
+        "tutorials/openai_codex"
       ]
     },
 
@@ -268,10 +277,19 @@ const sidebars = {
             "tutorials/scim_litellm",
             {
               type: "category",
+              label: "UI Usage Tracking",
+              items: [
+                "proxy/customer_usage",
+                "proxy/endpoint_activity"
+              ]
+            },
+            {
+              type: "category",
               label: "UI Logs",
               items: [
                 "proxy/ui_logs",
-                "proxy/ui_logs_sessions"
+                "proxy/ui_logs_sessions",
+                "proxy/deleted_keys_teams"
               ]
             }
           ],
@@ -321,7 +339,6 @@ const sidebars = {
             "proxy/team_budgets",
             "proxy/tag_budgets",
             "proxy/customers",
-            "proxy/customer_usage",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
@@ -850,6 +867,7 @@ const sidebars = {
         "proxy/load_balancing",
         "proxy/provider_budget_routing",
         "proxy/reliability",
+        "proxy/fallback_management",
         "proxy/tag_routing",
         "proxy/timeout",
         "wildcard_routing"
@@ -869,10 +887,11 @@ const sidebars = {
       type: "category",
       label: "Tutorials",
       items: [
-        "tutorials/openweb_ui",
-        "tutorials/openai_codex",
-        "tutorials/litellm_gemini_cli",
-        "tutorials/litellm_qwen_code_cli",
+        {
+          type: "link",
+          label: "AI Coding Tools (OpenWebUI, Claude Code, Gemini CLI, OpenAI Codex, etc.)",
+          href: "/docs/ai_tools",
+        },
         "tutorials/anthropic_file_usage",
         "tutorials/default_team_self_serve",
         "tutorials/msft_sso",
@@ -882,7 +901,6 @@ const sidebars = {
         "tutorials/presidio_pii_masking",
         "tutorials/elasticsearch_logging",
         "tutorials/gemini_realtime_with_audio",
-        "tutorials/claude_responses_api",
         {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",

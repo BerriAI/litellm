@@ -109,6 +109,20 @@ class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_high: float
 
 
+class AgenticLoopParams(TypedDict, total=False):
+    """
+    Parameters passed to agentic loop hooks (e.g., WebSearch interception).
+    
+    Stored in logging_obj.model_call_details["agentic_loop_params"] to provide
+    agentic hooks with the original request context needed for follow-up calls.
+    """
+    model: str
+    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    
+    custom_llm_provider: str
+    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
+
+
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
@@ -364,6 +378,11 @@ class CallTypes(str, Enum):
     asend_message = "asend_message"
     send_message = "send_message"
 
+    #########################################################
+    # Claude Code Call Types
+    #########################################################
+    acreate_skill = "acreate_skill"
+
 
 CallTypesLiteral = Literal[
     "embedding",
@@ -420,6 +439,7 @@ CallTypesLiteral = Literal[
     "send_message",
     "aresponses",
     "responses",
+    "acreate_skill",
 ]
 
 # Mapping of API routes to their corresponding call types

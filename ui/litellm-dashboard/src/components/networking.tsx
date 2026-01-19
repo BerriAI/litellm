@@ -53,7 +53,7 @@ const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
-  console.log = function () {};
+  console.log = function () { };
 }
 
 const getWindowLocation = () => {
@@ -239,7 +239,7 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
-const handleError = async (errorData: string | any) => {
+export const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
@@ -308,6 +308,11 @@ const MCP_AUTH_HEADER: string = "x-mcp-auth";
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
+}
+
+// Function to get the global header name
+export function getGlobalLitellmHeaderName(): string {
+  return globalLitellmHeaderName;
 }
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
@@ -3270,6 +3275,7 @@ export const keyListCall = async (
   sortBy: string | null = null,
   sortOrder: string | null = null,
   expand: string | null = null,
+  status: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -3317,6 +3323,10 @@ export const keyListCall = async (
 
     if (expand) {
       queryParams.append("expand", expand);
+    }
+
+    if (status) {
+      queryParams.append("status", status);
     }
 
     queryParams.append("return_full_object", "true");
@@ -8156,7 +8166,7 @@ export const perUserAnalyticsCall = async (
   }
 };
 
-const deriveErrorMessage = (errorData: any): string => {
+export const deriveErrorMessage = (errorData: any): string => {
   return (
     (errorData?.error && (errorData.error.message || errorData.error)) ||
     errorData?.message ||
