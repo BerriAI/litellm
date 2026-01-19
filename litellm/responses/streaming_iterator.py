@@ -170,7 +170,6 @@ class BaseResponsesAPIStreamingIterator:
             return None
         except Exception as e:
             # Ensure failures trigger failure hooks
-            self._handle_failure(e)
             raise
 
     def _handle_logging_completed_response(self):
