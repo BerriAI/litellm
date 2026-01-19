@@ -532,6 +532,10 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "web_search_options": None,
     "service_tier": None,
     "safety_identifier": None,
+    "prompt_cache_key": None,
+    "prompt_cache_retention": None,
+    "store": None,
+    "metadata": None,
 }
 
 openai_compatible_endpoints: List = [
