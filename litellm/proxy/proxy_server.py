@@ -544,7 +544,11 @@ except ImportError:
 
 server_root_path = os.getenv("SERVER_ROOT_PATH", "")
 _license_check = LicenseCheck()
-premium_user: bool = _license_check.is_premium()
+# Check if we're in on-prem mode - bypass license check
+if os.getenv("LITELLM_MODE", "").lower() == "onprem":
+    premium_user: bool = True
+else:
+    premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional[
     "EnterpriseLicenseData"
 ] = _license_check.airgapped_license_data
@@ -682,7 +686,11 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         )
     )
     if premium_user is False:
-        premium_user = _license_check.is_premium()
+        # Check if we're in on-prem mode - bypass license check
+        if os.getenv("LITELLM_MODE", "").lower() == "onprem":
+            premium_user = True
+        else:
+            premium_user = _license_check.is_premium()
 
     ## CHECK MASTER KEY IN ENVIRONMENT ##
     master_key = get_secret_str("LITELLM_MASTER_KEY")
@@ -896,7 +904,7 @@ def get_openapi_schema():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -922,7 +930,7 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
