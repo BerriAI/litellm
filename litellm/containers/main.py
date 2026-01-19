@@ -199,7 +199,13 @@ def create_container(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -406,7 +412,13 @@ def list_containers(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -594,7 +606,13 @@ def retrieve_container(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -774,7 +792,13 @@ def delete_container(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -968,7 +992,13 @@ def list_container_files(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -1203,7 +1233,13 @@ def upload_container_file(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(

@@ -360,6 +360,12 @@ class LiteLLMRoutes(enum.Enum):
         # OCR
         "/ocr",
         "/v1/ocr",
+
+        # containers API
+        "/containers",
+        "/v1/containers",
+        "/containers/*",
+        "/v1/containers/*",
     ]
 
     mapped_pass_through_routes = [
@@ -1717,6 +1723,21 @@ class LiteLLM_TeamTableCachedObj(LiteLLM_TeamTable):
     last_refreshed_at: Optional[float] = None
 
 
+class LiteLLM_DeletedTeamTable(LiteLLM_TeamTable):
+    """
+    Recording of deleted teams for audit purposes. Mirrors LiteLLM_TeamTable
+    plus metadata captured at deletion time.
+    """
+
+    id: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    deleted_by_api_key: Optional[str] = None
+    litellm_changed_by: Optional[str] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class TeamRequest(LiteLLMPydanticObjectBase):
     teams: List[str]
 
@@ -2111,6 +2132,21 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(protected_namespaces=())
 
 
+class LiteLLM_DeletedVerificationToken(LiteLLM_VerificationToken):
+    """
+    Recording of deleted keys for audit purposes. Mirrors LiteLLM_VerificationToken
+    plus metadata captured at deletion time.
+    """
+
+    id: Optional[str] = None
+    deleted_at: Optional[datetime] = None
+    deleted_by: Optional[str] = None
+    deleted_by_api_key: Optional[str] = None
+    litellm_changed_by: Optional[str] = None
+
+    model_config = ConfigDict(protected_namespaces=())
+
+
 class LiteLLM_VerificationTokenView(LiteLLM_VerificationToken):
     """
     Combined view of litellm verification token + litellm team table (select values)
@@ -2183,6 +2219,8 @@ class UserAPIKeyAuth(
     user_tpm_limit: Optional[int] = None
     user_rpm_limit: Optional[int] = None
     user_email: Optional[str] = None
+    user_spend: Optional[float] = None
+    user_max_budget: Optional[float] = None
     request_route: Optional[str] = None
     user: Optional[Any] = None  # Expanded user object when expand=user is used
 
@@ -2191,6 +2229,9 @@ class UserAPIKeyAuth(
     @model_validator(mode="before")
     @classmethod
     def check_api_key(cls, values):
+        # If values is already an instance (not a dict), return it as-is
+        if not isinstance(values, dict):
+            return values
         if values.get("api_key") is not None:
             values.update(
                 {"token": cls._safe_hash_litellm_api_key(values.get("api_key"))}
@@ -3321,7 +3362,7 @@ class TeamListResponseObject(LiteLLM_TeamTable):
 
 
 class KeyListResponseObject(TypedDict, total=False):
-    keys: List[Union[str, UserAPIKeyAuth]]
+    keys: List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]]
     total_count: Optional[int]
     current_page: Optional[int]
     total_pages: Optional[int]

@@ -404,6 +404,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
+            litellm.LlmProviders.OPENROUTER
         ):
             if image_generation_config is None:
                 raise ValueError(
