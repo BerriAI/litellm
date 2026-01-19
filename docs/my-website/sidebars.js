@@ -692,6 +692,7 @@ const sidebars = {
         "providers/galadriel",
         "providers/github",
         "providers/github_copilot",
+        "providers/gmi",
         "providers/gradient_ai",
         "providers/groq",
         "providers/helicone",
