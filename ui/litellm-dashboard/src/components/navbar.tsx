@@ -209,24 +209,6 @@ const Navbar: React.FC<NavbarProps> = ({
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
-            <Button
-              href="https://www.litellm.ai/support"
-              target="_blank"
-              rel="noopener noreferrer"
-              icon={<SlackOutlined />}
-              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
-            >
-              Присоединиться к Slack
-            </Button>
-            <Button
-              href="https://github.com/BerriAI/litellm"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
-              icon={<GithubOutlined />}
-            >
-              Поставьте звезду на GitHub
-            </Button>
             <a
               href="https://docs.litellm.ai/docs/"
               target="_blank"
