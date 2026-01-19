@@ -7,7 +7,7 @@ Run with: pytest tests/llm_translation/test_gigachat.py -v
 
 import json
 import pytest
-from unittest.mock import Mock, MagicMock
+from unittest.mock import Mock, MagicMock, patch
 
 
 class TestGigaChatMessageTransformation:
@@ -347,3 +347,83 @@ class TestGigaChatSupportedParams:
         assert "tools" in supported
         assert "response_format" in supported
         assert "stream" in supported
+
+
+class TestGigaChatBasicAuth:
+    """Tests for basic auth (user/password) token flow"""
+
+    def test_request_basic_token_sync_uses_httpx_basic_auth_tuple(self):
+        """
+        Ensure basic auth token request uses httpx 'auth=(user, password)' tuple and
+        hits the /token endpoint.
+        """
+        from litellm.llms.gigachat.authenticator import _request_basic_token_sync
+        from litellm.llms.gigachat.common_utils import USER_AGENT, build_url
+
+        api_base = "https://example.com/api/v1"
+        user = "alice"
+        password = "secret"
+
+        mock_response = MagicMock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {"access_token": "token-123", "expires_at": 1234567890}
+
+        mock_httpx_client = MagicMock()
+        mock_httpx_client.post.return_value = mock_response
+
+        mock_httpx_client_ctx = MagicMock()
+        mock_httpx_client_ctx.__enter__.return_value = mock_httpx_client
+        mock_httpx_client_ctx.__exit__.return_value = None
+
+        with patch(
+            "litellm.llms.gigachat.authenticator.httpx.Client",
+            return_value=mock_httpx_client_ctx,
+        ) as mock_client_ctor:
+            token, expires_at = _request_basic_token_sync(
+                user=user,
+                password=password,
+                api_base=api_base,
+            )
+
+        assert token == "token-123"
+        assert expires_at == 1234567890
+
+        mock_client_ctor.assert_called_once_with(verify=False)
+        mock_httpx_client.post.assert_called_once()
+
+        called_args, called_kwargs = mock_httpx_client.post.call_args
+        assert called_args[0] == build_url(api_base, "token")
+        assert called_kwargs["auth"] == (user, password)
+        assert called_kwargs["headers"] == {"User-Agent": USER_AGENT}
+
+    def test_get_access_token_falls_back_to_basic_auth(self):
+        """If no OAuth credentials exist, get_access_token should use basic auth path."""
+        from litellm.llms.gigachat import authenticator
+
+        with patch.object(authenticator, "_get_credentials", return_value=None), patch.object(
+            authenticator, "_token_cache"
+        ) as mock_cache, patch.object(
+            authenticator, "_request_basic_token_sync", return_value=("token-abc", 9999999999999)
+        ) as mock_request:
+            mock_cache.get_cache.return_value = None
+            token = authenticator.get_access_token(
+                credentials=None,
+                user="bob",
+                password="pw",
+            )
+
+        assert token == "token-abc"
+        mock_request.assert_called_once_with("bob", "pw")
+
+    def test_get_access_token_raises_without_credentials_or_user_password(self):
+        """No credentials and no user/password should raise a GigaChatAuthError."""
+        from litellm.llms.gigachat import authenticator
+        from litellm.llms.gigachat.common_utils import GigaChatAuthError
+
+        with patch.object(authenticator, "_get_credentials", return_value=None), patch.object(
+            authenticator, "_get_user_password", return_value=(None, None)
+        ):
+            with pytest.raises(GigaChatAuthError) as e:
+                authenticator.get_access_token(credentials=None, user=None, password=None)
+
+        assert e.value.status_code == 401
