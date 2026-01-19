@@ -655,7 +655,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 follow_up_params.update(
                     {
                         "input": follow_up_input,
-                        "previous_response_id": self.collected_response.id,  # type: ignore[attr-defined]
                         "stream": True,
                     }
                 )
