@@ -40,8 +40,21 @@ def test_function_call_output_stays_adjacent_to_tool_call():
             tool_call_idx = i
         if isinstance(m, dict) and m.get("role") == "tool":
             tool_msg_idx = i
-        if isinstance(m, dict) and m.get("role") == "assistant" and m.get("content") == "OK":
-            assistant_ok_idx = i
+
+        # Assistant "OK" can be either a plain string or a structured content list
+        if isinstance(m, dict) and m.get("role") == "assistant":
+            content = m.get("content")
+            if content == "OK":
+                assistant_ok_idx = i
+            elif isinstance(content, list):
+                for block in content:
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and block.get("text") == "OK"
+                    ):
+                        assistant_ok_idx = i
+                        break
 
     assert tool_call_idx is not None
     assert tool_msg_idx is not None
