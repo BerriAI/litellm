@@ -4410,9 +4410,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
-        # flatten the defs
-        for _, value in defs_copy.items():
-            unpack_defs(value, defs_copy)
+        # Expand $ref references in parameters using the definitions
+        # Note: We don't pre-flatten defs as that causes exponential memory growth
+        # with circular references (see issue #19098). unpack_defs handles nested
+        # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(
