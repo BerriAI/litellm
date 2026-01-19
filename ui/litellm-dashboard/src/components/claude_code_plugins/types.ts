@@ -43,6 +43,7 @@ export interface PluginListItem {
   enabled: boolean;
   created_at?: string;
   updated_at?: string;
+  created_by?: string;
 }
 
 export interface ListPluginsResponse {
