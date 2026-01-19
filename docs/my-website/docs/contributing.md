@@ -38,7 +38,27 @@ The UI comes pre-built in the repo. Access it at `http://localhost:4000/ui`
 
 There are two options for UI development:
 
-### Option A: Build Mode (Recommended)
+### Option A: Development Mode (Hot Reload)
+
+This runs the UI on port 3000 with hot reload. The proxy runs on port 4000.
+
+```bash
+cd ui/litellm-dashboard
+npm install
+npm run dev
+```
+
+**Login flow:**
+1. Go to `http://localhost:3000`
+2. You'll be redirected to `http://localhost:4000/ui` for login
+3. After logging in, manually navigate back to `http://localhost:3000/ui`
+4. You're now authenticated and can develop with hot reload
+
+:::note
+If you experience redirect loops or authentication issues, clear your browser cookies for localhost or use Build Mode instead.
+:::
+
+### Option B: Build Mode
 
 This builds the UI and copies it to the proxy. Changes require rebuilding.
 
@@ -59,18 +79,22 @@ cp -r out/* ../../litellm/proxy/_experimental/out/
 
 Then restart the proxy and access the UI at `http://localhost:4000/ui`
 
-### Option B: Development Mode (Hot Reload)
+## 4. Submitting a PR
 
-This runs the UI on port 3000 with hot reload. The proxy runs on port 4000.
-
+1. Create a new branch for your changes:
 ```bash
-cd ui/litellm-dashboard
-npm install
-npm run dev
+git checkout -b feat/your-feature-name
 ```
 
-Access the UI at `http://localhost:3000`
+2. Stage and commit your changes:
+```bash
+git add .
+git commit -m "feat: description of your changes"
+```
 
-:::note
-Development mode may have redirect issues between ports 3000 and 4000, if so use Build Mode instead.
-:::
+3. Push to your fork:
+```bash
+git push origin feat/your-feature-name
+```
+
+4. Create a Pull Request on GitHub following the [PR template](https://github.com/BerriAI/litellm/blob/main/.github/pull_request_template.md)
