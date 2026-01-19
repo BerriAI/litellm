@@ -1134,7 +1134,7 @@ class HTTPHandler:
 
 
 def get_async_httpx_client(
-    llm_provider: Union[LlmProviders, httpxSpecialProvider],
+    llm_provider: Union[LlmProviders, httpxSpecialProvider, Any],
     params: Optional[dict] = None,
     shared_session: Optional["ClientSession"] = None,
 ) -> AsyncHTTPHandler:
@@ -1152,7 +1152,9 @@ def get_async_httpx_client(
             except Exception:
                 pass
 
-    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider
+    # Convert llm_provider to string for cache key (handles both enum and _JSONProvider)
+    llm_provider_str = str(llm_provider) if hasattr(llm_provider, '__str__') else llm_provider.value if hasattr(llm_provider, 'value') else str(llm_provider)
+    _cache_key_name = "async_httpx_client" + _params_key_name + llm_provider_str
 
     # Lazily initialize the global in-memory client cache to avoid relying on
     # litellm globals being fully populated during import time.

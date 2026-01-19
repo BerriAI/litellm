@@ -1241,9 +1241,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             exception_status_code=original_exception.status_code,
                         )
             elif (
-                custom_llm_provider == LlmProviders.VERTEX_AI
-                or custom_llm_provider == LlmProviders.VERTEX_AI_BETA
-                or custom_llm_provider == LlmProviders.GEMINI
+                custom_llm_provider == LlmProviders.VERTEX_AI.value
+                or custom_llm_provider == LlmProviders.VERTEX_AI_BETA.value
+                or custom_llm_provider == LlmProviders.GEMINI.value
             ):
                 if (
                     "Vertex AI API has not been used in project" in error_str

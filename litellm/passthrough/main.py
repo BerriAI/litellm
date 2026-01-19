@@ -69,15 +69,19 @@ async def allm_passthrough_route(
             api_key=api_key,
         )
 
-        from litellm.types.utils import LlmProviders
+        from litellm.types.utils import LlmProviders, get_llm_provider_enum
         from litellm.utils import ProviderConfigManager
 
-        provider_config = cast(
-            Optional["BasePassthroughConfig"], kwargs.get("provider_config")
-        ) or ProviderConfigManager.get_provider_passthrough_config(
-            provider=LlmProviders(custom_llm_provider),
-            model=model,
-        )
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_config = cast(
+                Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+            ) or ProviderConfigManager.get_provider_passthrough_config(
+                provider=provider_enum,
+                model=model,
+            )
+        except ValueError:
+            provider_config = None
 
         if provider_config is None:
             raise Exception(f"Provider {custom_llm_provider} not found")
@@ -140,13 +144,15 @@ async def allm_passthrough_route(
         provider_config = None
         if resolved_custom_llm_provider:
             try:
+                from litellm.types.utils import get_llm_provider_enum
+                provider_enum = get_llm_provider_enum(resolved_custom_llm_provider)
                 provider_config = cast(
                     Optional["BasePassthroughConfig"], kwargs.get("provider_config")
                 ) or ProviderConfigManager.get_provider_passthrough_config(
-                    provider=LlmProviders(resolved_custom_llm_provider),
+                    provider=provider_enum,
                     model=model,
                 )
-            except Exception:
+            except (ValueError, Exception):
                 # If we can't get provider config, pass None
                 pass
 
@@ -230,12 +236,17 @@ def llm_passthrough_route(
         request_data=data if data else json,
     )
 
-    provider_config = cast(
-        Optional["BasePassthroughConfig"], kwargs.get("provider_config")
-    ) or ProviderConfigManager.get_provider_passthrough_config(
-        provider=LlmProviders(custom_llm_provider),
-        model=model,
-    )
+    from litellm.types.utils import get_llm_provider_enum
+    try:
+        provider_enum = get_llm_provider_enum(custom_llm_provider)
+        provider_config = cast(
+            Optional["BasePassthroughConfig"], kwargs.get("provider_config")
+        ) or ProviderConfigManager.get_provider_passthrough_config(
+            provider=provider_enum,
+            model=model,
+        )
+    except ValueError:
+        provider_config = None
     if provider_config is None:
         raise Exception(f"Provider {custom_llm_provider} not found")
 

@@ -131,10 +131,15 @@ class BedrockPassthroughConfig(
         else:
             return None
 
-        provider_chat_config = ProviderConfigManager.get_provider_chat_config(
-            provider=LlmProviders(custom_llm_provider),
-            model=chat_config_model,
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_chat_config = ProviderConfigManager.get_provider_chat_config(
+                provider=provider_enum,
+                model=chat_config_model,
+            )
+        except ValueError:
+            provider_chat_config = None
 
         if provider_chat_config is None:
             raise ValueError(f"No provider config found for model: {model}")

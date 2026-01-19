@@ -328,10 +328,15 @@ class AnthropicChatCompletion(BaseLLM):
             litellm_params=litellm_params,
         )
 
-        config = ProviderConfigManager.get_provider_chat_config(
-            model=model,
-            provider=LlmProviders(custom_llm_provider),
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            config = ProviderConfigManager.get_provider_chat_config(
+                model=model,
+                provider=provider_enum,
+            )
+        except ValueError:
+            config = None
         if config is None:
             raise ValueError(
                 f"Provider config not found for model: {model} and provider: {custom_llm_provider}"

@@ -5862,7 +5862,11 @@ class Router:
                 ),
             )
             # done reading model["litellm_params"]
-            if custom_llm_provider not in litellm.provider_list:
+            # Check if provider is in standard provider list or JSON-configured providers
+            from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+            JSONProviderRegistry.load()
+            is_json_provider = JSONProviderRegistry.exists(custom_llm_provider)
+            if custom_llm_provider not in litellm.provider_list and not is_json_provider:
                 raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         #### DEPLOYMENT NAMES INIT ########

@@ -282,11 +282,17 @@ class BaseLLMHTTPHandler:
             verbose_logger.debug(
                 f"Creating HTTP client with shared_session: {id(shared_session) if shared_session else None}"
             )
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -340,12 +346,15 @@ class BaseLLMHTTPHandler:
         json_mode: bool = optional_params.pop("json_mode", False)
         extra_body: Optional[dict] = optional_params.pop("extra_body", None)
 
-        provider_config = (
-            provider_config
-            or ProviderConfigManager.get_provider_chat_config(
-                model=model, provider=litellm.LlmProviders(custom_llm_provider)
-            )
-        )
+        if provider_config is None:
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                provider_config = ProviderConfigManager.get_provider_chat_config(
+                    model=model, provider=provider_enum
+                )
+            except ValueError:
+                provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
@@ -704,10 +713,16 @@ class BaseLLMHTTPHandler:
         Handles fake stream as well.
         """
         if client is None:
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
         stream = True
@@ -793,9 +808,14 @@ class BaseLLMHTTPHandler:
         aembedding: Optional[bool] = False,
         headers: Optional[Dict[str, Any]] = None,
     ) -> EmbeddingResponse:
-        provider_config = ProviderConfigManager.get_provider_embedding_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_config = ProviderConfigManager.get_provider_embedding_config(
+                model=model, provider=provider_enum
+            )
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Provider {custom_llm_provider} does not support embedding"
@@ -901,10 +921,16 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> EmbeddingResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -1032,9 +1058,15 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> RerankResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider)
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
         try:
@@ -1270,11 +1302,17 @@ class BaseLLMHTTPHandler:
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -1569,9 +1607,15 @@ class BaseLLMHTTPHandler:
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -2196,11 +2240,17 @@ class BaseLLMHTTPHandler:
             verbose_logger.debug(
                 f"Creating HTTP client for responses API with shared_session: {id(shared_session) if shared_session else None}"
             )
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -2341,11 +2391,17 @@ class BaseLLMHTTPHandler:
             verbose_logger.debug(
                 f"Creating HTTP client for delete_response with shared_session: {id(shared_session) if shared_session else None}"
             )
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -2581,11 +2637,17 @@ class BaseLLMHTTPHandler:
             verbose_logger.debug(
                 f"Creating HTTP client for get_responses with shared_session: {id(shared_session) if shared_session else None}"
             )
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -2747,11 +2809,17 @@ class BaseLLMHTTPHandler:
             verbose_logger.debug(
                 f"Creating HTTP client for list_input_items with shared_session: {id(shared_session) if shared_session else None}"
             )
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -3591,11 +3659,17 @@ class BaseLLMHTTPHandler:
             verbose_logger.debug(
                 f"Creating HTTP client for cancel_response with shared_session: {id(shared_session) if shared_session else None}"
             )
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -3757,11 +3831,17 @@ class BaseLLMHTTPHandler:
             verbose_logger.debug(
                 f"Creating HTTP client for compact_response with shared_session: {id(shared_session) if shared_session else None}"
             )
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-                shared_session=shared_session,
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                    shared_session=shared_session,
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -4709,10 +4789,16 @@ class BaseLLMHTTPHandler:
         Uses async HTTP client to make requests.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -4937,10 +5023,16 @@ class BaseLLMHTTPHandler:
         Uses async HTTP client to make requests.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -5171,10 +5263,16 @@ class BaseLLMHTTPHandler:
         Uses async HTTP client to make requests.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -5353,10 +5451,16 @@ class BaseLLMHTTPHandler:
         Async version of the video content download handler.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -5531,10 +5635,16 @@ class BaseLLMHTTPHandler:
         Async version of the video remix handler.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -5668,10 +5778,16 @@ class BaseLLMHTTPHandler:
         Async version of the video list handler.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -5748,10 +5864,16 @@ class BaseLLMHTTPHandler:
         Async version of the video delete handler.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -5928,10 +6050,16 @@ class BaseLLMHTTPHandler:
         Async version of the video status handler.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -7014,10 +7142,16 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
     ) -> VectorStoreSearchResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -7198,10 +7332,16 @@ class BaseLLMHTTPHandler:
         _is_async: bool = False,
     ) -> VectorStoreCreateResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -7340,10 +7480,16 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> VectorStoreFileObject:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -7496,10 +7642,16 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> VectorStoreFileListResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -7651,10 +7803,16 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> VectorStoreFileObject:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -7792,10 +7950,16 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> VectorStoreFileContentResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -7938,10 +8102,16 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> VectorStoreFileObject:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -8095,10 +8265,16 @@ class BaseLLMHTTPHandler:
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler]] = None,
     ) -> VectorStoreFileDeleteResponse:
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -8383,10 +8559,16 @@ class BaseLLMHTTPHandler:
         )
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -8604,10 +8786,16 @@ class BaseLLMHTTPHandler:
         Uses async HTTP client to make requests.
         """
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -8809,10 +8997,16 @@ class BaseLLMHTTPHandler:
     ) -> "Skill":
         """Async create a skill"""
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -8932,10 +9126,16 @@ class BaseLLMHTTPHandler:
     ) -> "ListSkillsResponse":
         """Async list skills"""
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -9038,10 +9238,16 @@ class BaseLLMHTTPHandler:
     ) -> "Skill":
         """Async get a skill"""
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 
@@ -9145,10 +9351,16 @@ class BaseLLMHTTPHandler:
     ) -> "DeleteSkillResponse":
         """Async delete a skill"""
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-                params={"ssl_verify": litellm_params.get("ssl_verify", None)},
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                async_httpx_client = get_async_httpx_client(
+                    llm_provider=provider_enum,
+                    params={"ssl_verify": litellm_params.get("ssl_verify", None)},
+                )
+            except ValueError:
+                # Fallback to default client if provider not found
+                async_httpx_client = litellm.module_level_aclient
         else:
             async_httpx_client = client
 

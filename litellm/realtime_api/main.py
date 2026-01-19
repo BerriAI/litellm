@@ -74,11 +74,22 @@ async def _arealtime(
     )
 
     provider_config: Optional[BaseRealtimeConfig] = None
-    if _custom_llm_provider in LlmProviders._member_map_.values():
-        provider_config = ProviderConfigManager.get_provider_realtime_config(
-            model=model,
-            provider=LlmProviders(_custom_llm_provider),
-        )
+    from litellm.types.utils import get_llm_provider_enum
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+    JSONProviderRegistry.load()
+    is_json_provider = JSONProviderRegistry.exists(_custom_llm_provider)
+    is_enum_provider = _custom_llm_provider in LlmProviders._member_map_.values()
+    if is_enum_provider or is_json_provider:
+        try:
+            provider_enum = get_llm_provider_enum(_custom_llm_provider)
+            provider_config = ProviderConfigManager.get_provider_realtime_config(
+                model=model,
+                provider=provider_enum,
+            )
+        except ValueError:
+            provider_config = None
+    else:
+        provider_config = None
     if provider_config is not None:
         await base_llm_http_handler.async_realtime(
             model=model,

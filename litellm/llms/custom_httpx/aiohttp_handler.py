@@ -302,9 +302,14 @@ class BaseLLMAIOHTTPHandler:
         headers: Optional[dict] = {},
         client: Optional[Union[HTTPHandler, AsyncHTTPHandler, ClientSession]] = None,
     ):
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=litellm.LlmProviders(custom_llm_provider)
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_config = ProviderConfigManager.get_provider_chat_config(
+                model=model, provider=provider_enum
+            )
+        except ValueError:
+            provider_config = None
         if provider_config is None:
             raise ValueError(
                 f"Provider config not found for model: {model} and provider: {custom_llm_provider}"
@@ -561,10 +566,15 @@ class BaseLLMAIOHTTPHandler:
         if model is None:
             raise ValueError("model is required for non-openai image variations")
 
-        provider_config = ProviderConfigManager.get_provider_image_variation_config(
-            model=model,  # openai defaults to dall-e-2
-            provider=LlmProviders(custom_llm_provider),
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_config = ProviderConfigManager.get_provider_image_variation_config(
+                model=model,  # openai defaults to dall-e-2
+                provider=provider_enum,
+            )
+        except ValueError:
+            provider_config = None
 
         if provider_config is None:
             raise ValueError(

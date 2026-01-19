@@ -213,8 +213,21 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // Calculate provider spend from the breakdown data
   const getProviderSpend = () => {
     const providerSpend: { [key: string]: MetricWithMetadata } = {};
-    userSpendData.results.forEach((day) => {
-      Object.entries(day.breakdown.providers || {}).forEach(([provider, metrics]) => {
+    
+    // Debug: Log breakdown data structure
+    console.log("🔍 [Spend by Provider] userSpendData.results:", userSpendData.results);
+    console.log("🔍 [Spend by Provider] Number of days:", userSpendData.results.length);
+    
+    userSpendData.results.forEach((day, dayIndex) => {
+      const providers = day.breakdown?.providers || {};
+      console.log(`🔍 [Spend by Provider] Day ${dayIndex} (${day.date}), providers:`, Object.keys(providers), "breakdown:", day.breakdown);
+      
+      Object.entries(providers).forEach(([provider, metrics]) => {
+        if (!provider || provider === "unknown" || provider === "") {
+          console.warn(`⚠️ [Spend by Provider] Skipping invalid provider: "${provider}"`);
+          return;
+        }
+        
         if (!providerSpend[provider]) {
           providerSpend[provider] = {
             metrics: {
@@ -232,26 +245,39 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
             api_key_breakdown: {},
           };
         }
-        providerSpend[provider].metrics.spend += metrics.metrics.spend;
-        providerSpend[provider].metrics.prompt_tokens += metrics.metrics.prompt_tokens;
-        providerSpend[provider].metrics.completion_tokens += metrics.metrics.completion_tokens;
-        providerSpend[provider].metrics.total_tokens += metrics.metrics.total_tokens;
-        providerSpend[provider].metrics.api_requests += metrics.metrics.api_requests;
-        providerSpend[provider].metrics.successful_requests += metrics.metrics.successful_requests || 0;
-        providerSpend[provider].metrics.failed_requests += metrics.metrics.failed_requests || 0;
-        providerSpend[provider].metrics.cache_read_input_tokens += metrics.metrics.cache_read_input_tokens || 0;
-        providerSpend[provider].metrics.cache_creation_input_tokens += metrics.metrics.cache_creation_input_tokens || 0;
+        
+        try {
+          const metricsData = (metrics as any).metrics || metrics;
+          providerSpend[provider].metrics.spend += metricsData.spend || 0;
+          providerSpend[provider].metrics.prompt_tokens += metricsData.prompt_tokens || 0;
+          providerSpend[provider].metrics.completion_tokens += metricsData.completion_tokens || 0;
+          providerSpend[provider].metrics.total_tokens += metricsData.total_tokens || 0;
+          providerSpend[provider].metrics.api_requests += metricsData.api_requests || 0;
+          providerSpend[provider].metrics.successful_requests += metricsData.successful_requests || 0;
+          providerSpend[provider].metrics.failed_requests += metricsData.failed_requests || 0;
+          providerSpend[provider].metrics.cache_read_input_tokens += metricsData.cache_read_input_tokens || 0;
+          providerSpend[provider].metrics.cache_creation_input_tokens += metricsData.cache_creation_input_tokens || 0;
+        } catch (e) {
+          console.error(`❌ [Spend by Provider] Error processing provider ${provider}:`, e, "metrics:", metrics);
+        }
       });
     });
 
-    return Object.entries(providerSpend).map(([provider, metrics]) => ({
-      provider,
-      spend: metrics.metrics.spend,
-      requests: metrics.metrics.api_requests,
-      successful_requests: metrics.metrics.successful_requests,
-      failed_requests: metrics.metrics.failed_requests,
-      tokens: metrics.metrics.total_tokens,
-    }));
+    const result = Object.entries(providerSpend)
+      .filter(([provider]) => provider && provider !== "unknown" && provider !== "")
+      .map(([provider, metrics]) => ({
+        provider,
+        spend: metrics.metrics.spend,
+        requests: metrics.metrics.api_requests,
+        successful_requests: metrics.metrics.successful_requests,
+        failed_requests: metrics.metrics.failed_requests,
+        tokens: metrics.metrics.total_tokens,
+      }))
+      .filter((provider) => provider.spend > 0)
+      .sort((a, b) => b.spend - a.spend);
+    
+    console.log("🔍 [Spend by Provider] Final result:", result);
+    return result;
   };
 
   // Calculate top API keys from the breakdown data

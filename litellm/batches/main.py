@@ -215,10 +215,15 @@ def create_batch(
             extra_body=extra_body,
         )
         if model is not None:
-            provider_config = ProviderConfigManager.get_provider_batches_config(
-                model=model,
-                provider=LlmProviders(custom_llm_provider),
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                provider_config = ProviderConfigManager.get_provider_batches_config(
+                    model=model,
+                    provider=provider_enum,
+                )
+            except ValueError:
+                provider_config = None
         else:
             provider_config = None
         if provider_config is not None:
@@ -614,10 +619,15 @@ def retrieve_batch(
         # Try to use provider config first (for providers like bedrock)
         model: Optional[str] = kwargs.get("model", None)
         if model is not None:
-            provider_config = ProviderConfigManager.get_provider_batches_config(
-                model=model,
-                provider=LlmProviders(custom_llm_provider),
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                provider_config = ProviderConfigManager.get_provider_batches_config(
+                    model=model,
+                    provider=provider_enum,
+                )
+            except ValueError:
+                provider_config = None
         else:
             provider_config = None
 

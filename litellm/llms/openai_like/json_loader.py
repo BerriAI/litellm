@@ -69,6 +69,42 @@ class JSONProviderRegistry:
         """List all registered provider slugs"""
         return list(cls._providers.keys())
 
+    @classmethod
+    def get_all_providers(cls) -> Dict[str, SimpleProviderConfig]:
+        """Get all provider configurations as a dict"""
+        return cls._providers.copy()
+    
+    @classmethod
+    def get_provider_endpoints_support(cls, provider_slug: str) -> Optional[dict]:
+        """
+        Generate provider_endpoints_support.json entry for a JSON-configured provider.
+        Returns a dict with display_name, url, and endpoints.
+        """
+        if provider_slug not in cls._providers:
+            return None
+        
+        # Default endpoints for OpenAI-compatible providers
+        # Most JSON providers are fully OpenAI-compatible
+        endpoints = {
+            "chat_completions": True,
+            "messages": False,
+            "responses": False,
+            "embeddings": False,  # Most don't support embeddings by default
+            "image_generations": False,
+            "audio_transcriptions": False,
+            "audio_speech": False,
+            "moderations": False,
+            "batches": False,
+            "rerank": False,
+            "a2a": False,
+        }
+        
+        return {
+            "display_name": f"{provider_slug.title()} (`{provider_slug}`)",
+            "url": "https://docs.litellm.ai/docs/providers/openai_compatible",
+            "endpoints": endpoints
+        }
+
 
 # Load on import
 JSONProviderRegistry.load()

@@ -211,12 +211,17 @@ def create(
             custom_llm_provider = custom_llm_provider
 
         # get provider config - using vector store custom logger for now
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            vector_store_provider_config = (
+                ProviderConfigManager.get_provider_vector_stores_config(
+                    provider=provider_enum,
+                    api_type=api_type,
+                )
             )
-        )
+        except ValueError:
+            vector_store_provider_config = None
 
         if vector_store_provider_config is None:
             raise ValueError(
@@ -417,12 +422,17 @@ def search(
             custom_llm_provider = custom_llm_provider
 
         # get provider config - using vector store custom logger for now
-        vector_store_provider_config = (
-            ProviderConfigManager.get_provider_vector_stores_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
-                api_type=api_type,
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            vector_store_provider_config = (
+                ProviderConfigManager.get_provider_vector_stores_config(
+                    provider=provider_enum,
+                    api_type=api_type,
+                )
             )
-        )
+        except ValueError:
+            vector_store_provider_config = None
 
         if vector_store_provider_config is None:
             raise ValueError(

@@ -544,7 +544,8 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "safety_identifier": None,
 }
 
-openai_compatible_endpoints: List = [
+# Base list of hardcoded OpenAI-compatible endpoints
+_base_openai_compatible_endpoints: List = [
     "api.perplexity.ai",
     "api.endpoints.anyscale.com/v1",
     "api.deepinfra.com/v1/openai",
@@ -567,12 +568,6 @@ openai_compatible_endpoints: List = [
     "api.studio.nebius.ai/v1",
     "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "https://api.moonshot.ai/v1",
-    "https://api.publicai.co/v1",
-    "https://api.synthetic.new/openai/v1",
-    "https://api.stima.tech/v1",
-    "https://nano-gpt.com/api/v1",
-    "https://api.poe.com/v1",
-    "https://llm.chutes.ai/v1/",
     "https://api.v0.dev/v1",
     "https://api.morphllm.com/v1",
     "https://api.lambda.ai/v1",
@@ -583,8 +578,25 @@ openai_compatible_endpoints: List = [
     "https://api.clarifai.com/v2/ext/openai/v1",
 ]
 
+# Dynamically add JSON-configured provider endpoints
+def _get_json_provider_endpoints() -> List[str]:
+    """Get base URLs from JSON-configured providers"""
+    try:
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        JSONProviderRegistry.load()
+        endpoints = []
+        for provider_config in JSONProviderRegistry.get_all_providers().values():
+            endpoints.append(provider_config.base_url)
+        return endpoints
+    except Exception:
+        return []
 
-openai_compatible_providers: List = [
+# Combine hardcoded and JSON-configured endpoints
+openai_compatible_endpoints: List = _base_openai_compatible_endpoints + _get_json_provider_endpoints()
+
+
+# Base list of hardcoded OpenAI-compatible providers
+_base_openai_compatible_providers: List = [
     "anyscale",
     "groq",
     "nvidia_nim",
@@ -615,12 +627,6 @@ openai_compatible_providers: List = [
     "github_copilot",  # GitHub Copilot Chat API
     "novita",
     "meta_llama",
-    "publicai",  # PublicAI - JSON-configured provider
-    "synthetic",  # Synthetic - JSON-configured provider
-    "apertis",  # Apertis - JSON-configured provider
-    "nano-gpt",  # Nano-GPT - JSON-configured provider
-    "poe",  # Poe - JSON-configured provider
-    "chutes",  # Chutes - JSON-configured provider
     "featherless_ai",
     "nscale",
     "nebius",
@@ -639,29 +645,39 @@ openai_compatible_providers: List = [
     "docker_model_runner",
     "ragflow",
 ]
-openai_text_completion_compatible_providers: List = (
-    [  # providers that support `/v1/completions`
-        "together_ai",
-        "fireworks_ai",
-        "hosted_vllm",
-        "meta_llama",
-        "llamafile",
-        "featherless_ai",
-        "nebius",
-        "dashscope",
-        "moonshot",
-        "publicai",
-        "synthetic",
-        "apertis",
-        "nano-gpt",
-        "poe",
-        "chutes",
-        "v0",
-        "lambda_ai",
-        "hyperbolic",
-        "wandb",
-    ]
-)
+
+# Dynamically add JSON-configured providers
+def _get_json_provider_names() -> List[str]:
+    """Get provider names from JSON-configured providers"""
+    try:
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        JSONProviderRegistry.load()
+        return JSONProviderRegistry.list_providers()
+    except Exception:
+        return []
+
+# Combine hardcoded and JSON-configured providers
+openai_compatible_providers: List = _base_openai_compatible_providers + _get_json_provider_names()
+# Base list of hardcoded text completion compatible providers
+_base_openai_text_completion_compatible_providers: List = [
+    "together_ai",
+    "fireworks_ai",
+    "hosted_vllm",
+    "meta_llama",
+    "llamafile",
+    "featherless_ai",
+    "nebius",
+    "dashscope",
+    "moonshot",
+    "v0",
+    "lambda_ai",
+    "hyperbolic",
+    "wandb",
+]
+
+# Dynamically add JSON-configured providers (all JSON providers support text completion by default)
+# Note: JSON providers are OpenAI-compatible, so they support both chat and text completion
+openai_text_completion_compatible_providers: List = _base_openai_text_completion_compatible_providers + _get_json_provider_names()
 _openai_like_providers: List = [
     "predibase",
     "databricks",

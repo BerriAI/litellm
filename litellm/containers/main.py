@@ -207,11 +207,16 @@ def create_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            container_provider_config: Optional[BaseContainerConfig] = (
+                ProviderConfigManager.get_provider_container_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            container_provider_config = None
 
         if container_provider_config is None:
             raise ValueError(f"container operations are not supported for {custom_llm_provider}")
@@ -420,11 +425,16 @@ def list_containers(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            container_provider_config: Optional[BaseContainerConfig] = (
+                ProviderConfigManager.get_provider_container_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            container_provider_config = None
 
         if container_provider_config is None:
             raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
@@ -614,11 +624,16 @@ def retrieve_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            container_provider_config: Optional[BaseContainerConfig] = (
+                ProviderConfigManager.get_provider_container_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            container_provider_config = None
 
         if container_provider_config is None:
             raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
@@ -800,11 +815,16 @@ def delete_container(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            container_provider_config: Optional[BaseContainerConfig] = (
+                ProviderConfigManager.get_provider_container_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            container_provider_config = None
 
         if container_provider_config is None:
             raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
@@ -1000,11 +1020,16 @@ def list_container_files(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            container_provider_config: Optional[BaseContainerConfig] = (
+                ProviderConfigManager.get_provider_container_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            container_provider_config = None
 
         if container_provider_config is None:
             raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
@@ -1241,11 +1266,16 @@ def upload_container_file(
             **kwargs,
         )
         # get provider config
-        container_provider_config: Optional[BaseContainerConfig] = (
-            ProviderConfigManager.get_provider_container_config(
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            container_provider_config: Optional[BaseContainerConfig] = (
+                ProviderConfigManager.get_provider_container_config(
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            container_provider_config = None
 
         if container_provider_config is None:
             raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")

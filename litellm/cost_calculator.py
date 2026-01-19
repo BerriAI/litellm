@@ -1560,10 +1560,15 @@ def vector_store_search_cost(
             model=model,
         )
 
-    config = ProviderConfigManager.get_provider_vector_stores_config(
-        provider=LlmProviders(custom_llm_provider),
-        api_type=api_type,
-    )
+    from litellm.types.utils import get_llm_provider_enum
+    try:
+        provider_enum = get_llm_provider_enum(custom_llm_provider)
+        config = ProviderConfigManager.get_provider_vector_stores_config(
+            provider=provider_enum,
+            api_type=api_type,
+        )
+    except ValueError:
+        config = None
 
     if config is None:
         verbose_logger.debug(
@@ -1590,11 +1595,13 @@ def rerank_cost(
     )
 
     try:
+        from litellm.types.utils import get_llm_provider_enum
+        provider_enum = get_llm_provider_enum(custom_llm_provider)
         config = ProviderConfigManager.get_provider_rerank_config(
             model=model,
             api_base=None,
             present_version_params=[],
-            provider=LlmProviders(custom_llm_provider),
+            provider=provider_enum,
         )
 
         try:

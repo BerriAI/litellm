@@ -159,13 +159,16 @@ def get_llm_provider(  # noqa: PLR0915
 
         # Check JSON-configured providers FIRST (before enum-based provider_list)
         provider_prefix = model.split("/", 1)[0]
-        if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):
-            return _get_openai_compatible_provider_info(
-                model=model,
-                api_base=api_base,
-                api_key=api_key,
-                dynamic_api_key=dynamic_api_key,
-            )
+        if len(model.split("/")) > 1:
+            # Ensure providers are loaded before checking
+            JSONProviderRegistry.load()
+            if JSONProviderRegistry.exists(provider_prefix):
+                return _get_openai_compatible_provider_info(
+                    model=model,
+                    api_base=api_base,
+                    api_key=api_key,
+                    dynamic_api_key=dynamic_api_key,
+                )
 
         # check if llm provider part of model name
 
@@ -197,6 +200,43 @@ def get_llm_provider(  # noqa: PLR0915
             return model, custom_llm_provider, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
+            # Check JSON-configured providers FIRST (before hardcoded endpoints)
+            # Ensure providers are loaded (defensive programming - load() is idempotent)
+            JSONProviderRegistry.load()
+            
+            for provider_slug, provider_config in JSONProviderRegistry.get_all_providers().items():
+                # Check if api_base matches this provider's base_url
+                # Normalize URLs by removing trailing slashes for comparison
+                base_url_normalized = provider_config.base_url.rstrip("/")
+                api_base_normalized = api_base.rstrip("/")
+                # Match if api_base equals base_url or starts with base_url + "/"
+                # This handles cases like:
+                # - base_url="https://api.example.com/v1", api_base="https://api.example.com/v1" -> match
+                # - base_url="https://api.example.com/v1", api_base="https://api.example.com/v1/chat" -> match
+                # - base_url="https://api.example.com", api_base="https://api.example.com/v1" -> match
+                if (
+                    api_base_normalized == base_url_normalized
+                    or api_base_normalized.startswith(base_url_normalized + "/")
+                ):
+                    custom_llm_provider = provider_slug
+                    dynamic_api_key = get_secret_str(provider_config.api_key_env)
+                    if api_base is not None and not isinstance(api_base, str):
+                        raise Exception(
+                            "api base needs to be a string. api_base={}".format(
+                                api_base
+                            )
+                        )
+                    if dynamic_api_key is not None and not isinstance(
+                        dynamic_api_key, str
+                    ):
+                        raise Exception(
+                            "dynamic_api_key needs to be a string. dynamic_api_key={}".format(
+                                dynamic_api_key
+                            )
+                        )
+                    return model, custom_llm_provider, dynamic_api_key, api_base  # type: ignore
+            
+            # Fall back to hardcoded endpoint mappings
             for endpoint in litellm.openai_compatible_endpoints:
                 if endpoint in api_base:
                     if endpoint == "api.perplexity.ai":
@@ -510,8 +550,9 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
 
     # Check JSON providers FIRST (before hardcoded ones)
     from litellm.llms.openai_like.dynamic_config import create_config_class
-    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
+    # Ensure providers are loaded before checking
+    JSONProviderRegistry.load()
     if JSONProviderRegistry.exists(custom_llm_provider):
         provider_config = JSONProviderRegistry.get(custom_llm_provider)
         if provider_config is None:

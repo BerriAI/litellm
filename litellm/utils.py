@@ -2834,10 +2834,15 @@ def get_optional_params_transcription(
 
     provider_config: Optional[BaseAudioTranscriptionConfig] = None
     if custom_llm_provider is not None:
-        provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
-            model=model,
-            provider=LlmProviders(custom_llm_provider),
-        )
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
+                model=model,
+                provider=provider_enum,
+            )
+        except ValueError:
+            provider_config = None
 
     if custom_llm_provider == "openai" or custom_llm_provider == "azure":
         optional_params = non_default_params
@@ -3077,14 +3082,21 @@ def get_optional_params_embeddings(  # noqa: PLR0915
     provider_config: Optional[BaseEmbeddingConfig] = None
 
     optional_params = {}
-    if (
-        custom_llm_provider is not None
-        and custom_llm_provider in LlmProviders._member_map_.values()
-    ):
-        provider_config = ProviderConfigManager.get_provider_embedding_config(
-            model=model,
-            provider=LlmProviders(custom_llm_provider),
-        )
+    if custom_llm_provider is not None:
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        JSONProviderRegistry.load()
+        is_json_provider = JSONProviderRegistry.exists(custom_llm_provider)
+        is_enum_provider = custom_llm_provider in LlmProviders._member_map_.values()
+        if is_enum_provider or is_json_provider:
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                provider_config = ProviderConfigManager.get_provider_embedding_config(
+                    model=model,
+                    provider=provider_enum,
+                )
+            except ValueError:
+                provider_config = None
 
     if provider_config is not None:
         supported_params: Optional[list] = provider_config.get_supported_openai_params(
@@ -3790,12 +3802,24 @@ def get_optional_params(  # noqa: PLR0915
         custom_llm_provider=custom_llm_provider,
     )
     provider_config: Optional[BaseConfig] = None
-    if custom_llm_provider is not None and custom_llm_provider in [
-        provider.value for provider in LlmProviders
-    ]:
-        provider_config = ProviderConfigManager.get_provider_chat_config(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
+    if custom_llm_provider is not None:
+        # Check if provider is in enum or JSON-configured providers
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        JSONProviderRegistry.load()
+        is_json_provider = JSONProviderRegistry.exists(custom_llm_provider)
+        is_enum_provider = custom_llm_provider in [
+            provider.value for provider in LlmProviders
+        ]
+        if is_enum_provider or is_json_provider:
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                provider_config = ProviderConfigManager.get_provider_chat_config(
+                    model=model, provider=provider_enum
+                )
+            except ValueError:
+                # Provider not found, skip
+                pass
 
     def _check_valid_arg(supported_params: List[str]):
         """
@@ -5292,11 +5316,20 @@ def get_provider_info(
     # if custom_llm_provider == "predibase":
     #     _model_info["supports_response_schema"] = True
     provider_config: Optional[BaseLLMModelInfo] = None
-    if custom_llm_provider and custom_llm_provider in LlmProvidersSet:
-        # Check if the provider string exists in LlmProviders enum
-        provider_config = ProviderConfigManager.get_provider_model_info(
-            model=model, provider=LlmProviders(custom_llm_provider)
-        )
+    if custom_llm_provider:
+        from litellm.types.utils import get_llm_provider_enum
+        from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+        JSONProviderRegistry.load()
+        is_json_provider = JSONProviderRegistry.exists(custom_llm_provider)
+        is_enum_provider = custom_llm_provider in LlmProvidersSet
+        if is_enum_provider or is_json_provider:
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                provider_config = ProviderConfigManager.get_provider_model_info(
+                    model=model, provider=provider_enum
+                )
+            except ValueError:
+                provider_config = None
 
     model_info: Optional[ProviderSpecificModelInfo] = None
     if provider_config:
@@ -7108,10 +7141,16 @@ def get_valid_models(
             valid_providers = _infer_valid_provider_from_env_vars(custom_llm_provider)
 
         for provider in valid_providers:
-            provider_config = ProviderConfigManager.get_provider_model_info(
-                model=None,
-                provider=LlmProviders(provider),
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(provider)
+                provider_config = ProviderConfigManager.get_provider_model_info(
+                    model=None,
+                    provider=provider_enum,
+                )
+            except ValueError:
+                provider_config = None
+                continue
 
             if custom_llm_provider and provider != custom_llm_provider:
                 continue

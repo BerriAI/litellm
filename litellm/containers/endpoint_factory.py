@@ -76,11 +76,16 @@ def create_sync_endpoint_function(endpoint_config: Dict) -> Callable:
 
             # Get provider config
             litellm_params = GenericLiteLLMParams(**kwargs)
-            container_provider_config: Optional[BaseContainerConfig] = (
-                ProviderConfigManager.get_provider_container_config(
-                    provider=litellm.LlmProviders(custom_llm_provider),
+            from litellm.types.utils import get_llm_provider_enum
+            try:
+                provider_enum = get_llm_provider_enum(custom_llm_provider)
+                container_provider_config: Optional[BaseContainerConfig] = (
+                    ProviderConfigManager.get_provider_container_config(
+                        provider=provider_enum,
+                    )
                 )
-            )
+            except ValueError:
+                container_provider_config = None
 
             if container_provider_config is None:
                 raise ValueError(f"Container provider config not found for: {custom_llm_provider}")

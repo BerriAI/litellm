@@ -1377,12 +1377,23 @@ def completion(  # type: ignore # noqa: PLR0915
             )
 
         provider_config: Optional[BaseConfig] = None
-        if custom_llm_provider is not None and custom_llm_provider in [
-            provider.value for provider in LlmProviders
-        ]:
-            provider_config = ProviderConfigManager.get_provider_chat_config(
-                model=model, provider=LlmProviders(custom_llm_provider)
-            )
+        if custom_llm_provider is not None:
+            # Check if provider is in enum or JSON-configured providers
+            from litellm.types.utils import get_llm_provider_enum
+            JSONProviderRegistry.load()
+            is_json_provider = JSONProviderRegistry.exists(custom_llm_provider)
+            is_enum_provider = custom_llm_provider in [
+                provider.value for provider in LlmProviders
+            ]
+            if is_enum_provider or is_json_provider:
+                try:
+                    provider_enum = get_llm_provider_enum(custom_llm_provider)
+                    provider_config = ProviderConfigManager.get_provider_chat_config(
+                        model=model, provider=provider_enum
+                    )
+                except ValueError:
+                    # Provider not found, skip
+                    pass
 
         if provider_config is not None:
             messages = provider_config.translate_developer_role_to_system_role(
@@ -6185,10 +6196,15 @@ def transcription(
         Union[TranscriptionResponse, Coroutine[Any, Any, TranscriptionResponse]]
     ] = None
 
-    provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
-        model=model,
-        provider=LlmProviders(custom_llm_provider),
-    )
+    from litellm.types.utils import get_llm_provider_enum
+    try:
+        provider_enum = get_llm_provider_enum(custom_llm_provider)
+        provider_config = ProviderConfigManager.get_provider_audio_transcription_config(
+            model=model,
+            provider=provider_enum,
+        )
+    except ValueError:
+        provider_config = None
 
     if custom_llm_provider == "azure":
         # azure configs
@@ -6393,12 +6409,17 @@ def speech(  # noqa: PLR0915
     litellm_params_dict = get_litellm_params(**kwargs)
 
     # Get provider-specific text-to-speech config and map parameters
-    text_to_speech_provider_config = (
-        ProviderConfigManager.get_provider_text_to_speech_config(
-            model=model,
-            provider=litellm.LlmProviders(custom_llm_provider),
+    from litellm.types.utils import get_llm_provider_enum
+    try:
+        provider_enum = get_llm_provider_enum(custom_llm_provider)
+        text_to_speech_provider_config = (
+            ProviderConfigManager.get_provider_text_to_speech_config(
+                model=model,
+                provider=provider_enum,
+            )
         )
-    )
+    except ValueError:
+        text_to_speech_provider_config = None
 
     # Map OpenAI params to provider-specific params if config exists
     if text_to_speech_provider_config is not None:

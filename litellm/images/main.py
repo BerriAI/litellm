@@ -273,13 +273,27 @@ def image_generation(  # noqa: PLR0915
         if (
             custom_llm_provider is not None
             and custom_llm_provider in LlmProviders._member_map_.values()
+        ) or (
+            custom_llm_provider is not None
         ):
-            image_generation_config = (
-                ProviderConfigManager.get_provider_image_generation_config(
-                    model=base_model or model,
-                    provider=LlmProviders(custom_llm_provider),
-                )
-            )
+            from litellm.types.utils import get_llm_provider_enum
+            from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+            JSONProviderRegistry.load()
+            is_json_provider = JSONProviderRegistry.exists(custom_llm_provider)
+            is_enum_provider = custom_llm_provider in LlmProviders._member_map_.values()
+            if is_enum_provider or is_json_provider:
+                try:
+                    provider_enum = get_llm_provider_enum(custom_llm_provider)
+                    image_generation_config = (
+                        ProviderConfigManager.get_provider_image_generation_config(
+                            model=base_model or model,
+                            provider=provider_enum,
+                        )
+                    )
+                except ValueError:
+                    image_generation_config = None
+            else:
+                image_generation_config = None
 
         optional_params = get_optional_params_image_gen(
             model=base_model or model,
@@ -643,7 +657,8 @@ def image_variation(
 
     # route to the correct provider w/ the params
     try:
-        llm_provider = LlmProviders(custom_llm_provider)
+        from litellm.types.utils import get_llm_provider_enum
+        llm_provider = get_llm_provider_enum(custom_llm_provider)
         image_variation_provider = LITELLM_IMAGE_VARIATION_PROVIDERS(llm_provider)
     except ValueError:
         raise ValueError(
@@ -839,12 +854,17 @@ def image_edit(  # noqa: PLR0915
                 )
 
         # get provider config
-        image_edit_provider_config: Optional[BaseImageEditConfig] = (
-            ProviderConfigManager.get_provider_image_edit_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            image_edit_provider_config: Optional[BaseImageEditConfig] = (
+                ProviderConfigManager.get_provider_image_edit_config(
+                    model=model,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            image_edit_provider_config = None
 
         if image_edit_provider_config is None:
             raise ValueError(f"image edit is not supported for {custom_llm_provider}")

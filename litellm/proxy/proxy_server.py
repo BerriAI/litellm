@@ -7020,7 +7020,11 @@ def _get_provider_token_counter(
         from litellm.utils import ProviderConfigManager
 
         # Convert string provider to LlmProviders enum
-        llm_provider_enum = LlmProviders(custom_llm_provider)
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            llm_provider_enum = get_llm_provider_enum(custom_llm_provider)
+        except ValueError:
+            llm_provider_enum = None
         # Add more provider mappings as needed
 
         if llm_provider_enum:

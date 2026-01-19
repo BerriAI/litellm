@@ -202,12 +202,17 @@ def video_generation(  # noqa: PLR0915
         )
 
         # get provider config
-        video_generation_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=model,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            video_generation_provider_config: Optional[BaseVideoConfig] = (
+                ProviderConfigManager.get_provider_video_config(
+                    model=model,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            video_generation_provider_config = None
 
         if video_generation_provider_config is None:
             raise ValueError(f"video generation is not supported for {custom_llm_provider}")
@@ -327,12 +332,17 @@ def video_content(
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            video_provider_config: Optional[BaseVideoConfig] = (
+                ProviderConfigManager.get_provider_video_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            video_provider_config = None
 
         if video_provider_config is None:
             raise ValueError(f"video support download is not supported for {custom_llm_provider}")
@@ -596,12 +606,17 @@ def video_remix(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_remix_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            video_remix_provider_config: Optional[BaseVideoConfig] = (
+                ProviderConfigManager.get_provider_video_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            video_remix_provider_config = None
 
         if video_remix_provider_config is None:
             raise ValueError(f"video remix is not supported for {custom_llm_provider}")
@@ -814,12 +829,17 @@ def video_list(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_list_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            video_list_provider_config: Optional[BaseVideoConfig] = (
+                ProviderConfigManager.get_provider_video_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            video_list_provider_config = None
 
         if video_list_provider_config is None:
             raise ValueError(f"video list is not supported for {custom_llm_provider}")
@@ -1040,12 +1060,17 @@ def video_status(  # noqa: PLR0915
         litellm_params = GenericLiteLLMParams(**kwargs)
 
         # get provider config
-        video_status_provider_config: Optional[BaseVideoConfig] = (
-            ProviderConfigManager.get_provider_video_config(
-                model=None,
-                provider=litellm.LlmProviders(custom_llm_provider),
+        from litellm.types.utils import get_llm_provider_enum
+        try:
+            provider_enum = get_llm_provider_enum(custom_llm_provider)
+            video_status_provider_config: Optional[BaseVideoConfig] = (
+                ProviderConfigManager.get_provider_video_config(
+                    model=None,
+                    provider=provider_enum,
+                )
             )
-        )
+        except ValueError:
+            video_status_provider_config = None
 
         if video_status_provider_config is None:
             raise ValueError(f"video status is not supported for {custom_llm_provider}")
