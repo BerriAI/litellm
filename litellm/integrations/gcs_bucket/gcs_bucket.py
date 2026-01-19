@@ -32,6 +32,9 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
         self.flush_interval = int(
             os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS)
         )
+        self.use_batched_logging = (
+            os.getenv("GCS_USE_BATCHED_LOGGING", str(GCS_DEFAULT_USE_BATCHED_LOGGING).lower()).lower() == "true"
+        )
         self.flush_lock = asyncio.Lock()
         super().__init__(
             flush_lock=self.flush_lock,
@@ -225,37 +228,67 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
             )
             return (success_count, error_count)
 
+    async def _send_individual_logs(self, items: List[GCSLogQueueItem]) -> None:
+        """
+        Send each log individually as separate GCS objects (legacy behavior).
+        This is used when GCS_USE_BATCHED_LOGGING is disabled.
+        """
+        for item in items:
+            await self._send_single_log_item(item)
+
+    async def _send_single_log_item(self, item: GCSLogQueueItem) -> None:
+        """
+        Send a single log item to GCS as an individual object.
+        """
+        try:
+            gcs_logging_config: GCSLoggingConfig = await self.get_gcs_logging_config(
+                item["kwargs"]
+            )
+
+            headers = await self.construct_request_headers(
+                vertex_instance=gcs_logging_config["vertex_instance"],
+                service_account_json=gcs_logging_config["path_service_account"],
+            )
+            bucket_name = gcs_logging_config["bucket_name"]
+            
+            object_name = self._get_object_name(
+                kwargs=item["kwargs"],
+                logging_payload=item["payload"],
+                response_obj=item["response_obj"],
+            )
+            
+            await self._log_json_data_on_gcs(
+                headers=headers,
+                bucket_name=bucket_name,
+                object_name=object_name,
+                logging_payload=item["payload"],
+            )
+        except Exception as e:
+            verbose_logger.exception(
+                f"GCS Bucket error logging individual payload to GCS bucket: {str(e)}"
+            )
+
     async def async_send_batch(self):
         """
-        Process queued logs in batch - sends logs to GCS Bucket as batched objects
+        Process queued logs - sends logs to GCS Bucket.
 
-        This implementation batches multiple log payloads into single GCS object uploads,
-        dramatically reducing API calls and improving throughput.
+        If `GCS_USE_BATCHED_LOGGING` is enabled (default), batches multiple log payloads
+        into single GCS object uploads (NDJSON format), dramatically reducing API calls.
 
-        Strategy:
-            - collect the logs to flush every `GCS_FLUSH_INTERVAL` seconds
-            - group items by GCS config (bucket + credentials) to handle mixed configs
-            - combine payloads in each group into newline-delimited JSON (NDJSON)
-            - make 1 POST request per config group (instead of 1 per log)
-            - process up to `batch_size` items per flush to prevent unbounded queue growth
-
-        Uses asyncio.Queue for thread-safe concurrent access. Processes up to `batch_size`
-        items per flush, leaving remaining items for the next flush cycle.
+        If disabled, sends each log individually as separate GCS objects (legacy behavior).
         """
         items_to_process = self._drain_queue_batch()
 
         if not items_to_process:
             return
-        
-        grouped_items = self._group_items_by_config(items_to_process)
-        
-        total_success = 0
-        total_errors = 0
-        
-        for config_key, group_items in grouped_items.items():
-            success_count, error_count = await self._send_grouped_batch(group_items, config_key)
-            total_success += success_count
-            total_errors += error_count
+
+        if self.use_batched_logging:
+            grouped_items = self._group_items_by_config(items_to_process)
+            
+            for config_key, group_items in grouped_items.items():
+                await self._send_grouped_batch(group_items, config_key)
+        else:
+            await self._send_individual_logs(items_to_process)
 
     def _get_object_name(
         self, kwargs: Dict, logging_payload: StandardLoggingPayload, response_obj: Any
