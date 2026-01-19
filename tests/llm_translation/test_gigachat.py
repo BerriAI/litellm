@@ -5,9 +5,8 @@ Tests message transformation, parameter handling, and response transformation.
 Run with: pytest tests/llm_translation/test_gigachat.py -v
 """
 
-import json
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 class TestGigaChatMessageTransformation:
@@ -413,7 +412,7 @@ class TestGigaChatBasicAuth:
             )
 
         assert token == "token-abc"
-        mock_request.assert_called_once_with("bob", "pw")
+        mock_request.assert_called_once_with("bob", "pw", ssl_verify=None)
 
     def test_get_access_token_raises_without_credentials_or_user_password(self):
         """No credentials and no user/password should raise a GigaChatAuthError."""

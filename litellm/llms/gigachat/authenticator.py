@@ -35,6 +35,7 @@ from .common_utils import (
     USER_AGENT,
     GigaChatAuthError,
     build_url,
+    get_gigachat_ssl_verify,
 )
 
 # Cache for access tokens
@@ -74,9 +75,9 @@ def _get_scope() -> str:
     return get_secret_str("GIGACHAT_SCOPE") or GIGACHAT_SCOPE
 
 
-def _get_http_client() -> HTTPHandler:
+def _get_http_client(ssl_verify: Optional[bool] = None) -> HTTPHandler:
     """Get cached httpx client with SSL verification disabled."""
-    return _get_httpx_client(params={"ssl_verify": False})
+    return _get_httpx_client(params={"ssl_verify": get_gigachat_ssl_verify(ssl_verify)})
 
 
 def get_access_token(
@@ -84,7 +85,8 @@ def get_access_token(
     scope: Optional[str] = None,
     auth_url: Optional[str] = None,
     user: Optional[str] = None,
-    password: Optional[str] = None
+    password: Optional[str] = None,
+    ssl_verify: Optional[bool] = None,
 ) -> str:
     """
     Get valid access token, using cache if available.
@@ -145,9 +147,11 @@ def get_access_token(
     # Request new token
     if credentials:
         _validate_credentials(credentials)
-        token, expires_at = _request_oauth_token_sync(credentials, scope, auth_url)
+        token, expires_at = _request_oauth_token_sync(
+            credentials, scope, auth_url, ssl_verify=ssl_verify
+        )
     elif user and password:
-        token, expires_at = _request_basic_token_sync(user, password)
+        token, expires_at = _request_basic_token_sync(user, password, ssl_verify=ssl_verify)
 
     # Cache token
     ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
@@ -163,6 +167,7 @@ async def get_access_token_async(
     auth_url: Optional[str] = None,
     user: Optional[str] = None,
     password: Optional[str] = None,
+    ssl_verify: Optional[bool] = None,
 ) -> str:
     """Async version of get_access_token."""
     # Try OAuth first
@@ -203,9 +208,13 @@ async def get_access_token_async(
     # Request new token
     if credentials:
         _validate_credentials(credentials)
-        token, expires_at = await _request_oauth_token_async(credentials, scope, auth_url)
+        token, expires_at = await _request_oauth_token_async(
+            credentials, scope, auth_url, ssl_verify=ssl_verify
+        )
     elif user and password:
-        token, expires_at = await _request_basic_token_async(user, password)
+        token, expires_at = await _request_basic_token_async(
+            user, password, ssl_verify=ssl_verify
+        )
 
     # Cache token
     ttl_seconds = max(0, (expires_at - TOKEN_EXPIRY_BUFFER_MS - time.time() * 1000) / 1000)
@@ -219,6 +228,7 @@ def _request_oauth_token_sync(
     credentials: str,
     scope: str,
     auth_url: str,
+    ssl_verify: Optional[bool] = None,
 ) -> Tuple[str, int]:
     """
     Request new access token from GigaChat OAuth endpoint (sync).
@@ -242,7 +252,7 @@ def _request_oauth_token_sync(
     verbose_logger.debug(f"Requesting GigaChat access token from {auth_url}")
 
     try:
-        client = _get_http_client()
+        client = _get_http_client(ssl_verify=ssl_verify)
         response = client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
         return _parse_token_response(response)
@@ -262,6 +272,7 @@ async def _request_oauth_token_async(
     credentials: str,
     scope: str,
     auth_url: str,
+    ssl_verify: Optional[bool] = None,
 ) -> Tuple[str, int]:
     """Async version of _request_oauth_token_sync."""
     headers = {
@@ -277,7 +288,7 @@ async def _request_oauth_token_async(
     try:
         client = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
-            params={"ssl_verify": False},
+            params={"ssl_verify": get_gigachat_ssl_verify(ssl_verify)},
         )
         response = await client.post(auth_url, headers=headers, data=data, timeout=30)
         response.raise_for_status()
@@ -298,6 +309,7 @@ def _request_basic_token_sync(
     user: str,
     password: str,
     api_base: Optional[str] = None,
+    ssl_verify: Optional[bool] = None,
 ) -> Tuple[str, int]:
     """
     Request new access token using basic auth (user/password).
@@ -324,7 +336,7 @@ def _request_basic_token_sync(
 
     try:
         # Use httpx.Client directly with auth parameter (HTTPHandler doesn't support it)
-        with httpx.Client(verify=False) as client:
+        with httpx.Client(verify=get_gigachat_ssl_verify(ssl_verify)) as client:
             response = client.post(
                 token_url,
                 headers=headers,
@@ -349,6 +361,7 @@ async def _request_basic_token_async(
     user: str,
     password: str,
     api_base: Optional[str] = None,
+    ssl_verify: Optional[bool] = None,
 ) -> Tuple[str, int]:
     """Async version of _request_basic_token_sync."""
     base_url = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
@@ -362,7 +375,7 @@ async def _request_basic_token_async(
 
     try:
         # Use httpx.AsyncClient directly with auth parameter
-        async with httpx.AsyncClient(verify=False) as client:
+        async with httpx.AsyncClient(verify=get_gigachat_ssl_verify(ssl_verify)) as client:
             response = await client.post(
                 token_url,
                 headers=headers,

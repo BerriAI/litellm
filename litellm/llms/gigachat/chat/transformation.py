@@ -29,7 +29,13 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..authenticator import get_access_token
-from ..common_utils import GIGACHAT_BASE_URL, USER_AGENT, GigaChatError, build_url
+from ..common_utils import (
+    GIGACHAT_BASE_URL,
+    USER_AGENT,
+    GigaChatError,
+    build_url,
+    get_gigachat_ssl_verify,
+)
 from ..file_handler import upload_file_sync
 
 if TYPE_CHECKING:
@@ -85,6 +91,7 @@ class GigaChatConfig(BaseConfig):
         # Instance variables for current request context
         self._current_credentials: Optional[str] = None
         self._current_api_base: Optional[str] = None
+        self._current_ssl_verify: Optional[bool] = None
 
     def get_complete_url(
         self,
@@ -110,9 +117,15 @@ class GigaChatConfig(BaseConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         """Set up headers with OAuth token."""
+        # Ensure ssl_verify is set for GigaChat requests even when caller doesn't pass it.
+        # Default is False due to self-signed certs; can be overridden by env vars or caller kwarg.
+        if litellm_params.get("ssl_verify") is None:
+            litellm_params["ssl_verify"] = get_gigachat_ssl_verify()
+        self._current_ssl_verify = litellm_params.get("ssl_verify")
+
         # Get access token
         credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
-        access_token = get_access_token(credentials=credentials)
+        access_token = get_access_token(credentials=credentials, ssl_verify=self._current_ssl_verify)
 
         # Store credentials for image uploads
         self._current_credentials = credentials
@@ -231,6 +244,7 @@ class GigaChatConfig(BaseConfig):
                 filename=filename,
                 credentials=self._current_credentials,
                 api_base=self._current_api_base,
+                ssl_verify=self._current_ssl_verify,
             )
         except Exception as e:
             verbose_logger.error(f"Failed to upload image: {e}")

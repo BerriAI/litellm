@@ -14,7 +14,8 @@ GigaChat is Sber AI's large language model, Russia's leading LLM provider.
 
 :::warning
 
-GigaChat API uses self-signed SSL certificates. You must pass `ssl_verify=False` in your requests.
+GigaChat API commonly uses self-signed SSL certificates. By default, LiteLLM sets `ssl_verify=false` for GigaChat.
+You can override per-request with `ssl_verify=True` or via env (`GIGACHAT_VERIFY_SSL_CERTS=true`).
 
 :::
 
@@ -66,7 +67,7 @@ os.environ['GIGACHAT_PASSWORD'] = "your-password"
 | `GIGACHAT_SCOPE` | No | `GIGACHAT_API_PERS` | API scope (GIGACHAT_API_PERS, GIGACHAT_API_B2B, GIGACHAT_API_CORP) |
 | `GIGACHAT_AUTH_URL` | No | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` | OAuth endpoint URL |
 | `GIGACHAT_API_BASE` | No | `https://gigachat.devices.sberbank.ru/api/v1` | API base URL |
-| `GIGACHAT_VERIFY_SSL_CERTS` | No | `false` | Enable SSL certificate verification |
+| `GIGACHAT_VERIFY_SSL_CERTS` | No | `false` | Set `ssl_verify` for GigaChat requests|
 
 \* Either `GIGACHAT_CREDENTIALS`/`GIGACHAT_API_KEY` OR `GIGACHAT_USER`+`GIGACHAT_PASSWORD` is required.
 

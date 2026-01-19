@@ -19,7 +19,13 @@ from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse
 
 from ..authenticator import get_access_token
-from ..common_utils import GIGACHAT_BASE_URL, USER_AGENT, build_url, GigaChatEmbeddingError
+from ..common_utils import (
+    GIGACHAT_BASE_URL,
+    USER_AGENT,
+    build_url,
+    GigaChatEmbeddingError,
+    get_gigachat_ssl_verify,
+)
 
 
 class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
@@ -184,8 +190,13 @@ class GigaChatEmbeddingConfig(BaseEmbeddingConfig):
         api_base: Optional[str] = None,
     ) -> dict:
         """Set up headers with OAuth token for GigaChat."""
+        # Ensure ssl_verify is set for GigaChat requests even when caller doesn't pass it.
+        # Default is False due to self-signed certs; can be overridden by env vars or caller kwarg.
+        if litellm_params.get("ssl_verify") is None:
+            litellm_params["ssl_verify"] = get_gigachat_ssl_verify()
+
         credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
-        access_token = get_access_token(credentials=credentials)
+        access_token = get_access_token(credentials=credentials, ssl_verify=litellm_params.get("ssl_verify"))
 
         default_headers = {
             "Content-Type": "application/json",

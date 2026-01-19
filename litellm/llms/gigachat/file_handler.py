@@ -22,7 +22,12 @@ from .authenticator import (
     get_access_token,
     get_access_token_async,
 )
-from .common_utils import GIGACHAT_BASE_URL, USER_AGENT, build_url
+from .common_utils import (
+    GIGACHAT_BASE_URL,
+    USER_AGENT,
+    build_url,
+    get_gigachat_ssl_verify,
+)
 from ...secret_managers.main import get_secret_str
 
 # Simple in-memory cache for file IDs
@@ -53,9 +58,11 @@ def _parse_data_url(data_url: str) -> Optional[Tuple[bytes, str, str]]:
     return content_bytes, content_type, ext
 
 
-def _download_image_sync(url: str) -> Tuple[bytes, str, str]:
+def _download_image_sync(url: str, ssl_verify: Optional[bool] = None) -> Tuple[bytes, str, str]:
     """Download image from URL synchronously."""
-    client = _get_httpx_client(params={"ssl_verify": False})
+    client = _get_httpx_client(
+        params={"ssl_verify": get_gigachat_ssl_verify(ssl_verify)}
+    )
     response = client.get(url, headers={"User-Agent": USER_AGENT})
     response.raise_for_status()
 
@@ -65,11 +72,11 @@ def _download_image_sync(url: str) -> Tuple[bytes, str, str]:
     return response.content, content_type, ext
 
 
-async def _download_image_async(url: str) -> Tuple[bytes, str, str]:
+async def _download_image_async(url: str, ssl_verify: Optional[bool] = None) -> Tuple[bytes, str, str]:
     """Download image from URL asynchronously."""
     client = get_async_httpx_client(
         llm_provider=LlmProviders.GIGACHAT,
-        params={"ssl_verify": False},
+        params={"ssl_verify": get_gigachat_ssl_verify(ssl_verify)},
     )
     response = await client.get(url, headers={"User-Agent": USER_AGENT})
     response.raise_for_status()
@@ -85,6 +92,7 @@ def upload_file_sync(
     filename: Optional[str] = None,
     credentials: Optional[str] = None,
     api_base: Optional[str] = None,
+    ssl_verify: Optional[bool] = None,
 ) -> Optional[str]:
     """
     Upload file to GigaChat and return file_id (sync).
@@ -113,17 +121,21 @@ def upload_file_sync(
             verbose_logger.debug("Decoded base64 image")
         else:
             verbose_logger.debug(f"Downloading image from URL: {file_url[:80]}...")
-            content_bytes, content_type, ext = _download_image_sync(file_url)
+            content_bytes, content_type, ext = _download_image_sync(
+                file_url, ssl_verify=ssl_verify
+            )
 
         filename = filename or f"{uuid.uuid4()}.{ext}"
         # Get access token
-        access_token = get_access_token(credentials)
+        access_token = get_access_token(credentials, ssl_verify=ssl_verify)
 
         # Upload to GigaChat
         base_url = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
         upload_url = build_url(base_url, "files")
 
-        client = _get_httpx_client(params={"ssl_verify": False})
+        client = _get_httpx_client(
+            params={"ssl_verify": get_gigachat_ssl_verify(ssl_verify)}
+        )
         response = client.post(
             upload_url,
             headers={
@@ -153,6 +165,7 @@ async def upload_file_async(
     image_url: str,
     credentials: Optional[str] = None,
     api_base: Optional[str] = None,
+    ssl_verify: Optional[bool] = None,
 ) -> Optional[str]:
     """
     Upload file to GigaChat and return file_id (async).
@@ -180,12 +193,14 @@ async def upload_file_async(
             verbose_logger.debug("Decoded base64 image")
         else:
             verbose_logger.debug(f"Downloading image from URL: {image_url[:80]}...")
-            content_bytes, content_type, ext = await _download_image_async(image_url)
+            content_bytes, content_type, ext = await _download_image_async(
+                image_url, ssl_verify=ssl_verify
+            )
 
         filename = f"{uuid.uuid4()}.{ext}"
 
         # Get access token
-        access_token = await get_access_token_async(credentials)
+        access_token = await get_access_token_async(credentials, ssl_verify=ssl_verify)
 
         # Upload to GigaChat
         base_url = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
@@ -193,7 +208,7 @@ async def upload_file_async(
 
         client = get_async_httpx_client(
             llm_provider=LlmProviders.GIGACHAT,
-            params={"ssl_verify": False},
+            params={"ssl_verify": get_gigachat_ssl_verify(ssl_verify)},
         )
         response = await client.post(
             upload_url,

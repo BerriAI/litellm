@@ -4,7 +4,10 @@ GigaChat Common Utils
 Constants and exceptions for GigaChat provider.
 """
 
+from typing import Optional
+
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.secret_managers.main import get_secret_str, str_to_bool
 
 # GigaChat API endpoints
 GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
@@ -18,6 +21,28 @@ TOKEN_EXPIRY_BUFFER_MS = 60000
 
 # User-Agent for GigaChat requests
 USER_AGENT = "GigaChat-python-lib"
+
+
+def get_gigachat_ssl_verify(ssl_verify: Optional[bool] = None) -> bool:
+    """
+    Determine the ssl_verify value for GigaChat httpx clients.
+
+    Priority:
+    1) Explicit function argument
+    3) GIGACHAT_VERIFY_SSL_CERTS (bool-like string) [backwards-compatible alias]
+    4) Default: False (GigaChat commonly uses self-signed certificates)
+    """
+
+    if ssl_verify is not None:
+        return ssl_verify
+    env_verify_certs = get_secret_str("GIGACHAT_VERIFY_SSL_CERTS")
+    if env_verify_certs is not None:
+        parsed = str_to_bool(env_verify_certs)
+        if parsed is not None:
+            return parsed
+
+    return False
+
 
 def build_url(base: str, path: str) -> str:
     """
