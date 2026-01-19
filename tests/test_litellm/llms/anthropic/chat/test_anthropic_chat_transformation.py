@@ -681,6 +681,73 @@ def test_anthropic_chat_headers_add_context_management_beta():
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
 
 
+def test_anthropic_beta_header_merging_with_output_format():
+    """
+    Test that anthropic-beta headers from extra_headers are merged with
+    output_format beta headers instead of being overridden.
+    
+    This is a regression test for: https://github.com/BerriAI/litellm/issues/...
+    When using response_format with a Pydantic model AND extra_headers with
+    anthropic-beta (e.g., for context-1m extension), both beta headers should
+    be present in the final request.
+    """
+    config = AnthropicConfig()
+    
+    # Simulate headers that already have the context-1m beta header from extra_headers
+    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+    
+    # Simulate output_format being set (happens when using response_format with Sonnet 4.5)
+    optional_params = {
+        "output_format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {}}
+        }
+    }
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
+    
+    # Both beta headers should be present
+    beta_value = result_headers["anthropic-beta"]
+    assert "context-1m-2025-08-07" in beta_value, \
+        f"User's context-1m beta header missing from: {beta_value}"
+    assert "structured-outputs-2025-11-13" in beta_value, \
+        f"Structured output beta header missing from: {beta_value}"
+
+
+def test_anthropic_beta_header_merging_with_multiple_features():
+    """
+    Test that multiple beta headers can be merged when using multiple features.
+    """
+    config = AnthropicConfig()
+    
+    # Start with a user-provided beta header
+    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+    
+    # Use multiple features that require beta headers
+    optional_params = {
+        "output_format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {}}
+        },
+        "context_management": _sample_context_management_payload(),
+        "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]
+    }
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
+    
+    beta_value = result_headers["anthropic-beta"]
+    
+    # All beta headers should be present
+    assert "context-1m-2025-08-07" in beta_value
+    assert "structured-outputs-2025-11-13" in beta_value
+    assert "context-management-2025-06-27" in beta_value
+    assert "web-fetch-2025-09-10" in beta_value
+
+
 def test_anthropic_chat_transform_request_includes_context_management():
     config = AnthropicConfig()
     headers = {}
