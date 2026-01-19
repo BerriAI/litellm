@@ -27,7 +27,7 @@ import PromptsPanel from "@/components/prompts";
 import PublicModelHub from "@/components/public_model_hub";
 import { SearchTools } from "@/components/search_tools";
 import Settings from "@/components/settings";
-import { SurveyPrompt, SurveyModal, ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
+import { ClaudeCodePrompt, ClaudeCodeModal } from "@/components/survey";
 import TagManagement from "@/components/tag_management";
 import TransformRequestPanel from "@/components/transform_request";
 import UIThemeSettings from "@/components/ui_theme_settings";
@@ -120,9 +120,6 @@ export default function CreateKeyPage() {
   const [authLoading, setAuthLoading] = useState(true);
   const [userID, setUserID] = useState<string | null>(null);
 
-  // Survey state - always show by default
-  const [showSurveyPrompt, setShowSurveyPrompt] = useState(true);
-  const [showSurveyModal, setShowSurveyModal] = useState(false);
 
   // Claude Code feedback state
   const [isClaudeCode, setIsClaudeCode] = useState(false);
@@ -284,8 +281,6 @@ export default function CreateKeyPage() {
           // Show Claude Code prompt on login if enabled
           if (isUsingClaudeCode) {
             setShowClaudeCodePrompt(true);
-            // Don't show the regular survey prompt if showing Claude Code prompt
-            setShowSurveyPrompt(false);
           }
         } catch (error) {
           console.error("Failed to fetch in-product nudges:", error);
@@ -295,15 +290,6 @@ export default function CreateKeyPage() {
     }
   }, [accessToken, token]);
 
-  // Auto-dismiss survey prompt after 15 seconds
-  useEffect(() => {
-    if (showSurveyPrompt && !showSurveyModal) {
-      const timer = setTimeout(() => {
-        setShowSurveyPrompt(false);
-      }, 15000);
-      return () => clearTimeout(timer);
-    }
-  }, [showSurveyPrompt, showSurveyModal]);
 
   // Auto-dismiss Claude Code prompt after 15 seconds
   useEffect(() => {
@@ -315,24 +301,6 @@ export default function CreateKeyPage() {
     }
   }, [showClaudeCodePrompt, showClaudeCodeModal]);
 
-  const handleOpenSurvey = () => {
-    setShowSurveyPrompt(false);
-    setShowSurveyModal(true);
-  };
-
-  const handleDismissSurveyPrompt = () => {
-    setShowSurveyPrompt(false);
-  };
-
-  const handleSurveyComplete = () => {
-    setShowSurveyModal(false);
-  };
-
-  const handleSurveyModalClose = () => {
-    // If they close the modal without completing, show the prompt again
-    setShowSurveyModal(false);
-    setShowSurveyPrompt(true);
-  };
 
   const handleOpenClaudeCode = () => {
     setShowClaudeCodePrompt(false);
@@ -548,18 +516,6 @@ export default function CreateKeyPage() {
                   />
                 )}
               </div>
-
-              {/* Survey Components */}
-              <SurveyPrompt
-                isVisible={showSurveyPrompt}
-                onOpen={handleOpenSurvey}
-                onDismiss={handleDismissSurveyPrompt}
-              />
-              <SurveyModal
-                isOpen={showSurveyModal}
-                onClose={handleSurveyModalClose}
-                onComplete={handleSurveyComplete}
-              />
 
               {/* Claude Code Components */}
               <ClaudeCodePrompt
