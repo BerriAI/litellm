@@ -7,20 +7,13 @@ for image generation endpoints (flux-pro-1.1, flux-pro-1.1-ultra, flux-dev, flux
 API Reference: https://docs.bfl.ai/
 """
 
-import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import httpx
 
-import litellm
-from litellm._logging import verbose_logger
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
-)
-from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
-    get_async_httpx_client,
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
@@ -31,8 +24,6 @@ from litellm.types.utils import ImageObject, ImageResponse
 
 from ..common_utils import (
     DEFAULT_API_BASE,
-    DEFAULT_MAX_POLLING_TIME,
-    DEFAULT_POLLING_INTERVAL,
     IMAGE_GENERATION_MODELS,
     BlackForestLabsError,
 )
@@ -54,6 +45,9 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
     - flux-pro-1.1-ultra: Ultra high-resolution (up to 4MP)
     - flux-dev: Development/open-source variant
     - flux-pro: Original pro model
+
+    Note: HTTP requests and polling are handled by the handler (handler.py).
+    This class only handles data transformation.
     """
 
     def get_supported_openai_params(
@@ -249,111 +243,28 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
 
         return request_body
 
-    def _poll_for_result(
+    def transform_image_generation_response(
         self,
-        polling_url: str,
-        api_key: str,
-        max_wait: float = DEFAULT_MAX_POLLING_TIME,
-        interval: float = DEFAULT_POLLING_INTERVAL,
-    ) -> Dict:
-        """
-        Poll the BFL API until the result is ready.
-
-        Returns the result data when status is "Ready".
-        Raises BlackForestLabsError on failure.
-        """
-        start_time = time.time()
-        httpx_client = _get_httpx_client()
-
-        while time.time() - start_time < max_wait:
-            response = httpx_client.get(
-                polling_url,
-                headers={"x-key": api_key},
-            )
-
-            if response.status_code != 200:
-                raise BlackForestLabsError(
-                    status_code=response.status_code,
-                    message=f"Polling failed: {response.text}",
-                )
-
-            data = response.json()
-            status = data.get("status")
-
-            if status == "Ready":
-                return data
-            elif status in ["Error", "Failed", "Content Moderated", "Request Moderated"]:
-                raise BlackForestLabsError(
-                    status_code=400,
-                    message=f"Image generation failed: {status}",
-                )
-
-            time.sleep(interval)
-
-        raise BlackForestLabsError(
-            status_code=408,
-            message=f"Timeout waiting for result after {max_wait} seconds",
-        )
-
-    async def _poll_for_result_async(
-        self,
-        polling_url: str,
-        api_key: str,
-        max_wait: float = DEFAULT_MAX_POLLING_TIME,
-        interval: float = DEFAULT_POLLING_INTERVAL,
-    ) -> Dict:
-        """
-        Poll the BFL API until the result is ready (async version).
-
-        Returns the result data when status is "Ready".
-        Raises BlackForestLabsError on failure.
-        """
-        start_time = time.time()
-        httpx_client = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.BLACK_FOREST_LABS
-        )
-
-        while time.time() - start_time < max_wait:
-            response = await httpx_client.get(
-                polling_url,
-                headers={"x-key": api_key},
-            )
-
-            if response.status_code != 200:
-                raise BlackForestLabsError(
-                    status_code=response.status_code,
-                    message=f"Polling failed: {response.text}",
-                )
-
-            data = response.json()
-            status = data.get("status")
-
-            verbose_logger.debug(f"BFL polling status: {status}")
-
-            if status == "Ready":
-                return data
-            elif status in ["Error", "Failed", "Content Moderated", "Request Moderated"]:
-                raise BlackForestLabsError(
-                    status_code=400,
-                    message=f"Image generation failed: {status}",
-                )
-
-            await asyncio.sleep(interval)
-
-        raise BlackForestLabsError(
-            status_code=408,
-            message=f"Timeout waiting for result after {max_wait} seconds",
-        )
-
-    def _extract_images_from_result(
-        self,
-        result_data: Dict,
+        model: str,
+        raw_response: httpx.Response,
         model_response: ImageResponse,
+        logging_obj: LiteLLMLoggingObj,
     ) -> ImageResponse:
         """
-        Extract image URLs from BFL result and populate ImageResponse.
+        Transform Black Forest Labs response to OpenAI-compatible ImageResponse.
+
+        This is called with the FINAL polled response (after handler does polling).
+        The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
-        result = result_data.get("result", {})
+        try:
+            response_data = raw_response.json()
+        except Exception as e:
+            raise BlackForestLabsError(
+                status_code=raw_response.status_code,
+                message=f"Error parsing BFL response: {e}",
+            )
+
+        result = response_data.get("result", {})
 
         if not model_response.data:
             model_response.data = []
@@ -377,102 +288,6 @@ class BlackForestLabsImageGenerationConfig(BaseImageGenerationConfig):
 
         model_response.created = int(time.time())
         return model_response
-
-    def _parse_initial_response(
-        self,
-        raw_response: httpx.Response,
-    ) -> tuple:
-        """
-        Parse initial BFL response and extract polling URL and API key.
-
-        Returns:
-            Tuple of (polling_url, api_key)
-        """
-        try:
-            response_data = raw_response.json()
-        except Exception as e:
-            raise BlackForestLabsError(
-                status_code=raw_response.status_code,
-                message=f"Error parsing BFL response: {e}",
-            )
-
-        # Check for immediate errors
-        if "errors" in response_data:
-            raise BlackForestLabsError(
-                status_code=raw_response.status_code,
-                message=f"BFL error: {response_data['errors']}",
-            )
-
-        # Get polling URL
-        polling_url = response_data.get("polling_url")
-        if not polling_url:
-            raise BlackForestLabsError(
-                status_code=500,
-                message="No polling_url in BFL response",
-            )
-
-        # Extract API key from original request headers
-        request_api_key = raw_response.request.headers.get("x-key", "")
-
-        return polling_url, request_api_key
-
-    def transform_image_generation_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        model_response: ImageResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
-    ) -> ImageResponse:
-        """
-        Transform Black Forest Labs response to OpenAI-compatible ImageResponse.
-
-        BFL returns a task ID initially, then we poll until the result is ready.
-        """
-        verbose_logger.debug("BFL starting sync polling...")
-
-        polling_url, request_api_key = self._parse_initial_response(raw_response)
-
-        # Poll for result (sync)
-        result_data = self._poll_for_result(polling_url, request_api_key)
-
-        verbose_logger.debug("BFL polling complete, extracting images")
-
-        return self._extract_images_from_result(result_data, model_response)
-
-    async def async_transform_image_generation_response(
-        self,
-        model: str,
-        raw_response: httpx.Response,
-        model_response: ImageResponse,
-        logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
-    ) -> ImageResponse:
-        """
-        Async transform Black Forest Labs response to OpenAI-compatible ImageResponse.
-
-        BFL returns a task ID initially, then we poll until the result is ready.
-        """
-        verbose_logger.debug("BFL starting async polling...")
-
-        polling_url, request_api_key = self._parse_initial_response(raw_response)
-
-        # Poll for result (async)
-        result_data = await self._poll_for_result_async(polling_url, request_api_key)
-
-        verbose_logger.debug("BFL async polling complete, extracting images")
-
-        return self._extract_images_from_result(result_data, model_response)
 
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]

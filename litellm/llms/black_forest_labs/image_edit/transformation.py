@@ -9,13 +9,12 @@ API Reference: https://docs.bfl.ai/
 
 import base64
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import httpx
 from httpx._types import RequestFiles
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
 from litellm.types.router import GenericLiteLLMParams
@@ -23,8 +22,6 @@ from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 
 from ..common_utils import (
     DEFAULT_API_BASE,
-    DEFAULT_MAX_POLLING_TIME,
-    DEFAULT_POLLING_INTERVAL,
     IMAGE_EDIT_MODELS,
     BlackForestLabsError,
 )
@@ -46,6 +43,9 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
     - flux-kontext-max: Premium quality editing
     - flux-pro-1.0-fill: Inpainting with mask
     - flux-pro-1.0-expand: Outpainting (expand image borders)
+
+    Note: HTTP requests and polling are handled by the handler (handler.py).
+    This class only handles data transformation.
     """
 
     def get_supported_openai_params(self, model: str) -> List[str]:
@@ -234,52 +234,6 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         # BFL uses JSON, not multipart - return empty files
         return request_body, []
 
-    def _poll_for_result(
-        self,
-        polling_url: str,
-        api_key: str,
-        max_wait: float = DEFAULT_MAX_POLLING_TIME,
-        interval: float = DEFAULT_POLLING_INTERVAL,
-    ) -> Dict:
-        """
-        Poll the BFL API until the result is ready.
-
-        Returns the result data when status is "Ready".
-        Raises BlackForestLabsError on failure.
-        """
-        start_time = time.time()
-        httpx_client = _get_httpx_client()
-
-        while time.time() - start_time < max_wait:
-            response = httpx_client.get(
-                polling_url,
-                headers={"x-key": api_key},
-            )
-
-            if response.status_code != 200:
-                raise BlackForestLabsError(
-                    status_code=response.status_code,
-                    message=f"Polling failed: {response.text}",
-                )
-
-            data = response.json()
-            status = data.get("status")
-
-            if status == "Ready":
-                return data
-            elif status in ["Error", "Content Moderated", "Request Moderated"]:
-                raise BlackForestLabsError(
-                    status_code=400,
-                    message=f"Image generation failed: {status}",
-                )
-
-            time.sleep(interval)
-
-        raise BlackForestLabsError(
-            status_code=408,
-            message=f"Timeout waiting for result after {max_wait} seconds",
-        )
-
     def transform_image_edit_response(
         self,
         model: str,
@@ -289,7 +243,8 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         """
         Transform Black Forest Labs response to OpenAI-compatible ImageResponse.
 
-        BFL returns a task ID initially, then we poll until the result is ready.
+        This is called with the FINAL polled response (after handler does polling).
+        The response contains: {"status": "Ready", "result": {"sample": "https://..."}}
         """
         try:
             response_data = raw_response.json()
@@ -299,29 +254,8 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
                 message=f"Error parsing BFL response: {e}",
             )
 
-        # Check for immediate errors
-        if "errors" in response_data:
-            raise BlackForestLabsError(
-                status_code=raw_response.status_code,
-                message=f"BFL error: {response_data['errors']}",
-            )
-
-        # Get polling URL
-        polling_url = response_data.get("polling_url")
-        if not polling_url:
-            raise BlackForestLabsError(
-                status_code=500,
-                message="No polling_url in BFL response",
-            )
-
-        # Extract API key from original request headers
-        api_key = raw_response.request.headers.get("x-key", "")
-
-        # Poll for result
-        result_data = self._poll_for_result(polling_url, api_key)
-
         # Get image URL from result
-        image_url = result_data.get("result", {}).get("sample")
+        image_url = response_data.get("result", {}).get("sample")
         if not image_url:
             raise BlackForestLabsError(
                 status_code=500,
@@ -332,4 +266,13 @@ class BlackForestLabsImageEditConfig(BaseImageEditConfig):
         return ImageResponse(
             created=int(time.time()),
             data=[ImageObject(url=image_url)],
+        )
+
+    def get_error_class(
+        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
+    ) -> BlackForestLabsError:
+        """Return the appropriate error class for Black Forest Labs."""
+        return BlackForestLabsError(
+            status_code=status_code,
+            message=error_message,
         )
