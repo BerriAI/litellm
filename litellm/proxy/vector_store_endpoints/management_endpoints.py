@@ -245,6 +245,7 @@ async def list_vector_stores(
     """
     List all available vector stores with optional filtering and pagination.
     Combines both in-memory vector stores and those stored in the database.
+    Database is the source of truth - deleted stores are removed from memory, updated stores sync to memory.
 
     Parameters:
     - page: int - Page number for pagination (default: 1)
@@ -252,29 +253,65 @@ async def list_vector_stores(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    seen_vector_store_ids = set()
+    vector_store_map: Dict[str, LiteLLM_ManagedVectorStore] = {}
+    db_vector_store_ids: set = set()
 
     try:
-        # Get in-memory vector stores
-        in_memory_vector_stores: List[LiteLLM_ManagedVectorStore] = []
+        # Get vector stores from database first (source of truth)
+        vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
+            prisma_client=prisma_client
+        )
+        
+        # Build map from database vector stores
+        for vector_store in vector_stores_from_db:
+            vector_store_id = vector_store.get("vector_store_id", None)
+            if vector_store_id:
+                vector_store_map[vector_store_id] = vector_store
+                db_vector_store_ids.add(vector_store_id)
+        
+        # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
             in_memory_vector_stores = copy.deepcopy(
                 litellm.vector_store_registry.vector_stores
             )
+            
+            vector_stores_to_delete_from_memory: List[str] = []
+            
+            for vector_store in in_memory_vector_stores:
+                vector_store_id = vector_store.get("vector_store_id", None)
+                if not vector_store_id:
+                    continue
+                
+                # If vector store is in memory but NOT in database, it was deleted
+                if vector_store_id not in db_vector_store_ids:
+                    verbose_proxy_logger.info(
+                        f"Vector store {vector_store_id} exists in memory but not in database - marking for deletion from cache"
+                    )
+                    vector_stores_to_delete_from_memory.append(vector_store_id)
+                # If not in our map yet, add it (only in-memory, not in DB)
+                elif vector_store_id not in vector_store_map:
+                    vector_store_map[vector_store_id] = vector_store
+            
+            # Synchronize in-memory registry with database
+            # 1. Remove deleted vector stores from memory
+            for vs_id in vector_stores_to_delete_from_memory:
+                litellm.vector_store_registry.delete_vector_store_from_registry(
+                    vector_store_id=vs_id
+                )
+                verbose_proxy_logger.debug(
+                    f"Removed deleted vector store {vs_id} from in-memory registry"
+                )
+            
+            # 2. Update in-memory registry with database versions (for updates)
+            for vector_store in vector_stores_from_db:
+                vector_store_id = vector_store.get("vector_store_id", None)
+                if vector_store_id:
+                    litellm.vector_store_registry.update_vector_store_in_registry(
+                        vector_store_id=vector_store_id,
+                        updated_data=vector_store
+                    )
 
-        # Get vector stores from database
-        vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
-            prisma_client=prisma_client
-        )
-
-        # Combine in-memory and database vector stores
-        combined_vector_stores: List[LiteLLM_ManagedVectorStore] = []
-        for vector_store in in_memory_vector_stores + vector_stores_from_db:
-            vector_store_id = vector_store.get("vector_store_id", None)
-            if vector_store_id not in seen_vector_store_ids:
-                combined_vector_stores.append(vector_store)
-                seen_vector_store_ids.add(vector_store_id)
-
+        combined_vector_stores = list(vector_store_map.values())
         total_count = len(combined_vector_stores)
         total_pages = (total_count + page_size - 1) // page_size
 
@@ -303,7 +340,7 @@ async def delete_vector_store(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Delete a vector store.
+    Delete a vector store from both database and in-memory registry.
 
     Parameters:
     - vector_store_id: str - ID of the vector store to delete
@@ -314,31 +351,53 @@ async def delete_vector_store(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Check if vector store exists
+        # Check if vector store exists in database or in-memory registry
+        db_vector_store_exists = False
+        memory_vector_store_exists = False
+        
         existing_vector_store = (
             await prisma_client.db.litellm_managedvectorstorestable.find_unique(
                 where={"vector_store_id": data.vector_store_id}
             )
         )
-        if existing_vector_store is None:
+        if existing_vector_store is not None:
+            db_vector_store_exists = True
+        
+        # Check in-memory registry
+        if litellm.vector_store_registry is not None:
+            memory_vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
+                vector_store_id=data.vector_store_id
+            )
+            if memory_vector_store is not None:
+                memory_vector_store_exists = True
+        
+        # If not found in either location, raise 404
+        if not db_vector_store_exists and not memory_vector_store_exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"Vector store with ID {data.vector_store_id} not found",
             )
 
-        # Delete vector store
-        await prisma_client.db.litellm_managedvectorstorestable.delete(
-            where={"vector_store_id": data.vector_store_id}
-        )
+        # Delete from database if exists
+        if db_vector_store_exists:
+            await prisma_client.db.litellm_managedvectorstorestable.delete(
+                where={"vector_store_id": data.vector_store_id}
+            )
 
-        # Delete vector store from registry
-        if litellm.vector_store_registry is not None:
+        # Delete from in-memory registry if exists
+        if memory_vector_store_exists and litellm.vector_store_registry is not None:
             litellm.vector_store_registry.delete_vector_store_from_registry(
                 vector_store_id=data.vector_store_id
             )
 
-        return {"message": f"Vector store {data.vector_store_id} deleted successfully"}
+        return {
+            "status": "success",
+            "message": f"Vector store {data.vector_store_id} deleted successfully"
+        }
+    except HTTPException:
+        raise
     except Exception as e:
+        verbose_proxy_logger.exception(f"Error deleting vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -415,8 +474,12 @@ async def update_vector_store(
     data: VectorStoreUpdateRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    """Update vector store details"""
+    """
+    Update vector store details in both database and in-memory registry.
+    The updated data is immediately synchronized to the in-memory registry.
+    """
     from litellm.proxy.proxy_server import prisma_client
+    from litellm.types.router import GenericLiteLLMParams
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -424,11 +487,36 @@ async def update_vector_store(
     try:
         update_data = data.model_dump(exclude_unset=True)
         vector_store_id = update_data.pop("vector_store_id")
+        
+        # Handle metadata serialization
         if update_data.get("vector_store_metadata") is not None:
             update_data["vector_store_metadata"] = safe_dumps(
                 update_data["vector_store_metadata"]
             )
+        
+        # Handle litellm_params if provided
+        if "litellm_params" in update_data:
+            _input_litellm_params: dict = update_data.get("litellm_params", {}) or {}
+            
+            # Auto-resolve embedding config if embedding model is provided but config is not
+            embedding_model = _input_litellm_params.get("litellm_embedding_model")
+            if embedding_model and not _input_litellm_params.get("litellm_embedding_config"):
+                resolved_config = await _resolve_embedding_config_from_db(
+                    embedding_model=embedding_model,
+                    prisma_client=prisma_client
+                )
+                if resolved_config:
+                    _input_litellm_params["litellm_embedding_config"] = resolved_config
+                    verbose_proxy_logger.info(
+                        f"Auto-resolved embedding config for model {embedding_model}"
+                    )
+            
+            litellm_params_dict = GenericLiteLLMParams(
+                **_input_litellm_params
+            ).model_dump(exclude_none=True)
+            update_data["litellm_params"] = safe_dumps(litellm_params_dict)
 
+        # Update in database
         updated = await prisma_client.db.litellm_managedvectorstorestable.update(
             where={"vector_store_id": vector_store_id},
             data=update_data,
@@ -436,13 +524,21 @@ async def update_vector_store(
 
         updated_vs = LiteLLM_ManagedVectorStore(**updated.model_dump())
 
+        # Immediately update in-memory registry to keep it in sync
         if litellm.vector_store_registry is not None:
             litellm.vector_store_registry.update_vector_store_in_registry(
                 vector_store_id=vector_store_id,
                 updated_data=updated_vs,
             )
+            verbose_proxy_logger.debug(
+                f"Updated vector store {vector_store_id} in both database and in-memory registry"
+            )
 
-        return {"vector_store": updated_vs}
+        return {
+            "status": "success",
+            "message": f"Vector store {vector_store_id} updated successfully",
+            "vector_store": updated_vs
+        }
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating vector store: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
