@@ -565,10 +565,6 @@ async def acompletion(
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=completion_kwargs.get("base_url", None),
-            litellm_params=litellm.types.router.LiteLLM_Params(
-                model=model,
-                use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-            ),
         )
 
     fallbacks = fallbacks or litellm.model_fallbacks
@@ -1295,10 +1291,6 @@ def completion(  # type: ignore # noqa: PLR0915
             custom_llm_provider=custom_llm_provider,
             api_base=api_base,
             api_key=api_key,
-            litellm_params=litellm.types.router.LiteLLM_Params(
-                model=model,
-                use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-            ),
         )
 
         if not _should_allow_input_examples(
@@ -4376,10 +4368,6 @@ async def aembedding(*args, **kwargs) -> EmbeddingResponse:
             model=model,
             custom_llm_provider=custom_llm_provider,
             api_base=kwargs.get("api_base", None),
-            litellm_params=litellm.types.router.LiteLLM_Params(
-                model=model,
-                use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-            ),
         )
 
         # Await normally
@@ -4565,10 +4553,6 @@ def embedding(  # noqa: PLR0915
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
-        litellm_params=litellm.types.router.LiteLLM_Params(
-            model=model,
-            use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-        ),
     )
 
     if dynamic_api_key is not None:
@@ -5704,10 +5688,6 @@ def text_completion(  # noqa: PLR0915
         model=model,  # type: ignore
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
-        litellm_params=litellm.types.router.LiteLLM_Params(
-            model=model,  # type: ignore
-            use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-        ),
     )
 
     if custom_llm_provider == "huggingface":
@@ -5998,10 +5978,6 @@ async def amoderation(
             custom_llm_provider=custom_llm_provider,
             api_base=optional_params.api_base,
             api_key=optional_params.api_key,
-            litellm_params=litellm.types.router.LiteLLM_Params(
-                model=model or "",
-                use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-            ),
         )
     except litellm.BadRequestError:
         # `model` is optional field for moderation - get_llm_provider will throw BadRequestError if model is not set / not recognized
@@ -6067,12 +6043,7 @@ async def atranscription(*args, **kwargs) -> TranscriptionResponse:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model,
-            api_base=kwargs.get("api_base", None),
-            litellm_params=litellm.types.router.LiteLLM_Params(
-                model=model,
-                use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-            ),
+            model=model, api_base=kwargs.get("api_base", None)
         )
 
         # Await normally
@@ -6176,10 +6147,6 @@ def transcription(
         custom_llm_provider=custom_llm_provider,
         api_base=api_base,
         api_key=api_key,
-        litellm_params=litellm.types.router.LiteLLM_Params(
-            model=model,
-            use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-        ),
     )  # type: ignore
 
     if dynamic_api_key is not None:
@@ -6355,12 +6322,7 @@ async def aspeech(*args, **kwargs) -> HttpxBinaryResponseContent:
         func_with_context = partial(ctx.run, func)
 
         _, custom_llm_provider, _, _ = get_llm_provider(
-            model=model,
-            api_base=kwargs.get("api_base", None),
-            litellm_params=litellm.types.router.LiteLLM_Params(
-                model=model,
-                use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-            ),
+            model=model, api_base=kwargs.get("api_base", None)
         )
 
         # Await normally
@@ -6411,13 +6373,7 @@ def speech(  # noqa: PLR0915
     model_info = kwargs.get("model_info", None)
     shared_session = kwargs.get("shared_session", None)
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
-        model=model,
-        custom_llm_provider=custom_llm_provider,
-        api_base=api_base,
-        litellm_params=litellm.types.router.LiteLLM_Params(
-            model=model,
-            use_litellm_proxy=kwargs.get("use_litellm_proxy", False),
-        ),
+        model=model, custom_llm_provider=custom_llm_provider, api_base=api_base
     )  # type: ignore
     kwargs.pop("tags", [])
 
@@ -6927,10 +6883,6 @@ async def ahealth_check(
             custom_llm_provider=custom_llm_provider_from_params,
             api_base=api_base_from_params,
             api_key=api_key_from_params,
-            litellm_params=litellm.types.router.LiteLLM_Params(
-                model=model,
-                use_litellm_proxy=model_params.get("use_litellm_proxy", False),
-            ),
         )
         if model in litellm.model_cost and mode is None:
             mode = litellm.model_cost[model].get("mode")
