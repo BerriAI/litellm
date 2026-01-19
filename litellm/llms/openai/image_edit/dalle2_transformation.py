@@ -31,7 +31,7 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
         self,
         model: str,
         prompt: Optional[str],
-        image: FileTypes,
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -40,17 +40,19 @@ class DallE2ImageEditConfig(OpenAIImageEditConfig):
         Transform image edit request for DALL-E-2.
 
         DALL-E-2 only accepts a single image with field name "image" (not "image[]").
-        """
-        if prompt is None:
-            raise ValueError("DALL-E-2 image edit requires a prompt.")
-        
-        request = ImageEditRequestParams(
-            model=model,
-            image=image,
-            prompt=prompt,
+        """        
+        request_params = {
+            "model": model,
             **image_edit_optional_request_params,
-        )
+        }
+        if image is not None:
+            request_params["image"] = image
+        if prompt is not None:
+            request_params["prompt"] = prompt
+            
+        request = ImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request)
+
 
         #########################################################
         # Separate images and masks as `files` and send other parameters as `data`
