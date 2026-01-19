@@ -1,5 +1,8 @@
 """
 Unit tests for Black Forest Labs image edit transformation functionality.
+
+Note: Polling tests are now in test_bfl_image_edit_handler.py
+since polling logic was moved to the handler.
 """
 
 import base64
@@ -233,219 +236,66 @@ class TestBlackForestLabsImageEditTransformation:
         result = self.config._read_image_bytes(images)
         assert result == image_data
 
-    def test_poll_for_result_success(self):
-        """Test successful polling."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "status": "Ready",
-            "result": {"sample": "https://example.com/image.png"},
-        }
-
-        mock_client = MagicMock()
-        mock_client.get.return_value = mock_response
-
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
-            result = self.config._poll_for_result(
-                polling_url="https://api.bfl.ai/v1/get_result?id=123",
-                api_key="test-key",
-                max_wait=10,
-                interval=0.1,
-            )
-
-        assert result["status"] == "Ready"
-        assert result["result"]["sample"] == "https://example.com/image.png"
-
-    def test_poll_for_result_pending_then_ready(self):
-        """Test polling that starts pending then becomes ready."""
-        pending_response = MagicMock()
-        pending_response.status_code = 200
-        pending_response.json.return_value = {"status": "Pending"}
-
-        ready_response = MagicMock()
-        ready_response.status_code = 200
-        ready_response.json.return_value = {
-            "status": "Ready",
-            "result": {"sample": "https://example.com/image.png"},
-        }
-
-        mock_client = MagicMock()
-        mock_client.get.side_effect = [pending_response, ready_response]
-
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
-            result = self.config._poll_for_result(
-                polling_url="https://api.bfl.ai/v1/get_result?id=123",
-                api_key="test-key",
-                max_wait=10,
-                interval=0.1,
-            )
-
-        assert result["status"] == "Ready"
-
-    def test_poll_for_result_error_status(self):
-        """Test polling with error status."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "Error"}
-
-        mock_client = MagicMock()
-        mock_client.get.return_value = mock_response
-
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
-            with pytest.raises(BlackForestLabsError) as exc_info:
-                self.config._poll_for_result(
-                    polling_url="https://api.bfl.ai/v1/get_result?id=123",
-                    api_key="test-key",
-                    max_wait=10,
-                    interval=0.1,
-                )
-
-        assert exc_info.value.status_code == 400
-        assert "Error" in exc_info.value.message
-
-    def test_poll_for_result_content_moderated(self):
-        """Test polling with content moderated status."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "Content Moderated"}
-
-        mock_client = MagicMock()
-        mock_client.get.return_value = mock_response
-
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
-            with pytest.raises(BlackForestLabsError) as exc_info:
-                self.config._poll_for_result(
-                    polling_url="https://api.bfl.ai/v1/get_result?id=123",
-                    api_key="test-key",
-                    max_wait=10,
-                    interval=0.1,
-                )
-
-        assert exc_info.value.status_code == 400
-        assert "Content Moderated" in exc_info.value.message
-
-    def test_poll_for_result_timeout(self):
-        """Test polling timeout."""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "Pending"}
-
-        mock_client = MagicMock()
-        mock_client.get.return_value = mock_response
-
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
-            with pytest.raises(BlackForestLabsError) as exc_info:
-                self.config._poll_for_result(
-                    polling_url="https://api.bfl.ai/v1/get_result?id=123",
-                    api_key="test-key",
-                    max_wait=0.2,
-                    interval=0.1,
-                )
-
-        assert exc_info.value.status_code == 408
-        assert "Timeout" in exc_info.value.message
-
-    def test_poll_for_result_http_error(self):
-        """Test polling with HTTP error."""
-        mock_response = MagicMock()
-        mock_response.status_code = 500
-        mock_response.text = "Internal Server Error"
-
-        mock_client = MagicMock()
-        mock_client.get.return_value = mock_response
-
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
-            with pytest.raises(BlackForestLabsError) as exc_info:
-                self.config._poll_for_result(
-                    polling_url="https://api.bfl.ai/v1/get_result?id=123",
-                    api_key="test-key",
-                    max_wait=10,
-                    interval=0.1,
-                )
-
-        assert exc_info.value.status_code == 500
-
     def test_transform_image_edit_response_success(self):
-        """Test successful response transformation."""
-        # Create mock initial response with polling URL
-        mock_request = MagicMock()
-        mock_request.headers = {"x-key": "test-key"}
-
-        mock_response = MagicMock()
+        """Test response transformation with final polled response."""
+        # The response is now the FINAL polled response from handler
+        mock_response = MagicMock(spec=httpx.Response)
         mock_response.json.return_value = {
-            "id": "task-123",
-            "polling_url": "https://api.bfl.ai/v1/get_result?id=task-123",
-        }
-        mock_response.request = mock_request
-        mock_response.status_code = 200
-
-        # Mock the polling result
-        poll_response = MagicMock()
-        poll_response.status_code = 200
-        poll_response.json.return_value = {
             "status": "Ready",
-            "result": {"sample": "https://example.com/edited-image.png"},
+            "result": {"sample": "https://example.com/edited_image.png"},
         }
-
-        mock_client = MagicMock()
-        mock_client.get.return_value = poll_response
-
-        with patch("litellm.llms.black_forest_labs.image_edit.transformation._get_httpx_client", return_value=mock_client):
-            result = self.config.transform_image_edit_response(
-                model=self.model,
-                raw_response=mock_response,
-                logging_obj=self.logging_obj,
-            )
-
-        assert isinstance(result, ImageResponse)
-        assert len(result.data) == 1
-        assert result.data[0].url == "https://example.com/edited-image.png"
-        assert result.created is not None
-
-    def test_transform_image_edit_response_no_polling_url(self):
-        """Test response transformation when polling URL is missing."""
-        mock_response = MagicMock()
-        mock_response.json.return_value = {"id": "task-123"}  # No polling_url
         mock_response.status_code = 200
 
-        with pytest.raises(BlackForestLabsError) as exc_info:
-            self.config.transform_image_edit_response(
-                model=self.model,
-                raw_response=mock_response,
-                logging_obj=self.logging_obj,
-            )
+        result = self.config.transform_image_edit_response(
+            model=self.model,
+            raw_response=mock_response,
+            logging_obj=self.logging_obj,
+        )
 
-        assert exc_info.value.status_code == 500
-        assert "No polling_url" in exc_info.value.message
+        assert len(result.data) == 1
+        assert result.data[0].url == "https://example.com/edited_image.png"
 
-    def test_transform_image_edit_response_api_error(self):
-        """Test response transformation with API error."""
-        mock_response = MagicMock()
+    def test_transform_image_edit_response_no_image_url(self):
+        """Test response transformation when no image URL is present."""
+        mock_response = MagicMock(spec=httpx.Response)
         mock_response.json.return_value = {
-            "errors": ["Invalid image format"]
+            "status": "Ready",
+            "result": {},
         }
-        mock_response.status_code = 400
+        mock_response.status_code = 200
 
-        with pytest.raises(BlackForestLabsError) as exc_info:
+        with pytest.raises(BlackForestLabsError, match="No image URL"):
             self.config.transform_image_edit_response(
                 model=self.model,
                 raw_response=mock_response,
                 logging_obj=self.logging_obj,
             )
-
-        assert "Invalid image format" in exc_info.value.message
 
     def test_transform_image_edit_response_json_parse_error(self):
         """Test response transformation with JSON parse error."""
-        mock_response = MagicMock()
-        mock_response.json.side_effect = json.JSONDecodeError("Invalid JSON", "", 0)
-        mock_response.status_code = 500
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.json.side_effect = json.JSONDecodeError("error", "doc", 0)
+        mock_response.status_code = 200
 
-        with pytest.raises(BlackForestLabsError) as exc_info:
+        with pytest.raises(BlackForestLabsError, match="Error parsing"):
             self.config.transform_image_edit_response(
                 model=self.model,
                 raw_response=mock_response,
                 logging_obj=self.logging_obj,
             )
 
-        assert "Error parsing BFL response" in exc_info.value.message
+    def test_get_error_class(self):
+        """Test that get_error_class returns BlackForestLabsError."""
+        error = self.config.get_error_class(
+            error_message="Test error",
+            status_code=400,
+            headers={},
+        )
+
+        assert isinstance(error, BlackForestLabsError)
+        assert error.status_code == 400
+        assert "Test error" in str(error.message)
+
+    def test_use_multipart_form_data_returns_false(self):
+        """Test that use_multipart_form_data returns False for BFL."""
+        assert self.config.use_multipart_form_data() is False
