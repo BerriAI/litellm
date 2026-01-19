@@ -24,7 +24,7 @@ guardrails:
       api_key: os.environ/AIM_API_KEY
       api_base: os.environ/AIM_API_BASE
       default_on: true # Optional
-  
+
   - guardrail_name: "aporia-pre-guard"
     litellm_params:
       guardrail: aporia  # supported values: "aporia", "lakera"
@@ -59,6 +59,18 @@ guardrails:
       presidio_score_thresholds:  # minimum confidence scores for keeping detections
         CREDIT_CARD: 0.8
         EMAIL_ADDRESS: 0.6
+
+# Example Pillar Security config via Generic Guardrail API
+  - guardrail_name: "pillar-security"
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: https://api.pillar.security/api/v1/integrations/litellm
+      api_key: os.environ/PILLAR_API_KEY
+      additional_provider_specific_params:
+        plr_mask: true
+        plr_evidence: true
+        plr_scanners: true
 ```
 
 

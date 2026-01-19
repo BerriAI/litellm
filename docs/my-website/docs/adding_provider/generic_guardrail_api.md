@@ -237,6 +237,27 @@ litellm_settings:
           language: "en"
 ```
 
+### Example: Pillar Security Configuration
+
+[Pillar Security](https://pillar.security) uses the Generic Guardrail API to provide comprehensive AI security scanning including prompt injection protection, jailbreak detection, PII/PCI detection, and secret detection.
+
+```yaml
+guardrails:
+  - guardrail_name: "pillar-security"
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: https://api.pillar.security/api/v1/integrations/litellm
+      api_key: os.environ/PILLAR_API_KEY
+      default_on: true
+      additional_provider_specific_params:
+        plr_mask: true      # Enable PII/secret masking
+        plr_evidence: true  # Include detection evidence
+        plr_scanners: true  # Include scanner breakdown
+```
+
+See the [Pillar Security documentation](../proxy/guardrails/pillar_security.md) for full configuration options.
+
 ## Usage
 
 Users apply your guardrail by name:
