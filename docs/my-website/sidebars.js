@@ -677,6 +677,7 @@ const sidebars = {
         "providers/compactifai",
         "providers/custom_llm_server",
         "providers/dashscope",
+        "providers/qwen_ai",
         "providers/databricks",
         "providers/datarobot",
         "providers/deepgram",

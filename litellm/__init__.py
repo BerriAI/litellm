@@ -557,6 +557,7 @@ docker_model_runner_models: Set = set()
 amazon_nova_models: Set = set()
 stability_models: Set = set()
 github_copilot_models: Set = set()
+qwen_ai_models: Set = set()
 minimax_models: Set = set()
 aws_polly_models: Set = set()
 gigachat_models: Set = set()
@@ -812,6 +813,8 @@ def add_known_models():
             stability_models.add(key)
         elif value.get("litellm_provider") == "github_copilot":
             github_copilot_models.add(key)
+        elif value.get("litellm_provider") == "qwen_ai":
+            qwen_ai_models.add(key)
         elif value.get("litellm_provider") == "minimax":
             minimax_models.add(key)
         elif value.get("litellm_provider") == "aws_polly":
@@ -912,6 +915,7 @@ model_list = list(
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
+    | qwen_ai_models
     | moonshot_models
     | publicai_models
     | v0_models
@@ -1025,6 +1029,7 @@ models_by_provider: dict = {
     "amazon_nova": amazon_nova_models,
     "stability": stability_models,
     "github_copilot": github_copilot_models,
+    "qwen_ai": qwen_ai_models,
     "minimax": minimax_models,
     "aws_polly": aws_polly_models,
     "gigachat": gigachat_models,
@@ -1458,6 +1463,7 @@ if TYPE_CHECKING:
     from .llms.github_copilot.chat.transformation import GithubCopilotConfig as GithubCopilotConfig
     from .llms.github_copilot.responses.transformation import GithubCopilotResponsesAPIConfig as GithubCopilotResponsesAPIConfig
     from .llms.github_copilot.embedding.transformation import GithubCopilotEmbeddingConfig as GithubCopilotEmbeddingConfig
+    from .llms.qwen_ai.chat.transformation import QwenAIConfig as QwenAIConfig
     from .llms.gigachat.chat.transformation import GigaChatConfig as GigaChatConfig
     from .llms.gigachat.embedding.transformation import GigaChatEmbeddingConfig as GigaChatEmbeddingConfig
     from .llms.nebius.chat.transformation import NebiusConfig as NebiusConfig
