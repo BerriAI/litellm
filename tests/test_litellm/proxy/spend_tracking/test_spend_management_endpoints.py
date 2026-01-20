@@ -201,6 +201,10 @@ ignored_keys = [
     "metadata.usage_object",
     "metadata.cold_storage_object_key",
     "metadata.additional_usage_values.prompt_tokens_details.cache_creation_tokens",
+    "metadata.additional_usage_values.completion_tokens_details",
+    "metadata.additional_usage_values.prompt_tokens_details",
+    "metadata.additional_usage_values.cache_creation_input_tokens",
+    "metadata.additional_usage_values.cache_read_input_tokens",
     "metadata.litellm_overhead_time_ms",
     "metadata.cost_breakdown",
 ]

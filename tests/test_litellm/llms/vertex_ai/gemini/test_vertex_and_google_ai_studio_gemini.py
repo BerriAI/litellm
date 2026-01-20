@@ -74,6 +74,10 @@ def test_get_model_name_from_gemini_spec_model():
 
 
 def test_vertex_ai_response_schema_dict():
+    """
+    Test that older Gemini models (1.5) use responseSchema (OpenAPI format).
+    responseSchema requires propertyOrdering and doesn't support additionalProperties.
+    """
     v = VertexGeminiConfig()
     non_default_params = {
         "messages": [{"role": "user", "content": "Hello, world!"}],
@@ -109,7 +113,7 @@ def test_vertex_ai_response_schema_dict():
     transformed_request = v.map_openai_params(
         non_default_params=non_default_params,
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema (OpenAPI format)
         drop_params=False,
     )
 
@@ -160,6 +164,9 @@ class Step(BaseModel):
 
 
 def test_vertex_ai_response_schema_defs():
+    """
+    Test that $defs are unpacked for older Gemini models using responseSchema.
+    """
     v = VertexGeminiConfig()
 
     schema = cast(dict, v.get_json_schema_from_pydantic_object(MathReasoning))
@@ -173,7 +180,7 @@ def test_vertex_ai_response_schema_defs():
             "response_format": schema,
         },
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema (OpenAPI format)
         drop_params=False,
     )
 
@@ -203,7 +210,93 @@ def test_vertex_ai_response_schema_defs():
     }
 
 
+def test_vertex_ai_response_json_schema_for_gemini_2():
+    """
+    Test that Gemini 2.0+ models automatically use responseJsonSchema.
+
+    responseJsonSchema uses standard JSON Schema format:
+    - lowercase types (string, object, etc.)
+    - no propertyOrdering required
+    - supports additionalProperties
+    """
+    v = VertexGeminiConfig()
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                            "age": {"type": "integer"},
+                        },
+                        "required": ["name"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model="gemini-2.0-flash",  # Gemini 2.0+ automatically uses responseJsonSchema
+        drop_params=False,
+    )
+
+    # Should use response_json_schema, not response_schema
+    assert "response_json_schema" in transformed_request
+    assert "response_schema" not in transformed_request
+
+    # Types should be lowercase (standard JSON Schema format)
+    assert transformed_request["response_json_schema"]["type"] == "object"
+    assert transformed_request["response_json_schema"]["properties"]["name"]["type"] == "string"
+    assert transformed_request["response_json_schema"]["properties"]["age"]["type"] == "integer"
+
+    # Should NOT have propertyOrdering (not needed for responseJsonSchema)
+    assert "propertyOrdering" not in transformed_request["response_json_schema"]
+
+    # additionalProperties should be preserved (supported by responseJsonSchema)
+    assert transformed_request["response_json_schema"].get("additionalProperties") == False
+
+
+def test_vertex_ai_response_schema_for_old_models():
+    """
+    Test that older models (Gemini 1.5) automatically use responseSchema.
+    """
+    v = VertexGeminiConfig()
+
+    transformed_request = v.map_openai_params(
+        non_default_params={
+            "messages": [{"role": "user", "content": "Hello, world!"}],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string"},
+                        },
+                    },
+                },
+            },
+        },
+        optional_params={},
+        model="gemini-1.5-flash",  # Old model automatically uses responseSchema
+        drop_params=False,
+    )
+
+    # Should use response_schema for older models
+    assert "response_schema" in transformed_request
+    assert "response_json_schema" not in transformed_request
+
+
 def test_vertex_ai_retain_property_ordering():
+    """
+    Test that existing propertyOrdering is preserved for older models using responseSchema.
+    """
     v = VertexGeminiConfig()
     transformed_request = v.map_openai_params(
         non_default_params={
@@ -224,7 +317,7 @@ def test_vertex_ai_retain_property_ordering():
             },
         },
         optional_params={},
-        model="gemini-2.0-flash-lite",
+        model="gemini-1.5-flash",  # Old model uses responseSchema which needs propertyOrdering
         drop_params=False,
     )
 
@@ -2587,3 +2680,69 @@ def test_gemini_token_usage_standard_response():
     assert result.completion_tokens == 50
     assert result.completion_tokens_details.text_tokens == 40
     assert result.completion_tokens_details.image_tokens == 10
+
+
+def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
+    """
+    Test that image generation models correctly separate prompt and completion token details.
+    
+    This is a regression test for the bug where prompt_tokens_details.image_tokens
+    was incorrectly set to the completion's image token count instead of 0.
+    
+    Scenario: Text-only prompt generates an image response
+    - Input: Text prompt (no images)
+    - Output: Generated image + text description
+    
+    Expected behavior:
+    - prompt_tokens_details.image_tokens should be 0 (text-only input)
+    - completion_tokens_details.image_tokens should be 1290 (generated image)
+    
+    Bug behavior (before fix):
+    - prompt_tokens_details.image_tokens was 1290 (incorrect!)
+    - completion_tokens_details.image_tokens was 1290 (correct)
+    
+    The bug was caused by reusing the same variables (image_tokens, audio_tokens, text_tokens)
+    for both prompt and completion token details.
+    """
+    v = VertexGeminiConfig()
+    
+    # Simulate Gemini image generation model response metadata
+    # User sends text-only prompt, model generates image + text
+    usage_metadata_dict = {
+        "promptTokenCount": 101,
+        "candidatesTokenCount": 1290,
+        "totalTokenCount": 1391,
+        # Prompt is text-only (no image tokens in input)
+        "promptTokensDetails": [
+            {"modality": "TEXT", "tokenCount": 101}
+        ],
+        # Response contains generated image + text
+        "candidatesTokensDetails": [
+            {"modality": "IMAGE", "tokenCount": 1290}
+        ],
+    }
+    
+    completion_response = {"usageMetadata": usage_metadata_dict}
+    result = v._calculate_usage(completion_response=completion_response)
+    
+    # Verify basic token counts
+    assert result.prompt_tokens == 101
+    assert result.completion_tokens == 1290
+    assert result.total_tokens == 1391
+    
+    # CRITICAL: Prompt tokens details should show NO image tokens (text-only input)
+    assert result.prompt_tokens_details.text_tokens == 101, \
+        "Prompt text tokens should be 101"
+    assert result.prompt_tokens_details.image_tokens is None, \
+        "Prompt image tokens should be None (text-only input, no images in prompt)"
+    assert result.prompt_tokens_details.audio_tokens is None, \
+        "Prompt audio tokens should be None"
+    
+    # Completion tokens details should show the generated image tokens
+    assert result.completion_tokens_details.image_tokens == 1290, \
+        "Completion image tokens should be 1290 (generated image)"
+    
+    # Verify text_tokens is auto-calculated for completion
+    # candidatesTokenCount (1290) - image_tokens (1290) = 0
+    assert result.completion_tokens_details.text_tokens == 0, \
+        "Completion text tokens should be 0 (image-only response)"

@@ -404,6 +404,7 @@ def image_generation(  # noqa: PLR0915
             litellm.LlmProviders.STABILITY,
             litellm.LlmProviders.RUNWAYML,
             litellm.LlmProviders.VERTEX_AI,
+            litellm.LlmProviders.OPENROUTER
         ):
             if image_generation_config is None:
                 raise ValueError(
@@ -713,8 +714,8 @@ def image_variation(
 
 @client
 def image_edit(  # noqa: PLR0915
-    image: Union[FileTypes, List[FileTypes]],
-    prompt: str,
+    image: Optional[Union[FileTypes, List[FileTypes]]] = None,
+    prompt: Optional[str]= None,
     model: Optional[str] = None,
     mask: Optional[str] = None,
     n: Optional[int] = None,
@@ -765,7 +766,7 @@ def image_edit(  # noqa: PLR0915
         _is_async = kwargs.pop("async_call", False) is True
 
         # add images / or return a single image
-        images = image if isinstance(image, list) else [image]
+        images = image if isinstance(image, list) else ([image] if image is not None else [])
 
         headers_from_kwargs = kwargs.get("headers")
         merged_extra_headers: Dict[str, Any] = {}

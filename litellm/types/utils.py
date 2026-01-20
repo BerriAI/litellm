@@ -63,6 +63,19 @@ def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
 
 
+
+class SafeAttributeModel:
+    """
+    A base model that provides safe attribute access.
+    """
+    def __delattr__(self, name):
+        try:
+            super().__delattr__(name)
+        except AttributeError:
+            # noop if attribute does not exist
+            pass
+
+
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
@@ -107,6 +120,20 @@ class SearchContextCostPerQuery(TypedDict, total=False):
     search_context_size_low: float
     search_context_size_medium: float
     search_context_size_high: float
+
+
+class AgenticLoopParams(TypedDict, total=False):
+    """
+    Parameters passed to agentic loop hooks (e.g., WebSearch interception).
+    
+    Stored in logging_obj.model_call_details["agentic_loop_params"] to provide
+    agentic hooks with the original request context needed for follow-up calls.
+    """
+    model: str
+    """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
+    
+    custom_llm_provider: str
+    """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
 
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
@@ -364,6 +391,11 @@ class CallTypes(str, Enum):
     asend_message = "asend_message"
     send_message = "send_message"
 
+    #########################################################
+    # Claude Code Call Types
+    #########################################################
+    acreate_skill = "acreate_skill"
+
 
 CallTypesLiteral = Literal[
     "embedding",
@@ -420,6 +452,7 @@ CallTypesLiteral = Literal[
     "send_message",
     "aresponses",
     "responses",
+    "acreate_skill",
 ]
 
 # Mapping of API routes to their corresponding call types
@@ -1000,7 +1033,7 @@ def add_provider_specific_fields(
     setattr(object, "provider_specific_fields", provider_specific_fields)
 
 
-class Message(OpenAIObject):
+class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
@@ -1120,7 +1153,7 @@ class Message(OpenAIObject):
             return self.dict()
 
 
-class Delta(OpenAIObject):
+class Delta(SafeAttributeModel, OpenAIObject):
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -1217,7 +1250,7 @@ class Delta(OpenAIObject):
         setattr(self, key, value)
 
 
-class Choices(OpenAIObject):
+class Choices(SafeAttributeModel, OpenAIObject):
     finish_reason: str
     index: int
     message: Message
@@ -1250,6 +1283,14 @@ class Choices(OpenAIObject):
                 params["message"] = message
             elif isinstance(message, dict):
                 params["message"] = Message(**message)
+            elif isinstance(message, BaseModel):
+                # Normalize provider/OpenAI SDK message models into LiteLLM's Message type.
+                dump = (
+                    message.model_dump()
+                    if hasattr(message, "model_dump")
+                    else message.dict()
+                )
+                params["message"] = Message(**dump)
         if logprobs is not None:
             if isinstance(logprobs, dict):
                 params["logprobs"] = ChoiceLogprobs(**logprobs)
@@ -1302,6 +1343,7 @@ class CacheCreationTokenDetails(BaseModel):
 
 
 class PromptTokensDetailsWrapper(
+    SafeAttributeModel,
     PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
     text_tokens: Optional[int] = None
@@ -1349,7 +1391,7 @@ class ServerToolUse(BaseModel):
     tool_search_requests: Optional[int] = None
 
 
-class Usage(CompletionUsage):
+class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
@@ -1612,6 +1654,12 @@ class ModelResponseBase(OpenAIObject):
 
     _response_headers: Optional[dict] = None
 
+    def model_dump(self, **kwargs):
+        """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
+        if "exclude_unset" not in kwargs and "exclude_none" not in kwargs:
+            kwargs["exclude_unset"] = True
+        return super().model_dump(**kwargs)
+
 
 class ModelResponseStream(ModelResponseBase):
     choices: List[StreamingChoices]
@@ -1651,12 +1699,16 @@ class ModelResponseStream(ModelResponseBase):
         else:
             created = created
 
-        if (
-            "usage" in kwargs
-            and kwargs["usage"] is not None
-            and isinstance(kwargs["usage"], dict)
-        ):
-            kwargs["usage"] = Usage(**kwargs["usage"])
+        if "usage" in kwargs and kwargs["usage"] is not None:
+            if isinstance(kwargs["usage"], dict):
+                kwargs["usage"] = Usage(**kwargs["usage"])
+            elif isinstance(kwargs["usage"], BaseModel):
+                dump = (
+                    kwargs["usage"].model_dump()
+                    if hasattr(kwargs["usage"], "model_dump")
+                    else kwargs["usage"].dict()
+                )
+                kwargs["usage"] = Usage(**dump)
 
         kwargs["id"] = id
         kwargs["created"] = created
@@ -1730,6 +1782,13 @@ class ModelResponse(ModelResponseBase):
                         _new_choice = choice  # type: ignore
                     elif isinstance(choice, dict):
                         _new_choice = Choices(**choice)  # type: ignore
+                    elif isinstance(choice, BaseModel):
+                        dump = (
+                            choice.model_dump()
+                            if hasattr(choice, "model_dump")
+                            else choice.dict()
+                        )
+                        _new_choice = Choices(**dump)  # type: ignore
                     else:
                         _new_choice = choice
                     new_choices.append(_new_choice)
@@ -1748,6 +1807,11 @@ class ModelResponse(ModelResponseBase):
         if usage is not None:
             if isinstance(usage, dict):
                 usage = Usage(**usage)
+            elif isinstance(usage, BaseModel):
+                dump = (
+                    usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
+                )
+                usage = Usage(**dump)
             else:
                 usage = usage
         elif stream is None or stream is False:
@@ -2908,6 +2972,7 @@ GenericBudgetConfigType = Dict[str, BudgetConfig]
 
 class LlmProviders(str, Enum):
     OPENAI = "openai"
+    CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
@@ -3032,7 +3097,6 @@ class LlmProviders(str, Enum):
     XIAOMI_MIMO = "xiaomi_mimo"
 
 
-
 # Create a set of all provider values for quick lookup
 LlmProvidersSet = {provider.value for provider in LlmProviders}
 
@@ -3089,6 +3153,12 @@ class TokenCountResponse(LiteLLMPydanticObjectBase):
     """
     Original Response from upstream API call - if an API call was made for token counting
     """
+    error: bool = False
+    error_message: Optional[str] = None
+    """
+    HTTP status code from the token counting API (e.g., 200 for success, 429 for rate limit, 400 for bad request)
+    """
+    status_code: Optional[int] = None
 
 
 class CustomHuggingfaceTokenizer(TypedDict):
