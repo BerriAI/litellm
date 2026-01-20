@@ -23,6 +23,11 @@ from .common_utils import (
     is_global_only_vertex_model,
 )
 
+GOOGLE_IMPORT_ERROR_MESSAGE = (
+    "Google Cloud SDK not found. Install it with: pip install 'litellm[google]' "
+    "or pip install google-cloud-aiplatform"
+)
+
 if TYPE_CHECKING:
     from google.auth.credentials import Credentials as GoogleCredentialsObject
 else:
@@ -138,7 +143,10 @@ class VertexBase:
 
     # Google Auth Helpers -- extracted for mocking purposes in tests
     def _credentials_from_identity_pool(self, json_obj, scopes):
-        from google.auth import identity_pool
+        try:
+            from google.auth import identity_pool
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         creds = identity_pool.Credentials.from_info(json_obj)
         if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
@@ -146,7 +154,10 @@ class VertexBase:
         return creds
 
     def _credentials_from_identity_pool_with_aws(self, json_obj, scopes):
-        from google.auth import aws
+        try:
+            from google.auth import aws
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         creds = aws.Credentials.from_info(json_obj)
         if scopes and hasattr(creds, "requires_scopes") and creds.requires_scopes:
@@ -154,22 +165,30 @@ class VertexBase:
         return creds
 
     def _credentials_from_authorized_user(self, json_obj, scopes):
-        import google.oauth2.credentials
+        try:
+            import google.oauth2.credentials
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         return google.oauth2.credentials.Credentials.from_authorized_user_info(
             json_obj, scopes=scopes
         )
 
     def _credentials_from_service_account(self, json_obj, scopes):
-        import google.oauth2.service_account
+        try:
+            import google.oauth2.service_account
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         return google.oauth2.service_account.Credentials.from_service_account_info(
             json_obj, scopes=scopes
         )
 
     def _credentials_from_default_auth(self, scopes):
-
-        import google.auth as google_auth
+        try:
+            import google.auth as google_auth
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         return google_auth.default(scopes=scopes)
 
@@ -261,9 +280,12 @@ class VertexBase:
         return api_base
 
     def refresh_auth(self, credentials: Any) -> None:
-        from google.auth.transport.requests import (
-            Request,  # type: ignore[import-untyped]
-        )
+        try:
+            from google.auth.transport.requests import (
+                Request,  # type: ignore[import-untyped]
+            )
+        except ImportError:
+            raise ImportError(GOOGLE_IMPORT_ERROR_MESSAGE)
 
         credentials.refresh(Request())
 
