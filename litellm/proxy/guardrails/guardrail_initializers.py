@@ -206,6 +206,7 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
         guardrail_name=guardrail.get(
             "guardrail_name", "panw_prisma_airs"
         ),  # Use .get() with default
+        event_hook=litellm_params.mode,
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base
         or "https://service.api.aisecurity.paloaltonetworks.com/v1/scan/sync/request",

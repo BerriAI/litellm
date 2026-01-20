@@ -63,6 +63,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
         violation_message_template: Optional[str] = None,
+        event_hook: Optional[Any] = None,
         **kwargs,
     ):
         """Initialize PANW Prisma AIRS guardrail handler."""
@@ -75,6 +76,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         # Initialize parent CustomGuardrail with masking flags
         super().__init__(
             guardrail_name=guardrail_name,
+            event_hook=event_hook,
             default_on=default_on,
             mask_request_content=_mask_request_content,
             mask_response_content=_mask_response_content,
