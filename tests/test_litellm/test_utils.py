@@ -2945,3 +2945,162 @@ def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
         and not any_assistant_message_has_thinking_blocks(messages)
     )
     assert should_drop_thinking is False
+
+
+class TestAdditionalDropParamsForNonOpenAIProviders:
+    """
+    Test additional_drop_params functionality for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    The bug was that additional_drop_params only filtered params for OpenAI/Azure
+    providers, but not for other providers like Bedrock. This caused OpenAI-specific
+    params like prompt_cache_key to be passed to Bedrock, resulting in errors.
+    """
+
+    def test_additional_drop_params_filters_for_bedrock(self):
+        """
+        Test that additional_drop_params correctly filters params for Bedrock provider.
+
+        Before the fix, prompt_cache_key would be passed through to Bedrock even when
+        specified in additional_drop_params, causing:
+        'BedrockException - {"message":"The model returned the following errors:
+        prompt_cache_key: Extra inputs are not permitted"}'
+        """
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key_123",
+            "temperature": 0.7,
+            "model": "bedrock/anthropic.claude-v2",
+        }
+        openai_params = ["temperature", "max_tokens", "top_p", "model"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key"],
+        )
+
+        # prompt_cache_key should be filtered out
+        assert "prompt_cache_key" not in result
+        # temperature should still be there (it's in openai_params, not filtered)
+        # Note: temperature is in openai_params so it won't be added by this function
+        # The function only adds params NOT in openai_params
+
+    def test_additional_drop_params_filters_multiple_params_for_non_openai(self):
+        """Test filtering multiple params for non-OpenAI providers."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "some_openai_only_param": "value1",
+            "another_openai_param": "value2",
+            "keep_this_param": "keep_me",
+        }
+        openai_params = ["temperature", "max_tokens"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="anthropic",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key", "some_openai_only_param"],
+        )
+
+        # Filtered params should not be present
+        assert "prompt_cache_key" not in result
+        assert "some_openai_only_param" not in result
+        # Non-filtered params should be present
+        assert result.get("another_openai_param") == "value2"
+        assert result.get("keep_this_param") == "keep_me"
+
+    def test_additional_drop_params_none_keeps_all_params(self):
+        """Test that when additional_drop_params is None, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=None,
+        )
+
+        # All params should be present when additional_drop_params is None
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+    def test_additional_drop_params_empty_list_keeps_all_params(self):
+        """Test that when additional_drop_params is empty list, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=[],
+        )
+
+        # All params should be present when additional_drop_params is empty
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+
+class TestDropParamsWithPromptCacheKey:
+    """
+    Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    prompt_cache_key is an OpenAI-specific parameter that should be automatically
+    dropped when using providers like Bedrock that don't support it.
+    """
+
+    def test_prompt_cache_key_in_default_params(self):
+        """Verify prompt_cache_key is now in DEFAULT_CHAT_COMPLETION_PARAM_VALUES."""
+        from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+        assert "prompt_cache_key" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+        assert "prompt_cache_retention" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+    def test_drop_params_removes_prompt_cache_key_for_bedrock(self):
+        """
+        Test that get_optional_params with drop_params=True removes prompt_cache_key
+        for Bedrock provider since it's not in Bedrock's supported params.
+        """
+        from litellm.utils import get_optional_params
+
+        # Call get_optional_params for Bedrock with prompt_cache_key
+        # drop_params=True should remove it since Bedrock doesn't support it
+        result = get_optional_params(
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            custom_llm_provider="bedrock",
+            prompt_cache_key="test_cache_key",
+            temperature=0.7,
+            drop_params=True,
+        )
+
+        # prompt_cache_key should be dropped for Bedrock
+        assert "prompt_cache_key" not in result
+        # temperature should remain (it's supported by Bedrock)
+        assert result.get("temperature") == 0.7
