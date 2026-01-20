@@ -3,8 +3,8 @@
 LiteLLM Health Check Client
 
 A sentinel health check tool that tests all configured models on a LiteLLM proxy.
-Similar to HRT's health check system, this script:
-- Can read models from YAML config file (like HRT) or fetch from proxy API
+This script:
+- Can read models from YAML config file or fetch from proxy API
 - Sends a simple test request to each model concurrently
 - Reports health status for each model
 - Supports both chat/completion and embedding models
