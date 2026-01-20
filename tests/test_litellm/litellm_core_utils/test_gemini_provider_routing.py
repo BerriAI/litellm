@@ -27,9 +27,9 @@ class TestGeminiProviderRouting:
     def test_gemini_models_with_vertex_ai_prefix_route_to_vertex_ai(self):
         """Test that vertex_ai/gemini-* models route to vertex_ai provider when prefix is used"""
         model, provider, _, _ = get_llm_provider("vertex_ai/gemini-2.0-flash")
-        assert provider == "vertex_ai", (
-            f"Expected 'vertex_ai' provider when using vertex_ai/ prefix, got '{provider}'"
-        )
+        assert (
+            provider == "vertex_ai"
+        ), f"Expected 'vertex_ai' provider when using vertex_ai/ prefix, got '{provider}'"
         assert model == "gemini-2.0-flash"
 
     def test_gemini_models_in_vertex_lists_route_to_gemini(self):
@@ -55,7 +55,7 @@ class TestGeminiProviderRouting:
     def test_non_gemini_vertex_models_unchanged(self):
         """Test that non-gemini vertex models still route to vertex_ai"""
         model, provider, _, _ = get_llm_provider("chat-bison")
-        assert provider == "vertex_ai", (
-            f"Expected 'vertex_ai' provider for chat-bison, got '{provider}'"
-        )
+        assert (
+            provider == "vertex_ai"
+        ), f"Expected 'vertex_ai' provider for chat-bison, got '{provider}'"
         assert model == "chat-bison"
