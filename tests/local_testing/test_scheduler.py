@@ -10,7 +10,7 @@ sys.path.insert(
     0, os.path.abspath("../..")
 )  # Adds the parent directory to the system path
 from litellm import Router
-from litellm.scheduler import FlowItem, Scheduler
+from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 from litellm import ModelResponse
 
 
@@ -38,6 +38,35 @@ async def test_scheduler_diff_model_names():
         )
         == True
     )
+
+
+@pytest.mark.asyncio
+async def test_scheduler_poll_persists_queue_to_cache():
+    class StubRedisCache:
+        def __init__(self):
+            self.store = {}
+
+        async def async_get_cache(self, key, **kwargs):
+            return self.store.get(key)
+
+        async def async_set_cache(self, key, value, **kwargs):
+            self.store[key] = value
+
+    redis_cache = StubRedisCache()
+    scheduler = Scheduler(redis_cache=redis_cache)
+
+    item1 = FlowItem(priority=0, request_id="10", model_name="gpt-3.5-turbo")
+    item2 = FlowItem(priority=0, request_id="11", model_name="gpt-3.5-turbo")
+    await scheduler.add_request(item1)
+    await scheduler.add_request(item2)
+
+    await scheduler.poll(
+        id="10", model_name="gpt-3.5-turbo", health_deployments=[]
+    )
+
+    queue_key = f"{SchedulerCacheKeys.queue.value}:{item1.model_name}"
+    updated_queue = redis_cache.store[queue_key]
+    assert updated_queue[0][1] == "11"
 
 
 @pytest.mark.parametrize("p0, p1", [(0, 0), (0, 1), (1, 0)])
