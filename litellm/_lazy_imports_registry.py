@@ -198,6 +198,7 @@ LLM_CONFIG_NAMES = (
     "AzureOpenAIOSeriesResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
+    "VolcEngineResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -591,6 +592,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AzureOpenAIOSeriesResponsesAPIConfig": (".llms.azure.responses.o_series_transformation", "AzureOpenAIOSeriesResponsesAPIConfig"),
     "XAIResponsesAPIConfig": (".llms.xai.responses.transformation", "XAIResponsesAPIConfig"),
     "LiteLLMProxyResponsesAPIConfig": (".llms.litellm_proxy.responses.transformation", "LiteLLMProxyResponsesAPIConfig"),
+    "VolcEngineResponsesAPIConfig": (".llms.volcengine.responses.transformation", "VolcEngineResponsesAPIConfig"),
     "ManusResponsesAPIConfig": (".llms.manus.responses.transformation", "ManusResponsesAPIConfig"),
     "GoogleAIStudioInteractionsConfig": (".llms.gemini.interactions.transformation", "GoogleAIStudioInteractionsConfig"),
     "OpenAIOSeriesConfig": (".llms.openai.chat.o_series_transformation", "OpenAIOSeriesConfig"),
@@ -774,4 +776,3 @@ __all__ = [
     "_LLM_PROVIDER_LOGIC_IMPORT_MAP",
     "_UTILS_MODULE_IMPORT_MAP",
 ]
-
