@@ -1173,7 +1173,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <Text className="ont-medium block text-gray-700 flex items-center">
+                  <Text className="font-medium block text-gray-700 flex items-center">
                     <SettingOutlined className="mr-2" /> Custom Proxy Base URL
                   </Text>
                   {proxySettings?.LITELLM_UI_API_DOC_BASE_URL && !customProxyBaseUrl && (
