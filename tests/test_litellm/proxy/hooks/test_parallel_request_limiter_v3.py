@@ -3,11 +3,9 @@ Unit Tests for the max parallel request limiter v3 for the proxy
 """
 
 import asyncio
-import os
-import sys
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Dict
 
 import pytest
 from fastapi import HTTPException
@@ -19,7 +17,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
-from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
+from litellm.proxy.utils import InternalUsageCache, hash_token
 from litellm.types.utils import ModelResponse, Usage
 
 
@@ -709,10 +707,6 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
     """
     Test that model-specific rate limits only trigger should_rate_limit when actually configured for the requested model.
     """
-    from litellm.proxy.auth.auth_utils import (
-        get_key_model_rpm_limit,
-        get_key_model_tpm_limit,
-    )
 
     _api_key = "sk-12345"
     _api_key = hash_token(_api_key)
@@ -774,7 +768,6 @@ async def test_model_specific_rate_limits_only_called_when_configured_v3():
 
 @pytest.mark.asyncio
 async def test_tpm_api_key_rate_limits_v3():
-
     _api_key = "sk-12345"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
@@ -869,7 +862,6 @@ async def test_tpm_api_key_rate_limits_v3():
 
 @pytest.mark.asyncio
 async def test_rpm_api_key_rate_limits_v3():
-
     _api_key = "sk-12345"
     _api_key_hash = hash_token(_api_key)
     model = "gpt-3.5-turbo"
@@ -1138,7 +1130,6 @@ async def test_async_increment_tokens_with_ttl_preservation():
     4. Verify TTL decreased but wasn't reset to 60s
     """
     import os
-    import time
 
     from litellm.caching.redis_cache import RedisCache
     from litellm.types.caching import RedisPipelineIncrementOperation
@@ -2065,3 +2056,90 @@ class TestGetTotalTokensFromUsageCacheExclusion:
         """Should handle None usage gracefully."""
         result = handler._get_total_tokens_from_usage(None, "total")
         assert result == 0, f"Expected 0 for None usage, got {result}"
+
+
+@pytest.mark.parametrize(
+    "token_rate_limit_type,expected_tokens",
+    [
+        ("input", 25),
+        ("output", 35),
+        ("total", 60),
+    ],
+)
+@pytest.mark.asyncio
+async def test_async_log_success_event_with_responses_api_usage(
+    monkeypatch, token_rate_limit_type, expected_tokens
+):
+    """
+    Test that async_log_success_event correctly handles usage for Responses API.
+
+    After upstream transformation in litellm_logging.py, ResponseAPIUsage is converted
+    to a unified Usage object with prompt_tokens/completion_tokens field names.
+
+    This test verifies the fix for issue #18671: Rate limiter decrements by incorrect token count
+    for /v1/responses endpoint.
+    """
+    from unittest.mock import MagicMock
+    from litellm.types.utils import Usage
+
+    _api_key = "sk-12345"
+    _api_key = hash_token(_api_key)
+    local_cache = DualCache()
+    parallel_request_handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache)
+    )
+
+    # Mock the get_rate_limit_type method
+    monkeypatch.setattr(
+        parallel_request_handler, "get_rate_limit_type", lambda: token_rate_limit_type
+    )
+
+    # Create a mock response object with Usage (unified format after upstream transformation)
+    # The upstream _transform_usage_objects converts ResponseAPIUsage to Usage
+    from litellm.types.utils import BaseLiteLLMOpenAIResponseObject
+
+    mock_response = MagicMock(spec=BaseLiteLLMOpenAIResponseObject)
+    # Use unified Usage object (after transformation from ResponseAPIUsage)
+    mock_response.usage = Usage(prompt_tokens=25, completion_tokens=35, total_tokens=60)
+
+    mock_kwargs = {
+        "standard_logging_object": {
+            "metadata": {
+                "user_api_key_hash": _api_key,
+                "user_api_key_user_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_end_user_id": None,
+            }
+        },
+        "model": "gemini-3-flash-preview",
+    }
+
+    captured_operations = []
+
+    async def mock_increment_pipeline(increment_list, **kwargs):
+        captured_operations.extend(increment_list)
+        return True
+
+    monkeypatch.setattr(
+        parallel_request_handler.internal_usage_cache.dual_cache,
+        "async_increment_cache_pipeline",
+        mock_increment_pipeline,
+    )
+
+    await parallel_request_handler.async_log_success_event(
+        kwargs=mock_kwargs,
+        response_obj=mock_response,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    tpm_operation = None
+    for op in captured_operations:
+        if op["key"].endswith(":tokens"):
+            tpm_operation = op
+            break
+
+    assert tpm_operation is not None, "Should have a TPM increment operation"
+    assert (
+        tpm_operation["increment_value"] == expected_tokens
+    ), f"Expected {expected_tokens} tokens for type '{token_rate_limit_type}', got {tpm_operation['increment_value']}"

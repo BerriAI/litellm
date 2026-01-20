@@ -1627,11 +1627,7 @@ class Logging(LiteLLMLoggingBaseClass):
             setattr(
                 result,
                 "usage",
-                (
-                    transformed_usage.model_dump()
-                    if hasattr(transformed_usage, "model_dump")
-                    else dict(transformed_usage)
-                ),
+                transformed_usage,  # Keep as Usage object for unified handling in callbacks
             )
             if (
                 standard_logging_payload := self.model_call_details.get(
