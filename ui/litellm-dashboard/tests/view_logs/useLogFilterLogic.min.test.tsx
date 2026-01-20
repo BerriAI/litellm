@@ -26,6 +26,7 @@ function Harness({ logs }: { logs: any }) {
     setCurrentPage: () => {},
     userID: "user-1",
     userRole: "admin",
+    currentPage: 1,
   });
 
   return <div data-testid="count">{filteredLogs.data.length}</div>;
