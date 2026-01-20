@@ -59,6 +59,17 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
             return AzureAIAnthropicTokenCounter()
         return None
 
+    def get_models(
+        self, api_key: Optional[str] = None, api_base: Optional[str] = None
+    ) -> List[str]:
+        """
+        Returns a list of models supported by Azure AI.
+        
+        Azure AI doesn't have a standard model listing endpoint,
+        so this returns an empty list.
+        """
+        return []
+
     #########################################################
     # Not implemented methods
     #########################################################
