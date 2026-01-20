@@ -1,30 +1,20 @@
 import asyncio
 import base64
 import os
-import re
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Type, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Type
 
 from fastapi import HTTPException
 
-from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import UserAPIKeyAuth
-from litellm.types.utils import (
-    CallTypes,
-    Choices,
-    Delta,
-    EmbeddingResponse,
-    ImageResponse,
-    ModelResponse,
-    ModelResponseStream,
-)
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
@@ -77,29 +67,285 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         super().__init__(**kwargs)
 
-    async def async_pre_call_hook(
+    async def apply_guardrail(
         self,
-        user_api_key_dict: UserAPIKeyAuth,
-        cache: DualCache,
-        data: dict,
-        call_type: str,
-    ) -> Union[Exception, str, dict, None]:
-        alias = self._resolve_key_alias(user_api_key_dict, data)
-        return await self.call_prompt_security_guardrail(
-            data, call_type=call_type, user_api_key_alias=alias
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional["LiteLLMLoggingObj"] = None,
+    ) -> GenericGuardrailAPIInputs:
+        """
+        Apply Prompt Security guardrail to the given inputs.
+
+        This method is called by LiteLLM's guardrail framework for ALL endpoints:
+        - /chat/completions
+        - /responses
+        - /messages (Anthropic)
+        - /embeddings
+        - /image/generations
+        - /audio/transcriptions
+        - /rerank
+        - MCP server
+        - and more...
+
+        Args:
+            inputs: Dictionary containing:
+                - texts: List of texts to check
+                - images: Optional list of image URLs
+                - tool_calls: Optional list of tool calls
+                - structured_messages: Optional full message structure
+            request_data: The original request data
+            input_type: "request" for input checking, "response" for output checking
+            logging_obj: Optional logging object
+
+        Returns:
+            The inputs (potentially modified if action is "modify")
+
+        Raises:
+            HTTPException: If content is blocked by Prompt Security
+        """
+        texts = inputs.get("texts", [])
+        images = inputs.get("images", [])
+        structured_messages = inputs.get("structured_messages", [])
+
+        # Resolve user API key alias from request metadata
+        user_api_key_alias = self._resolve_key_alias_from_request_data(request_data)
+
+        verbose_proxy_logger.debug(
+            "Prompt Security Guardrail: apply_guardrail called with input_type=%s, "
+            "texts=%d, images=%d, structured_messages=%d",
+            input_type,
+            len(texts),
+            len(images),
+            len(structured_messages),
         )
 
-    async def async_moderation_hook(
+        if input_type == "request":
+            return await self._apply_guardrail_on_request(
+                inputs=inputs,
+                texts=texts,
+                images=images,
+                structured_messages=structured_messages,
+                request_data=request_data,
+                user_api_key_alias=user_api_key_alias,
+            )
+        else:  # response
+            return await self._apply_guardrail_on_response(
+                inputs=inputs,
+                texts=texts,
+                user_api_key_alias=user_api_key_alias,
+            )
+
+    async def _apply_guardrail_on_request(
         self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        call_type: str,
-    ) -> Union[Exception, str, dict, None]:
-        alias = self._resolve_key_alias(user_api_key_dict, data)
-        await self.call_prompt_security_guardrail(
-            data, call_type=call_type, user_api_key_alias=alias
+        inputs: GenericGuardrailAPIInputs,
+        texts: List[str],
+        images: List[str],
+        structured_messages: list,
+        request_data: dict,
+        user_api_key_alias: Optional[str],
+    ) -> GenericGuardrailAPIInputs:
+        """Handle request-side guardrail checks."""
+        # If we have structured messages, use them (they contain role information)
+        # Otherwise, convert texts to simple user messages
+        if structured_messages:
+            messages = list(structured_messages)
+        else:
+            messages = [{"role": "user", "content": text} for text in texts]
+
+        # Process any embedded files/images in messages
+        messages = await self.process_message_files(
+            messages, user_api_key_alias=user_api_key_alias
         )
-        return data
+
+        # Also process standalone images from inputs
+        if images:
+            await self._process_standalone_images(images, user_api_key_alias)
+
+        # Filter messages by role for the API call
+        filtered_messages = self.filter_messages_by_role(messages)
+
+        if not filtered_messages:
+            verbose_proxy_logger.debug(
+                "Prompt Security Guardrail: No messages to check after filtering"
+            )
+            return inputs
+
+        # Call Prompt Security API
+        headers = self._build_headers(user_api_key_alias)
+        payload = {
+            "messages": filtered_messages,
+            "user": user_api_key_alias or self.user,
+            "system_prompt": self.system_prompt,
+        }
+
+        self._log_api_request(
+            method="POST",
+            url=f"{self.api_base}/api/protect",
+            headers=headers,
+            payload={"messages_count": len(filtered_messages)},
+        )
+
+        response = await self.async_handler.post(
+            f"{self.api_base}/api/protect",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        res = response.json()
+
+        self._log_api_response(
+            url=f"{self.api_base}/api/protect",
+            status_code=response.status_code,
+            payload={"result": res.get("result")},
+        )
+
+        result = res.get("result", {}).get("prompt", {})
+        if result is None:
+            return inputs
+
+        action = result.get("action")
+        violations = result.get("violations", [])
+
+        if action == "block":
+            raise HTTPException(
+                status_code=400,
+                detail="Blocked by Prompt Security, Violations: "
+                + ", ".join(violations),
+            )
+        elif action == "modify":
+            # Extract modified texts from modified_messages
+            modified_messages = result.get("modified_messages", [])
+            modified_texts = self._extract_texts_from_messages(modified_messages)
+            if modified_texts:
+                inputs["texts"] = modified_texts
+
+        return inputs
+
+    async def _apply_guardrail_on_response(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        texts: List[str],
+        user_api_key_alias: Optional[str],
+    ) -> GenericGuardrailAPIInputs:
+        """Handle response-side guardrail checks."""
+        if not texts:
+            return inputs
+
+        # Combine all texts for response checking
+        combined_text = "\n".join(texts)
+
+        headers = self._build_headers(user_api_key_alias)
+        payload = {
+            "response": combined_text,
+            "user": user_api_key_alias or self.user,
+            "system_prompt": self.system_prompt,
+        }
+
+        self._log_api_request(
+            method="POST",
+            url=f"{self.api_base}/api/protect",
+            headers=headers,
+            payload={"response_length": len(combined_text)},
+        )
+
+        response = await self.async_handler.post(
+            f"{self.api_base}/api/protect",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        res = response.json()
+
+        self._log_api_response(
+            url=f"{self.api_base}/api/protect",
+            status_code=response.status_code,
+            payload={"result": res.get("result")},
+        )
+
+        result = res.get("result", {}).get("response", {})
+        if result is None:
+            return inputs
+
+        action = result.get("action")
+        violations = result.get("violations", [])
+
+        if action == "block":
+            raise HTTPException(
+                status_code=400,
+                detail="Blocked by Prompt Security, Violations: "
+                + ", ".join(violations),
+            )
+        elif action == "modify":
+            modified_text = result.get("modified_text")
+            if modified_text is not None:
+                # If we combined multiple texts, return the modified version as single text
+                # The framework will handle distributing it back
+                inputs["texts"] = [modified_text]
+
+        return inputs
+
+    def _extract_texts_from_messages(self, messages: list) -> List[str]:
+        """Extract text content from messages."""
+        texts = []
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, str):
+                texts.append(content)
+            elif isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and item.get("type") == "text":
+                        text = item.get("text")
+                        if text:
+                            texts.append(text)
+        return texts
+
+    async def _process_standalone_images(
+        self, images: List[str], user_api_key_alias: Optional[str]
+    ) -> None:
+        """Process standalone images from inputs (data URLs)."""
+        for image_url in images:
+            if image_url.startswith("data:"):
+                try:
+                    header, encoded = image_url.split(",", 1)
+                    file_data = base64.b64decode(encoded)
+                    mime_type = header.split(";")[0].split(":")[1]
+                    extension = mime_type.split("/")[-1]
+                    filename = f"image.{extension}"
+
+                    result = await self.sanitize_file_content(
+                        file_data, filename, user_api_key_alias=user_api_key_alias
+                    )
+
+                    if result.get("action") == "block":
+                        violations = result.get("violations", [])
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Image blocked by Prompt Security. Violations: {', '.join(violations)}",
+                        )
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    verbose_proxy_logger.error(f"Error processing image: {str(e)}")
+
+    @staticmethod
+    def _resolve_key_alias_from_request_data(request_data: dict) -> Optional[str]:
+        """Resolve user API key alias from request_data metadata."""
+        # Check litellm_metadata first (set by guardrail framework)
+        litellm_metadata = request_data.get("litellm_metadata", {})
+        if litellm_metadata:
+            alias = litellm_metadata.get("user_api_key_alias")
+            if alias:
+                return alias
+
+        # Then check regular metadata
+        metadata = request_data.get("metadata", {})
+        if metadata:
+            alias = metadata.get("user_api_key_alias")
+            if alias:
+                return alias
+
+        return None
 
     async def sanitize_file_content(
         self,
@@ -108,10 +354,9 @@ class PromptSecurityGuardrail(CustomGuardrail):
         user_api_key_alias: Optional[str] = None,
     ) -> dict:
         """
-        Sanitize file content using Prompt Security API
+        Sanitize file content using Prompt Security API.
         Returns: dict with keys 'action', 'content', 'metadata'
         """
-        # For file upload, don't set Content-Type header - let httpx set multipart/form-data
         headers = {"APP-ID": self.api_key}
         if user_api_key_alias:
             headers["X-LiteLLM-Key-Alias"] = user_api_key_alias
@@ -133,6 +378,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
         upload_response.raise_for_status()
         upload_result = upload_response.json()
         job_id = upload_result.get("jobId")
+
         self._log_api_response(
             url=f"{self.api_base}/api/sanitizeFile",
             status_code=upload_response.status_code,
@@ -165,6 +411,7 @@ class PromptSecurityGuardrail(CustomGuardrail):
             )
             poll_response.raise_for_status()
             result = poll_response.json()
+
             self._log_api_response(
                 url=f"{self.api_base}/api/sanitizeFile",
                 status_code=poll_response.status_code,
@@ -372,29 +619,12 @@ class PromptSecurityGuardrail(CustomGuardrail):
 
         return processed_messages
 
-    @staticmethod
-    def _resolve_key_alias(
-        user_api_key_dict: Optional[UserAPIKeyAuth], data: Optional[dict]
-    ) -> Optional[str]:
-        if user_api_key_dict:
-            alias = getattr(user_api_key_dict, "key_alias", None)
-            if alias:
-                return alias
-
-        if data:
-            metadata = data.get("metadata", {})
-            alias = metadata.get("user_api_key_alias")
-            if alias:
-                return alias
-
-        return None
-
     def filter_messages_by_role(self, messages: list) -> list:
         """Filter messages to only include standard OpenAI/Anthropic roles.
 
         Behavior depends on check_tool_results flag:
         - False (default): Filters out tool/function roles completely
-        - True : Transforms tool/function to "other" role and includes them
+        - True: Transforms tool/function to "other" role and includes them
 
         This allows checking tool results for indirect prompt injection when enabled.
         """
@@ -486,205 +716,6 @@ class PromptSecurityGuardrail(CustomGuardrail):
             status_code,
             payload,
         )
-
-    async def call_prompt_security_guardrail(
-        self,
-        data: dict,
-        call_type: Optional[str] = None,
-        user_api_key_alias: Optional[str] = None,
-    ) -> dict:
-        messages = data.get("messages", [])
-
-        # Handle /responses endpoint by extracting messages from input
-        if not messages and call_type:
-            try:
-                call_type_enum = CallTypes(call_type)
-                if call_type_enum in {CallTypes.responses, CallTypes.aresponses}:
-                    verbose_proxy_logger.debug(
-                        "Prompt Security Guardrail: Extracting messages from /responses endpoint"
-                    )
-                    messages = self.get_guardrails_messages_for_call_type(
-                        call_type=call_type_enum,
-                        data=data,
-                    )
-            except (ValueError, AttributeError):
-                pass
-
-        verbose_proxy_logger.debug(
-            "Prompt Security Guardrail: Processing %d messages", len(messages)
-        )
-
-        # First, sanitize any files in the messages (these modifications should persist)
-        messages = await self.process_message_files(
-            messages, user_api_key_alias=user_api_key_alias
-        )
-        data["messages"] = messages  # Update with sanitized files
-
-        # Second, filter messages by role for the API call (don't persist to data)
-        filtered_messages = self.filter_messages_by_role(messages)
-
-        # Then, run the regular prompt security check with filtered messages
-        headers = self._build_headers(user_api_key_alias)
-        self._log_api_request(
-            method="POST",
-            url=f"{self.api_base}/api/protect",
-            headers=headers,
-            payload={"messages": filtered_messages},
-        )
-        response = await self.async_handler.post(
-            f"{self.api_base}/api/protect",
-            headers=headers,
-            json={
-                "messages": filtered_messages,
-                "user": user_api_key_alias or self.user,
-                "system_prompt": self.system_prompt,
-            },
-        )
-        response.raise_for_status()
-        res = response.json()
-        self._log_api_response(
-            url=f"{self.api_base}/api/protect",
-            status_code=response.status_code,
-            payload={"result": res.get("result")},
-        )
-        result = res.get("result", {}).get("prompt", {})
-        if result is None:  # prompt can exist but be with value None!
-            return data
-        action = result.get("action")
-        violations = result.get("violations", [])
-        if action == "block":
-            raise HTTPException(
-                status_code=400,
-                detail="Blocked by Prompt Security, Violations: "
-                + ", ".join(violations),
-            )
-        elif action == "modify":
-            data["messages"] = result.get("modified_messages", [])
-        return data
-
-    async def call_prompt_security_guardrail_on_output(
-        self, output: str, user_api_key_alias: Optional[str] = None
-    ) -> dict:
-        headers = self._build_headers(user_api_key_alias)
-        self._log_api_request(
-            method="POST",
-            url=f"{self.api_base}/api/protect",
-            headers=headers,
-            payload={"response": output},
-        )
-        response = await self.async_handler.post(
-            f"{self.api_base}/api/protect",
-            headers=headers,
-            json={
-                "response": output,
-                "user": user_api_key_alias or self.user,
-                "system_prompt": self.system_prompt,
-            },
-        )
-        response.raise_for_status()
-        res = response.json()
-        self._log_api_response(
-            url=f"{self.api_base}/api/protect",
-            status_code=response.status_code,
-            payload={"result": res.get("result")},
-        )
-        result = res.get("result", {}).get("response", {})
-        if result is None:  # prompt can exist but be with value None!
-            return {}
-        violations = result.get("violations", [])
-        return {
-            "action": result.get("action"),
-            "modified_text": result.get("modified_text"),
-            "violations": violations,
-        }
-
-    async def async_post_call_success_hook(
-        self,
-        data: dict,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Union[Any, ModelResponse, EmbeddingResponse, ImageResponse],
-    ) -> Any:
-        verbose_proxy_logger.debug("Prompt Security Guardrail: Post-call hook")
-
-        if (
-            isinstance(response, ModelResponse)
-            and response.choices
-            and isinstance(response.choices[0], Choices)
-        ):
-            content = response.choices[0].message.content or ""
-            verbose_proxy_logger.debug(
-                "Prompt Security Guardrail: Checking response content (%d chars)",
-                len(content),
-            )
-            alias = self._resolve_key_alias(user_api_key_dict, data)
-            ret = await self.call_prompt_security_guardrail_on_output(
-                content, user_api_key_alias=alias
-            )
-            violations = ret.get("violations", [])
-            if ret.get("action") == "block":
-                raise HTTPException(
-                    status_code=400,
-                    detail="Blocked by Prompt Security, Violations: "
-                    + ", ".join(violations),
-                )
-            elif ret.get("action") == "modify":
-                response.choices[0].message.content = ret.get("modified_text")
-        return response
-
-    async def async_post_call_streaming_iterator_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response,
-        request_data: dict,
-    ) -> AsyncGenerator[ModelResponseStream, None]:
-        verbose_proxy_logger.debug(
-            "Prompt Security Guardrail: Streaming response hook (window_size=%d)", 250
-        )
-        buffer: str = ""
-        WINDOW_SIZE = 250  # Adjust window size as needed
-
-        alias = self._resolve_key_alias(user_api_key_dict, request_data)
-
-        async for item in response:
-            if (
-                not isinstance(item, ModelResponseStream)
-                or not item.choices
-                or len(item.choices) == 0
-            ):
-                yield item
-                continue
-
-            choice = item.choices[0]
-            if choice.delta and choice.delta.content:
-                buffer += choice.delta.content
-
-            if choice.finish_reason or len(buffer) >= WINDOW_SIZE:
-                if buffer:
-                    if not choice.finish_reason and re.search(r"\s", buffer):
-                        chunk, buffer = re.split(r"(?=\s\S*$)", buffer, 1)
-                    else:
-                        chunk, buffer = buffer, ""
-
-                    ret = await self.call_prompt_security_guardrail_on_output(
-                        chunk, user_api_key_alias=alias
-                    )
-                    violations = ret.get("violations", [])
-                    if ret.get("action") == "block":
-                        from litellm.proxy.proxy_server import StreamingCallbackError
-
-                        raise StreamingCallbackError(
-                            "Blocked by Prompt Security, Violations: "
-                            + ", ".join(violations)
-                        )
-                    elif ret.get("action") == "modify":
-                        chunk = ret.get("modified_text")
-
-                    if choice.delta:
-                        choice.delta.content = chunk
-                    else:
-                        choice.delta = Delta(content=chunk)
-            yield item
-        return
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
