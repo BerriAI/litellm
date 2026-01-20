@@ -44,7 +44,7 @@ commands:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.10.2"
+            pip install "pydantic==2.11.0"
             pip install "mcp==1.25.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
@@ -1152,7 +1152,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
-            pip install "pydantic==2.10.2"
+            pip install "pydantic==2.11.0"
             pip install "mcp==1.25.0"
       # Run pytest and generate JUnit XML report
       - run:
@@ -1556,7 +1556,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.10.2"
+            pip install "pydantic==2.11.0"
             pip install "mcp==1.25.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
