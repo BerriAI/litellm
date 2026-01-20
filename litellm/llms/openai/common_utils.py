@@ -212,7 +212,8 @@ class BaseOpenAILLM:
         try:
             # Get SSL config and include in params for proper cache key
             ssl_config = get_ssl_configuration()
-            params = {"ssl_verify": ssl_config} if ssl_config is not None else None
+            params = {"ssl_verify": ssl_config} if ssl_config is not None else {}
+            params["disable_aiohttp_transport"] = litellm.disable_aiohttp_transport
 
             # Get a cached AsyncHTTPHandler which manages the httpx.AsyncClient
             cached_handler = get_async_httpx_client(
