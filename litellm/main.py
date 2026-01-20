@@ -415,11 +415,6 @@ async def acompletion(
     web_search_options: Optional[OpenAIWebSearchOptions] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
-    # Retry params
-    retry_delay: Optional[float] = None,
-    exponential_backoff: Optional[bool] = None,
-    jitter: Optional[bool] = None,
-    num_retries: Optional[int] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -465,16 +460,6 @@ async def acompletion(
         - The `completion` function is called using `run_in_executor` to execute synchronously in the event loop.
         - If `stream` is True, the function returns an async generator that yields completion lines.
     """
-    if _update_kwargs_with_retry_params(
-        retry_delay,
-        exponential_backoff,
-        jitter,
-        num_retries,
-        locals().get("max_retries"),
-        kwargs,
-    ):
-        return await acompletion_with_retries(model=model, messages=messages, **kwargs)
-
     fallbacks = kwargs.get("fallbacks", None)
     mock_timeout = kwargs.get("mock_timeout", None)
 
@@ -1007,32 +992,8 @@ def _drop_input_examples_from_tools(
     return cleaned_tools
 
 
-def _update_kwargs_with_retry_params(
-    retry_delay: Optional[float],
-    exponential_backoff: Optional[bool],
-    jitter: Optional[bool],
-    num_retries: Optional[int],
-    max_retries: Optional[int],
-    kwargs: dict,
-) -> bool:
-    """
-    Updates kwargs with retry parameters if any are provided.
-    Returns True if retry logic should be triggered, False otherwise.
-    """
-    if retry_delay is not None or exponential_backoff is not None or jitter is not None:
-        kwargs["retry_delay"] = retry_delay
-        kwargs["exponential_backoff"] = exponential_backoff
-        kwargs["jitter"] = jitter
-
-        if num_retries is not None:
-            kwargs["num_retries"] = num_retries
-        elif max_retries is not None and "num_retries" not in kwargs:
-            kwargs["num_retries"] = max_retries
-
-        return True
-    return False
-
-
+@tracer.wrap()
+@client
 def completion(  # type: ignore # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
@@ -1082,11 +1043,6 @@ def completion(  # type: ignore # noqa: PLR0915
     thinking: Optional[AnthropicThinkingParam] = None,
     # Session management
     shared_session: Optional["ClientSession"] = None,
-    # Retry params
-    retry_delay: Optional[float] = None,
-    exponential_backoff: Optional[bool] = None,
-    jitter: Optional[bool] = None,
-    num_retries: Optional[int] = None,
     **kwargs,
 ) -> Union[ModelResponse, CustomStreamWrapper]:
     """
@@ -1134,20 +1090,6 @@ def completion(  # type: ignore # noqa: PLR0915
         - It supports various optional parameters for customizing the completion behavior.
         - If 'mock_response' is provided, a mock completion response is returned for testing or debugging.
     """
-    if _update_kwargs_with_retry_params(
-        retry_delay,
-        exponential_backoff,
-        jitter,
-        num_retries,
-        locals().get("max_retries"),
-        kwargs,
-    ):
-        # check if this is an async call (acompletion=True in kwargs)
-        if kwargs.get("acompletion", False) is True:
-            return acompletion_with_retries(model=model, messages=messages, **kwargs)
-
-        return completion_with_retries(model=model, messages=messages, **kwargs)
-
     ### VALIDATE Request ###
     if model is None:
         raise ValueError("model param not passed in.")
@@ -1173,9 +1115,7 @@ def completion(  # type: ignore # noqa: PLR0915
         # Check if MCP tools are present (following responses pattern)
         # Cast tools to Optional[Iterable[ToolParam]] for type checking
         tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
-        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
-            tools=tools_for_mcp
-        ):
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(tools=tools_for_mcp):
             # Return coroutine - acompletion will await it
             # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
             return acompletion_with_mcp(  # type: ignore[return-value]
@@ -2405,7 +2345,11 @@ def completion(  # type: ignore # noqa: PLR0915
                 input=messages, api_key=api_key, original_response=response
             )
         elif custom_llm_provider == "minimax":
-            api_key = api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
+            api_key = (
+                api_key
+                or get_secret_str("MINIMAX_API_KEY")
+                or litellm.api_key
+            )
 
             api_base = (
                 api_base
@@ -2453,9 +2397,7 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
-            or JSONProviderRegistry.exists(
-                custom_llm_provider
-            )  # JSON-configured providers
+            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -4295,51 +4237,24 @@ def completion_with_retries(*args, **kwargs):
     retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop(
         "retry_strategy", "constant_retry"
     )  # type: ignore
-    retry_delay = kwargs.pop("retry_delay", None)
-    exponential_backoff = kwargs.pop("exponential_backoff", False)
-    jitter = kwargs.pop("jitter", False)
-
     original_function = kwargs.pop("original_function", completion)
-
-    # +1 because stop_after_attempt includes the initial attempt
-    stop_after = tenacity.stop_after_attempt(num_retries + 1)
-
-    if retry_strategy == "exponential_backoff_retry" or exponential_backoff:
-        # Defaults for exponential backoff
-        multiplier = 1
-        min_wait = 0
-        if retry_delay is not None:
-            multiplier = retry_delay
-            min_wait = retry_delay
-
-        wait_args = {"multiplier": multiplier, "min": min_wait, "max": 10}
-
-        if jitter:
-            wait_strategy = tenacity.wait_random_exponential(**wait_args)
-        else:
-            wait_strategy = tenacity.wait_exponential(**wait_args)
-
+    if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
-            wait=wait_strategy,
-            stop=stop_after,
+            wait=tenacity.wait_exponential(multiplier=1, max=10),
+            stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        wait_strategy = tenacity.wait_none()
-        if retry_delay:
-            wait_strategy = tenacity.wait_fixed(retry_delay)
-
         retryer = tenacity.Retrying(
-            wait=wait_strategy,
-            stop=stop_after,
-            reraise=True,
+            stop=tenacity.stop_after_attempt(num_retries), reraise=True
         )
     return retryer(original_function, *args, **kwargs)
 
 
 async def acompletion_with_retries(*args, **kwargs):
     """
-    Executes a litellm.completion() with retries.
+    [DEPRECATED]. Use 'acompletion' or router.acompletion instead!
+    Executes a litellm.completion() with 3 retries
     """
     try:
         import tenacity
@@ -4352,65 +4267,18 @@ async def acompletion_with_retries(*args, **kwargs):
     kwargs["max_retries"] = 0
     kwargs["num_retries"] = 0
     retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
-    retry_delay = kwargs.pop("retry_delay", None)
-    exponential_backoff = kwargs.pop("exponential_backoff", False)
-    jitter = kwargs.pop("jitter", False)
     original_function = kwargs.pop("original_function", completion)
-
-    # +1 because stop_after_attempt includes the initial attempt
-    stop_after = tenacity.stop_after_attempt(num_retries + 1)
-
-    # If the original function is completion but we are doing async retries
-    # we need to ensure it's treated as an async function if it returns a coroutine
-    # or wraps it.
-    # However, since we are in acompletion_with_retries, we expect to be waiting.
-    # If original_function is completion(acompletion=True), it returns a coro.
-    # Tenacity AsyncRetrying expects the function to be awaitable or return awaitable?
-    # Actually AsyncRetrying works with async def functions.
-    # If original_function is sync (but returns coro), we might need a wrapper.
-
-    async def _async_original_function(*args, **kwargs):
-        # Ensure we await the result if it is a coroutine
-        result = original_function(*args, **kwargs)
-        if asyncio.iscoroutine(result):
-            return await result
-        return result
-
-    if retry_strategy == "exponential_backoff_retry" or exponential_backoff:
-        # Defaults for exponential backoff
-        multiplier = 1
-        min_wait = 0
-        if retry_delay is not None:
-            multiplier = retry_delay
-            min_wait = retry_delay
-
-        wait_args = {"multiplier": multiplier, "min": min_wait, "max": 10}
-
-        if jitter:
-            # Use wait_random_exponential if available or combine
-            # Using wait_exponential + wait_random is one way, or wait_random_exponential
-            # tenacity.wait_random_exponential(multiplier=1, max=10)
-            wait_strategy = tenacity.wait_random_exponential(**wait_args)
-        else:
-            wait_strategy = tenacity.wait_exponential(**wait_args)
-
+    if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.AsyncRetrying(
-            wait=wait_strategy,
-            stop=stop_after,
+            wait=tenacity.wait_exponential(multiplier=1, max=10),
+            stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
         )
     else:
-        wait_strategy = tenacity.wait_none()
-        if retry_delay:
-            wait_strategy = tenacity.wait_fixed(retry_delay)
-
         retryer = tenacity.AsyncRetrying(
-            wait=wait_strategy,
-            stop=stop_after,
-            reraise=True,
+            stop=tenacity.stop_after_attempt(num_retries), reraise=True
         )
-
-    return await retryer(_async_original_function, *args, **kwargs)
+    return await retryer(original_function, *args, **kwargs)
 
 
 def responses_with_retries(*args, **kwargs):
@@ -4848,7 +4716,7 @@ def embedding(  # noqa: PLR0915
 
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers
-
+            
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
             else:
@@ -6911,7 +6779,9 @@ def speech(  # noqa: PLR0915
         if text_to_speech_provider_config is None:
             text_to_speech_provider_config = MinimaxTextToSpeechConfig()
 
-        minimax_config = cast(MinimaxTextToSpeechConfig, text_to_speech_provider_config)
+        minimax_config = cast(
+            MinimaxTextToSpeechConfig, text_to_speech_provider_config
+        )
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -7051,7 +6921,7 @@ async def ahealth_check(
         custom_llm_provider_from_params = model_params.get("custom_llm_provider", None)
         api_base_from_params = model_params.get("api_base", None)
         api_key_from_params = model_params.get("api_key", None)
-
+        
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider_from_params,
@@ -7429,7 +7299,6 @@ def __getattr__(name: str) -> Any:
         _encoding = tiktoken.get_encoding("cl100k_base")
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
-
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding
