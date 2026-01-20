@@ -15975,6 +15975,37 @@
         "max_tokens": 8191,
         "mode": "embedding"
     },
+    "qwen_ai/coder-model": {
+        "litellm_provider": "qwen_ai",
+        "mode": "chat"
+    },
+    "qwen_ai/qwen3-coder-plus": {
+        "litellm_provider": "qwen_ai",
+        "max_input_tokens": 997952,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://portal.qwen.ai/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "qwen_ai/qwen3-coder-flash": {
+        "litellm_provider": "qwen_ai",
+        "max_input_tokens": 997952,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "source": "https://portal.qwen.ai/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true
+    },
+    "qwen_ai/vision-model": {
+        "litellm_provider": "qwen_ai",
+        "mode": "chat",
+        "supports_vision": true
+    },
     "gigachat/GigaChat-2-Lite": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "gigachat",
