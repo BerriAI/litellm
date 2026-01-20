@@ -1333,6 +1333,10 @@ router = Router(model_list: Optional[list] = None,
 				 cache_responses=True)
 ```
 
+:::info
+When configuring Redis caching in router settings, use `cache_kwargs` to pass additional Redis parameters, especially for non-string values that may fail when set via `REDIS_*` environment variables.
+:::
+
 ## Pre-Call Checks (Context Window, EU-Regions)
 
 Enable pre-call checks to filter out:
