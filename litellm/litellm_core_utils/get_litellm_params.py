@@ -64,9 +64,6 @@ def get_litellm_params(
     api_version: Optional[str] = None,
     max_retries: Optional[int] = None,
     litellm_request_debug: Optional[bool] = None,
-    retry_delay: Optional[float] = None,
-    exponential_backoff: Optional[bool] = None,
-    jitter: Optional[bool] = None,
     **kwargs,
 ) -> dict:
     litellm_params = {
@@ -119,9 +116,6 @@ def get_litellm_params(
         "azure_password": kwargs.get("azure_password"),
         "azure_scope": kwargs.get("azure_scope"),
         "max_retries": max_retries,
-        "retry_delay": retry_delay,
-        "exponential_backoff": exponential_backoff,
-        "jitter": jitter,
         "timeout": kwargs.get("timeout"),
         "bucket_name": kwargs.get("bucket_name"),
         "vertex_credentials": kwargs.get("vertex_credentials"),
