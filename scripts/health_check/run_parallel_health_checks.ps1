@@ -49,6 +49,11 @@ Write-Host "    2. Set LITELLM_BASE_URL to the correct URL (e.g., http://host.do
 Write-Host "    3. On Linux, you may need to use the host IP instead of host.docker.internal" -ForegroundColor Yellow
 Write-Host ""
 
+# Capture environment variables in parent scope for use in parallel block
+$baseUrl = $env:LITELLM_BASE_URL
+$apiKey = $env:LITELLM_API_KEY
+$customAuthHeader = $env:LITELLM_CUSTOM_AUTH_HEADER
+
 # Run parallel health checks
 # This creates an infinite loop that keeps spawning containers
 # Each container tests all models, then exits, and a new one starts
@@ -57,13 +62,20 @@ while ($true) {
     1..$NumParallelJobs | ForEach-Object -Parallel {
         $runtime = $using:ContainerRuntime
         $imageName = $using:ImageName
-        $baseUrl = $env:LITELLM_BASE_URL
-        $apiKey = $env:LITELLM_API_KEY
+        $baseUrl = $using:baseUrl
+        $apiKey = $using:apiKey
+        $customAuthHeader = $using:customAuthHeader
         
-        & $runtime run --rm `
-            -e LITELLM_BASE_URL="$baseUrl" `
-            -e LITELLM_API_KEY="$apiKey" `
-            -e LITELLM_JSON_OUTPUT="true" `
-            $imageName
+        $envVars = @(
+            "-e", "LITELLM_BASE_URL=$baseUrl",
+            "-e", "LITELLM_API_KEY=$apiKey",
+            "-e", "LITELLM_JSON_OUTPUT=true"
+        )
+        
+        if ($customAuthHeader) {
+            $envVars += "-e", "LITELLM_CUSTOM_AUTH_HEADER=$customAuthHeader"
+        }
+        
+        & $runtime run --rm $envVars $imageName
     } -ThrottleLimit $NumParallelJobs
 }

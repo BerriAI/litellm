@@ -20,6 +20,17 @@ from typing import Dict, List, Optional, Tuple
 import httpx
 import yaml
 
+# Default prompt for health checks - exactly 100k characters
+# Generate a repeating pattern to reach exactly 100,000 characters
+_base_text = "This is a health check test prompt for LiteLLM proxy. "
+_repeat_count = (100000 // len(_base_text)) + 1
+_DEFAULT_COMPLETION_PROMPT = (_base_text * _repeat_count)[:100000]
+
+# Default embedding text - also exactly 100k characters
+_embedding_base_text = "This is a test for vectorization. "
+_embedding_repeat_count = (100000 // len(_embedding_base_text)) + 1
+_DEFAULT_EMBEDDING_TEXT = (_embedding_base_text * _embedding_repeat_count)[:100000]
+
 
 class LiteLLMHealthCheckClient:
     """Client for health checking LiteLLM proxy models."""
@@ -29,8 +40,9 @@ class LiteLLMHealthCheckClient:
         base_url: str,
         api_key: str,
         timeout: int = 120,  # Match Go implementation's 120s timeout
-        completion_prompt: str = "Say this is a test",  # Match Go implementation
-        embedding_text: str = "This is a test for vectorization.",  # Match Go implementation
+        completion_prompt: str = _DEFAULT_COMPLETION_PROMPT,  # Default ~100k chars
+        embedding_text: str = _DEFAULT_EMBEDDING_TEXT,  # Default ~100k chars
+        custom_auth_header: Optional[str] = None,
     ):
         """
         Initialize the health check client.
@@ -41,16 +53,34 @@ class LiteLLMHealthCheckClient:
             timeout: Request timeout in seconds (default: 120, matching Go implementation)
             completion_prompt: Test prompt for chat/completion models
             embedding_text: Test text for embedding models
+            custom_auth_header: Optional custom header name for authentication (e.g., "x-ifood-requester-service").
+                If provided, uses this header instead of standard "Authorization" header.
         """
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self.completion_prompt = completion_prompt
         self.embedding_text = embedding_text
-        self.headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        }
+        
+        # Debug: Print prompt/text lengths
+        print(f"DEBUG: Completion prompt length: {len(self.completion_prompt)} characters", file=sys.stderr)
+        print(f"DEBUG: Embedding text length: {len(self.embedding_text)} characters", file=sys.stderr)
+        
+        # Support custom auth header for proxies with custom authentication
+        # Handle both None and empty string
+        if custom_auth_header and custom_auth_header.strip():
+            custom_auth_header = custom_auth_header.strip()
+            self.headers = {
+                custom_auth_header: f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            print(f"Using custom auth header: {custom_auth_header}", file=sys.stderr)
+        else:
+            self.headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            }
+            print("Using standard Authorization header", file=sys.stderr)
 
     def load_models_from_yaml(self, yaml_path: str) -> List[Dict]:
         """
@@ -182,6 +212,8 @@ class LiteLLMHealthCheckClient:
 
             if is_embedding:
                 # Test embedding endpoint (matching Go implementation)
+                embedding_text_length = len(self.embedding_text)
+                print(f"DEBUG: Sending embedding text of length {embedding_text_length} chars to model {model_id}", file=sys.stderr)
                 embedding_response = await client.post(
                     f"{self.base_url}/v1/embeddings",
                     headers=self.headers,
@@ -202,6 +234,8 @@ class LiteLLMHealthCheckClient:
                 result["dimensions"] = dimensions
             else:
                 # Test chat completion endpoint (matching Go implementation)
+                prompt_length = len(self.completion_prompt)
+                print(f"DEBUG: Sending prompt of length {prompt_length} chars to model {model_id}", file=sys.stderr)
                 completion_response = await client.post(
                     f"{self.base_url}/v1/chat/completions",
                     headers=self.headers,
@@ -358,6 +392,11 @@ async def main():
     base_url = os.environ.get("LITELLM_BASE_URL", "http://localhost:4000")
     api_key = os.environ.get("LITELLM_API_KEY", "sk-1234")
     yaml_path = os.environ.get("LITELLM_MODELS_YAML")
+    custom_auth_header = os.environ.get("LITELLM_CUSTOM_AUTH_HEADER")  # e.g., "x-ifood-requester-service"
+    
+    # Debug: Print custom auth header value if set
+    if custom_auth_header:
+        print(f"Custom auth header from env: '{custom_auth_header}'", file=sys.stderr)
 
     if not base_url:
         print("Error: LITELLM_BASE_URL environment variable not set", file=sys.stderr)
@@ -369,10 +408,10 @@ async def main():
 
     timeout = int(os.environ.get("LITELLM_TIMEOUT", "120"))  # Match Go's 120s default
     completion_prompt = os.environ.get(
-        "LITELLM_COMPLETION_PROMPT", "Say this is a test"
+        "LITELLM_COMPLETION_PROMPT", _DEFAULT_COMPLETION_PROMPT
     )
     embedding_text = os.environ.get(
-        "LITELLM_EMBEDDING_TEXT", "This is a test for vectorization."
+        "LITELLM_EMBEDDING_TEXT", _DEFAULT_EMBEDDING_TEXT
     )
     json_output = os.environ.get("LITELLM_JSON_OUTPUT", "").lower() == "true"
     # Optional: only health-check these model IDs (comma-separated). E.g.:
@@ -386,6 +425,7 @@ async def main():
         timeout=timeout,
         completion_prompt=completion_prompt,
         embedding_text=embedding_text,
+        custom_auth_header=custom_auth_header,
     )
 
     # Load models from YAML if provided, otherwise fetch from API
