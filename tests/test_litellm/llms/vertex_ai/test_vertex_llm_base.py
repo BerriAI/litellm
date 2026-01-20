@@ -1048,3 +1048,146 @@ class TestVertexBase:
             MockCredentials.from_info.assert_called_once_with(json_obj)
             mock_creds.with_scopes.assert_called_once_with(scopes)
             assert result == "scoped_creds"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_skip_auth_with_custom_api_base(self, is_async):
+        """
+        Test that authentication is skipped when using a custom api_base
+        without PSC endpoint format (e.g., custom proxy that doesn't require Google credentials)
+        """
+        vertex_base = VertexBase()
+
+        # Test case 1: Custom api_base without PSC format should skip authentication
+        if is_async:
+            token, project = await vertex_base._ensure_access_token_async(
+                credentials=None,
+                project_id="test-project",
+                custom_llm_provider="vertex_ai",
+                api_base="https://custom-proxy.example.com",
+                use_psc_endpoint_format=False,
+            )
+        else:
+            token, project = vertex_base._ensure_access_token(
+                credentials=None,
+                project_id="test-project",
+                custom_llm_provider="vertex_ai",
+                api_base="https://custom-proxy.example.com",
+                use_psc_endpoint_format=False,
+            )
+        
+        # Should return empty token and the provided project_id
+        assert token == ""
+        assert project == "test-project"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_require_auth_with_psc_endpoint(self, is_async):
+        """
+        Test that authentication is still required when using PSC endpoint format,
+        even with custom api_base
+        """
+        vertex_base = VertexBase()
+
+        # Mock credentials for PSC endpoint
+        mock_creds = MagicMock()
+        mock_creds.token = "psc-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "psc-project"
+        mock_creds.quota_project_id = "psc-project"
+
+        # Test case 2: Custom api_base WITH PSC format should require authentication
+        with patch.object(
+            vertex_base, "load_auth", return_value=(mock_creds, "psc-project")
+        ):
+            if is_async:
+                token, project = await vertex_base._ensure_access_token_async(
+                    credentials={"type": "service_account"},
+                    project_id="psc-project",
+                    custom_llm_provider="vertex_ai",
+                    api_base="https://10.0.0.1",
+                    use_psc_endpoint_format=True,
+                )
+            else:
+                token, project = vertex_base._ensure_access_token(
+                    credentials={"type": "service_account"},
+                    project_id="psc-project",
+                    custom_llm_provider="vertex_ai",
+                    api_base="https://10.0.0.1",
+                    use_psc_endpoint_format=True,
+                )
+        
+        # Should return actual token from authentication
+        assert token == "psc-token"
+        assert project == "psc-project"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_require_auth_without_custom_api_base(self, is_async):
+        """
+        Test that authentication is required when no custom api_base is provided
+        (standard Vertex AI usage)
+        """
+        vertex_base = VertexBase()
+
+        # Mock credentials for standard Vertex AI
+        mock_creds = MagicMock()
+        mock_creds.token = "standard-token"
+        mock_creds.expired = False
+        mock_creds.project_id = "standard-project"
+        mock_creds.quota_project_id = "standard-project"
+
+        # Test case 3: No custom api_base should require authentication
+        with patch.object(
+            vertex_base, "load_auth", return_value=(mock_creds, "standard-project")
+        ):
+            if is_async:
+                token, project = await vertex_base._ensure_access_token_async(
+                    credentials={"type": "service_account"},
+                    project_id="standard-project",
+                    custom_llm_provider="vertex_ai",
+                    api_base=None,
+                    use_psc_endpoint_format=False,
+                )
+            else:
+                token, project = vertex_base._ensure_access_token(
+                    credentials={"type": "service_account"},
+                    project_id="standard-project",
+                    custom_llm_provider="vertex_ai",
+                    api_base=None,
+                    use_psc_endpoint_format=False,
+                )
+        
+        # Should return actual token from authentication
+        assert token == "standard-token"
+        assert project == "standard-project"
+
+    @pytest.mark.parametrize("is_async", [True, False], ids=["async", "sync"])
+    @pytest.mark.asyncio
+    async def test_skip_auth_with_custom_api_base_no_project(self, is_async):
+        """
+        Test that authentication is skipped with custom api_base even when project_id is None
+        """
+        vertex_base = VertexBase()
+
+        # Test case 4: Custom api_base without project_id should still skip auth
+        if is_async:
+            token, project = await vertex_base._ensure_access_token_async(
+                credentials=None,
+                project_id=None,
+                custom_llm_provider="vertex_ai",
+                api_base="https://custom-proxy.example.com",
+                use_psc_endpoint_format=False,
+            )
+        else:
+            token, project = vertex_base._ensure_access_token(
+                credentials=None,
+                project_id=None,
+                custom_llm_provider="vertex_ai",
+                api_base="https://custom-proxy.example.com",
+                use_psc_endpoint_format=False,
+            )
+        
+        # Should return empty token and empty project
+        assert token == ""
+        assert project == ""

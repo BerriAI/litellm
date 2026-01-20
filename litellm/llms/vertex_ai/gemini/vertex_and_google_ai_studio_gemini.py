@@ -2329,14 +2329,16 @@ class VertexLLM(VertexBase):
             optional_params=optional_params
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
-
-        # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
 
         auth_header, api_base = self._get_token_and_url(
             model=model,
@@ -2427,14 +2429,16 @@ class VertexLLM(VertexBase):
             optional_params=optional_params
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         _auth_header, vertex_project = await self._ensure_access_token_async(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
-
-        # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
 
         auth_header, api_base = self._get_token_and_url(
             model=model,
@@ -2615,14 +2619,16 @@ class VertexLLM(VertexBase):
             optional_params=optional_params
         )
 
+        # Extract use_psc_endpoint_format from optional_params
+        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
         _auth_header, vertex_project = self._ensure_access_token(
             credentials=vertex_credentials,
             project_id=vertex_project,
             custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            use_psc_endpoint_format=use_psc_endpoint_format,
         )
-
-        # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
 
         auth_header, url = self._get_token_and_url(
             model=model,

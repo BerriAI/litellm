@@ -274,17 +274,44 @@ class VertexBase:
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
+        api_base: Optional[str] = None,
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[str, str]:
         """
         Returns auth token and project id
+        
+        Args:
+            credentials: Vertex AI credentials
+            project_id: Google Cloud project ID
+            custom_llm_provider: Provider type (vertex_ai, vertex_ai_beta, or gemini)
+            api_base: Custom API base URL (e.g., for proxies)
+            use_psc_endpoint_format: Whether using PSC endpoint format
+            
+        Returns:
+            Tuple of (access_token, project_id)
+            
+        Note:
+            Authentication is skipped when using a custom api_base that is not a PSC endpoint.
+            PSC endpoints still require Google authentication even with custom api_base.
         """
         if custom_llm_provider == "gemini":
             return "", ""
-        else:
-            return self.get_access_token(
-                credentials=credentials,
-                project_id=project_id,
+        
+        # Skip authentication if custom api_base is provided and it's not a PSC endpoint
+        if api_base is not None and not use_psc_endpoint_format:
+            verbose_logger.debug(
+                "Skipping Vertex AI authentication - custom api_base provided without PSC endpoint format"
             )
+            # Return empty token and use provided project_id or empty string
+            return "", project_id or ""
+        
+        # Perform authentication for:
+        # 1. No custom api_base (standard Vertex AI)
+        # 2. Custom api_base with PSC endpoint format (PSC endpoints need auth)
+        return self.get_access_token(
+            credentials=credentials,
+            project_id=project_id,
+        )
 
     def is_using_v1beta1_features(self, optional_params: dict) -> bool:
         """
@@ -626,20 +653,47 @@ class VertexBase:
         custom_llm_provider: Literal[
             "vertex_ai", "vertex_ai_beta", "gemini"
         ],  # if it's vertex_ai or gemini (google ai studio)
+        api_base: Optional[str] = None,
+        use_psc_endpoint_format: bool = False,
     ) -> Tuple[str, str]:
         """
         Async version of _ensure_access_token
+        
+        Args:
+            credentials: Vertex AI credentials
+            project_id: Google Cloud project ID
+            custom_llm_provider: Provider type (vertex_ai, vertex_ai_beta, or gemini)
+            api_base: Custom API base URL (e.g., for proxies)
+            use_psc_endpoint_format: Whether using PSC endpoint format
+            
+        Returns:
+            Tuple of (access_token, project_id)
+            
+        Note:
+            Authentication is skipped when using a custom api_base that is not a PSC endpoint.
+            PSC endpoints still require Google authentication even with custom api_base.
         """
         if custom_llm_provider == "gemini":
             return "", ""
-        else:
-            try:
-                return await asyncify(self.get_access_token)(
-                    credentials=credentials,
-                    project_id=project_id,
-                )
-            except Exception as e:
-                raise e
+        
+        # Skip authentication if custom api_base is provided and it's not a PSC endpoint
+        if api_base is not None and not use_psc_endpoint_format:
+            verbose_logger.debug(
+                "Skipping Vertex AI authentication - custom api_base provided without PSC endpoint format"
+            )
+            # Return empty token and use provided project_id or empty string
+            return "", project_id or ""
+        
+        # Perform authentication for:
+        # 1. No custom api_base (standard Vertex AI)
+        # 2. Custom api_base with PSC endpoint format (PSC endpoints need auth)
+        try:
+            return await asyncify(self.get_access_token)(
+                credentials=credentials,
+                project_id=project_id,
+            )
+        except Exception as e:
+            raise e
 
     def set_headers(
         self, auth_header: Optional[str], extra_headers: Optional[dict]

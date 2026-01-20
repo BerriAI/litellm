@@ -86,16 +86,21 @@ class VertexAIGemmaModels(VertexBase):
             model = get_vertex_base_model_name(model=model)
             vertex_httpx_logic = VertexLLM()
 
+            ## CONSTRUCT API BASE
+            stream: bool = optional_params.get("stream", False) or False
+            
+            # Extract use_psc_endpoint_format from optional_params
+            use_psc_endpoint_format = optional_params.get("use_psc_endpoint_format", False)
+
             access_token, project_id = vertex_httpx_logic._ensure_access_token(
                 credentials=vertex_credentials,
                 project_id=vertex_project,
                 custom_llm_provider="vertex_ai",
+                api_base=api_base,
+                use_psc_endpoint_format=use_psc_endpoint_format,
             )
 
             gemma_transformation = VertexGemmaConfig()
-
-            ## CONSTRUCT API BASE
-            stream: bool = optional_params.get("stream", False) or False
             optional_params["stream"] = stream
 
             # If api_base is not provided, it should be set as an environment variable
