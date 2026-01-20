@@ -896,7 +896,7 @@ def get_openapi_schema():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -922,7 +922,7 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -2730,6 +2730,14 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
+                elif k == "health_check_interval":
+                    raise ValueError(
+                        f"'{k}' is NOT a valid router_settings parameter. Please move it to 'general_settings'."
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Key '{k}' is not a valid argument for Router.__init__(). Ignoring this key."
+                    )
         router = litellm.Router(
             **router_params,
             assistants_config=assistants_config,
