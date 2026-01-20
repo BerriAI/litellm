@@ -50,6 +50,12 @@ class AmazonAnthropicClaudeMessagesConfig(
 
     DEFAULT_BEDROCK_ANTHROPIC_API_VERSION = "bedrock-2023-05-31"
 
+    # Beta header patterns that are not supported by Bedrock Invoke API
+    # These will be filtered out to prevent 400 "invalid beta flag" errors
+    UNSUPPORTED_BEDROCK_INVOKE_BETA_PATTERNS = [
+        "advanced-tool-use",  # Bedrock Invoke doesn't support advanced-tool-use beta headers
+    ]
+
     def __init__(self, **kwargs):
         BaseAnthropicMessagesConfig.__init__(self, **kwargs)
         AmazonInvokeConfig.__init__(self, **kwargs)
@@ -114,7 +120,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         """
         Remove `ttl` field from cache_control in messages.
         Bedrock doesn't support the ttl field in cache_control.
-        
+
         Args:
             anthropic_messages_request: The request dictionary to modify in-place
         """
@@ -129,6 +135,75 @@ class AmazonAnthropicClaudeMessagesConfig(
                                 if isinstance(cache_control, dict) and "ttl" in cache_control:
                                     cache_control.pop("ttl", None)
 
+    def _supports_extended_thinking_on_bedrock(self, model: str) -> bool:
+        """
+        Check if the model supports extended thinking beta headers on Bedrock.
+
+        On 3rd-party platforms (e.g., Amazon Bedrock), extended thinking is only
+        supported on: Claude Opus 4.5, Claude Opus 4.1, Opus 4, or Sonnet 4.
+
+        Ref: https://docs.anthropic.com/en/docs/build-with-claude/extended-thinking
+
+        Args:
+            model: The model name
+
+        Returns:
+            True if the model supports extended thinking on Bedrock
+        """
+        model_lower = model.lower()
+
+        # Supported models on Bedrock for extended thinking
+        supported_patterns = [
+            "opus-4.5", "opus_4.5", "opus-4-5", "opus_4_5",  # Opus 4.5
+            "opus-4.1", "opus_4.1", "opus-4-1", "opus_4_1",  # Opus 4.1
+            "opus-4", "opus_4",                               # Opus 4
+            "sonnet-4", "sonnet_4",                           # Sonnet 4
+        ]
+
+        return any(pattern in model_lower for pattern in supported_patterns)
+
+    def _filter_unsupported_beta_headers_for_bedrock(
+        self, model: str, beta_set: set
+    ) -> None:
+        """
+        Remove beta headers that are not supported on Bedrock for the given model.
+
+        Extended thinking beta headers are only supported on specific Claude 4+ models.
+        Advanced tool use headers are not supported on Bedrock Invoke API.
+        This prevents 400 "invalid beta flag" errors on Bedrock.
+
+        Note: Bedrock Invoke API fails with a 400 error when unsupported beta headers
+        are sent, returning: {"message":"invalid beta flag"}
+
+        Args:
+            model: The model name
+            beta_set: The set of beta headers to filter in-place
+        """
+        beta_headers_to_remove = set()
+
+        # 1. Filter out beta headers that are universally unsupported on Bedrock Invoke
+        for beta in beta_set:
+            for unsupported_pattern in self.UNSUPPORTED_BEDROCK_INVOKE_BETA_PATTERNS:
+                if unsupported_pattern in beta.lower():
+                    beta_headers_to_remove.add(beta)
+                    break
+
+        # 2. Filter out extended thinking headers for models that don't support them
+        extended_thinking_patterns = [
+            "extended-thinking",
+            "interleaved-thinking",
+        ]
+        if not self._supports_extended_thinking_on_bedrock(model):
+            for beta in beta_set:
+                for pattern in extended_thinking_patterns:
+                    if pattern in beta.lower():
+                        beta_headers_to_remove.add(beta)
+                        break
+
+        # Remove all filtered headers
+        for beta in beta_headers_to_remove:
+            beta_set.discard(beta)
+
     def _get_tool_search_beta_header_for_bedrock(
         self,
         model: str,
@@ -139,15 +214,15 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> None:
         """
         Adjust tool search beta header for Bedrock.
-        
+
         Bedrock requires a different beta header for tool search on Opus 4 models
         when tool search is used without programmatic tool calling or input examples.
-        
+
         Note: On Amazon Bedrock, server-side tool search is only supported on Claude Opus 4
         with the `tool-search-tool-2025-10-19` beta header.
-        
+
         Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
-        
+
         Args:
             model: The model name
             tool_search_used: Whether tool search is used
@@ -225,6 +300,12 @@ class AmazonAnthropicClaudeMessagesConfig(
             tool_search_used=tool_search_used,
             programmatic_tool_calling_used=programmatic_tool_calling_used,
             input_examples_used=input_examples_used,
+            beta_set=beta_set,
+        )
+
+        # Filter out unsupported beta headers for Bedrock (e.g., advanced-tool-use, extended-thinking on non-Opus/Sonnet 4 models)
+        self._filter_unsupported_beta_headers_for_bedrock(
+            model=model,
             beta_set=beta_set,
         )
 

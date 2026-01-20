@@ -786,7 +786,6 @@ if MCP_AVAILABLE:
                     add_prefix=add_prefix,
                     raw_headers=raw_headers,
                 )
-
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
                 filtered_tools = await filter_tools_by_key_team_permissions(
