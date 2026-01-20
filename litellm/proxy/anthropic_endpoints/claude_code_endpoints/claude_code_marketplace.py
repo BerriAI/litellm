@@ -310,24 +310,37 @@ async def list_plugins(
 
         where = {"enabled": True} if enabled_only else {}
         plugins = await prisma_client.db.litellm_claudecodeplugintable.find_many(
-            where=where,
-            order_by={"created_at": "desc"},
+            where=where
         )
 
-        return ListPluginsResponse(
-            plugins=[
+        plugin_list = []
+        for p in plugins:
+            # Parse manifest to get additional fields
+            manifest = json.loads(p.manifest_json) if p.manifest_json else {}
+
+            plugin_list.append(
                 PluginListItem(
                     id=p.id,
                     name=p.name,
                     version=p.version,
                     description=p.description,
+                    source=manifest.get("source", {}),
+                    author=manifest.get("author"),
+                    homepage=manifest.get("homepage"),
+                    keywords=manifest.get("keywords"),
+                    category=manifest.get("category"),
                     enabled=p.enabled,
                     created_at=p.created_at.isoformat() if p.created_at else None,
                     updated_at=p.updated_at.isoformat() if p.updated_at else None,
                 )
-                for p in plugins
-            ],
-            count=len(plugins),
+            )
+
+        # Sort by created_at descending (newest first)
+        plugin_list.sort(key=lambda x: x.created_at or "", reverse=True)
+
+        return ListPluginsResponse(
+            plugins=plugin_list,
+            count=len(plugin_list),
         )
 
     except HTTPException:
