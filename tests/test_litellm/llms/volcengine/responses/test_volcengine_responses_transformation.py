@@ -14,8 +14,8 @@ from litellm.llms.volcengine.responses.transformation import (
     VolcEngineResponsesAPIConfig,
 )
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.responses.main import DeleteResponseResult
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
@@ -204,6 +204,7 @@ class TestVolcengineResponsesAPITransformation:
             "thinking",
             "caching",
             "expire_at",
+            "context_management",
             "extra_headers",
             "extra_query",
             "extra_body",
