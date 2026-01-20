@@ -75,6 +75,9 @@ grpcio = [
     {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14"},
     {version = ">=1.75.0", python = ">=3.14"},
 ]
+packaging = "<25.0,>=23.2"
+redis = "<=7.1"
+langfuse = "<3"
 
 [tool.poetry.extras]
 proxy = [

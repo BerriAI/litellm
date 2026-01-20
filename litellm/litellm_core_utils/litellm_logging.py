@@ -3056,8 +3056,16 @@ class Logging(LiteLLMLoggingBaseClass):
         self, dynamic_success_callbacks: Optional[List], global_callbacks: List
     ) -> List:
         if dynamic_success_callbacks is None:
-            return global_callbacks
-        return list(set(dynamic_success_callbacks + global_callbacks))
+            combined = list(global_callbacks)
+        else:
+            combined = list(set(dynamic_success_callbacks + global_callbacks))
+
+        from litellm.litellm_core_utils.logging_callback_manager import (
+            LoggingCallbackManager,
+        )
+
+        LoggingCallbackManager._ensure_langfuse_present(combined)
+        return combined
 
     def _remove_internal_litellm_callbacks(self, callbacks: List) -> List:
         """

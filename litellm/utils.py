@@ -48,6 +48,7 @@ from tokenizers import Tokenizer
 
 import litellm
 import litellm.litellm_core_utils
+from litellm.litellm_core_utils.logging_callback_manager import LoggingCallbackManager
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
@@ -76,6 +77,20 @@ _CachingHandlerResponse = None
 _LLMCachingHandler = None
 _CustomGuardrail = None
 _CustomLogger = None
+_CallbackDefaultsInitialized = False
+
+
+def _ensure_langfuse_defaults() -> None:
+    """
+    Ensure langfuse is always present on core callback lists for Python SDK usage.
+    """
+    global _CallbackDefaultsInitialized
+    if _CallbackDefaultsInitialized is True:
+        return
+    LoggingCallbackManager._ensure_langfuse_present(litellm.callbacks)
+    LoggingCallbackManager._ensure_langfuse_present(litellm.success_callback)
+    LoggingCallbackManager._ensure_langfuse_present(litellm.failure_callback)
+    _CallbackDefaultsInitialized = True
 
 
 def _get_cached_custom_logger():
@@ -766,6 +781,7 @@ def function_setup(  # noqa: PLR0915
         get_coroutine_checker = getattr(sys.modules[__name__], 'get_coroutine_checker')
 
         ## DYNAMIC CALLBACKS ##
+        _ensure_langfuse_defaults()
         dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
             kwargs.pop("callbacks", None)
         )

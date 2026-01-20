@@ -108,6 +108,17 @@ class LangFuseLogger:
         self.langfuse_host = langfuse_host or os.getenv(
             "LANGFUSE_HOST", "https://cloud.langfuse.com"
         )
+        missing = []
+        if not self.public_key:
+            missing.append("LANGFUSE_PUBLIC_KEY")
+        if not self.secret_key:
+            missing.append("LANGFUSE_SECRET_KEY")
+        if not self.langfuse_host:
+            missing.append("LANGFUSE_HOST")
+        if missing:
+            raise ValueError(
+                f"Missing required Langfuse configuration: {', '.join(missing)}"
+            )
         if not (
             self.langfuse_host.startswith("http://")
             or self.langfuse_host.startswith("https://")

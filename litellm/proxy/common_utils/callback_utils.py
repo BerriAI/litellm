@@ -464,3 +464,29 @@ def normalize_callback_names(callbacks: Iterable[Any]) -> List[Any]:
     if callbacks is None:
         return []
     return [c.lower() if isinstance(c, str) else c for c in callbacks]
+
+
+def ensure_langfuse_present(
+    callbacks: Optional[Iterable[Any] | str],
+) -> List[Any]:
+    """
+    Ensure the returned callback list always contains 'langfuse'.
+
+    - Accepts None, a single string callback, or any iterable of callbacks.
+    - Preserves existing callbacks (including callables) and appends langfuse
+      only when it's not already present (case-insensitive).
+    """
+    if callbacks is None:
+        callback_list: List[Any] = []
+    elif isinstance(callbacks, str):
+        callback_list = [callbacks]
+    else:
+        callback_list = list(callbacks)
+
+    string_callbacks = [
+        callback.lower() for callback in callback_list if isinstance(callback, str)
+    ]
+    if "langfuse" not in string_callbacks:
+        callback_list.append("langfuse")
+
+    return callback_list

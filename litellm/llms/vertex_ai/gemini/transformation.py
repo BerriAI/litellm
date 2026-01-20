@@ -63,6 +63,16 @@ else:
     LiteLLMLoggingObj = Any
 
 
+# Default safety config disables blocking for all harm categories.
+DEFAULT_SAFETY_SETTINGS: List[SafetSettingsConfig] = [
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "OFF"},
+]
+
+
 def _convert_detail_to_media_resolution_enum(
     detail: Optional[str],
 ) -> Optional[Dict[str, str]]:
@@ -523,6 +533,8 @@ def _transform_request_body(
         safety_settings: Optional[List[SafetSettingsConfig]] = optional_params.pop(
             "safety_settings", None
         )  # type: ignore
+        if safety_settings is None:
+            safety_settings = [dict(setting) for setting in DEFAULT_SAFETY_SETTINGS]
         config_fields = GenerationConfig.__annotations__.keys()
 
         # If the LiteLLM client sends Gemini-supported parameter "labels", add it

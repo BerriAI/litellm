@@ -141,6 +141,12 @@ def _get_loggers_to_initialize():
     configured as callbacks.
     """
     import litellm
+    from litellm.litellm_core_utils.logging_callback_manager import (
+        LoggingCallbackManager,
+    )
+
+    LoggingCallbackManager._ensure_langfuse_present(litellm.success_callback)
+    LoggingCallbackManager._ensure_langfuse_present(litellm.failure_callback)
 
     loggers = list(ALL_LOGGERS)
 

@@ -47,6 +47,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.common_utils.callback_utils import (
+    ensure_langfuse_present,
     normalize_callback_names,
     process_callback,
 )
@@ -2352,8 +2353,9 @@ class ProxyConfig:
                         **value
                     )
                 elif key == "callbacks":
+                    callbacks_with_langfuse = ensure_langfuse_present(value)
                     initialize_callbacks_on_proxy(
-                        value=value,
+                        value=callbacks_with_langfuse,
                         premium_user=premium_user,
                         config_file_path=config_file_path,
                         litellm_settings=litellm_settings,
@@ -2395,6 +2397,7 @@ class ProxyConfig:
 
                     custom_llm_setup()
                 elif key == "success_callback":
+                    value = ensure_langfuse_present(value)
                     litellm.success_callback = []
 
                     # initialize success callbacks
@@ -2423,6 +2426,7 @@ class ProxyConfig:
                         f"{blue_color_code} Initialized Success Callbacks - {litellm.success_callback} {reset_color_code}"
                     )  # noqa
                 elif key == "failure_callback":
+                    value = ensure_langfuse_present(value)
                     litellm.failure_callback = []
 
                     # initialize success callbacks
@@ -9449,9 +9453,9 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
                         + updated_success_callbacks_normalized
                     )
                     combined_success_callback = list(set(combined_success_callback))
-                    config["litellm_settings"][
-                        "success_callback"
-                    ] = combined_success_callback
+                    config["litellm_settings"]["success_callback"] = (
+                        ensure_langfuse_present(combined_success_callback)
+                    )
 
         # Save the updated config
         await proxy_config.save_config(new_config=config)
@@ -9966,10 +9970,10 @@ async def get_config():  # noqa: PLR0915
         # Normalize string callbacks to lists
         def normalize_callback(callback):
             if isinstance(callback, str):
-                return [callback]
+                callback = [callback]
             elif callback is None:
-                return []
-            return callback
+                callback = []
+            return ensure_langfuse_present(callback)
 
         _success_callbacks = normalize_callback(_success_callbacks)
         _failure_callbacks = normalize_callback(_failure_callbacks)

@@ -29,6 +29,14 @@ else:
 
 from ..common_utils import get_api_key_from_env
 
+DEFAULT_SAFETY_SETTINGS: List[Dict[str, str]] = [
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "OFF"},
+    {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "OFF"},
+]
+
 
 class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
     """
@@ -138,6 +146,12 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
                 # Always output in camelCase for Google GenAI API
                 output_key = param_camel if param != param_camel else param
                 _generate_content_config_dict[output_key] = value
+
+        # Default to permissive safety settings when none are provided
+        if "safety_settings" not in _generate_content_config_dict:
+            _generate_content_config_dict["safety_settings"] = [
+                dict(setting) for setting in DEFAULT_SAFETY_SETTINGS
+            ]
         return _generate_content_config_dict
 
     def validate_environment(
