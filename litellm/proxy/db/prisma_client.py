@@ -383,18 +383,7 @@ class PrismaManager:
 
                     prisma_dir = PrismaManager._get_prisma_dir()
 
-                    # Import redis_usage_cache for distributed locking
-                    try:
-                        from litellm.proxy.proxy_server import redis_usage_cache
-                    except ImportError:
-                        verbose_proxy_logger.warning(
-                            "Could not import redis_usage_cache, migrations will run without distributed locking"
-                        )
-                        redis_usage_cache = None
-
-                    return ProxyExtrasDBManager.setup_database(
-                        use_migrate=use_migrate, redis_cache=redis_usage_cache
-                    )
+                    return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout
                     subprocess.run(
