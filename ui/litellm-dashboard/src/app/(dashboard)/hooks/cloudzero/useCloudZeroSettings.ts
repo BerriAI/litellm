@@ -1,5 +1,5 @@
 import { CloudZeroSettings } from "@/components/CloudZeroCostTracking/types";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
@@ -12,7 +12,7 @@ const getCloudZeroSettings = async (accessToken: string): Promise<CloudZeroSetti
   const response = await fetch(url, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
   });
@@ -82,7 +82,7 @@ const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams
   const response = await fetch(url, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -140,7 +140,7 @@ const deleteCloudZeroSettings = async (accessToken: string): Promise<DeleteRespo
   const response = await fetch(url, {
     method: "DELETE",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
   });
