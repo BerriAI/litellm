@@ -146,8 +146,8 @@ async def route_create_file(
     Priority:
     1. If target_storage is specified and not "default" -> use storage backend
     2. If model parameter provided -> use model credentials and encode ID
-    3. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
-    4. If target_model_names_list -> managed files (requires DB)
+    3. If target_model_names_list -> managed files (requires DB, supports loadbalancing)
+    4. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
     5. Else -> use custom_llm_provider with files_settings
     """
     
@@ -202,18 +202,9 @@ async def route_create_file(
         
         return response
     
-    # EXISTING: Deprecated loadbalancing approach
-    if (
-        litellm.enable_loadbalancing_on_batch_endpoints is True
-        and is_router_model
-        and router_model is not None
-    ):
-        response = await _deprecated_loadbalanced_create_file(
-            llm_router=llm_router,
-            router_model=router_model,
-            _create_file_request=_create_file_request,
-        )
-    elif target_model_names_list:
+    # Handle managed files (supports loadbalancing via llm_router.acreate_file)
+    # Priority: Check for managed files BEFORE deprecated loadbalancing
+    if target_model_names_list:
         managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
             raise ProxyException(
@@ -236,12 +227,24 @@ async def route_create_file(
                 param="None",
                 code=500,
             )
+        # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
         response = await managed_files_obj.acreate_file(
             llm_router=llm_router,
             create_file_request=_create_file_request,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             user_api_key_dict=user_api_key_dict,
+        )
+    # EXISTING: Deprecated loadbalancing approach (for backwards compatibility when not using managed files)
+    elif (
+        litellm.enable_loadbalancing_on_batch_endpoints is True
+        and is_router_model
+        and router_model is not None
+    ):
+        response = await _deprecated_loadbalanced_create_file(
+            llm_router=llm_router,
+            router_model=router_model,
+            _create_file_request=_create_file_request,
         )
     else:
         # get configs for custom_llm_provider
