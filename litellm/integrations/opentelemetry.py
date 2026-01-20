@@ -594,9 +594,9 @@ class OpenTelemetry(CustomLogger):
 
     def _get_dynamic_otel_headers_from_kwargs(self, kwargs) -> Optional[dict]:
         """Extract dynamic headers from kwargs if available."""
-        standard_callback_dynamic_params: Optional[StandardCallbackDynamicParams] = (
-            kwargs.get("standard_callback_dynamic_params")
-        )
+        standard_callback_dynamic_params: Optional[
+            StandardCallbackDynamicParams
+        ] = kwargs.get("standard_callback_dynamic_params")
 
         if not standard_callback_dynamic_params:
             return None
@@ -987,10 +987,15 @@ class OpenTelemetry(CustomLogger):
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
+
         try:
-            from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # OTEL < 1.39.0
+            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]
+                LogRecord as SdkLogRecord,
+            )  # OTEL < 1.39.0
         except ImportError:
-            from opentelemetry.sdk._logs._internal import LogRecord as SdkLogRecord  # OTEL >= 1.39.0
+            from opentelemetry.sdk._logs._internal import (
+                LogRecord as SdkLogRecord,
+            )  # OTEL >= 1.39.0
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
@@ -1592,7 +1597,6 @@ class OpenTelemetry(CustomLogger):
 
                     for idx, choice in enumerate(response_obj.get("choices")):
                         if choice.get("finish_reason"):
-
                             message = choice.get("message")
                             tool_calls = message.get("tool_calls")
                             if tool_calls:
