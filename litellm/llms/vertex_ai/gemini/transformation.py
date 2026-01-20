@@ -77,6 +77,42 @@ def _convert_detail_to_media_resolution_enum(
     return None
 
 
+def _apply_gemini_3_metadata(
+    part: PartType,
+    model: Optional[str],
+    media_resolution_enum: Optional[Dict[str, str]],
+    video_metadata: Optional[Dict[str, Any]],
+) -> PartType:
+    """
+    Apply the unique media_resolution and video_metadata parameters of Gemini 3+    
+    """
+    if model is None:
+        return part
+
+    from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    if not VertexGeminiConfig._is_gemini_3_or_newer(model):
+        return part
+
+    part_dict = dict(part)
+
+    if media_resolution_enum is not None:
+        part_dict["media_resolution"] = media_resolution_enum
+
+    if video_metadata is not None:
+        gemini_video_metadata = {}
+        if "fps" in video_metadata:
+            gemini_video_metadata["fps"] = video_metadata["fps"]
+        if "start_offset" in video_metadata:
+            gemini_video_metadata["startOffset"] = video_metadata["start_offset"]
+        if "end_offset" in video_metadata:
+            gemini_video_metadata["endOffset"] = video_metadata["end_offset"]
+        if gemini_video_metadata:
+            part_dict["video_metadata"] = gemini_video_metadata
+
+    return cast(PartType, part_dict)
+
+
 def _process_gemini_media(
     image_url: str,
     format: Optional[str] = None,
@@ -115,29 +151,9 @@ def _process_gemini_media(
                 mime_type = format
             file_data = FileDataType(mime_type=mime_type, file_uri=image_url)
             part: PartType = {"file_data": file_data}
-
-            # Apply media_resolution and video_metadata for Gemini 3+
-            if model is not None:
-                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    part_dict = dict(part)
-
-                    if media_resolution_enum is not None:
-                        part_dict["media_resolution"] = media_resolution_enum
-
-                    if video_metadata is not None:
-                        gemini_video_metadata = {}
-                        if "fps" in video_metadata:
-                            gemini_video_metadata["fps"] = video_metadata["fps"]
-                        if "start_offset" in video_metadata:
-                            gemini_video_metadata["startOffset"] = video_metadata["start_offset"]
-                        if "end_offset" in video_metadata:
-                            gemini_video_metadata["endOffset"] = video_metadata["end_offset"]
-                        if gemini_video_metadata:
-                            part_dict["video_metadata"] = gemini_video_metadata
-
-                    return cast(PartType, part_dict)
-            return part
+            return _apply_gemini_3_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         elif (
             "https://" in image_url
             and (image_type := format or _get_image_mime_type_from_url(image_url))
@@ -145,57 +161,16 @@ def _process_gemini_media(
         ):
             file_data = FileDataType(mime_type=image_type, file_uri=image_url)
             part = {"file_data": file_data}
-
-            # Apply media_resolution and video_metadata for Gemini 3+
-            if model is not None:
-                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    part_dict = dict(part)
-
-                    if media_resolution_enum is not None:
-                        part_dict["media_resolution"] = media_resolution_enum
-
-                    if video_metadata is not None:
-                        gemini_video_metadata = {}
-                        if "fps" in video_metadata:
-                            gemini_video_metadata["fps"] = video_metadata["fps"]
-                        if "start_offset" in video_metadata:
-                            gemini_video_metadata["startOffset"] = video_metadata["start_offset"]
-                        if "end_offset" in video_metadata:
-                            gemini_video_metadata["endOffset"] = video_metadata["end_offset"]
-                        if gemini_video_metadata:
-                            part_dict["video_metadata"] = gemini_video_metadata
-
-                    return cast(PartType, part_dict)
-            return part
+            return _apply_gemini_3_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         elif "http://" in image_url or "https://" in image_url or "base64" in image_url:
             image = convert_to_anthropic_image_obj(image_url, format=format)
             _blob: BlobType = {"data": image["data"], "mime_type": image["media_type"]}
-
             part = {"inline_data": cast(BlobType, _blob)}
-
-            # Apply media_resolution and video_metadata for Gemini 3+
-            if model is not None:
-                from .vertex_and_google_ai_studio_gemini import VertexGeminiConfig
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    part_dict = dict(part)
-
-                    if media_resolution_enum is not None:
-                        part_dict["media_resolution"] = media_resolution_enum
-
-                    if video_metadata is not None:
-                        gemini_video_metadata = {}
-                        if "fps" in video_metadata:
-                            gemini_video_metadata["fps"] = video_metadata["fps"]
-                        if "start_offset" in video_metadata:
-                            gemini_video_metadata["startOffset"] = video_metadata["start_offset"]
-                        if "end_offset" in video_metadata:
-                            gemini_video_metadata["endOffset"] = video_metadata["end_offset"]
-                        if gemini_video_metadata:
-                            part_dict["video_metadata"] = gemini_video_metadata
-
-                    return cast(PartType, part_dict)
-            return part
+            return _apply_gemini_3_metadata(
+                part, model, media_resolution_enum, video_metadata
+            )
         raise Exception("Invalid image received - {}".format(image_url))
     except Exception as e:
         raise e
