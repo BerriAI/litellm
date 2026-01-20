@@ -2653,3 +2653,273 @@ def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
     # candidatesTokenCount (1290) - image_tokens (1290) = 0
     assert result.completion_tokens_details.text_tokens == 0, \
         "Completion text tokens should be 0 (image-only response)"
+
+
+def test_file_object_detail_parameter():
+    """Test that detail parameter works for type: file objects (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this video?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "low"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Verify media_resolution is set for file objects
+    assert len(contents) == 1
+    assert len(contents[0]["parts"]) == 2  # text + file
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None, "File part should exist"
+    assert "media_resolution" in file_part, "media_resolution should be set for file objects"
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
+
+
+def test_video_metadata_fps():
+    """Test fps parameter in video_metadata (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {"fps": 5}
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "video_metadata" in file_part, "video_metadata should be present"
+    assert file_part["video_metadata"]["fps"] == 5
+
+
+def test_video_metadata_complete():
+    """Test all video_metadata fields: fps, start_offset, end_offset (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "start_offset": "10s",
+                            "end_offset": "60s",
+                            "fps": 5
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "video_metadata" in file_part
+
+    # Verify field name conversion: snake_case -> camelCase
+    vm = file_part["video_metadata"]
+    assert vm["startOffset"] == "10s", "start_offset should be converted to startOffset"
+    assert vm["endOffset"] == "60s", "end_offset should be converted to endOffset"
+    assert vm["fps"] == 5, "fps should remain unchanged"
+
+
+def test_detail_and_video_metadata_combined():
+    """Test using both detail and video_metadata together (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze video"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",
+                        "video_metadata": {"fps": 10}
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "media_resolution" in file_part
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert "video_metadata" in file_part
+    assert file_part["video_metadata"]["fps"] == 10
+
+
+def test_new_detail_levels():
+    """Test new detail levels: medium and ultra_high (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _convert_detail_to_media_resolution_enum,
+        _gemini_convert_messages_with_history,
+    )
+
+    # Test mapping function
+    assert _convert_detail_to_media_resolution_enum("low") == {"level": "MEDIA_RESOLUTION_LOW"}
+    assert _convert_detail_to_media_resolution_enum("medium") == {"level": "MEDIA_RESOLUTION_MEDIUM"}
+    assert _convert_detail_to_media_resolution_enum("high") == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert _convert_detail_to_media_resolution_enum("ultra_high") == {"level": "MEDIA_RESOLUTION_ULTRA_HIGH"}
+
+    # Test with actual message transformation
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "medium"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_MEDIUM"}
+
+
+def test_video_metadata_only_for_gemini_3():
+    """Test that video_metadata is only applied for Gemini 3+ models (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",
+                        "video_metadata": {"fps": 5}
+                    }
+                }
+            ]
+        }
+    ]
+
+    # Test with Gemini 1.5 (should not have video_metadata or media_resolution)
+    contents_1_5 = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-1.5-pro"
+    )
+
+    file_part_1_5 = None
+    for part in contents_1_5[0]["parts"]:
+        if "file_data" in part:
+            file_part_1_5 = part
+            break
+
+    assert file_part_1_5 is not None
+    assert "media_resolution" not in file_part_1_5, "Gemini 1.5 should not have media_resolution"
+    assert "video_metadata" not in file_part_1_5, "Gemini 1.5 should not have video_metadata"
+
+    # Test with Gemini 3 (should have both)
+    contents_3 = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    file_part_3 = None
+    for part in contents_3[0]["parts"]:
+        if "file_data" in part:
+            file_part_3 = part
+            break
+
+    assert file_part_3 is not None
+    assert "media_resolution" in file_part_3, "Gemini 3 should have media_resolution"
+    assert "video_metadata" in file_part_3, "Gemini 3 should have video_metadata"
