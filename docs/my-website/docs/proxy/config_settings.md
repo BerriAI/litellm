@@ -449,6 +449,13 @@ router_settings:
 | BRAINTRUST_API_KEY | API key for Braintrust integration
 | BRAINTRUST_API_BASE | Base URL for Braintrust API. Default is https://api.braintrustdata.com/v1
 | CACHED_STREAMING_CHUNK_DELAY | Delay in seconds for cached streaming chunks. Default is 0.02
+| CHATGPT_API_BASE | Base URL for ChatGPT API. Default is https://chatgpt.com/backend-api/codex
+| CHATGPT_AUTH_FILE | Filename for ChatGPT authentication data. Default is "auth.json"
+| CHATGPT_DEFAULT_INSTRUCTIONS | Default system instructions for ChatGPT provider
+| CHATGPT_ORIGINATOR | Originator identifier for ChatGPT API requests. Default is "codex_cli_rs"
+| CHATGPT_TOKEN_DIR | Directory to store ChatGPT authentication tokens. Default is "~/.config/litellm/chatgpt"
+| CHATGPT_USER_AGENT | Custom user agent string for ChatGPT API requests
+| CHATGPT_USER_AGENT_SUFFIX | Suffix to append to the ChatGPT user agent string
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
 | CLOUDZERO_API_KEY | CloudZero API key for authentication
@@ -794,6 +801,7 @@ router_settings:
 | OPENAI_BASE_URL | Base URL for OpenAI API
 | OPENAI_API_BASE | Base URL for OpenAI API. Default is https://api.openai.com/
 | OPENAI_API_KEY | API key for OpenAI services
+| OPENAI_CHATGPT_API_BASE | Alternative to CHATGPT_API_BASE. Base URL for ChatGPT API
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI
 | OPENID_BASE_URL | Base URL for OpenID Connect services
