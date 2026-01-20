@@ -267,10 +267,16 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
-                    elif endpoint == "api.minimax.io/anthropic" or endpoint == "api.minimaxi.com/anthropic":
+                    elif (
+                        endpoint == "api.minimax.io/anthropic"
+                        or endpoint == "api.minimaxi.com/anthropic"
+                    ):
                         custom_llm_provider = "minimax"
                         dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
-                    elif endpoint == "api.minimax.io/v1" or endpoint == "api.minimaxi.com/v1":
+                    elif (
+                        endpoint == "api.minimax.io/v1"
+                        or endpoint == "api.minimaxi.com/v1"
+                    ):
                         custom_llm_provider = "minimax"
                         dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
                     elif endpoint == "platform.publicai.co/v1":
@@ -365,6 +371,18 @@ def get_llm_provider(  # noqa: PLR0915
         ## maritalk
         elif model in litellm.maritalk_models:
             custom_llm_provider = "maritalk"
+        ## gemini models (Google AI Studio) - check BEFORE vertex_ai to prioritize gemini over vertex_ai
+        ## Models with "gemini" in the name should default to gemini provider for intuitive behavior
+        ## This handles cases where models are in vertex_language_models but should use gemini provider
+        ## Users can still explicitly use "vertex_ai/gemini-2.0-flash" prefix to force vertex_ai provider
+        elif model in litellm.gemini_models or (
+            "gemini" in model.lower()
+            and (
+                model in litellm.vertex_language_models
+                or model in litellm.vertex_vision_models
+            )
+        ):
+            custom_llm_provider = "gemini"
         ## vertex - text + chat + language (gemini) models
         elif (
             model in litellm.vertex_chat_models
@@ -575,7 +593,11 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         if api_base is None:
             api_base = litellm.BasetenConfig.get_api_base_for_model(model)
         else:
-            api_base = api_base or get_secret_str("BASETEN_API_BASE") or "https://inference.baseten.co/v1"
+            api_base = (
+                api_base
+                or get_secret_str("BASETEN_API_BASE")
+                or "https://inference.baseten.co/v1"
+            )
         dynamic_api_key = api_key or get_secret_str("BASETEN_API_KEY")
     elif custom_llm_provider == "sambanova":
         api_base = (
@@ -600,9 +622,7 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
     elif custom_llm_provider == "ollama":
         api_base = (
-            api_base
-            or get_secret("OLLAMA_API_BASE")
-            or "http://localhost:11434"
+            api_base or get_secret("OLLAMA_API_BASE") or "http://localhost:11434"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
@@ -908,17 +928,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
     elif custom_llm_provider == "langgraph":
         # LangGraph is a custom provider, just need to set api_base
         api_base = (
-            api_base
-            or get_secret_str("LANGGRAPH_API_BASE")
-            or "http://localhost:2024"
+            api_base or get_secret_str("LANGGRAPH_API_BASE") or "http://localhost:2024"
         )
         dynamic_api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
     elif custom_llm_provider == "manus":
         # Manus is OpenAI compatible for responses API
         api_base = (
-            api_base
-            or get_secret_str("MANUS_API_BASE")
-            or "https://api.manus.im"
+            api_base or get_secret_str("MANUS_API_BASE") or "https://api.manus.im"
         )
         dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
 
