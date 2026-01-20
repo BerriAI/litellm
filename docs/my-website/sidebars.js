@@ -125,6 +125,7 @@ const sidebars = {
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
+            "tutorials/claude_code_plugin_marketplace",
           ]
         },
         "tutorials/cost_tracking_coding",

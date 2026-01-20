@@ -257,6 +257,13 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
               roles: all_admin_roles,
             },
             {
+              key: "claude-code-plugins",
+              page: "claude-code-plugins",
+              label: "Claude Code Plugins",
+              icon: <ToolOutlined />,
+              roles: all_admin_roles,
+            },
+            {
               key: "4",
               page: "usage",
               label: "Old Usage",
