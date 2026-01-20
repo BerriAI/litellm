@@ -4,51 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # Claude Code Plugin Marketplace
 
-Create a centralized plugin marketplace for your organization's Claude Code users.
-
-## Why Use a Plugin Marketplace?
-
-When running LiteLLM as your AI Gateway, you can provide a **central plugin marketplace** that enables:
-
-| Benefit | Description |
-|---------|-------------|
-| **Centralized Discovery** | Engineers across your company can browse and install approved plugins from a single source |
-| **Governance & Control** | Admins control which plugins are available, ensuring security and compliance |
-| **Easy Distribution** | Share internal tools, custom integrations, and approved third-party plugins organization-wide |
-| **Version Management** | Track plugin versions and updates across your organization |
-| **No Manual Setup** | Engineers install plugins with a single command instead of manually configuring each one |
-
-## How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        LiteLLM AI Gateway                           │
-│                                                                     │
-│  ┌─────────────────────────────────────────────────────────────┐   │
-│  │              Plugin Marketplace Registry                     │   │
-│  │                                                             │   │
-│  │   /claude-code/marketplace.json                             │   │
-│  │   ├── internal-tools (GitHub: company/internal-tools)       │   │
-│  │   ├── jira-integration (GitHub: company/jira-plugin)        │   │
-│  │   └── code-review-helper (GitHub: company/review-plugin)    │   │
-│  └─────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────┘
-                              │
-                              │ Engineers install with:
-                              │ claude plugin marketplace add <litellm-url>
-                              │ claude plugin install <plugin>@litellm
-                              ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     Engineer's Claude Code                          │
-│                                                                     │
-│   Installed Plugins:                                                │
-│   ✓ internal-tools@litellm                                         │
-│   ✓ jira-integration@litellm                                       │
-│   ✓ code-review-helper@litellm                                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-LiteLLM stores plugin **metadata and git source references** in its database. When engineers install plugins, Claude Code clones directly from the git source (GitHub/GitLab/Bitbucket).
+LiteLLM AI Gateway acts as a central registry for Claude Code plugins. Admins can govern which plugins are available across the organization, and engineers can discover and install approved plugins from a single source.
 
 ## Prerequisites
 
