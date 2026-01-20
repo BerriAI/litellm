@@ -1168,8 +1168,10 @@ def get_async_httpx_client(
         return _cached_client
 
     if params is not None:
-        params["shared_session"] = shared_session
-        _new_client = AsyncHTTPHandler(**params)
+        # Filter out params that are only used for cache key, not for AsyncHTTPHandler.__init__
+        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        handler_params["shared_session"] = shared_session
+        _new_client = AsyncHTTPHandler(**handler_params)
     else:
         _new_client = AsyncHTTPHandler(
             timeout=httpx.Timeout(timeout=600.0, connect=5.0),
@@ -1215,7 +1217,9 @@ def _get_httpx_client(params: Optional[dict] = None) -> HTTPHandler:
         return _cached_client
 
     if params is not None:
-        _new_client = HTTPHandler(**params)
+        # Filter out params that are only used for cache key, not for HTTPHandler.__init__
+        handler_params = {k: v for k, v in params.items() if k != "disable_aiohttp_transport"}
+        _new_client = HTTPHandler(**handler_params)
     else:
         _new_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
 
