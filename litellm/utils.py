@@ -4580,6 +4580,8 @@ def add_provider_specific_params_to_optional_params(
     else:
         for k in passed_params.keys():
             if k not in openai_params and passed_params[k] is not None:
+                if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
+                    continue
                 optional_params[k] = passed_params[k]
     return optional_params
 
