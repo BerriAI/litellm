@@ -4121,7 +4121,21 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
-            if bedrock_base_model.startswith("anthropic.claude-3"):
+            if (
+                bedrock_base_model
+                in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
+            ):
+                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    model=model,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
+                )
+            else:
                 optional_params = (
                     litellm.AmazonAnthropicClaudeConfig().map_openai_params(
                         non_default_params=non_default_params,
@@ -4133,18 +4147,6 @@ def get_optional_params(  # noqa: PLR0915
                             else False
                         ),
                     )
-                )
-
-            else:
-                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
-                    non_default_params=non_default_params,
-                    optional_params=optional_params,
-                    model=model,
-                    drop_params=(
-                        drop_params
-                        if drop_params is not None and isinstance(drop_params, bool)
-                        else False
-                    ),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
