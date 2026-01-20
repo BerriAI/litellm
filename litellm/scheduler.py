@@ -84,6 +84,7 @@ class Scheduler:
             if queue[0][1] == id:
                 # Remove the item from the queue
                 heapq.heappop(queue)
+                await self.save_queue(queue=queue, model_name=model_name)
                 print_verbose(f"Popped id: {id}")
                 return True
             else:
