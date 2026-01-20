@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Common utilities used across bedrock chat/embedding/image generation
 """
@@ -8,6 +10,7 @@ from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
+    from litellm.types.utils import ProviderSpecificModelInfo
 
 import httpx
 
