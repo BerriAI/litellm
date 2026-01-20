@@ -2237,6 +2237,7 @@ class PrometheusLogger(CustomLogger):
         from typing import Union
 
         from litellm.constants import UI_SESSION_TOKEN_TEAM_ID
+        from litellm.proxy._types import LiteLLM_DeletedVerificationToken
         from litellm.proxy.management_endpoints.key_management_endpoints import (
             _list_key_helper,
         )

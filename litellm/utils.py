@@ -8243,7 +8243,9 @@ class ProviderConfigManager:
         elif LlmProviders.CLARIFAI == provider:
             return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
-            return litellm.llms.bedrock.common_utils.BedrockModelInfo()
+            from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+            return BedrockModelInfo()
         return None
 
     @staticmethod
