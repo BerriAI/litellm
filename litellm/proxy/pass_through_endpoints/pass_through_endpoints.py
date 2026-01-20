@@ -1877,7 +1877,7 @@ class InitPassThroughEndpointHelpers:
             dependencies=dependencies,
         )
 
-        # Register the route to prevent duplicates only if it was added
+        # Always register/update the route metadata (headers, target) even if FastAPI route exists
         _registered_pass_through_routes[route_key] = {
             "endpoint_id": endpoint_id,
             "path": path,
@@ -2404,7 +2404,7 @@ async def update_pass_through_endpoints(
     )
 
     # Re-register the route with updated headers
-    _custom_headers = updated_endpoint.headers
+    _custom_headers: Optional[dict] = updated_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     if updated_endpoint.include_subpath:
@@ -2417,7 +2417,7 @@ async def update_pass_through_endpoints(
             merge_query_params=None,
             dependencies=None,
             cost_per_request=updated_endpoint.cost_per_request,
-            endpoint_id=updated_endpoint.id or endpoint_id,
+            endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
         )
     else:
@@ -2430,7 +2430,7 @@ async def update_pass_through_endpoints(
             merge_query_params=None,
             dependencies=None,
             cost_per_request=updated_endpoint.cost_per_request,
-            endpoint_id=updated_endpoint.id or endpoint_id,
+            endpoint_id=updated_endpoint.id or endpoint_id or "",
             guardrails=getattr(updated_endpoint, "guardrails", None),
         )
 
@@ -2492,7 +2492,7 @@ async def create_pass_through_endpoints(
     created_endpoint = PassThroughGenericEndpoint(**data_dict)
 
     # Register the new route
-    _custom_headers = created_endpoint.headers
+    _custom_headers: Optional[dict] = created_endpoint.headers or {}
     _custom_headers = await set_env_variables_in_header(custom_headers=_custom_headers)
 
     if created_endpoint.include_subpath:
@@ -2505,7 +2505,7 @@ async def create_pass_through_endpoints(
             merge_query_params=None,
             dependencies=None,
             cost_per_request=created_endpoint.cost_per_request,
-            endpoint_id=created_endpoint.id,
+            endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
         )
     else:
@@ -2518,7 +2518,7 @@ async def create_pass_through_endpoints(
             merge_query_params=None,
             dependencies=None,
             cost_per_request=created_endpoint.cost_per_request,
-            endpoint_id=created_endpoint.id,
+            endpoint_id=created_endpoint.id or "",
             guardrails=getattr(created_endpoint, "guardrails", None),
         )
 
