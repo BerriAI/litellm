@@ -1,30 +1,29 @@
-import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Title,
-  Text,
-  Button,
-  Badge,
-  Grid,
-} from "@tremor/react";
-import { Spin, Switch, Tooltip, Descriptions } from "antd";
-import { ArrowLeftIcon, ExternalLinkIcon } from "@heroicons/react/outline";
 import { CopyOutlined } from "@ant-design/icons";
+import { ArrowLeftIcon, ExternalLinkIcon } from "@heroicons/react/outline";
 import {
-  getClaudeCodePluginDetails,
-  enableClaudeCodePlugin,
-  disableClaudeCodePlugin,
-} from "../networking";
+  Badge,
+  Button,
+  Card,
+  Grid,
+  Text,
+  Title,
+} from "@tremor/react";
+import { Spin, Switch, Tooltip } from "antd";
+import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
-import { Plugin } from "./types";
 import {
-  formatInstallCommand,
-  getSourceDisplayText,
-  getSourceLink,
-  getCategoryBadgeColor,
+  disableClaudeCodePlugin,
+  enableClaudeCodePlugin,
+  getClaudeCodePluginDetails,
+} from "../networking";
+import {
   formatDateString,
-  formatKeywords,
+  formatInstallCommand,
+  getCategoryBadgeColor,
+  getSourceDisplayText,
+  getSourceLink
 } from "./helpers";
+import { Plugin } from "./types";
 
 interface PluginInfoViewProps {
   pluginId: string;
@@ -169,7 +168,9 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
       {/* Plugin Details */}
       <Card>
         <Title>Plugin Details</Title>
-        <Grid numColsSm={2} numColsLg={3} className="gap-6 mt-4">
+        <Grid
+          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mt-4"
+        >
           {/* Plugin ID */}
           <div>
             <Text className="text-gray-600 text-xs">Plugin ID</Text>
@@ -277,7 +278,7 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
       {plugin.author && (
         <Card>
           <Title>Author Information</Title>
-          <Grid numColsSm={2} className="gap-4 mt-4">
+          <Grid className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
             {plugin.author.name && (
               <div>
                 <Text className="text-gray-600 text-xs">Name</Text>
@@ -322,7 +323,7 @@ const PluginInfoView: React.FC<PluginInfoViewProps> = ({
       {/* Timestamps */}
       <Card>
         <Title>Metadata</Title>
-        <Grid numColsSm={2} className="gap-4 mt-4">
+        <Grid className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-4">
           <div>
             <Text className="text-gray-600 text-xs">Created At</Text>
             <Text className="font-semibold mt-1">
