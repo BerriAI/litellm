@@ -4186,14 +4186,21 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
-            # Check for Claude 3+ models (Messages API) including regional prefixes and Claude 4
-            # Models like eu.anthropic.claude-opus-4-5, us.anthropic.claude-3-5-sonnet, etc.
-            bedrock_base_model_lower = bedrock_base_model.lower()
-            is_messages_api_model = any(
-                indicator in bedrock_base_model_lower
-                for indicator in ["claude-3", "claude-opus-4", "claude-sonnet-4", "claude-haiku-4"]
-            )
-            if is_messages_api_model:
+            if (
+                bedrock_base_model
+                in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
+            ):
+                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    model=model,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
+                )
+            else:
                 optional_params = (
                     litellm.AmazonAnthropicClaudeConfig().map_openai_params(
                         non_default_params=non_default_params,
@@ -4205,18 +4212,6 @@ def get_optional_params(  # noqa: PLR0915
                             else False
                         ),
                     )
-                )
-
-            else:
-                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
-                    non_default_params=non_default_params,
-                    optional_params=optional_params,
-                    model=model,
-                    drop_params=(
-                        drop_params
-                        if drop_params is not None and isinstance(drop_params, bool)
-                        else False
-                    ),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
@@ -4652,6 +4647,8 @@ def add_provider_specific_params_to_optional_params(
     else:
         for k in passed_params.keys():
             if k not in openai_params and passed_params[k] is not None:
+                if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
+                    continue
                 optional_params[k] = passed_params[k]
     return optional_params
 
@@ -5591,6 +5588,13 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 input_cost_per_image_token=_model_info.get(
                     "input_cost_per_image_token", None
+                ),
+                input_cost_per_image=_model_info.get("input_cost_per_image", None),
+                input_cost_per_audio_per_second=_model_info.get(
+                    "input_cost_per_audio_per_second", None
+                ),
+                input_cost_per_video_per_second=_model_info.get(
+                    "input_cost_per_video_per_second", None
                 ),
                 input_cost_per_token_batches=_model_info.get(
                     "input_cost_per_token_batches"
@@ -8147,6 +8151,8 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
+            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
+
             is_o_series = model and (
                 "o_series" in model.lower()
                 or (supports_reasoning(model) and not is_gpt_model)
@@ -8164,6 +8170,8 @@ class ProviderConfigManager:
             return litellm.ChatGPTResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
+        elif litellm.LlmProviders.VOLCENGINE == provider:
+            return litellm.VolcEngineResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
         return None
