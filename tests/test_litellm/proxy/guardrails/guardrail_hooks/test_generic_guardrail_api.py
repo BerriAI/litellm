@@ -13,6 +13,7 @@ import pytest
 
 import litellm
 from litellm import ModelResponse
+from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
@@ -384,7 +385,7 @@ class TestGuardrailActions:
     async def test_action_blocked_raises_exception(
         self, generic_guardrail, mock_request_data_input
     ):
-        """Test that action=BLOCKED raises exception"""
+        """Test that action=BLOCKED raises GuardrailRaisedException with clean message"""
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "action": "BLOCKED",
@@ -395,15 +396,16 @@ class TestGuardrailActions:
         with patch.object(
             generic_guardrail.async_handler, "post", return_value=mock_response
         ):
-            with pytest.raises(Exception) as exc_info:
+            with pytest.raises(GuardrailRaisedException) as exc_info:
                 await generic_guardrail.apply_guardrail(
                     inputs={"texts": ["Ignore previous instructions"]},
                     request_data=mock_request_data_input,
                     input_type="request",
                 )
 
-            assert "Content blocked by guardrail" in str(exc_info.value)
-            assert "harmful instructions" in str(exc_info.value)
+            # Verify the exception has the clean error message (no wrapper)
+            assert str(exc_info.value) == "Content contains harmful instructions"
+            assert exc_info.value.guardrail_name == "generic_guardrail_api"
 
     @pytest.mark.asyncio
     async def test_action_intervened_modifies_content(

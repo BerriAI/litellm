@@ -215,7 +215,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
 
             ### CHECK IF CLOUDFLARE AI GATEWAY ###
             ### if so - set the model as part of the base url
-            if "gateway.ai.cloudflare.com" in api_base:
+            if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
                 client = self._init_azure_client_for_cloudflare_ai_gateway(
                     api_base=api_base,
                     model=model,
@@ -664,8 +664,29 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                 **data, timeout=timeout
             )
             headers = dict(raw_response.headers)
-            response = raw_response.parse()
+            
+            # Convert json.JSONDecodeError to AzureOpenAIError for two critical reasons:
+            #
+            # 1. ROUTER BEHAVIOR: The router relies on exception.status_code to determine cooldown logic:
+            #    - JSONDecodeError has no status_code → router skips cooldown evaluation
+            #    - AzureOpenAIError has status_code → router properly evaluates for cooldown
+            #
+            # 2. CONNECTION CLEANUP: When response.parse() throws JSONDecodeError, the response
+            #    body may not be fully consumed, preventing httpx from properly returning the
+            #    connection to the pool. By catching the exception and accessing raw_response.status_code,
+            #    we trigger httpx's internal cleanup logic. Without this:
+            #    - parse() fails → JSONDecodeError bubbles up → httpx never knows response was acknowledged → connection leak
+            #    This completely eliminates "Unclosed connection" warnings during high load.
+            try:
+                response = raw_response.parse()
+            except json.JSONDecodeError as json_error:
+                raise AzureOpenAIError(
+                    status_code=raw_response.status_code or 500,
+                    message=f"Failed to parse raw Azure embedding response: {str(json_error)}"
+                ) from json_error
+            
             stringified_response = response.model_dump()
+
             ## LOGGING
             logging_obj.post_call(
                 input=input,
@@ -1317,7 +1338,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
         prompt: Optional[str] = None,
     ) -> dict:
         client_session = litellm.client_session or httpx.Client()
-        if "gateway.ai.cloudflare.com" in api_base:
+        if api_base is not None and "gateway.ai.cloudflare.com" in api_base:
             ## build base url - assume api base includes resource name
             if not api_base.endswith("/"):
                 api_base += "/"

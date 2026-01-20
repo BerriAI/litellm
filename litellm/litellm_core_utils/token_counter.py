@@ -719,6 +719,12 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
+            elif c["type"] == "thinking":
+                # Claude extended thinking content block
+                # Count the thinking text and skip signature (opaque signature blob)
+                thinking_text = c.get("thinking", "")
+                if thinking_text:
+                    num_tokens += count_function(thinking_text)
             else:
                 raise ValueError(
                     f"Invalid content item type: {type(c).__name__}. "

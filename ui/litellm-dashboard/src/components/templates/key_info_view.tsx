@@ -304,7 +304,7 @@ export default function KeyInfoView({
     isProxyAdminRole(userRole || "") ||
     (teamsData &&
       isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
         userID || "",
       )) ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
