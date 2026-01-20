@@ -81,6 +81,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             Union[ModelResponse, TextCompletionResponse]
         ] = None
         self.final_text: str = ""
+        self._cached_item_id: Optional[str] = None
+        self._cached_response_id: Optional[str] = None
         self._pending_tool_events: List[BaseLiteLLMOpenAIResponseObject] = []
         self._tool_output_index_by_call_id: dict[str, int] = {}
         self._tool_args_by_call_id: dict[str, str] = {}
@@ -307,12 +309,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
 
     def create_output_item_added_event(self) -> OutputItemAddedEvent:
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+        
         return OutputItemAddedEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
             output_index=0,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
-                    "id": f"msg_{str(uuid.uuid4())}",
+                    "id": self._cached_item_id,
                     "type": "message",
                     "status": "in_progress",
                     "role": "assistant",
@@ -322,9 +327,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         )
 
     def create_content_part_added_event(self) -> ContentPartAddedEvent:
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+        
         return ContentPartAddedEvent(
             type=ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
-            item_id=f"msg_{str(uuid.uuid4())}",
+            item_id=self._cached_item_id,
             output_index=0,
             content_index=0,
             part=BaseLiteLLMOpenAIResponseObject(
@@ -346,9 +354,12 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def create_output_text_done_event(
         self, litellm_complete_object: ModelResponse
     ) -> OutputTextDoneEvent:
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+        
         return OutputTextDoneEvent(
             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
-            item_id=f"msg_{str(uuid.uuid4())}",
+            item_id=self._cached_item_id,
             output_index=0,
             content_index=0,
             text=getattr(litellm_complete_object.choices[0].message, "content", "")  # type: ignore
@@ -358,6 +369,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def create_output_content_part_done_event(
         self, litellm_complete_object: ModelResponse
     ) -> ContentPartDoneEvent:
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
 
         text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
         reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
@@ -383,7 +396,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         return ContentPartDoneEvent(
             type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
-            item_id=f"msg_{str(uuid.uuid4())}",
+            item_id=self._cached_item_id,
             output_index=0,
             content_index=0,
             part=part,
@@ -392,6 +405,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     def create_output_item_done_event(
         self, litellm_complete_object: ModelResponse
     ) -> OutputItemDoneEvent:
+        if self._cached_item_id is None:
+            self._cached_item_id = f"msg_{str(uuid.uuid4())}"
+        
         text = self.litellm_model_response.choices[0].message.content or ""  # type: ignore
         annotations = getattr(self.litellm_model_response.choices[0].message, "annotations", None)  # type: ignore
 
@@ -404,7 +420,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             sequence_number=1,
             item=BaseLiteLLMOpenAIResponseObject(
                 **{
-                    "id": f"msg_{str(uuid.uuid4())}",
+                    "id": self._cached_item_id,
                     "status": "completed",
                     "type": "message",
                     "role": "assistant",
@@ -576,6 +592,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         and the ReasoningSummaryTextDeltaEvent, which is used by the responses API to emit reasoning content.
         It also handles emitting annotation.added events when annotations are detected in the chunk.
         """
+        if self._cached_item_id is None and chunk.id:
+            self._cached_item_id = chunk.id
+        item_id = self._cached_item_id or chunk.id
+        
         # Check if this chunk has annotations first (before processing text/reasoning)
         # This ensures we detect and queue annotation events from the annotation chunk
         if chunk.choices and hasattr(chunk.choices[0].delta, "annotations"):
@@ -593,7 +613,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         annotation_dict = annotation.model_dump() if hasattr(annotation, 'model_dump') else dict(annotation)
                         event = OutputTextAnnotationAddedEvent(
                             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
-                            item_id=chunk.id,
+                            item_id=item_id,
                             output_index=0,
                             content_index=0,
                             annotation_index=idx,
@@ -620,7 +640,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if delta_content:
             return OutputTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
-                item_id=chunk.id,
+                item_id=item_id,
                 output_index=0,
                 content_index=0,
                 delta=delta_content,

@@ -92,7 +92,12 @@ from litellm.utils import (
 )
 
 from ....utils import _remove_additional_properties, _remove_strict_from_schema
-from ..common_utils import VertexAIError, _build_vertex_schema
+from ..common_utils import (
+    VertexAIError,
+    _build_json_schema,
+    _build_vertex_schema,
+    supports_response_json_schema,
+)
 from ..vertex_llm_base import VertexBase
 from .transformation import (
     _gemini_convert_messages_with_history,
@@ -624,30 +629,55 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             )
         return old_schema
 
-    def apply_response_schema_transformation(self, value: dict, optional_params: dict):
+    def apply_response_schema_transformation(
+        self, value: dict, optional_params: dict, model: str
+    ):
         new_value = deepcopy(value)
-        # remove 'additionalProperties' from json schema
-        new_value = _remove_additional_properties(new_value)
-        # remove 'strict' from json schema
+        # remove 'strict' from json schema (not supported by Gemini)
         new_value = _remove_strict_from_schema(new_value)
-        if new_value["type"] == "json_object":
+
+        # Automatically use responseJsonSchema for Gemini 2.0+ models
+        # responseJsonSchema uses standard JSON Schema format and supports additionalProperties
+        # For older models (Gemini 1.5), fall back to responseSchema (OpenAPI format)
+        use_json_schema = supports_response_json_schema(model)
+
+        if not use_json_schema:
+            # For responseSchema, remove 'additionalProperties' (not supported)
+            new_value = _remove_additional_properties(new_value)
+
+        # Handle response type
+        if new_value.get("type") == "json_object":
             optional_params["response_mime_type"] = "application/json"
-        elif new_value["type"] == "text":
+        elif new_value.get("type") == "text":
             optional_params["response_mime_type"] = "text/plain"
+
+        # Extract schema from response_format
+        schema = None
         if "response_schema" in new_value:
             optional_params["response_mime_type"] = "application/json"
-            optional_params["response_schema"] = new_value["response_schema"]
-        elif new_value["type"] == "json_schema":  # type: ignore
-            if "json_schema" in new_value and "schema" in new_value["json_schema"]:  # type: ignore
+            schema = new_value["response_schema"]
+        elif new_value.get("type") == "json_schema":
+            if "json_schema" in new_value and "schema" in new_value["json_schema"]:
                 optional_params["response_mime_type"] = "application/json"
-                optional_params["response_schema"] = new_value["json_schema"]["schema"]  # type: ignore
+                schema = new_value["json_schema"]["schema"]
 
-        if "response_schema" in optional_params and isinstance(
-            optional_params["response_schema"], dict
-        ):
-            optional_params["response_schema"] = self._map_response_schema(
-                value=optional_params["response_schema"]
-            )
+        if schema and isinstance(schema, dict):
+            if use_json_schema:
+                # Use responseJsonSchema (Gemini 2.0+ only, opt-in)
+                # - Standard JSON Schema format (lowercase types)
+                # - Supports additionalProperties
+                # - No propertyOrdering needed
+                optional_params["response_json_schema"] = _build_json_schema(
+                    deepcopy(schema)
+                )
+            else:
+                # Use responseSchema (default, backwards compatible)
+                # - OpenAPI-style format (uppercase types)
+                # - No additionalProperties support
+                # - Requires propertyOrdering
+                optional_params["response_schema"] = self._map_response_schema(
+                    value=schema
+                )
 
     @staticmethod
     def _map_reasoning_effort_to_thinking_budget(
@@ -947,7 +977,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params["max_output_tokens"] = value
             elif param == "response_format" and isinstance(value, dict):  # type: ignore
                 self.apply_response_schema_transformation(
-                    value=value, optional_params=optional_params
+                    value=value, optional_params=optional_params, model=model
                 )
             elif param == "frequency_penalty":
                 if self._supports_penalty_parameters(model):

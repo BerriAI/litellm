@@ -919,6 +919,24 @@
         "interactions": true
       }
     },
+    "chatgpt": {
+      "display_name": "ChatGPT Subscription (`chatgpt`)",
+      "url": "https://docs.litellm.ai/docs/providers/chatgpt",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "github": {
       "display_name": "GitHub Models (`github`)",
       "url": "https://docs.litellm.ai/docs/providers/github",
