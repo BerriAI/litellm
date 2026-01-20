@@ -252,7 +252,7 @@ class BraveSearchConfig(BaseSearchConfig):
         response_json = raw_response.json()
 
         # Transform results to SearchResult objects
-        results = []
+        results: List[SearchResult] = []
 
         query_params = raw_response.request.url.params if raw_response.request else {}
         sections_to_process = self._sections_from_params(dict(query_params))
