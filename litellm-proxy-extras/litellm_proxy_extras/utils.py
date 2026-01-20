@@ -11,165 +11,12 @@ from typing import Optional
 
 from litellm_proxy_extras._logging import logger
 
-try:
-    from litellm.caching.redis_cache import RedisCache
-except ImportError:
-    RedisCache = None  # type: ignore
-
 
 def str_to_bool(value: Optional[str]) -> bool:
     if value is None:
         return False
     return value.lower() in ("true", "1", "t", "y", "yes")
 
-
-class MigrationLockManager:
-    """Redis-based lock manager for database migrations.
-
-    Prevents concurrent Prisma migrations in multi-pod deployments by using
-    a distributed lock. Only one pod can hold the lock and run migrations at a time.
-    """
-
-    MIGRATION_LOCK_KEY = "migration_lock"
-    LOCK_TTL_SECONDS = 300  # 5 minutes TTL
-
-    def __init__(self, redis_cache: Optional["RedisCache"] = None):
-        """Initialize the migration lock manager.
-
-        Args:
-            redis_cache: Optional RedisCache instance for distributed locking.
-                        If None, migrations run without lock protection (single instance mode).
-        """
-        self.redis_cache = redis_cache
-        self.lock_acquired = False
-        self.pod_id = f"pod_{os.getpid()}_{int(time.time())}"
-
-    def _get_redis_lock_key(self) -> str:
-        """Get Redis lock key for migration."""
-        return f"migration_lock:{self.MIGRATION_LOCK_KEY}"
-
-    def acquire_lock(self) -> bool:
-        """Acquire migration lock using Redis SET NX.
-
-        Returns:
-            bool: True if lock acquired, False otherwise.
-        """
-        if self.redis_cache is None:
-            logger.warning(
-                "Redis cache is not available, running migration without lock protection"
-            )
-            self.lock_acquired = True
-            return True
-
-        try:
-            lock_key = self._get_redis_lock_key()
-
-            # FIX: Use native Redis SET NX instead of RedisCache.set_cache()
-            # Original bug: set_cache() doesn't support nx parameter and returns None
-            # Fixed: Use redis_client.set() directly which returns True/False
-            acquired = self.redis_cache.redis_client.set(
-                name=lock_key,
-                value=self.pod_id,
-                nx=True,  # Only set if key doesn't exist
-                ex=self.LOCK_TTL_SECONDS,  # Set expiration time
-            )
-
-            if acquired:
-                self.lock_acquired = True
-                logger.info(f"Migration lock acquired by pod {self.pod_id}")
-                return True
-            else:
-                logger.info("Migration lock is already held by another pod")
-                return False
-
-        except Exception as e:
-            logger.warning(f"Failed to acquire migration lock: {e}")
-            return False
-
-    def wait_for_lock_release(
-        self, check_interval: int = 5, max_wait: int = 300
-    ) -> bool:
-        """Wait for another process to release the lock.
-
-        Args:
-            check_interval: Seconds to wait between lock acquisition attempts.
-            max_wait: Maximum seconds to wait for lock release.
-
-        Returns:
-            bool: True if lock acquired after waiting, False if timeout.
-        """
-        if self.redis_cache is None:
-            logger.warning("Redis cache is not available, cannot wait for lock")
-            return False
-
-        logger.info(f"Waiting for migration lock to be released (max {max_wait}s)...")
-        start_time = time.time()
-
-        while time.time() - start_time < max_wait:
-            # Try to acquire lock using the public acquire_lock method
-            if self.acquire_lock():
-                logger.info(
-                    f"Migration lock acquired after waiting by pod {self.pod_id}"
-                )
-                return True
-
-            time.sleep(check_interval)
-
-        logger.warning(f"Failed to acquire migration lock within {max_wait} seconds")
-        return False
-
-    def release_lock(self):
-        """Release migration lock atomically using Lua script.
-
-        FIX: Use Lua script for atomic compare-and-delete to prevent race conditions.
-        Original bug: Non-atomic GET then DELETE allows another pod to acquire lock
-        between the GET and DELETE operations.
-        """
-        if not self.lock_acquired or self.redis_cache is None:
-            return
-
-        try:
-            lock_key = self._get_redis_lock_key()
-
-            # FIX: Use Lua script for atomic compare-and-delete
-            # This prevents race condition where:
-            # 1. Pod A reads lock value (sees its own pod_id)
-            # 2. Lock TTL expires
-            # 3. Pod B acquires lock
-            # 4. Pod A deletes lock (deletes Pod B's lock!)
-            lua_script = """
-            if redis.call("GET", KEYS[1]) == ARGV[1] then
-                return redis.call("DEL", KEYS[1])
-            else
-                return 0
-            end
-            """
-
-            result = self.redis_cache.redis_client.eval(
-                lua_script,
-                1,  # Number of keys
-                lock_key,  # KEYS[1]
-                self.pod_id,  # ARGV[1]
-            )
-
-            if result == 1:
-                logger.info(f"Migration lock released by pod {self.pod_id}")
-            else:
-                logger.warning(f"Pod {self.pod_id} cannot release lock (not owner)")
-
-        except Exception as e:
-            logger.warning(f"Failed to release migration lock: {e}")
-        finally:
-            self.lock_acquired = False
-
-    def __enter__(self):
-        """Context manager entry - acquire lock when entering with statement."""
-        self.acquire_lock()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit - release lock when exiting with statement."""
-        self.release_lock()
 
 
 def _get_prisma_env() -> dict:
@@ -178,9 +25,7 @@ def _get_prisma_env() -> dict:
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # These env vars prevent Prisma from attempting downloads
         prisma_env["NPM_CONFIG_PREFER_OFFLINE"] = "true"
-        prisma_env["NPM_CONFIG_CACHE"] = os.getenv(
-            "NPM_CONFIG_CACHE", "/app/.cache/npm"
-        )
+        prisma_env["NPM_CONFIG_CACHE"] = os.getenv("NPM_CONFIG_CACHE", "/app/.cache/npm")
     return prisma_env
 
 
@@ -189,26 +34,27 @@ def _get_prisma_command() -> str:
     if str_to_bool(os.getenv("PRISMA_OFFLINE_MODE")):
         # Primary location where Prisma Python package installs the CLI
         default_cli_path = "/app/.cache/prisma-python/binaries/node_modules/.bin/prisma"
-
+        
         # Check if custom path is provided (for flexibility)
         custom_cli_path = os.getenv("PRISMA_CLI_PATH")
         if custom_cli_path and os.path.exists(custom_cli_path):
             logger.info(f"Using custom Prisma CLI at {custom_cli_path}")
             return custom_cli_path
-
+        
         # Check the default location
         if os.path.exists(default_cli_path):
             logger.info(f"Using cached Prisma CLI at {default_cli_path}")
             return default_cli_path
-
+        
         # If not found, log warning and fall back
         logger.warning(
             f"Prisma CLI not found at {default_cli_path}. "
             "Falling back to Python wrapper (may attempt downloads)"
         )
-
+    
     # Fall back to the Python wrapper (will work in online mode)
     return "prisma"
+
 
 
 class ProxyExtrasDBManager:
@@ -273,7 +119,7 @@ class ProxyExtrasDBManager:
                 stdout=open(migration_file, "w"),
                 check=True,
                 timeout=30,
-                env=prisma_env,
+                env=prisma_env
             )
 
             # 3. Mark the migration as applied since it represents current state
@@ -288,7 +134,7 @@ class ProxyExtrasDBManager:
                 ],
                 check=True,
                 timeout=30,
-                env=prisma_env,
+                env=prisma_env
             )
 
             return True
@@ -313,20 +159,14 @@ class ProxyExtrasDBManager:
     @staticmethod
     def _roll_back_migration(migration_name: str):
         """Mark a specific migration as rolled back"""
-        # Set up environment for offline mode if configured
+         # Set up environment for offline mode if configured
         prisma_env = _get_prisma_env()
         subprocess.run(
-            [
-                _get_prisma_command(),
-                "migrate",
-                "resolve",
-                "--rolled-back",
-                migration_name,
-            ],
+            [_get_prisma_command(), "migrate", "resolve", "--rolled-back", migration_name],
             timeout=60,
             check=True,
             capture_output=True,
-            env=prisma_env,
+            env=prisma_env
         )
 
     @staticmethod
@@ -338,7 +178,7 @@ class ProxyExtrasDBManager:
             timeout=60,
             check=True,
             capture_output=True,
-            env=prisma_env,
+            env=prisma_env
         )
 
     @staticmethod
@@ -408,7 +248,7 @@ class ProxyExtrasDBManager:
         if not database_url:
             logger.error("DATABASE_URL not set")
             return
-
+        
         diff_dir = (
             Path(migrations_dir)
             / "migrations"
@@ -443,7 +283,7 @@ class ProxyExtrasDBManager:
                     check=True,
                     timeout=60,
                     stdout=f,
-                    env=_get_prisma_env(),
+                    env=_get_prisma_env()
                 )
         except subprocess.CalledProcessError as e:
             logger.warning(f"Failed to generate migration diff: {e.stderr}")
@@ -473,7 +313,7 @@ class ProxyExtrasDBManager:
                 check=True,
                 capture_output=True,
                 text=True,
-                env=_get_prisma_env(),
+                env=_get_prisma_env()
             )
             logger.info(f"prisma db execute stdout: {result.stdout}")
             logger.info("✅ Migration diff applied successfully")
@@ -491,18 +331,12 @@ class ProxyExtrasDBManager:
             try:
                 logger.info(f"Resolving migration: {migration_name}")
                 subprocess.run(
-                    [
-                        _get_prisma_command(),
-                        "migrate",
-                        "resolve",
-                        "--applied",
-                        migration_name,
-                    ],
+                    [_get_prisma_command(), "migrate", "resolve", "--applied", migration_name],
                     timeout=60,
                     check=True,
                     capture_output=True,
                     text=True,
-                    env=_get_prisma_env(),
+                    env=_get_prisma_env()
                 )
                 logger.debug(f"Resolved migration: {migration_name}")
             except subprocess.CalledProcessError as e:
@@ -512,57 +346,19 @@ class ProxyExtrasDBManager:
                     )
 
     @staticmethod
-    def setup_database(
-        use_migrate: bool = False, redis_cache: Optional["RedisCache"] = None
-    ) -> bool:
+    def setup_database(use_migrate: bool = False) -> bool:
         """
-        Set up the database using either prisma migrate or prisma db push.
-        Uses migrations from litellm-proxy-extras package.
-        In multi-instance environment, use redis lock to prevent concurrent execution.
+        Set up the database using either prisma migrate or prisma db push
+        Uses migrations from litellm-proxy-extras package
 
         Args:
+            schema_path (str): Path to the Prisma schema file
             use_migrate (bool): Whether to use prisma migrate instead of db push
-            redis_cache: Redis cache instance for distributed locking
 
         Returns:
             bool: True if setup was successful, False otherwise
         """
         schema_path = ProxyExtrasDBManager._get_prisma_dir() + "/schema.prisma"
-
-        database_url = os.getenv("DATABASE_URL")
-        if not database_url:
-            logger.error("DATABASE_URL environment variable is not set")
-            return False
-
-        # Use MigrationLockManager to prevent concurrent migration execution
-        with MigrationLockManager(redis_cache) as lock_manager:
-            # Lock is already acquired in __enter__, check if it was successful
-            if not lock_manager.lock_acquired:
-                # Cannot acquire lock, another process is running migration
-                logger.info(
-                    "Another pod is running migration, waiting for completion..."
-                )
-
-                # Wait for other process to complete migration
-                if not lock_manager.wait_for_lock_release():
-                    logger.error("Failed to acquire migration lock after waiting")
-                    return False
-
-            # Successfully acquired lock, proceed with migration
-            logger.info("Acquired migration lock, proceeding with migration")
-            return ProxyExtrasDBManager._execute_migration(use_migrate, schema_path)
-
-    @staticmethod
-    def _execute_migration(use_migrate: bool, schema_path: str) -> bool:
-        """Execute the actual migration.
-
-        Args:
-            use_migrate: Whether to use prisma migrate instead of db push
-            schema_path: Path to the Prisma schema file
-
-        Returns:
-            bool: True if migration was successful, False otherwise
-        """
         for attempt in range(4):
             original_dir = os.getcwd()
             migrations_dir = ProxyExtrasDBManager._get_prisma_dir()
@@ -579,7 +375,7 @@ class ProxyExtrasDBManager:
                             check=True,
                             capture_output=True,
                             text=True,
-                            env=_get_prisma_env(),
+                            env=_get_prisma_env()
                         )
                         logger.info(f"prisma migrate deploy stdout: {result.stdout}")
 
@@ -617,7 +413,7 @@ class ProxyExtrasDBManager:
                                     check=True,
                                     capture_output=True,
                                     text=True,
-                                    env=_get_prisma_env(),
+                                    env=_get_prisma_env()
                                 )
                                 logger.info(
                                     f"✅ Migration {failed_migration} marked as rolled back... retrying"
