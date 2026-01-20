@@ -374,7 +374,9 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
 3. Install dependencies `pip install -e ".[all]"`
-4. Start proxy backend `python litellm/proxy_cli.py`
+4. `pip install prisma`
+5. `prisma generate`
+6. Start proxy backend `python litellm/proxy/proxy_cli.py`
 
 ### Frontend
 1. Navigate to `ui/litellm-dashboard`

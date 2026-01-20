@@ -8,6 +8,7 @@ import AdminPanel from "@/components/admins";
 import AgentsPanel from "@/components/agents";
 import BudgetPanel from "@/components/budgets/budget_panel";
 import CacheDashboard from "@/components/cache_dashboard";
+import ClaudeCodePluginsPanel from "@/components/claude_code_plugins";
 import { fetchTeams } from "@/components/common_components/fetch_teams";
 import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
@@ -530,6 +531,8 @@ export default function CreateKeyPage() {
                   <SearchTools accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "tag-management" ? (
                   <TagManagement accessToken={accessToken} userRole={userRole} userID={userID} />
+                ) : page == "claude-code-plugins" ? (
+                  <ClaudeCodePluginsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "vector-stores" ? (
                   <VectorStoreManagement accessToken={accessToken} userRole={userRole} userID={userID} />
                 ) : page == "new_usage" ? (

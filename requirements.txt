@@ -16,12 +16,12 @@ prisma==0.11.0 # for db
 nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.6.2 # for encrypting keys
-google-cloud-aiplatform==1.47.0 # for vertex ai calls
+google-cloud-aiplatform==1.133.0 # for vertex ai calls
 google-cloud-iam==2.19.1 # for GCP IAM Redis authentication
-google-genai==1.22.0
+google-genai==1.37.0
 anthropic[vertex]==0.54.0
 mcp==1.25.0 ; python_version >= "3.10"    # for MCP server
-google-generativeai==0.5.0 # for vertex ai calls
+# google-generativeai removed - deprecated, replaced by google-genai (line 21)
 async_generator==1.10.0 # for async ollama calls
 langfuse==2.59.7 # for langfuse self-hosted logging
 prometheus_client==0.20.0 # for /metrics endpoint on proxy
@@ -38,9 +38,10 @@ azure-ai-contentsafety==1.0.0 # for azure content safety
 azure-identity==1.16.1 ; python_version >= "3.9" # for azure content safety
 azure-keyvault==4.2.0 # for azure KMS integration
 azure-storage-file-datalake==12.20.0 # for azure buck storage logging
-opentelemetry-api==1.25.0
-opentelemetry-sdk==1.25.0
-opentelemetry-exporter-otlp==1.25.0
+opentelemetry-api==1.28.0
+opentelemetry-sdk==1.28.0
+opentelemetry-exporter-otlp==1.28.0
+a2a-sdk>=0.3.22 ; python_version >= "3.10"
 # grpcio: 1.68.0-1.68.1 has reconnect bug (#38290), 1.75+ has Python 3.14 wheels + fix
 grpcio>=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0; python_version < "3.14"
 grpcio>=1.75.0; python_version >= "3.14"

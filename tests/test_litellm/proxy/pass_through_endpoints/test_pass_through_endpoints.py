@@ -1897,8 +1897,8 @@ async def test_add_litellm_data_to_request_adds_headers_to_metadata():
     The fix ensures headers are available in data["metadata"]["headers"] so
     guardrails can validate User-Agent, API keys, and other header-based checks.
     """
-    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     # Create mock request with headers including User-Agent
     mock_request = MagicMock(spec=Request)
@@ -1954,3 +1954,150 @@ async def test_add_litellm_data_to_request_adds_headers_to_metadata():
     # Also verify proxy_server_request has headers (original location)
     assert "proxy_server_request" in result
     assert "headers" in result["proxy_server_request"]
+
+
+def test_build_full_path_with_root_default():
+    """
+    Test _build_full_path_with_root with default root path (/)
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+        # Test with default root path
+        mock_get_root.return_value = "/"
+
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        assert result == "/api/v1/endpoint"
+
+
+def test_build_full_path_with_root_custom():
+    """
+    Test _build_full_path_with_root with custom root path
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+        # Test with custom root path /proxy
+        mock_get_root.return_value = "/proxy"
+
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/api/v1/endpoint")
+        assert result == "/proxy/api/v1/endpoint"
+
+
+def test_build_full_path_with_root_nested():
+    """
+    Test _build_full_path_with_root with nested root path
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+    )
+
+    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+        # Test with nested root path /api/v2
+        mock_get_root.return_value = "/api/v2"
+
+        result = InitPassThroughEndpointHelpers._build_full_path_with_root("/endpoint")
+        assert result == "/api/v2/endpoint"
+
+
+def test_is_registered_pass_through_route_with_custom_root():
+    """
+    Test is_registered_pass_through_route correctly handles server root path
+
+    When server has a custom root path like /proxy, the registered path
+    should be constructed by prepending the root to match incoming routes.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+
+    # Clear the registry first
+    _registered_pass_through_routes.clear()
+
+    # Register a pass-through route with endpoint format: {endpoint_id}:exact:{path}
+    endpoint_id = "test-endpoint-123"
+    path = "/api/endpoint"
+    route_key = f"{endpoint_id}:exact:{path}"
+    _registered_pass_through_routes[route_key] = {
+        "target": "http://example.com",
+        "headers": {},
+    }
+
+    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+        # Test with custom root path /proxy
+        mock_get_root.return_value = "/proxy"
+
+        # Should match when request route includes the root path
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is True
+
+        # Should not match when request route doesn't include root path
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is False
+
+        # Test with default root path
+        mock_get_root.return_value = "/"
+
+        # Should match with default root
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/api/endpoint") is True
+
+        # Should not match with root prepended when root is /
+        assert InitPassThroughEndpointHelpers.is_registered_pass_through_route("/proxy/api/endpoint") is False
+
+    # Clean up
+    _registered_pass_through_routes.clear()
+
+
+def test_get_registered_pass_through_route_with_custom_root():
+    """
+    Test get_registered_pass_through_route correctly handles server root path
+
+    When server has a custom root path, the method should return the correct
+    endpoint configuration by matching the full path including the root.
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        _registered_pass_through_routes,
+    )
+
+    # Clear the registry first
+    _registered_pass_through_routes.clear()
+
+    # Register a pass-through route
+    endpoint_id = "test-endpoint-456"
+    path = "/chat/completions"
+    target_config = {
+        "target": "http://api.example.com/v1/chat/completions",
+        "headers": {"Authorization": "Bearer token123"},
+        "forward_headers": True,
+    }
+    route_key = f"{endpoint_id}:exact:{path}"
+    _registered_pass_through_routes[route_key] = target_config
+
+    with patch("litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path") as mock_get_root:
+        # Test with custom root path /litellm
+        mock_get_root.return_value = "/litellm"
+
+        # Should return config when request route includes root path
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/litellm/chat/completions")
+        assert result is not None
+        assert result["target"] == "http://api.example.com/v1/chat/completions"
+        assert result["headers"]["Authorization"] == "Bearer token123"
+
+        # Should return None when route doesn't match
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        assert result is None
+
+        # Test with default root path
+        mock_get_root.return_value = "/"
+
+        # Should return config with default root
+        result = InitPassThroughEndpointHelpers.get_registered_pass_through_route("/chat/completions")
+        assert result is not None
+        assert result["target"] == "http://api.example.com/v1/chat/completions"
+
+    # Clean up
+    _registered_pass_through_routes.clear()
