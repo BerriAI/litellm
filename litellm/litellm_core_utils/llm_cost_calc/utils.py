@@ -354,7 +354,7 @@ class PromptTokensDetailsResult(TypedDict):
     image_tokens: int
     character_count: int
     image_count: int
-    video_length_seconds: int
+    video_length_seconds: float
 
 
 def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
@@ -400,10 +400,10 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     )
     video_length_seconds = (
         cast(
-            Optional[int],
+            Optional[float],
             getattr(usage.prompt_tokens_details, "video_length_seconds", 0),
         )
-        or 0
+        or 0.0
     )
 
     return PromptTokensDetailsResult(
@@ -415,7 +415,7 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         image_tokens=image_tokens,
         character_count=character_count,
         image_count=image_count,
-        video_length_seconds=video_length_seconds,
+        video_length_seconds=float(video_length_seconds),
     )
 
 
@@ -561,7 +561,7 @@ def generic_cost_per_token(  # noqa: PLR0915
         image_tokens=0,
         character_count=0,
         image_count=0,
-        video_length_seconds=0,
+        video_length_seconds=0.0,
     )
     if usage.prompt_tokens_details:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)
