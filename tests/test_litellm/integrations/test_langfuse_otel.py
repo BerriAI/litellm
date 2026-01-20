@@ -1,6 +1,11 @@
+import asyncio
+import contextvars
 import json
 import os
+import threading
+import time
 from datetime import datetime
+from typing import Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -612,6 +617,148 @@ class TestLangfuseOtelResponsesAPI:
             assert output_data[0]["call_id"] == "call-abc"
             assert output_data[0]["arguments"]["location"] == "San Francisco"
             assert output_data[0]["arguments"]["unit"] == "celsius"
+
+
+class TestContextPreservation:
+    """Test that OpenTelemetry context is preserved when callbacks run in executor threads"""
+
+    def test_handle_sync_success_callbacks_preserves_context(self):
+        """Test that handle_sync_success_callbacks_for_async_calls preserves contextvars when submitting to executor"""
+        import litellm
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.utils import executor
+
+        # Create a context variable to track context preservation
+        test_context_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("test_context")
+        callback_executed = threading.Event()
+        context_value_in_callback = []
+
+        # Set up logging with a callback
+        logging_obj = Logging(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id="test-123",
+            function_id="test-456",
+        )
+
+        # Override success_handler to check context
+        original_success_handler = logging_obj.success_handler
+
+        def test_success_handler(*args, **kwargs):
+            # Try to access the context variable
+            try:
+                value = test_context_var.get()
+                context_value_in_callback.append(value)
+            except LookupError:
+                context_value_in_callback.append(None)
+            callback_executed.set()
+            return original_success_handler(*args, **kwargs)
+
+        logging_obj.success_handler = test_success_handler
+
+        # Add a test callback to success_callback to trigger the sync callback path
+        def test_callback(*args, **kwargs):
+            pass
+
+        # Set the context variable before calling
+        test_context_var.set("test_context_value")  # type: ignore
+        litellm.success_callback = [test_callback]
+
+        # Create a mock result
+        mock_result = MagicMock()
+
+        # Call handle_sync_success_callbacks_for_async_calls
+        logging_obj.handle_sync_success_callbacks_for_async_calls(
+            result=mock_result,
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+            cache_hit=None,
+        )
+
+        # Wait for callback to execute (with timeout)
+        assert callback_executed.wait(timeout=2.0), "Callback should have been executed"
+
+        # Verify context was preserved
+        assert len(context_value_in_callback) > 0, "Callback should have been called"
+        assert (
+            context_value_in_callback[0] == "test_context_value"
+        ), "Context variable should be preserved in executor thread"
+
+        # Cleanup
+        litellm.success_callback = []
+
+    @pytest.mark.asyncio
+    async def test_executor_submit_preserves_context_in_streaming_iterator(self):
+        """Test that executor.submit calls in streaming_iterator preserve contextvars"""
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+        from unittest.mock import Mock
+        import httpx
+
+        # Create a context variable
+        test_context_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("test_context")
+        callback_executed = threading.Event()
+        context_value_in_callback = []
+
+        # Set up logging object with a test callback
+        logging_obj = Logging(
+            model="test-model",
+            messages=[],
+            stream=False,
+            call_type="responses",
+            start_time=datetime.now(),
+            litellm_call_id="test-123",
+            function_id="test-456",
+        )
+
+        # Override success_handler to check context
+        original_success_handler = logging_obj.success_handler
+
+        def test_success_handler(*args, **kwargs):
+            try:
+                value = test_context_var.get()
+                context_value_in_callback.append(value)
+            except LookupError:
+                context_value_in_callback.append(None)
+            callback_executed.set()
+            return original_success_handler(*args, **kwargs)
+
+        logging_obj.success_handler = test_success_handler
+
+        # Create a mock response
+        mock_response = Mock(spec=httpx.Response)
+        mock_response.headers = {}
+        mock_response.status_code = 200
+
+        # Create iterator
+        iterator = ResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="test-model",
+            responses_api_provider_config=Mock(),
+            logging_obj=logging_obj,
+        )
+
+        # Set context variable
+        test_context_var.set("streaming_context_value")  # type: ignore
+        iterator.completed_response = Mock()
+
+        # Call _handle_logging_completed_response which uses executor.submit
+        iterator._handle_logging_completed_response()
+
+        # Wait a bit for async task to start
+        await asyncio.sleep(0.1)
+
+        # Wait for callback to execute
+        assert callback_executed.wait(timeout=2.0), "Callback should have been executed"
+
+        # Verify context was preserved
+        assert len(context_value_in_callback) > 0, "Callback should have been called"
+        assert (
+            context_value_in_callback[0] == "streaming_context_value"
+        ), "Context variable should be preserved in executor thread"
 
 
 if __name__ == "__main__":
