@@ -937,8 +937,8 @@
         "interactions": true
       }
     },
-    "gmi_cloud": {
-      "display_name": "GMI Cloud (`gmi_cloud`)",
+    "gmi": {
+      "display_name": "GMI Cloud (`gmi`)",
       "url": "https://docs.litellm.ai/docs/providers/gmi_cloud",
       "endpoints": {
         "chat_completions": true,
