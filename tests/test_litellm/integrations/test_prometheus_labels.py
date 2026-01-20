@@ -3,7 +3,7 @@ Unit tests for prometheus metric labels configuration
 """
 from litellm.types.integrations.prometheus import (
     PrometheusMetricLabels,
-    UserAPIKeyLabelNames
+    UserAPIKeyLabelNames,
 )
 
 
@@ -42,8 +42,9 @@ def test_user_email_label_exists():
 
 def test_prometheus_metric_labels_structure():
     """Test that all required prometheus metrics have proper label structure"""
-    from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
     from typing import get_args
+
+    from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
 
     # Test a few key metrics to ensure they have proper label structure
     test_metrics = [
@@ -69,8 +70,161 @@ def test_prometheus_metric_labels_structure():
         print(f"✅ {metric_name} has proper label structure with user_email")
 
 
+def test_route_normalization_for_responses_api():
+    """
+    Test that route normalization prevents high cardinality in Prometheus metrics
+    for the /v1/responses/{response_id} endpoint.
+    
+    Issue: https://github.com/BerriAI/litellm/issues/XXXX
+    Each unique response ID was creating a separate metric line, causing the
+    /metrics endpoint to grow to ~30MB and take ~40 seconds to respond.
+    
+    Fix: Routes are normalized to collapse dynamic IDs into placeholders.
+    """
+    from litellm.proxy.auth.auth_utils import normalize_request_route
+
+    # Test responses API routes
+    responses_routes = [
+        ("/v1/responses/1234567890", "/v1/responses/{response_id}"),
+        ("/v1/responses/9876543210", "/v1/responses/{response_id}"),
+        ("/v1/responses/abcdefghij", "/v1/responses/{response_id}"),
+        ("/v1/responses/resp_abc123", "/v1/responses/{response_id}"),
+        ("/v1/responses/litellm_poll_xyz", "/v1/responses/{response_id}"),
+    ]
+    
+    for original, expected in responses_routes:
+        normalized = normalize_request_route(original)
+        assert normalized == expected, \
+            f"Failed: {original} -> {normalized} (expected {expected})"
+    
+    # Verify cardinality reduction
+    unique_normalized = set(normalize_request_route(route) for route, _ in responses_routes)
+    assert len(unique_normalized) == 1, \
+        f"Expected 1 unique normalized route, got {len(unique_normalized)}: {unique_normalized}"
+    
+    print(f"✅ Responses API routes: {len(responses_routes)} different IDs normalized to 1 metric label")
+    
+
+def test_route_normalization_for_sub_routes():
+    """Test that sub-routes like /cancel and /input_items are normalized correctly"""
+    from litellm.proxy.auth.auth_utils import normalize_request_route
+    
+    sub_routes = [
+        ("/v1/responses/id1/cancel", "/v1/responses/{response_id}/cancel"),
+        ("/v1/responses/id2/cancel", "/v1/responses/{response_id}/cancel"),
+        ("/v1/responses/id3/input_items", "/v1/responses/{response_id}/input_items"),
+        ("/openai/v1/responses/id4/input_items", "/openai/v1/responses/{response_id}/input_items"),
+    ]
+    
+    for original, expected in sub_routes:
+        normalized = normalize_request_route(original)
+        assert normalized == expected, \
+            f"Failed: {original} -> {normalized} (expected {expected})"
+    
+    print("✅ Sub-routes normalized correctly")
+
+
+def test_route_normalization_preserves_static_routes():
+    """Test that static routes are not affected by normalization"""
+    from litellm.proxy.auth.auth_utils import normalize_request_route
+    
+    static_routes = [
+        "/chat/completions",
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/health",
+        "/metrics",
+        "/v1/models",
+        "/v1/responses",  # List endpoint without ID
+    ]
+    
+    for route in static_routes:
+        normalized = normalize_request_route(route)
+        assert normalized == route, \
+            f"Static route should not be modified: {route} -> {normalized}"
+    
+    print(f"✅ {len(static_routes)} static routes preserved")
+
+
+def test_route_normalization_other_dynamic_apis():
+    """Test normalization for other OpenAI-compatible APIs with dynamic IDs"""
+    from litellm.proxy.auth.auth_utils import normalize_request_route
+    
+    test_cases = [
+        # Threads API
+        ("/v1/threads/thread_123", "/v1/threads/{thread_id}"),
+        ("/v1/threads/thread_abc/messages", "/v1/threads/{thread_id}/messages"),
+        ("/v1/threads/thread_abc/runs/run_123", "/v1/threads/{thread_id}/runs/{run_id}"),
+        
+        # Vector Stores API
+        ("/v1/vector_stores/vs_123", "/v1/vector_stores/{vector_store_id}"),
+        ("/v1/vector_stores/vs_123/files", "/v1/vector_stores/{vector_store_id}/files"),
+        
+        # Assistants API
+        ("/v1/assistants/asst_123", "/v1/assistants/{assistant_id}"),
+        
+        # Files API
+        ("/v1/files/file_123", "/v1/files/{file_id}"),
+        ("/v1/files/file_123/content", "/v1/files/{file_id}/content"),
+        
+        # Batches API
+        ("/v1/batches/batch_123", "/v1/batches/{batch_id}"),
+        ("/v1/batches/batch_123/cancel", "/v1/batches/{batch_id}/cancel"),
+    ]
+    
+    for original, expected in test_cases:
+        normalized = normalize_request_route(original)
+        assert normalized == expected, \
+            f"Failed: {original} -> {normalized} (expected {expected})"
+    
+    print(f"✅ {len(test_cases)} other API routes normalized correctly")
+
+
+def test_prometheus_metrics_use_normalized_routes():
+    """
+    Test that Prometheus metrics use the normalized route in labels
+    to prevent high cardinality.
+    """
+    from unittest.mock import MagicMock
+
+    from litellm.integrations.prometheus import (
+        PrometheusLogger,
+        UserAPIKeyLabelValues,
+        prometheus_label_factory,
+    )
+
+    # Create a mock PrometheusLogger
+    prometheus_logger = MagicMock()
+    prometheus_logger.get_labels_for_metric = PrometheusLogger.get_labels_for_metric.__get__(prometheus_logger)
+    
+    # Test with a normalized route
+    enum_values = UserAPIKeyLabelValues(
+        route="/v1/responses/{response_id}",  # Normalized route
+        status_code="200",
+        requested_model="gpt-4",
+    )
+    
+    labels = prometheus_label_factory(
+        supported_enum_labels=prometheus_logger.get_labels_for_metric(
+            metric_name="litellm_proxy_total_requests_metric"
+        ),
+        enum_values=enum_values,
+    )
+    
+    # Verify the route is normalized in labels
+    assert labels["route"] == "/v1/responses/{response_id}", \
+        f"Expected normalized route in labels, got: {labels.get('route')}"
+    
+    print("✅ Prometheus metrics use normalized routes in labels")
+
+
 if __name__ == "__main__":
     test_user_email_in_required_metrics()
     test_user_email_label_exists()
     test_prometheus_metric_labels_structure()
-    print("All prometheus label tests passed!")
+    test_route_normalization_for_responses_api()
+    test_route_normalization_for_sub_routes()
+    test_route_normalization_preserves_static_routes()
+    test_route_normalization_other_dynamic_apis()
+    test_prometheus_metrics_use_normalized_routes()
+    print("\n✅ All prometheus label tests passed!")

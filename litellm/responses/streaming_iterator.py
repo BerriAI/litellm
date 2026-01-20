@@ -55,6 +55,7 @@ class BaseResponsesAPIStreamingIterator:
         self.responses_api_provider_config = responses_api_provider_config
         self.completed_response: Optional[ResponsesAPIStreamingResponse] = None
         self.start_time = getattr(logging_obj, "start_time", datetime.now())
+        self._failure_handled = False  # Track if failure handler has been called
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -169,7 +170,8 @@ class BaseResponsesAPIStreamingIterator:
             # If we can't parse the chunk, continue
             return None
         except Exception as e:
-            # Ensure failures trigger failure hooks
+            # Trigger failure hooks before re-raising
+            # This ensures failures are logged even when _process_chunk is called directly
             self._handle_failure(e)
             raise
 
@@ -287,7 +289,13 @@ class BaseResponsesAPIStreamingIterator:
     def _handle_failure(self, exception: Exception):
         """
         Trigger failure handlers before bubbling the exception.
+        Only calls handlers once even if called multiple times.
         """
+        # Prevent double-calling failure handlers
+        if self._failure_handled:
+            return
+        self._failure_handled = True
+        
         traceback_exception = traceback.format_exc()
         try:
             run_async_function(
@@ -383,11 +391,20 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in async context"""
-        # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
+        # Create a copy for logging to avoid modifying the response object that will be returned to the user
         # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        import copy
-        logging_response = copy.deepcopy(self.completed_response)
+        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
+        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
+        logging_response = self.completed_response
+        if self.completed_response is not None and hasattr(self.completed_response, 'model_dump'):
+            try:
+                logging_response = type(self.completed_response).model_validate(
+                    self.completed_response.model_dump()
+                )
+            except Exception:
+                # Fallback to original if serialization fails
+                pass
 
         asyncio.create_task(
             self.logging_obj.async_success_handler(
@@ -469,11 +486,20 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
 
     def _handle_logging_completed_response(self):
         """Handle logging for completed responses in sync context"""
-        # Create a deep copy for logging to avoid modifying the response object that will be returned to the user
+        # Create a copy for logging to avoid modifying the response object that will be returned to the user
         # The logging handlers may transform usage from Responses API format (input_tokens/output_tokens)
         # to chat completion format (prompt_tokens/completion_tokens) for internal logging
-        import copy
-        logging_response = copy.deepcopy(self.completed_response)
+        # Use model_dump + model_validate instead of deepcopy to avoid pickle errors with
+        # Pydantic ValidatorIterator when response contains tool_choice with allowed_tools (fixes #17192)
+        logging_response = self.completed_response
+        if self.completed_response is not None and hasattr(self.completed_response, 'model_dump'):
+            try:
+                logging_response = type(self.completed_response).model_validate(
+                    self.completed_response.model_dump()
+                )
+            except Exception:
+                # Fallback to original if serialization fails
+                pass
 
         run_async_function(
             async_function=self.logging_obj.async_success_handler,

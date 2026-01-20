@@ -533,6 +533,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
           onClose={() => setSelectedKey(null)}
           keyData={selectedKey}
           teams={allTeams}
+          onDelete={refetch}
         />
       ) : (
         <div className="border-b py-4 flex-1 overflow-hidden">
@@ -599,11 +600,10 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
                           <TableHeaderCell
                             key={header.id}
                             data-header-id={header.id}
-                            className={`py-1 h-8 relative hover:bg-gray-50 ${
-                              header.id === "actions"
+                            className={`py-1 h-8 relative hover:bg-gray-50 ${header.id === "actions"
                                 ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)]"
                                 : ""
-                            }`}
+                              }`}
                             style={{
                               width: header.getSize(),
                               position: "relative",
