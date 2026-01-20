@@ -81,6 +81,7 @@ class ExceptionCheckers:
         known_exception_substrings = [
             "exceed context limit",
             "this model's maximum context length is",
+            "exceeds the model's maximum context length",  # VLLM error pattern
             "string too long. expected a string with maximum length",
             "model's maximum context limit",
             "is longer than the model's context length",

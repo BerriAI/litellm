@@ -59,6 +59,11 @@ context_window_test_cases = [
         "GeminiException BadRequestError - {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"The input token count (2800010) exceeds the maximum number of tokens allowed (1048575).\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
         True,
     ),
+    # VLLM error pattern
+    (
+        "Requested token count exceeds the model's maximum context length of 196608 tokens.",
+        True,
+    ),
     # Test case insensitivity
     ("ERROR: THIS MODEL'S MAXIMUM CONTEXT LENGTH IS 1024.", True),
     # Cerebras context window error format
