@@ -440,7 +440,7 @@ def test_vertex_ai_complex_response_schema():
     optional_params = {}
 
     v.apply_response_schema_transformation(
-        value=non_default_params["response_format"], optional_params=optional_params
+        value=non_default_params["response_format"], optional_params=optional_params, model="gemini-1.5-pro-preview-0409"
     )
 
     # Assertions for the transformed schema

@@ -53,7 +53,13 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     Usage,
 )
-from litellm.utils import add_dummy_tool, has_tool_call_blocks, supports_reasoning
+from litellm.utils import (
+    add_dummy_tool,
+    any_assistant_message_has_thinking_blocks,
+    has_tool_call_blocks,
+    last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_reasoning,
+)
 
 from ..common_utils import (
     BedrockError,
@@ -773,7 +779,7 @@ class AmazonConverseConfig(BaseConfig):
             return optional_params
 
         """
-        Follow similar approach to anthropic - translate to a single tool call. 
+        Follow similar approach to anthropic - translate to a single tool call.
 
         When using tools in this way: - https://docs.anthropic.com/en/docs/build-with-claude/tool-use#json-mode
         - You usually want to provide a single tool
@@ -1070,9 +1076,28 @@ class AmazonConverseConfig(BaseConfig):
                     llm_provider="bedrock",
                 )
 
+        # Drop thinking param if thinking is enabled but thinking_blocks are missing
+        # This prevents the error: "Expected thinking or redacted_thinking, but found tool_use"
+        #
+        # IMPORTANT: Only drop thinking if NO assistant messages have thinking_blocks.
+        # If any message has thinking_blocks, we must keep thinking enabled, otherwise
+        # Related issues: https://github.com/BerriAI/litellm/issues/14194
+        if (
+            optional_params.get("thinking") is not None
+            and messages is not None
+            and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+            and not any_assistant_message_has_thinking_blocks(messages)
+        ):
+            if litellm.modify_params:
+                optional_params.pop("thinking", None)
+                litellm.verbose_logger.warning(
+                    "Dropping 'thinking' param because the last assistant message with tool_calls "
+                    "has no thinking_blocks. The model won't use extended thinking for this turn."
+                )
+
         # Prepare and separate parameters
-        inference_params, additional_request_params, request_metadata = (
-            self._prepare_request_params(optional_params, model)
+        inference_params, additional_request_params, request_metadata = self._prepare_request_params(
+            optional_params, model
         )
 
         original_tools = inference_params.pop("tools", [])
@@ -1459,11 +1484,11 @@ class AmazonConverseConfig(BaseConfig):
             )
 
         """
-        Bedrock Response Object has optional message block 
+        Bedrock Response Object has optional message block
 
         completion_response["output"].get("message", None)
 
-        A message block looks like this (Example 1): 
+        A message block looks like this (Example 1):
         "output": {
             "message": {
                 "role": "assistant",

@@ -415,6 +415,7 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
     "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
+    "chatgpt",  # ChatGPT subscription API
     "novita",
     "meta_llama",
     "featherless_ai",
@@ -617,6 +618,7 @@ openai_compatible_providers: List = [
     "lm_studio",
     "galadriel",
     "github_copilot",  # GitHub Copilot Chat API
+    "chatgpt",  # ChatGPT subscription API
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
