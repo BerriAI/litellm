@@ -372,27 +372,112 @@ class LiteLLMCompletionResponsesConfig:
             messages.append(ChatCompletionUserMessage(role="user", content=input))
         elif isinstance(input, list):
             existing_tool_call_ids: Set[str] = set()
-            for _input in input:
+            i = 0
+            while i < len(input):
+                _input = input[i]
+
+                # Check if this is the start of a sequence of function_call items
+                if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+                    input_item=_input
+                ):
+                    # Collect all consecutive function_call items
+                    function_call_items: List[Any] = []
+                    j = i
+                    while j < len(input) and LiteLLMCompletionResponsesConfig._is_input_item_function_call(
+                        input_item=input[j]
+                    ):
+                        function_call_items.append(input[j])
+                        call_id_raw = input[j].get("call_id") or input[j].get("id") or ""
+                        if call_id_raw:
+                            existing_tool_call_ids.add(str(call_id_raw))
+                        j += 1
+
+                    # Create a single assistant message with all tool calls merged
+                    tool_calls_list: List[ChatCompletionToolCallChunk] = []
+                    for idx, func_call in enumerate(function_call_items):
+                        tool_call = ChatCompletionToolCallChunk(
+                            id=func_call.get("call_id") or func_call.get("id") or "",
+                            type="function",
+                            function=ChatCompletionToolCallFunctionChunk(
+                                name=func_call.get("name") or "",
+                                arguments=str(func_call.get("arguments") or ""),
+                            ),
+                            index=idx,
+                        )
+                        tool_calls_list.append(tool_call)
+
+                    # Check if the last message is an assistant message with empty/None content
+                    # If so, merge the tool calls into it
+                    if messages and len(messages) > 0:
+                        last_msg = messages[-1]
+                        last_msg_role = (
+                            last_msg.get("role") if isinstance(last_msg, dict)
+                            else getattr(last_msg, "role", None)
+                        )
+                        last_msg_content = (
+                            last_msg.get("content") if isinstance(last_msg, dict)
+                            else getattr(last_msg, "content", None)
+                        )
+
+                        # If last message is assistant with empty/None content, merge tool_calls into it
+                        if (
+                            last_msg_role == "assistant"
+                            and (
+                                last_msg_content is None
+                                or last_msg_content == ""
+                                or (isinstance(last_msg_content, list) and all(
+                                    (isinstance(c, dict) and c.get("text") == "")
+                                    or (hasattr(c, "text") and getattr(c, "text", "") == "")
+                                    for c in last_msg_content
+                                ))
+                            )
+                        ):
+                            # Merge tool_calls into existing assistant message
+                            if isinstance(last_msg, dict):
+                                last_msg["tool_calls"] = tool_calls_list
+                            else:
+                                # For typed objects, we need to create a new message
+                                messages[-1] = ChatCompletionResponseMessage(
+                                    role="assistant",
+                                    content=last_msg_content,
+                                    tool_calls=tool_calls_list,
+                                )
+                        else:
+                            # Create a new assistant message with the tool calls
+                            assistant_msg = ChatCompletionResponseMessage(
+                                tool_calls=tool_calls_list,
+                                role="assistant",
+                                content=None,
+                            )
+                            messages.append(assistant_msg)
+                    else:
+                        # No previous messages, create a new assistant message
+                        assistant_msg = ChatCompletionResponseMessage(
+                            tool_calls=tool_calls_list,
+                            role="assistant",
+                            content=None,
+                        )
+                        messages.append(assistant_msg)
+
+                    # Move index past all processed function_call items
+                    i = j
+                    continue
+
+                # Handle non-function_call items normally
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
                     input_item=_input
                 )
 
-                if LiteLLMCompletionResponsesConfig._is_input_item_function_call(
-                    input_item=_input
-                ):
-                    call_id_raw = _input.get("call_id") or _input.get("id") or ""
-                    if call_id_raw:
-                        existing_tool_call_ids.add(str(call_id_raw))
-
                 #########################################################
                 # If Input Item is a Tool Call Output, add it to the tool_call_output_messages list
-                # preserving the ordering of tool call outputs. Some models require the tool 
-                # result to immediately follow the assistant tool call. 
+                # preserving the ordering of tool call outputs. Some models require the tool
+                # result to immediately follow the assistant tool call.
                 #########################################################
                 if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(
                     input_item=_input
                 ):
                     if not chat_completion_messages:
+                        i += 1
                         continue
 
                     deduped_in_place: List[Any] = []
@@ -432,9 +517,11 @@ class LiteLLMCompletionResponsesConfig:
                         deduped_in_place.append(m)
 
                     messages.extend(deduped_in_place)
+                    i += 1
                     continue
 
                 messages.extend(chat_completion_messages)
+                i += 1
         return messages
 
     @staticmethod
