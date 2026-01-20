@@ -51,6 +51,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.utils import get_server_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -1973,9 +1974,25 @@ class InitPassThroughEndpointHelpers:
         _registered_pass_through_routes.clear()
 
     @staticmethod
-    def get_registered_pass_through_endpoints_keys() -> List[str]:
+    def get_all_registered_pass_through_routes() -> List[str]:
         """Get all registered pass-through endpoints from the registry"""
         return list(_registered_pass_through_routes.keys())
+
+    @staticmethod
+    def _build_full_path_with_root(path: str) -> str:
+        """
+        Build full path by prepending server root path if needed.
+
+        Args:
+            path: The relative path to build
+
+        Returns:
+            Full path with server root prepended (if root is not "/")
+        """
+        root_path = get_server_root_path()
+        if root_path == "/":
+            return path
+        return f"{root_path}{path}"
 
     @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
@@ -2003,7 +2020,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -2021,7 +2040,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
 
                 if route_type == "exact" and route == registered_path:
                     return _registered_pass_through_routes[key]
@@ -2085,7 +2106,7 @@ async def initialize_pass_through_endpoints(
     # mark the ones that are visited in the list
     # remove the ones that are not visited from the list
     registered_pass_through_endpoints = (
-        InitPassThroughEndpointHelpers.get_registered_pass_through_endpoints_keys()
+        InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
     )
 
     visited_endpoints = set()

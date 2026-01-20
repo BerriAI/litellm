@@ -414,7 +414,13 @@ async def new_user(
             )
         
         # Only proxy admins can create administrative users
-        if data.user_role in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY] and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        # Check if user_api_key_dict is actually a UserAPIKeyAuth instance (not a Depends object)
+        # This can happen when the function is called directly in tests
+        if (
+            data.user_role in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
+            and isinstance(user_api_key_dict, UserAPIKeyAuth)
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
             raise HTTPException(
                 status_code=403,
                 detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}"
