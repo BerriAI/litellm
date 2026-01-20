@@ -5515,6 +5515,13 @@ def _get_model_info_helper(  # noqa: PLR0915
                 input_cost_per_image_token=_model_info.get(
                     "input_cost_per_image_token", None
                 ),
+                input_cost_per_image=_model_info.get("input_cost_per_image", None),
+                input_cost_per_audio_per_second=_model_info.get(
+                    "input_cost_per_audio_per_second", None
+                ),
+                input_cost_per_video_per_second=_model_info.get(
+                    "input_cost_per_video_per_second", None
+                ),
                 input_cost_per_token_batches=_model_info.get(
                     "input_cost_per_token_batches"
                 ),
