@@ -14,15 +14,12 @@ class TestQwenAIConfig:
         with patch.object(
             config.authenticator, "get_access_token", return_value="oauth-token"
         ):
-            api_base, api_key, provider = config._get_openai_compatible_provider_info(
-                model="qwen_ai/qwen3-coder-plus",
+            api_base, api_key = config._get_openai_compatible_provider_info(
                 api_base=None,
                 api_key="manual-key",
-                custom_llm_provider="qwen_ai",
             )
 
         assert api_key == "oauth-token"
-        assert provider == "qwen_ai"
         assert api_base is not None
 
     def test_validate_environment_sets_qwen_headers(self):
@@ -32,10 +29,8 @@ class TestQwenAIConfig:
             config.authenticator, "get_access_token", return_value="oauth-token"
         ):
             config._get_openai_compatible_provider_info(
-                model="qwen_ai/qwen3-coder-plus",
                 api_base=None,
                 api_key=None,
-                custom_llm_provider="qwen_ai",
             )
 
         headers = config.validate_environment(

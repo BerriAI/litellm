@@ -24,14 +24,13 @@ class QwenAIConfig(DashScopeChatConfig):
         super().__init__()
         self.authenticator = Authenticator()
         self._uses_oauth = True
+        self._auth_model: Optional[str] = None
 
     def _get_openai_compatible_provider_info(
         self,
-        model: str,
         api_base: Optional[str],
         api_key: Optional[str],
-        custom_llm_provider: str,
-    ) -> Tuple[Optional[str], Optional[str], str]:
+    ) -> Tuple[Optional[str], Optional[str]]:
         dynamic_api_base = normalize_qwen_api_base(
             api_base
             or get_secret_str("QWEN_API_BASE")
@@ -45,11 +44,11 @@ class QwenAIConfig(DashScopeChatConfig):
             dynamic_api_key = self.authenticator.get_access_token()
         except GetAccessTokenError as e:
             raise AuthenticationError(
-                model=model,
-                llm_provider=custom_llm_provider,
+                model=self._auth_model or "qwen_ai",
+                llm_provider="qwen_ai",
                 message=str(e),
             )
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        return dynamic_api_base, dynamic_api_key
 
     def validate_environment(
         self,
