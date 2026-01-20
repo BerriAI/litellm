@@ -13465,6 +13465,31 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "gemini-2.5-computer-use-preview-10-2025": {
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/computer-use",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-embedding-models",
