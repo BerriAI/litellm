@@ -2063,6 +2063,7 @@ def _is_async_request(
         or kwargs.get("atext_completion", False) is True
         or kwargs.get("atranscription", False) is True
         or kwargs.get("arerank", False) is True
+        or kwargs.get("aresponses", False) is True
         or kwargs.get("_arealtime", False) is True
         or kwargs.get("acreate_batch", False) is True
         or kwargs.get("acreate_fine_tuning_job", False) is True
@@ -4647,7 +4648,9 @@ def add_provider_specific_params_to_optional_params(
     else:
         for k in passed_params.keys():
             if k not in openai_params and passed_params[k] is not None:
-                if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
+                if _should_drop_param(
+                    k=k, additional_drop_params=additional_drop_params
+                ):
                     continue
                 optional_params[k] = passed_params[k]
     return optional_params
@@ -8151,7 +8154,10 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
+            is_o_series = model and (
+                "o_series" in model.lower()
+                or (supports_reasoning(model) and not is_gpt_model)
+            )
 
             is_o_series = model and (
                 "o_series" in model.lower()
