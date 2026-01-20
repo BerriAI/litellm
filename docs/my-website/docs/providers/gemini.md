@@ -15,6 +15,17 @@ import TabItem from '@theme/TabItem';
 
 <br />
 
+:::tip Gemini API vs Vertex AI
+| Model Format | Provider | Auth Required |
+|-------------|----------|---------------|
+| `gemini/gemini-2.0-flash` | Gemini API | `GEMINI_API_KEY` (simple API key) |
+| `vertex_ai/gemini-2.0-flash` | Vertex AI | GCP credentials + project |
+| `gemini-2.0-flash` (no prefix) | Vertex AI | GCP credentials + project |
+
+**If you just want to use an API key** (like OpenAI), use the `gemini/` prefix.
+
+Models without a prefix default to Vertex AI which requires full GCP authentication.
+:::
 
 ## API Keys
 
