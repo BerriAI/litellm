@@ -2735,6 +2735,7 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     # Skip get_model_info for these providers during model registration
     _skip_get_model_info_providers = {
         LlmProviders.GITHUB_COPILOT.value,
+        LlmProviders.CHATGPT.value,
     }
 
     for key, value in loaded_model_cost.items():
