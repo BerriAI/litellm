@@ -142,7 +142,12 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        if response is not None and isinstance(response, httpx.Response):
+        if (
+            response is not None
+            and isinstance(response, httpx.Response)
+            and hasattr(response, "request")
+            and response.request is not None
+        ):
             self.response = response
         else:
             self.response = _get_minimal_error_response()
