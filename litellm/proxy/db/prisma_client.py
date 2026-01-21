@@ -386,39 +386,11 @@ class PrismaManager:
                     return ProxyExtrasDBManager.setup_database(use_migrate=use_migrate)
                 else:
                     # Use prisma db push with increased timeout
-                    try:
-                        subprocess.run(
-                            ["prisma", "db", "push", "--accept-data-loss"],
-                            timeout=60,
-                            check=True,
-                            capture_output=True,
-                            text=True,
-                        )
-                    except subprocess.CalledProcessError as e:
-                        if (
-                            "Permission denied" in e.stderr
-                            and "schema.prisma" in e.stderr
-                        ):
-                            verbose_proxy_logger.warning(
-                                f"Permission denied during prisma generate: {e.stderr}. Retrying with --skip-generate..."
-                            )
-                            # Retry with --skip-generate
-                            subprocess.run(
-                                [
-                                    "prisma",
-                                    "db",
-                                    "push",
-                                    "--accept-data-loss",
-                                    "--skip-generate",
-                                ],
-                                timeout=60,
-                                check=True,
-                                capture_output=True,
-                                text=True,
-                            )
-                            return True
-                        else:
-                            raise e
+                    subprocess.run(
+                        ["prisma", "db", "push", "--accept-data-loss"],
+                        timeout=60,
+                        check=True,
+                    )
                     return True
             except subprocess.TimeoutExpired:
                 verbose_proxy_logger.warning(f"Attempt {attempt + 1} timed out")
