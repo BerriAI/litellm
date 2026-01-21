@@ -8872,28 +8872,32 @@ export const searchToolQueryCall = async (
 // New endpoint functions for DAU, WAU, MAU
 export const tagDauCall = async (
   accessToken: string,
-  endDate: Date,
+  startDate?: string,
+  endDate?: string,
   tagFilter?: string,
   tagFilters?: string[],
   custom_llm_provider?: string,
 ) => {
   /**
-   * Get Daily Active Users (DAU) for last 7 days ending on endDate
+   * Get Daily Active Users (DAU) for a customizable date range
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/dau` : `/tag/dau`;
 
     const queryParams = new URLSearchParams();
 
-    // Format date as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
+    if (startDate) {
+      queryParams.append("start_date", startDate);
+    }
 
-    queryParams.append("end_date", formatDate(endDate));
+    if (endDate) {
+      queryParams.append("end_date", endDate);
+    }
+
+    // Add custom_llm_provider filter if provided
+    if (custom_llm_provider) {
+      queryParams.append("custom_llm_provider", custom_llm_provider);
+    }
 
     // Add custom_llm_provider filter if provided
     if (custom_llm_provider) {
@@ -8939,28 +8943,22 @@ export const tagDauCall = async (
 
 export const tagWauCall = async (
   accessToken: string,
-  endDate: Date,
   tagFilter?: string,
   tagFilters?: string[],
   custom_llm_provider?: string,
 ) => {
   /**
-   * Get Weekly Active Users (WAU) for last 7 weeks ending on endDate
+   * Get Weekly Active Users (WAU) for the last 7 weeks
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/wau` : `/tag/wau`;
 
     const queryParams = new URLSearchParams();
 
-    // Format date as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
-
-    queryParams.append("end_date", formatDate(endDate));
+    // Add custom_llm_provider filter if provided
+    if (custom_llm_provider) {
+      queryParams.append("custom_llm_provider", custom_llm_provider);
+    }
 
     // Add custom_llm_provider filter if provided
     if (custom_llm_provider) {
@@ -9006,28 +9004,25 @@ export const tagWauCall = async (
 
 export const tagMauCall = async (
   accessToken: string,
-  endDate: Date,
+  months: number = 7,
   tagFilter?: string,
   tagFilters?: string[],
   custom_llm_provider?: string,
 ) => {
   /**
-   * Get Monthly Active Users (MAU) for last 7 months ending on endDate
+   * Get Monthly Active Users (MAU) for the last N months
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/tag/mau` : `/tag/mau`;
 
     const queryParams = new URLSearchParams();
 
-    // Format date as YYYY-MM-DD for the API
-    const formatDate = (date: Date) => {
-      const year = date.getFullYear();
-      const month = String(date.getMonth() + 1).padStart(2, "0");
-      const day = String(date.getDate()).padStart(2, "0");
-      return `${year}-${month}-${day}`;
-    };
+    queryParams.append("months", months.toString());
 
-    queryParams.append("end_date", formatDate(endDate));
+    // Add custom_llm_provider filter if provided
+    if (custom_llm_provider) {
+      queryParams.append("custom_llm_provider", custom_llm_provider);
+    }
 
     // Add custom_llm_provider filter if provided
     if (custom_llm_provider) {
@@ -9221,19 +9216,25 @@ export const perUserAnalyticsCall = async (
 
 export const leaderboardCall = async (
   accessToken: string,
-  limit?: number,
+  start_date?: string,
+  end_date?: string,
   custom_llm_provider?: string,
 ) => {
   /**
-   * Get top active users by request count in the last 7 days
+   * Get all active users by request count with customizable date range
+   * Frontend handles pagination and email search
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/user/analytics/leaderboard` : `/user/analytics/leaderboard`;
 
     const queryParams = new URLSearchParams();
 
-    if (limit) {
-      queryParams.append("limit", limit.toString());
+    if (start_date) {
+      queryParams.append("start_date", start_date);
+    }
+
+    if (end_date) {
+      queryParams.append("end_date", end_date);
     }
 
     // Add custom_llm_provider filter if provided
