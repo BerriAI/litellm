@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # Using Claude Code Max Subscription
 
-{/* <Image img={require('../../img/claude_code_max/overview.png')} style={{ width: '100%', maxWidth: '900px', height: 'auto' }} /> */}
+<Image img={require('../../img/claude_code_max.png')} style={{ width: '100%', maxWidth: '800px', height: 'auto' }} />
 
 Route Claude Code Max subscription traffic through LiteLLM AI Gateway.
 
