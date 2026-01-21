@@ -28,8 +28,8 @@ from litellm.proxy.auth.auth_checks import (
     _delete_cache_key_object,
     _get_user_role,
     _is_user_proxy_admin,
-    _virtual_key_max_budget_check,
     _virtual_key_max_budget_alert_check,
+    _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
     can_key_call_model,
     common_checks,
@@ -45,6 +45,7 @@ from litellm.proxy.auth.auth_utils import (
     get_end_user_id_from_request_body,
     get_model_from_request,
     get_request_route,
+    normalize_request_route,
     pre_db_read_auth_checks,
     route_in_additonal_public_routes,
 )
@@ -1261,7 +1262,7 @@ async def user_api_key_auth(
     if end_user_id is not None:
         user_api_key_auth_obj.end_user_id = end_user_id
 
-    user_api_key_auth_obj.request_route = route
+    user_api_key_auth_obj.request_route = normalize_request_route(route)
 
     return user_api_key_auth_obj
 

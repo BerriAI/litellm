@@ -866,11 +866,9 @@ async def test_langfuse_trace_id():
 
     assert trace_url is not None
 
-    returned_trace_id = int(trace_url.split("/")[-1])
+    returned_trace_id = trace_url.split("/")[-1]
 
-    assert returned_trace_id == int(
-        litellm_logging_obj._get_trace_id(service_name="langfuse")
-    )
+    assert returned_trace_id == litellm_logging_obj._get_trace_id(service_name="langfuse")
 
 
 @pytest.mark.asyncio

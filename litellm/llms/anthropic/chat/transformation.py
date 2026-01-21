@@ -200,6 +200,68 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return params
 
+    @staticmethod
+    def filter_anthropic_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Filter out unsupported fields from JSON schema for Anthropic's output_format API.
+        
+        Anthropic's output_format doesn't support certain JSON schema properties:
+        - maxItems: Not supported for array types
+        - minItems: Not supported for array types
+        
+        This function recursively removes these unsupported fields while preserving
+        all other valid schema properties.
+        
+        Args:
+            schema: The JSON schema dictionary to filter
+            
+        Returns:
+            A new dictionary with unsupported fields removed
+            
+        Related issue: https://github.com/BerriAI/litellm/issues/19444
+        """
+        if not isinstance(schema, dict):
+            return schema
+
+        unsupported_fields = {"maxItems", "minItems"}
+
+        result: Dict[str, Any] = {}
+        for key, value in schema.items():
+            if key in unsupported_fields:
+                continue
+
+            if key == "properties" and isinstance(value, dict):
+                result[key] = {
+                    k: AnthropicConfig.filter_anthropic_output_schema(v)
+                    for k, v in value.items()
+                }
+            elif key == "items" and isinstance(value, dict):
+                result[key] = AnthropicConfig.filter_anthropic_output_schema(value)
+            elif key == "$defs" and isinstance(value, dict):
+                result[key] = {
+                    k: AnthropicConfig.filter_anthropic_output_schema(v)
+                    for k, v in value.items()
+                }
+            elif key == "anyOf" and isinstance(value, list):
+                result[key] = [
+                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    for item in value
+                ]
+            elif key == "allOf" and isinstance(value, list):
+                result[key] = [
+                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    for item in value
+                ]
+            elif key == "oneOf" and isinstance(value, list):
+                result[key] = [
+                    AnthropicConfig.filter_anthropic_output_schema(item)
+                    for item in value
+                ]
+            else:
+                result[key] = value
+
+        return result
+
     def get_json_schema_from_pydantic_object(
         self, response_format: Union[Any, Dict, None]
     ) -> Optional[dict]:
@@ -636,9 +698,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
         if json_schema is None:
             return None
+        
+        # Filter out unsupported fields for Anthropic's output_format API
+        filtered_schema = self.filter_anthropic_output_schema(json_schema)
+        
         return AnthropicOutputSchema(
             type="json_schema",
-            schema=json_schema,
+            schema=filtered_schema,
         )
 
     def map_response_format_to_anthropic_tool(
