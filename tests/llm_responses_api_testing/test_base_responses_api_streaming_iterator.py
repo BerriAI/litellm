@@ -309,3 +309,129 @@ class TestBaseResponsesAPIStreamingIterator:
                     pytest.fail(f"_handle_logging_completed_response failed with pickle error: {e}")
                 raise
 
+    def test_handle_logging_completed_response_preserves_context(self):
+        """
+        Test that _handle_logging_completed_response preserves OpenTelemetry context
+        when submitting success_handler to thread pool executor.
+        
+        This fixes duplicate root traces when using langfuse_otel with streaming Responses API.
+        The context must be preserved so that OpenTelemetry can find the parent span.
+        """
+        import contextvars
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        # Create a context variable to simulate OpenTelemetry context
+        test_context_var = contextvars.ContextVar('otel_context', default=None)
+        test_context_var.set('parent_span_context')
+
+        # Mock dependencies
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aiter_lines = Mock()
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_success_handler = Mock()
+        mock_logging_obj.success_handler = Mock()
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        # Create the iterator instance
+        iterator = ResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-4",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj
+        )
+
+        # Create a mock completed response
+        mock_completed_response = Mock()
+        mock_completed_response.model_dump.return_value = {
+            "type": "response.completed",
+            "response": {"id": "resp_123"}
+        }
+        type(mock_completed_response).model_validate = Mock(return_value=mock_completed_response)
+        iterator.completed_response = mock_completed_response
+
+        # Track if context.run was called (which preserves context)
+        context_preserved = False
+
+        def submit_side_effect(fn, *args):
+            nonlocal context_preserved
+            # Check if the first argument is ctx.run (bound method with 'run' attribute)
+            if hasattr(fn, '__self__') and hasattr(fn.__self__, 'run'):
+                context_preserved = True
+                # Simulate running with preserved context
+                fn(*args)
+            else:
+                # If context wasn't preserved, this would be called directly
+                mock_logging_obj.success_handler(*args)
+
+        with patch('asyncio.create_task'), \
+             patch('litellm.responses.streaming_iterator.executor') as mock_executor:
+            mock_executor.submit = Mock(side_effect=submit_side_effect)
+            
+            iterator._handle_logging_completed_response()
+            
+            # Verify that context was preserved (ctx.run was used)
+            assert context_preserved, "Context should be preserved using contextvars.copy_context() and ctx.run()"
+            assert mock_executor.submit.called, "executor.submit should be called"
+
+    def test_sync_handle_logging_completed_response_preserves_context(self):
+        """
+        Test that SyncResponsesAPIStreamingIterator._handle_logging_completed_response
+        preserves OpenTelemetry context when submitting success_handler to thread pool executor.
+        """
+        import contextvars
+        from litellm.responses.streaming_iterator import SyncResponsesAPIStreamingIterator
+
+        # Create a context variable to simulate OpenTelemetry context
+        test_context_var = contextvars.ContextVar('otel_context', default=None)
+        test_context_var.set('parent_span_context')
+
+        # Mock dependencies
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.iter_lines = Mock()
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_success_handler = Mock()
+        mock_logging_obj.success_handler = Mock()
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        # Create the iterator instance
+        iterator = SyncResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-4",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj
+        )
+
+        # Create a mock completed response
+        mock_completed_response = Mock()
+        mock_completed_response.model_dump.return_value = {
+            "type": "response.completed",
+            "response": {"id": "resp_123"}
+        }
+        type(mock_completed_response).model_validate = Mock(return_value=mock_completed_response)
+        iterator.completed_response = mock_completed_response
+
+        # Track if context.run was called
+        context_preserved = False
+
+        def submit_side_effect(fn, *args):
+            nonlocal context_preserved
+            if hasattr(fn, '__self__') and hasattr(fn.__self__, 'run'):
+                context_preserved = True
+                fn(*args)
+            else:
+                mock_logging_obj.success_handler(*args)
+
+        with patch('litellm.responses.streaming_iterator.run_async_function'), \
+             patch('litellm.responses.streaming_iterator.executor') as mock_executor:
+            mock_executor.submit = Mock(side_effect=submit_side_effect)
+            
+            iterator._handle_logging_completed_response()
+            
+            # Verify that context was preserved
+            assert context_preserved, "Context should be preserved using contextvars.copy_context() and ctx.run()"
+            assert mock_executor.submit.called, "executor.submit should be called"
+
