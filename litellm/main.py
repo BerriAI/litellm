@@ -367,7 +367,7 @@ class AsyncCompletions:
 
 @tracer.wrap()
 @client
-async def acompletion(
+async def acompletion( # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -637,7 +637,7 @@ async def acompletion(
                 loop=loop
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
-    except asyncio.TimeoutError as e:
+    except asyncio.TimeoutError:
         custom_llm_provider = custom_llm_provider or "openai"
         from litellm.exceptions import Timeout
         raise Timeout(
