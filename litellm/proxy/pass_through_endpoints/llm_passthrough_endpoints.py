@@ -1369,6 +1369,27 @@ def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
 
+def add_incoming_headers(request: Request, auth_header: str) -> dict:
+    """
+    Build headers from incoming request, preserving headers like anthropic-beta,
+    while removing headers that should not be forwarded and adding authorization.
+
+    Args:
+        request: The FastAPI request object
+        auth_header: The authorization token to add
+
+    Returns:
+        dict: Headers dictionary with authorization added
+    """
+    headers = dict(request.headers) or {}
+    # Remove headers that should not be forwarded
+    headers.pop("content-length", None)
+    headers.pop("host", None)
+    # Add/override the Authorization header
+    headers["Authorization"] = f"Bearer {auth_header}"
+    return headers
+
+
 def get_vertex_pass_through_handler(
     call_type: Literal["discovery", "aiplatform"],
 ) -> BaseVertexAIPassThroughHandler:
@@ -1512,9 +1533,13 @@ async def _prepare_vertex_auth_headers(
             api_base="",
         )
 
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-        }
+        # Start with incoming request headers to preserve headers like anthropic-beta
+        headers = dict(request.headers) or {}
+        # Remove headers that should not be forwarded
+        headers.pop("content-length", None)
+        headers.pop("host", None)
+        # Add/override the Authorization header
+        headers["Authorization"] = f"Bearer {auth_header}"
 
         if base_target_url is not None:
             base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
