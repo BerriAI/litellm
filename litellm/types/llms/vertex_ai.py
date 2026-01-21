@@ -214,6 +214,7 @@ class GenerationConfig(TypedDict, total=False):
     responseModalities: List[GeminiResponseModalities]
     imageConfig: GeminiImageConfig
     thinkingConfig: GeminiThinkingConfig
+    mediaResolution: str
     speechConfig: SpeechConfig
 
 
