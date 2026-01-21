@@ -738,7 +738,7 @@ if MCP_AVAILABLE:
 
         return server_auth_header, extra_headers
 
-    async def _get_tools_from_mcp_servers(
+    async def _get_tools_from_mcp_servers(  # noqa: PLR0915
         user_api_key_auth: Optional[UserAPIKeyAuth],
         mcp_auth_header: Optional[str],
         mcp_servers: Optional[List[str]],
