@@ -1058,3 +1058,51 @@ def test_append_system_prompt_messages():
         kwargs=None, messages=messages
     )
     assert result == messages
+
+
+def test_scrub_sensitive_keys_in_metadata():
+    """
+    Test that scrub_sensitive_keys_in_metadata scrubs logging secrets from
+    user_api_key_auth_metadata and user_api_key_auth.metadata paths.
+    """
+    from litellm.litellm_core_utils.litellm_logging import scrub_sensitive_keys_in_metadata
+
+    litellm_params = {
+        "metadata": {
+            "user_api_key_auth_metadata": {
+                "logging": [
+                    {
+                        "callback_name": "langfuse",
+                        "callback_vars": {"langfuse_secret_key": "secret"},
+                    }
+                ],
+                "other_key": "keep_this",
+            },
+            "user_api_key_auth": {
+                "token": "abc123",
+                "metadata": {
+                    "logging": [
+                        {
+                            "callback_name": "langfuse",
+                            "callback_vars": {"langfuse_secret_key": "secret"},
+                        }
+                    ],
+                    "other_key": "keep_this",
+                },
+            },
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    assert result["metadata"]["user_api_key_auth_metadata"] == {
+        "logging": "scrubbed_by_litellm_for_sensitive_keys",
+        "other_key": "keep_this",
+    }
+    assert result["metadata"]["user_api_key_auth"] == {
+        "token": "abc123",
+        "metadata": {
+            "logging": "scrubbed_by_litellm_for_sensitive_keys",
+            "other_key": "keep_this",
+        },
+    }
