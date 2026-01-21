@@ -7,6 +7,7 @@ import asyncio
 import contextlib
 from datetime import datetime
 import traceback
+import uuid
 from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
 
 from fastapi import FastAPI, HTTPException
@@ -28,7 +29,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
 from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
-from litellm.utils import client
+from litellm.utils import Rules, client, function_setup
 
 # Check if MCP is available
 # "mcp" requires python 3.10 or higher, but several litellm users use python 3.8
@@ -228,6 +229,8 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                log_list_tools_to_spendlogs=True,
+                list_tools_log_source="mcp_protocol",
             )
             verbose_logger.info(
                 f"MCP list_tools - Successfully returned {len(tools)} tools"
@@ -742,6 +745,8 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        log_list_tools_to_spendlogs: bool = False,
+        list_tools_log_source: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         Helper method to fetch tools from MCP servers based on server filtering criteria.
@@ -759,67 +764,186 @@ if MCP_AVAILABLE:
         if not MCP_AVAILABLE:
             return []
 
-        allowed_mcp_servers = await _get_allowed_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_servers=mcp_servers,
-        )
+        list_tools_start_time = datetime.now()
+        litellm_logging_obj: Optional[LiteLLMLoggingObj] = None
+        list_tools_request_data: Dict[str, Any] = {}
 
-        # Decide whether to add prefix based on number of allowed servers
-        add_prefix = not (len(allowed_mcp_servers) == 1)
+        if log_list_tools_to_spendlogs:
+            # This is intentionally minimal: only async_success_handler / post_call_failure_hook
+            rules_obj = Rules()
+            list_tools_call_id = str(uuid.uuid4())
+            spend_logs_metadata: Dict[str, Any] = {
+                "mcp_operation": "list_tools",
+            }
+            if isinstance(list_tools_log_source, str):
+                spend_logs_metadata["source"] = list_tools_log_source
+            if isinstance(mcp_servers, list):
+                spend_logs_metadata["requested_mcp_servers"] = mcp_servers
 
-        async def _fetch_and_filter_server_tools(server: MCPServer) -> List[MCPTool]:
-            """Fetch and filter tools from a single server with error handling."""
-            if server is None:
-                return []
+            list_tools_request_data = {
+                "model": "MCP: list_tools",
+                "call_type": CallTypes.list_mcp_tools.value,
+                "litellm_call_id": list_tools_call_id,
+                "metadata": {
+                    "spend_logs_metadata": spend_logs_metadata,
+                },
+                # Provide a small input payload for standard logging
+                "input": [
+                    {
+                        "role": "system",
+                        "content": {
+                            "mcp_operation": "list_tools",
+                            "requested_mcp_servers": mcp_servers,
+                        },
+                    }
+                ],
+            }
 
-            server_auth_header, extra_headers = _prepare_mcp_server_headers(
-                server=server,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                mcp_auth_header=mcp_auth_header,
-                oauth2_headers=oauth2_headers,
-                raw_headers=raw_headers,
-            )
+            # Attach user identifiers when available (matches call_mcp_tool style)
+            if user_api_key_auth is not None:
+                user_api_key = getattr(user_api_key_auth, "api_key", None)
+                if user_api_key:
+                    cast(dict, list_tools_request_data["metadata"])[
+                        "user_api_key"
+                    ] = user_api_key
+
+                user_identifier = getattr(user_api_key_auth, "end_user_id", None) or getattr(
+                    user_api_key_auth, "user_id", None
+                )
+                if user_identifier:
+                    list_tools_request_data["user"] = user_identifier
 
             try:
-                tools = await global_mcp_server_manager._get_tools_from_server(
+                litellm_logging_obj, _ = function_setup(
+                    original_function="list_mcp_tools",
+                    rules_obj=rules_obj,
+                    start_time=list_tools_start_time,
+                    **list_tools_request_data,
+                )
+                if litellm_logging_obj:
+                    litellm_logging_obj.call_type = CallTypes.list_mcp_tools.value
+                    litellm_logging_obj.model = "MCP: list_tools"
+            except Exception as logging_error:
+                verbose_logger.debug(
+                    "Failed to initialize logging for MCP list_tools: %s", logging_error
+                )
+                litellm_logging_obj = None
+
+        try:
+            allowed_mcp_servers = await _get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth,
+                mcp_servers=mcp_servers,
+            )
+
+            # Decide whether to add prefix based on number of allowed servers
+            add_prefix = not (len(allowed_mcp_servers) == 1)
+
+            async def _fetch_and_filter_server_tools(server: MCPServer) -> List[MCPTool]:
+                """Fetch and filter tools from a single server with error handling."""
+                if server is None:
+                    return []
+
+                server_auth_header, extra_headers = _prepare_mcp_server_headers(
                     server=server,
-                    mcp_auth_header=server_auth_header,
-                    extra_headers=extra_headers,
-                    add_prefix=add_prefix,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_auth_header=mcp_auth_header,
+                    oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                 )
-                filtered_tools = filter_tools_by_allowed_tools(tools, server)
 
-                filtered_tools = await filter_tools_by_key_team_permissions(
-                    tools=filtered_tools,
-                    server_id=server.server_id,
-                    user_api_key_auth=user_api_key_auth,
+                try:
+                    tools = await global_mcp_server_manager._get_tools_from_server(
+                        server=server,
+                        mcp_auth_header=server_auth_header,
+                        extra_headers=extra_headers,
+                        add_prefix=add_prefix,
+                        raw_headers=raw_headers,
+                    )
+                    filtered_tools = filter_tools_by_allowed_tools(tools, server)
+
+                    filtered_tools = await filter_tools_by_key_team_permissions(
+                        tools=filtered_tools,
+                        server_id=server.server_id,
+                        user_api_key_auth=user_api_key_auth,
+                    )
+
+                    verbose_logger.debug(
+                        f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
+                    )
+                    return filtered_tools
+                except Exception as e:
+                    verbose_logger.exception(
+                        f"Error getting tools from server {server.name}: {str(e)}"
+                    )
+                    return []
+
+            # Fetch tools from all servers in parallel
+            tasks = [
+                _fetch_and_filter_server_tools(server) for server in allowed_mcp_servers
+            ]
+            results = await asyncio.gather(*tasks)
+
+            # Flatten results into single list
+            all_tools: List[MCPTool] = [tool for tools in results for tool in tools]
+
+            # If logging is enabled, enrich spend_logs_metadata with counts
+            if litellm_logging_obj:
+                per_server_tool_counts: Dict[str, int] = {}
+                for server, server_tools in zip(allowed_mcp_servers, results):
+                    if server is None:
+                        continue
+                    server_key = (
+                        getattr(server, "server_name", None)
+                        or getattr(server, "alias", None)
+                        or getattr(server, "name", None)
+                        or "unknown"
+                    )
+                    per_server_tool_counts[str(server_key)] = len(server_tools)
+
+                metadata_dict = litellm_logging_obj.model_call_details.get("metadata")
+                if isinstance(metadata_dict, dict):
+                    spend_meta = metadata_dict.get("spend_logs_metadata")
+                    if not isinstance(spend_meta, dict):
+                        spend_meta = {}
+                        metadata_dict["spend_logs_metadata"] = spend_meta
+                    spend_meta["allowed_server_count"] = len(allowed_mcp_servers)
+                    spend_meta["tool_count_total"] = len(all_tools)
+                    spend_meta["per_server_tool_counts"] = per_server_tool_counts
+
+                end_time = datetime.now()
+                await litellm_logging_obj.async_success_handler(
+                    result=all_tools,
+                    start_time=list_tools_start_time,
+                    end_time=end_time,
                 )
 
-                verbose_logger.debug(
-                    f"Successfully fetched {len(tools)} tools from server {server.name}, {len(filtered_tools)} after filtering"
-                )
-                return filtered_tools
-            except Exception as e:
-                verbose_logger.exception(
-                    f"Error getting tools from server {server.name}: {str(e)}"
-                )
-                return []
+            verbose_logger.info(
+                f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
+            )
 
-        # Fetch tools from all servers in parallel
-        tasks = [
-            _fetch_and_filter_server_tools(server) for server in allowed_mcp_servers
-        ]
-        results = await asyncio.gather(*tasks)
+            return all_tools
+        except Exception as e:
+            # Only fire failure hook if logging was requested for this list-tools execution
+            if log_list_tools_to_spendlogs and user_api_key_auth is not None:
+                try:
+                    from litellm.proxy.proxy_server import proxy_logging_obj
 
-        # Flatten results into single list
-        all_tools: List[MCPTool] = [tool for tools in results for tool in tools]
-
-        verbose_logger.info(
-            f"Successfully fetched {len(all_tools)} tools total from all MCP servers"
-        )
-
-        return all_tools
+                    if proxy_logging_obj:
+                        traceback_str = traceback.format_exc(
+                            limit=MAXIMUM_TRACEBACK_LINES_TO_LOG
+                        )
+                        await proxy_logging_obj.post_call_failure_hook(
+                            request_data=list_tools_request_data or {},
+                            original_exception=e,
+                            user_api_key_dict=user_api_key_auth,
+                            route="/mcp/list_tools",
+                            traceback_str=traceback_str,
+                        )
+                except Exception:
+                    verbose_logger.debug(
+                        "Failed to log MCP list_tools failure via post_call_failure_hook"
+                    )
+            raise
 
     async def _get_prompts_from_mcp_servers(
         user_api_key_auth: Optional[UserAPIKeyAuth],
@@ -1052,6 +1176,8 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        log_list_tools_to_spendlogs: bool = False,
+        list_tools_log_source: Optional[str] = None,
     ) -> List[MCPTool]:
         """
         List all available MCP tools.
@@ -1077,6 +1203,8 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
+                list_tools_log_source=list_tools_log_source,
             )
             verbose_logger.debug(
                 f"Successfully fetched {len(managed_tools)} tools from managed MCP servers"

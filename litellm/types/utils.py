@@ -384,6 +384,7 @@ class CallTypes(str, Enum):
     # MCP Call Types
     #########################################################
     call_mcp_tool = "call_mcp_tool"
+    list_mcp_tools = "list_mcp_tools"
 
     #########################################################
     # A2A Call Types
@@ -448,6 +449,7 @@ CallTypesLiteral = Literal[
     "vector_store_file_delete",
     "avector_store_file_delete",
     "call_mcp_tool",
+    "list_mcp_tools",
     "asend_message",
     "send_message",
     "aresponses",
