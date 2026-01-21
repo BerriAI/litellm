@@ -1237,7 +1237,7 @@ def completion(  # type: ignore # noqa: PLR0915
     )
     ######## end of unpacking kwargs ###########
     non_default_params = get_non_default_completion_params(kwargs=kwargs)
-    litellm_params = {}  # used to prevent unbound var errors
+    litellm_params: dict = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
     if isinstance(litellm_logging_obj, LiteLLMLoggingObj) and (

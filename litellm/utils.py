@@ -8032,6 +8032,8 @@ class ProviderConfigManager:
             return litellm.LiteLLMProxyResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            return litellm.AzureAIStudioResponsesAPIConfig()
         return None
 
     @staticmethod
