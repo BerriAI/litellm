@@ -2358,6 +2358,15 @@
         "a2a": true,
         "interactions": true
       }
+    },
+    "sarvam": {
+      "display_name": "Sarvam (`sarvam`)",
+      "url": "https://docs.litellm.ai/docs/providers/sarvam",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
+      }
     }
   },
   "endpoints": {
