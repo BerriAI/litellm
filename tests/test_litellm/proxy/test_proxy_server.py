@@ -3216,3 +3216,228 @@ async def test_get_hierarchical_router_settings():
         prisma_client=mock_prisma_client,
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_pagination_basic(monkeypatch):
+    """
+    Test basic pagination functionality for /v2/model/info endpoint.
+    Tests multiple pages with different page sizes.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Create 75 mock models for testing pagination
+    mock_models = [
+        {
+            "model_name": f"model-{i}",
+            "litellm_params": {"model": f"gpt-{i}"},
+            "model_info": {"id": f"model-{i}"},
+        }
+        for i in range(1, 76)  # 75 models total
+    ]
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.model_list = mock_models
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test page 1 with size 25 (should return models 1-25)
+        response = client.get("/v2/model/info", params={"page": 1, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 1
+        assert data["size"] == 25
+        assert data["total_pages"] == 3  # ceil(75/25) = 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-1"
+        assert data["data"][24]["model_name"] == "model-25"
+
+        # Test page 2 with size 25 (should return models 26-50)
+        response = client.get("/v2/model/info", params={"page": 2, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 2
+        assert data["size"] == 25
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-26"
+        assert data["data"][24]["model_name"] == "model-50"
+
+        # Test page 3 with size 25 (should return models 51-75)
+        response = client.get("/v2/model/info", params={"page": 3, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 3
+        assert data["size"] == 25
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-51"
+        assert data["data"][24]["model_name"] == "model-75"
+
+        # Test different page size (size 10)
+        response = client.get("/v2/model/info", params={"page": 1, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 1
+        assert data["size"] == 10
+        assert data["total_pages"] == 8  # ceil(75/10) = 8
+        assert len(data["data"]) == 10
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_pagination_edge_cases(monkeypatch):
+    """
+    Test edge cases for pagination in /v2/model/info endpoint.
+    Tests empty results, last page with partial results, and boundary conditions.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test Case 1: Empty model list (no models configured)
+        mock_router_empty = MagicMock()
+        mock_router_empty.model_list = []
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_empty)
+
+        response = client.get("/v2/model/info", params={"page": 1, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["current_page"] == 1
+        assert data["size"] == 25
+        assert data["total_pages"] == 0
+        assert len(data["data"]) == 0
+
+        # Test Case 2: Last page with partial results (23 models, page size 10)
+        mock_models_partial = [
+            {
+                "model_name": f"model-{i}",
+                "litellm_params": {"model": f"gpt-{i}"},
+                "model_info": {"id": f"model-{i}"},
+            }
+            for i in range(1, 24)  # 23 models total
+        ]
+        mock_router_partial = MagicMock()
+        mock_router_partial.model_list = mock_models_partial
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_partial)
+
+        # Page 1 should have 10 models
+        response = client.get("/v2/model/info", params={"page": 1, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 3  # ceil(23/10) = 3
+        assert len(data["data"]) == 10
+
+        # Page 2 should have 10 models
+        response = client.get("/v2/model/info", params={"page": 2, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 2
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 10
+
+        # Page 3 (last page) should have only 3 models
+        response = client.get("/v2/model/info", params={"page": 3, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 3
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 3
+        assert data["data"][0]["model_name"] == "model-21"
+        assert data["data"][2]["model_name"] == "model-23"
+
+        # Test Case 3: Page beyond available pages (should return empty data)
+        response = client.get("/v2/model/info", params={"page": 4, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 4
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 0  # No data for page beyond total_pages
+
+        # Test Case 4: Single model with page size 1
+        mock_models_single = [
+            {
+                "model_name": "single-model",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "single-model"},
+            }
+        ]
+        mock_router_single = MagicMock()
+        mock_router_single.model_list = mock_models_single
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_single)
+
+        response = client.get("/v2/model/info", params={"page": 1, "size": 1})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_name"] == "single-model"
+
+    finally:
+        app.dependency_overrides = original_overrides

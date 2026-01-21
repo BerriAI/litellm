@@ -7522,6 +7522,8 @@ async def model_info_v2(
         False, description="Return all models across all teams user is in."
     ),
     debug: Optional[bool] = False,
+    page: int = Query(1, description="Page number", ge=1),
+    size: int = Query(50, description="Page size", ge=1),
 ):
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
@@ -7530,7 +7532,13 @@ async def model_info_v2(
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_router is None or not llm_router.model_list:
-        return {"data": []}
+        return {
+            "data": [],
+            "total_count": 0,
+            "current_page": page,
+            "total_pages": 0,
+            "size": size,
+        }
 
     if prisma_client is None:
         raise HTTPException(
@@ -7620,7 +7628,26 @@ async def model_info_v2(
         )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
-    return {"data": all_models}
+    
+    total_count = len(all_models)
+    
+    skip = (page - 1) * size
+    
+    total_pages = -(-total_count // size) if total_count > 0 else 0
+    
+    paginated_models = all_models[skip : skip + size]
+    
+    verbose_proxy_logger.debug(
+        f"Pagination: skip={skip}, take={size}, total_count={total_count}, total_pages={total_pages}"
+    )
+    
+    return {
+        "data": paginated_models,
+        "total_count": total_count,
+        "current_page": page,
+        "total_pages": total_pages,
+        "size": size,
+    }
 
 
 @router.get(
