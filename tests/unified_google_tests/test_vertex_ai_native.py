@@ -6,5 +6,5 @@ class TestVertexAIGenerateContent(BaseGoogleGenAITest):
     @property
     def model_config(self):
         return {
-            "model": "vertex_ai/gemini-2.5-flash-lite",
+            "model": "vertex_ai/gemini-3-flash-preview",
         }
