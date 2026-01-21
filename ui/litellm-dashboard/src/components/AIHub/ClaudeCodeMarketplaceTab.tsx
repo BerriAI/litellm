@@ -1,20 +1,19 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { Input } from "antd";
-import { Card, TabGroup, TabList, Tab, TabPanels, TabPanel, Text } from "@tremor/react";
 import { SearchOutlined } from "@ant-design/icons";
-import { getClaudeCodeMarketplace } from "../networking";
-import { ModelDataTable } from "../model_dashboard/table";
-import { getMarketplaceTableColumns } from "./marketplace_table_columns";
-import NotificationsManager from "../molecules/notifications_manager";
-import {
-  MarketplaceResponse,
-  MarketplacePluginEntry,
-} from "../claude_code_plugins/types";
+import { Card, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
+import { Input } from "antd";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   extractCategories,
-  filterPluginsBySearch,
   filterPluginsByCategory,
+  filterPluginsBySearch,
 } from "../claude_code_plugins/helpers";
+import {
+  MarketplaceResponse
+} from "../claude_code_plugins/types";
+import { ModelDataTable } from "../model_dashboard/table";
+import NotificationsManager from "../molecules/notifications_manager";
+import { getClaudeCodeMarketplace } from "../networking";
+import { getMarketplaceTableColumns } from "./marketplace_table_columns";
 
 interface ClaudeCodeMarketplaceTabProps {
   publicPage?: boolean;
