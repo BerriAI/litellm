@@ -34,10 +34,11 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
   const [percentageValue, setPercentageValue] = useState<string>("");
   const [fixedAmountValue, setFixedAmountValue] = useState<string>("");
   const [models, setModels] = useState<string[]>([]);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
   const [form] = Form.useForm();
   const [marginForm] = Form.useForm();
   const [modal, contextHolder] = Modal.useModal();
-  
+
   const isProxyAdmin = userRole === "proxy_admin" || userRole === "Admin";
 
   // Use custom hooks for discount and margin config
@@ -57,24 +58,42 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
     handleMarginChange,
   } = useMarginConfig({ accessToken });
 
+  // Fetch models for pricing calculator (available to all roles)
   useEffect(() => {
-    if (accessToken) {
+    if (!accessToken) {
+      return;
+    }
+
+    const loadModels = async () => {
+      setIsLoadingModels(true);
+      try {
+        console.log("Fetching models for pricing calculator...");
+        const modelGroups = await fetchAvailableModels(accessToken);
+        console.log("Fetched model groups:", modelGroups);
+        const modelNames = modelGroups.map((m: ModelGroup) => m.model_group);
+        console.log("Setting models:", modelNames);
+        setModels(modelNames);
+      } catch (error) {
+        console.error("Error fetching models for pricing calculator:", error);
+        setModels([]);
+      } finally {
+        setIsLoadingModels(false);
+      }
+    };
+
+    loadModels();
+  }, [accessToken]);
+
+  // Fetch discount and margin configs (only for proxy admins)
+  useEffect(() => {
+    if (accessToken && isProxyAdmin) {
       Promise.all([fetchDiscountConfig(), fetchMarginConfig()]).finally(() => {
         setIsFetching(false);
       });
-      
-      // Fetch models for pricing calculator (available to all roles)
-      const loadModels = async () => {
-        try {
-          const modelGroups = await fetchAvailableModels(accessToken);
-          setModels(modelGroups.map((m: ModelGroup) => m.model_group));
-        } catch (error) {
-          console.error("Error fetching models:", error);
-        }
-      };
-      loadModels();
+    } else {
+      setIsFetching(false);
     }
-  }, [accessToken, fetchDiscountConfig, fetchMarginConfig]);
+  }, [accessToken, isProxyAdmin, fetchDiscountConfig, fetchMarginConfig]);
 
   const handleAddProvider = async () => {
     const success = await addProvider(selectedProvider, newDiscount);
@@ -314,6 +333,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
               <PricingCalculator
                 accessToken={accessToken}
                 models={models}
+                isLoadingModels={isLoadingModels}
               />
             </div>
           </AccordionBody>

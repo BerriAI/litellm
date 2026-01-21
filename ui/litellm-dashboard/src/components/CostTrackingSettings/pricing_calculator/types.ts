@@ -1,6 +1,7 @@
 export interface PricingCalculatorProps {
   accessToken: string | null;
   models: string[];
+  isLoadingModels?: boolean;
 }
 
 export interface PricingFormValues {

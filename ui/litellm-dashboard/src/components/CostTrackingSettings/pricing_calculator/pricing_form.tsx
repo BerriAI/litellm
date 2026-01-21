@@ -5,9 +5,10 @@ import { PricingFormValues } from "./types";
 interface PricingFormProps {
   models: string[];
   onValuesChange: (changedValues: Partial<PricingFormValues>, allValues: PricingFormValues) => void;
+  isLoadingModels?: boolean;
 }
 
-const PricingForm: React.FC<PricingFormProps> = ({ models, onValuesChange }) => {
+const PricingForm: React.FC<PricingFormProps> = ({ models, onValuesChange, isLoadingModels = false }) => {
   return (
     <Form
       layout="vertical"
@@ -26,7 +27,7 @@ const PricingForm: React.FC<PricingFormProps> = ({ models, onValuesChange }) => 
           >
             <Select
               showSearch
-              placeholder="Select a model"
+              placeholder={isLoadingModels ? "Loading models..." : "Select a model"}
               optionFilterProp="label"
               filterOption={(input, option) =>
                 String(option?.label ?? "").toLowerCase().includes(input.toLowerCase())
@@ -35,6 +36,9 @@ const PricingForm: React.FC<PricingFormProps> = ({ models, onValuesChange }) => 
                 value: model,
                 label: model,
               }))}
+              loading={isLoadingModels}
+              disabled={isLoadingModels}
+              notFoundContent={isLoadingModels ? "Loading..." : "No models available"}
             />
           </Form.Item>
         </Col>

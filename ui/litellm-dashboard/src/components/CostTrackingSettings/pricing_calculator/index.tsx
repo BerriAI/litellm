@@ -21,6 +21,7 @@ const createDefaultEntry = (): ModelEntry => ({
 const PricingCalculator: React.FC<PricingCalculatorProps> = ({
   accessToken,
   models,
+  isLoadingModels = false,
 }) => {
   const [entries, setEntries] = useState<ModelEntry[]>([createDefaultEntry()]);
   const [timePeriod, setTimePeriod] = useState<TimePeriod>("month");
@@ -78,7 +79,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
       render: (_: string, record: ModelEntry) => (
         <Select
           showSearch
-          placeholder="Select a model"
+          placeholder={isLoadingModels ? "Loading models..." : "Select a model"}
           value={record.model || undefined}
           onChange={(value) => handleEntryChange(record.id, "model", value)}
           optionFilterProp="label"
@@ -89,8 +90,11 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({
             value: model,
             label: model,
           }))}
+          loading={isLoadingModels}
+          disabled={isLoadingModels}
           style={{ width: "100%" }}
           size="small"
+          notFoundContent={isLoadingModels ? "Loading..." : "No models available"}
         />
       ),
     },
