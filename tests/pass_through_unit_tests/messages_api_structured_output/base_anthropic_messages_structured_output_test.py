@@ -107,14 +107,26 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
 
         print(f"Response: {response}")
 
-        # Validate response structure
-        assert "content" in response
-        assert len(response["content"]) > 0
+        # Validate response structure - handle both dict and object responses
+        if isinstance(response, dict):
+            assert "content" in response
+            content_list = response["content"]
+        else:
+            assert hasattr(response, "content")
+            content_list = response.content
 
-        content = response["content"][0]
-        assert "text" in content
+        assert len(content_list) > 0
 
-        response_text = content["text"]
+        content = content_list[0]
+        
+        # Handle both dict and object content blocks
+        if isinstance(content, dict):
+            assert "text" in content
+            response_text = content["text"]
+        else:
+            assert hasattr(content, "text")
+            response_text = content.text
+
         print(f"Response text: {response_text}")
 
         # The response should be valid JSON
