@@ -101,9 +101,23 @@ export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 
 You have two options for specifying which model Claude Code uses:
 
-#### Option 1: Environment Variables (Recommended)
+#### Option 1: Command Line / Session Model Selection
 
-Configure which model Claude Code requests using environment variables:
+Specify the model directly when starting Claude Code or during a session:
+
+```bash
+# Specify model at startup
+claude --model claude-3-5-sonnet-20241022
+
+# Or change model during a session
+/model claude-3-5-haiku-20241022
+```
+
+This method uses the exact model you specify.
+
+#### Option 2: Environment Variables
+
+Configure default models using environment variables:
 
 ```bash
 # Tell Claude Code which models to use by default
@@ -114,19 +128,7 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-3-5-20240229
 claude  # Will use the models specified above
 ```
 
-This allows you to use any model configured in your LiteLLM proxy without Claude Code needing to know about it.
-
-#### Option 2: Command Line / Session Model Selection
-
-Alternatively, specify the model directly:
-
-```bash
-# Specify model at startup
-claude --model claude-3-5-sonnet-20241022
-
-# Or change model during a session
-/model claude-3-5-haiku-20241022
-```
+**Note:** Claude Code may cache the model from a previous session. If environment variables don't take effect, use Option 1 to explicitly set the model.
 
 **Important:** The `model_name` in your LiteLLM config must match what Claude Code requests (either from env vars or command line).
 
@@ -141,7 +143,7 @@ claude --model 'claude-sonnet-4-5-20250929[1m]'
 # Inside a Claude Code session (no quotes needed)
 /model claude-sonnet-4-5-20250929[1m]
 
-# With environment variables (most convenient)
+# With environment variables
 export ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-4-5-20250929[1m]'
 claude
 ```
