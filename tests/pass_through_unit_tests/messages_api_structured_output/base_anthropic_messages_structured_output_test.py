@@ -67,6 +67,7 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
         """
         E2E test: Make actual API call with structured output and validate JSON response.
         """
+        litellm._turn_on_debug()
         messages = self.get_test_messages()
         output_format = self.get_output_format_schema()
 
