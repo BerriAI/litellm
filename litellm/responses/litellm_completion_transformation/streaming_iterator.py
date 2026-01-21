@@ -695,7 +695,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Change: Never return a value, just enqueue output item events
         if self.sent_output_item_added_event:
             return
-        print("first chunk=", chunk)
         delta = chunk.choices[0].delta
 
         self._sequence_number += 1
