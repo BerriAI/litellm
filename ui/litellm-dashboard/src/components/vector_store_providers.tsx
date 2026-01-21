@@ -5,6 +5,7 @@ export enum VectorStoreProviders {
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
+  Qdrant = "Qdrant",
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
@@ -14,6 +15,7 @@ export const vectorStoreProviderMap: Record<string, string> = {
   OpenAI: "openai",
   Azure: "azure",
   Milvus: "milvus",
+  Qdrant: "qdrant",
 };
 
 const asset_logos_folder = "../ui/assets/logos/";
@@ -25,6 +27,7 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.OpenAI]: `${asset_logos_folder}openai_small.svg`,
   [VectorStoreProviders.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
   [VectorStoreProviders.Milvus]: `${asset_logos_folder}milvus.svg`,
+  [VectorStoreProviders.Qdrant]: `${asset_logos_folder}qdrant.svg`,
 };
 
 // Define field types for provider-specific configurations
@@ -106,12 +109,46 @@ export const vectorStoreProviderFields: Record<string, VectorStoreFieldConfig[]>
       type: "text",
     },
     {
-      name: "embedding_model",
+      name: "litellm_embedding_model",
       label: "Embedding Model",
       tooltip: "Select the embedding model to use",
       placeholder: "text-embedding-3-small",
       required: true,
       type: "select",
+    },
+  ],
+  qdrant: [
+    {
+      name: "api_base",
+      label: "API Base",
+      tooltip: "Enter your Qdrant endpoint (e.g., http://qdrant:6333 or https://your-qdrant.cloud)",
+      placeholder: "http://qdrant:6333",
+      required: true,
+      type: "text",
+    },
+    {
+      name: "api_key",
+      label: "API Key",
+      tooltip: "Enter your Qdrant API key (leave blank for unauthenticated local instances)",
+      placeholder: "your-qdrant-api-key",
+      required: false,
+      type: "password",
+    },
+    {
+      name: "litellm_embedding_model",
+      label: "Embedding Model",
+      tooltip: "Select the embedding model to use",
+      placeholder: "text-embedding-3-small",
+      required: true,
+      type: "select",
+    },
+    {
+      name: "qdrant_text_field",
+      label: "Payload Text Field",
+      tooltip: "Payload key that stores the text content (defaults to 'text')",
+      placeholder: "text",
+      required: false,
+      type: "text",
     },
   ],
 };

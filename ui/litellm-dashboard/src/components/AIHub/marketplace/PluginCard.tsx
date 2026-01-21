@@ -1,15 +1,15 @@
+import React from "react";
+import { Card, Badge, Button, Text } from "@tremor/react";
+import { Tooltip } from "antd";
+import { ClipboardCopyIcon, ExternalLinkIcon } from "@heroicons/react/outline";
+import { MarketplacePluginEntry } from "@/components/claude_code_plugins/types";
 import {
   formatInstallCommand,
   getCategoryBadgeColor,
-  getSourceLink
+  getSourceLink,
+  truncateText,
 } from "@/components/claude_code_plugins/helpers";
-import { MarketplacePluginEntry } from "@/components/claude_code_plugins/types";
 import NotificationsManager from "@/components/molecules/notifications_manager";
-import { ExternalLinkIcon } from "@heroicons/react/outline";
-import { CopyOutlined } from "@ant-design/icons";
-import { Badge, Button, Card, Text } from "@tremor/react";
-import { Tooltip } from "antd";
-import React from "react";
 
 interface PluginCardProps {
   plugin: MarketplacePluginEntry;
@@ -139,7 +139,7 @@ const PluginCard: React.FC<PluginCardProps> = ({ plugin }) => {
             <Button
               size="xs"
               variant="secondary"
-              icon={CopyOutlined}
+              icon={ClipboardCopyIcon}
               onClick={(e) => {
                 e.stopPropagation();
                 copyToClipboard(installCommand);

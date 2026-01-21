@@ -3,7 +3,7 @@ export interface VectorStore {
   custom_llm_provider: string;
   vector_store_name?: string;
   vector_store_description?: string;
-  vector_store_metadata?: Record<string, any>;
+  vector_store_metadata?: Record<string, any> | string;
   created_at: string;
   updated_at: string;
   created_by?: string;
@@ -19,7 +19,7 @@ export interface VectorStoreNewRequest {
   custom_llm_provider: string;
   vector_store_name?: string;
   vector_store_description?: string;
-  vector_store_metadata?: Record<string, any>;
+  vector_store_metadata?: Record<string, any> | string;
 }
 
 export interface VectorStoreUpdateRequest {
@@ -27,7 +27,7 @@ export interface VectorStoreUpdateRequest {
   custom_llm_provider?: string;
   vector_store_name?: string;
   vector_store_description?: string;
-  vector_store_metadata?: Record<string, any>;
+  vector_store_metadata?: Record<string, any> | string;
 }
 
 export interface VectorStoreDeleteRequest {

@@ -10,9 +10,12 @@ All /vector_store management endpoints
 
 import copy
 import json
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Literal
+
+import httpx
 
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -33,6 +36,8 @@ from litellm.types.vector_stores import (
     VectorStoreUpdateRequest,
 )
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+from litellm.proxy.vector_store_endpoints.utils import check_vector_store_permission
+from litellm.proxy._types import LitellmUserRoles
 
 router = APIRouter()
 
@@ -42,21 +47,21 @@ async def _resolve_embedding_config_from_db(
 ) -> Optional[Dict[str, Any]]:
     """
     Resolve embedding config from database model configuration.
-    
+
     If litellm_embedding_model is provided but litellm_embedding_config is not,
     this function looks up the model in the database and extracts api_key, api_base,
     and api_version from the model's litellm_params to build the embedding config.
-    
+
     Args:
         embedding_model: The embedding model string (e.g., "text-embedding-ada-002" or "azure/text-embedding-3-large")
         prisma_client: The Prisma client instance
-        
+
     Returns:
         Dictionary with api_key, api_base, and api_version if model found, None otherwise
     """
     if not embedding_model:
         return None
-    
+
     # Extract model name - could be "text-embedding-ada-002" or "azure/text-embedding-3-large"
     # Try to find model by exact match first, then try without provider prefix
     model_name_candidates = [embedding_model]
@@ -64,20 +69,20 @@ async def _resolve_embedding_config_from_db(
         # If it has a provider prefix, also try without it
         _, model_name = embedding_model.split("/", 1)
         model_name_candidates.append(model_name)
-    
+
     # Try to find model in database
     for model_name in model_name_candidates:
         try:
             db_model = await prisma_client.db.litellm_proxymodeltable.find_first(
                 where={"model_name": model_name}
             )
-            
+
             if db_model and db_model.litellm_params:
                 # Extract litellm_params (could be dict or JSON string)
                 model_params = db_model.litellm_params
                 if isinstance(model_params, str):
                     model_params = json.loads(model_params)
-                
+
                 # Decrypt values from database (similar to how proxy_server.py does it)
                 # Values stored in DB are encrypted, so we need to decrypt them first
                 decrypted_params = {}
@@ -93,10 +98,10 @@ async def _resolve_embedding_config_from_db(
                             decrypted_params[k] = v
                 else:
                     decrypted_params = model_params
-                
+
                 # Build embedding config from model params
                 embedding_config = {}
-                
+
                 # Extract api_key
                 api_key = decrypted_params.get("api_key")
                 if api_key:
@@ -104,7 +109,7 @@ async def _resolve_embedding_config_from_db(
                     if isinstance(api_key, str) and api_key.startswith("os.environ/"):
                         api_key = get_secret(api_key)
                     embedding_config["api_key"] = api_key
-                
+
                 # Extract api_base
                 api_base = decrypted_params.get("api_base")
                 if api_base:
@@ -112,12 +117,12 @@ async def _resolve_embedding_config_from_db(
                     if isinstance(api_base, str) and api_base.startswith("os.environ/"):
                         api_base = get_secret(api_base)
                     embedding_config["api_base"] = api_base
-                
+
                 # Extract api_version
                 api_version = decrypted_params.get("api_version")
                 if api_version:
                     embedding_config["api_version"] = api_version
-                
+
                 # Only return config if we have at least api_key or api_base
                 if embedding_config:
                     verbose_proxy_logger.debug(
@@ -129,8 +134,80 @@ async def _resolve_embedding_config_from_db(
                 f"Error resolving embedding config for model {model_name}: {str(e)}"
             )
             continue
-    
+
     return None
+
+
+class QdrantCreateCollectionRequest(BaseModel):
+    vector_store_id: str
+    vector_size: int = Field(gt=0)
+    distance: Literal["cosine", "dot", "euclid"] = "cosine"
+    collection_name: Optional[str] = None
+    collection_config: Optional[Dict[str, Any]] = None
+
+
+class QdrantCollectionInfoRequest(BaseModel):
+    vector_store_id: str
+
+
+class QdrantCollectionPointsRequest(BaseModel):
+    vector_store_id: str
+    limit: int = Field(default=20, gt=0, le=200)
+    offset: Optional[Any] = None
+
+
+def _resolve_qdrant_connection_params(
+    vector_store: LiteLLM_ManagedVectorStoresTable,
+) -> Dict[str, Any]:
+    litellm_params = vector_store.litellm_params or {}
+    if isinstance(litellm_params, str):
+        litellm_params = json.loads(litellm_params)
+
+    def _resolve_secret_value(value: Any, key: str) -> Any:
+        if isinstance(value, str):
+            decrypted_value = decrypt_value_helper(
+                value=value, key=key, return_original_value=True
+            )
+            if isinstance(decrypted_value, str) and decrypted_value.startswith(
+                "os.environ/"
+            ):
+                return get_secret(decrypted_value)
+            return decrypted_value
+        return value
+
+    resolved_params: Dict[str, Any] = {
+        key: _resolve_secret_value(value, key)
+        for key, value in litellm_params.items()
+    }
+
+    api_base = resolved_params.get("api_base") or get_secret(
+        "os.environ/QDRANT_API_BASE"
+    )
+    if not api_base:
+        api_base = get_secret("os.environ/QDRANT_URL")
+    if not api_base:
+        raise HTTPException(status_code=400, detail="Qdrant api_base is required.")
+
+    api_key = resolved_params.get("api_key") or get_secret("os.environ/QDRANT_API_KEY")
+
+    vector_store_metadata = vector_store.vector_store_metadata or {}
+    if isinstance(vector_store_metadata, str):
+        try:
+            vector_store_metadata = json.loads(vector_store_metadata)
+        except Exception:
+            vector_store_metadata = {}
+
+    collection_name = (
+        vector_store_metadata.get("qdrant_collection_name")
+        if isinstance(vector_store_metadata, dict)
+        else None
+    ) or vector_store.vector_store_id
+
+    return {
+        "api_base": api_base,
+        "api_key": api_key,
+        "collection_name": collection_name,
+    }
 
 
 ########################################################
@@ -185,17 +262,18 @@ async def new_vector_store(
         if _input_litellm_params is not None:
             # Auto-resolve embedding config if embedding model is provided but config is not
             embedding_model = _input_litellm_params.get("litellm_embedding_model")
-            if embedding_model and not _input_litellm_params.get("litellm_embedding_config"):
+            if embedding_model and not _input_litellm_params.get(
+                "litellm_embedding_config"
+            ):
                 resolved_config = await _resolve_embedding_config_from_db(
-                    embedding_model=embedding_model,
-                    prisma_client=prisma_client
+                    embedding_model=embedding_model, prisma_client=prisma_client
                 )
                 if resolved_config:
                     _input_litellm_params["litellm_embedding_config"] = resolved_config
                     verbose_proxy_logger.info(
                         f"Auto-resolved embedding config for model {embedding_model}"
                     )
-            
+
             litellm_params_dict = GenericLiteLLMParams(
                 **_input_litellm_params
             ).model_dump(exclude_none=True)
@@ -231,6 +309,247 @@ async def new_vector_store(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post(
+    "/vector_store/qdrant/create_collection",
+    tags=["vector store management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def create_qdrant_collection(
+    request: QdrantCreateCollectionRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    vector_store_id = request.vector_store_id
+    collection_name = request.collection_name or vector_store_id
+
+    vector_store = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": vector_store_id}
+    )
+    if vector_store is None:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    if not (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        has_permission = check_vector_store_permission(
+            index_name=vector_store_id,
+            permission="write",
+            key_metadata=user_api_key_dict.metadata,
+            team_metadata=user_api_key_dict.team_metadata,
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=403,
+                detail="User does not have permission to create this vector store collection.",
+            )
+
+    litellm_params = vector_store.litellm_params or {}
+    if isinstance(litellm_params, str):
+        litellm_params = json.loads(litellm_params)
+
+    def _resolve_secret_value(value: Any, key: str) -> Any:
+        if isinstance(value, str):
+            decrypted_value = decrypt_value_helper(
+                value=value, key=key, return_original_value=True
+            )
+            if isinstance(decrypted_value, str) and decrypted_value.startswith(
+                "os.environ/"
+            ):
+                return get_secret(decrypted_value)
+            return decrypted_value
+        return value
+
+    resolved_params: Dict[str, Any] = {
+        key: _resolve_secret_value(value, key) for key, value in litellm_params.items()
+    }
+
+    api_base = resolved_params.get("api_base") or get_secret(
+        "os.environ/QDRANT_API_BASE"
+    )
+    if not api_base:
+        api_base = get_secret("os.environ/QDRANT_URL")
+    if not api_base:
+        raise HTTPException(status_code=400, detail="Qdrant api_base is required.")
+
+    api_key = resolved_params.get("api_key") or get_secret("os.environ/QDRANT_API_KEY")
+
+    distance_map = {"cosine": "Cosine", "dot": "Dot", "euclid": "Euclid"}
+    payload: Dict[str, Any] = {
+        "vectors": {
+            "size": request.vector_size,
+            "distance": distance_map[request.distance],
+        }
+    }
+
+    if request.collection_config:
+        payload.update(request.collection_config)
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["api-key"] = api_key
+
+    url = f"{api_base.rstrip('/')}/collections/{collection_name}"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.put(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        try:
+            vector_store_metadata = vector_store.vector_store_metadata or {}
+            if isinstance(vector_store_metadata, str):
+                vector_store_metadata = json.loads(vector_store_metadata)
+            vector_store_metadata = vector_store_metadata or {}
+            vector_store_metadata["qdrant_collection_name"] = collection_name
+
+            await prisma_client.db.litellm_managedvectorstorestable.update(
+                where={"vector_store_id": vector_store_id},
+                data={"vector_store_metadata": safe_dumps(vector_store_metadata)},
+            )
+
+            if litellm.vector_store_registry is not None:
+                litellm.vector_store_registry.update_vector_store_in_registry(
+                    vector_store_id=vector_store_id,
+                    updated_data={"vector_store_metadata": vector_store_metadata},
+                )
+        except Exception as metadata_error:
+            verbose_proxy_logger.warning(
+                "Failed to persist qdrant collection name metadata: %s", metadata_error
+            )
+        return response.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error creating Qdrant collection: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/vector_store/qdrant/collection/info",
+    tags=["vector store management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_qdrant_collection_info(
+    request: QdrantCollectionInfoRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    vector_store_id = request.vector_store_id
+    vector_store = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": vector_store_id}
+    )
+    if vector_store is None:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    if not (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        has_permission = check_vector_store_permission(
+            index_name=vector_store_id,
+            permission="read",
+            key_metadata=user_api_key_dict.metadata,
+            team_metadata=user_api_key_dict.team_metadata,
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=403,
+                detail="User does not have permission to view this vector store collection.",
+            )
+
+    connection = _resolve_qdrant_connection_params(vector_store=vector_store)
+    url = f"{connection['api_base'].rstrip('/')}/collections/{connection['collection_name']}"
+
+    headers = {"Content-Type": "application/json"}
+    if connection.get("api_key"):
+        headers["api-key"] = connection["api_key"]
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers)
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        return response.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error fetching Qdrant collection info: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post(
+    "/vector_store/qdrant/collection/points",
+    tags=["vector store management"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_qdrant_collection_points(
+    request: QdrantCollectionPointsRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    vector_store_id = request.vector_store_id
+    vector_store = await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+        where={"vector_store_id": vector_store_id}
+    )
+    if vector_store is None:
+        raise HTTPException(status_code=404, detail="Vector store not found")
+
+    if not (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    ):
+        has_permission = check_vector_store_permission(
+            index_name=vector_store_id,
+            permission="read",
+            key_metadata=user_api_key_dict.metadata,
+            team_metadata=user_api_key_dict.team_metadata,
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=403,
+                detail="User does not have permission to view this vector store collection.",
+            )
+
+    connection = _resolve_qdrant_connection_params(vector_store=vector_store)
+    url = f"{connection['api_base'].rstrip('/')}/collections/{connection['collection_name']}/points/scroll"
+
+    headers = {"Content-Type": "application/json"}
+    if connection.get("api_key"):
+        headers["api-key"] = connection["api_key"]
+
+    payload: Dict[str, Any] = {
+        "limit": request.limit,
+        "with_payload": True,
+        "with_vector": False,
+    }
+    if request.offset:
+        payload["offset"] = request.offset
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            raise HTTPException(status_code=response.status_code, detail=response.text)
+        return response.json()
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error fetching Qdrant collection points: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get(
     "/vector_store/list",
     tags=["vector store management"],
@@ -261,27 +580,27 @@ async def list_vector_stores(
         vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
             prisma_client=prisma_client
         )
-        
+
         # Build map from database vector stores
         for vector_store in vector_stores_from_db:
             vector_store_id = vector_store.get("vector_store_id", None)
             if vector_store_id:
                 vector_store_map[vector_store_id] = vector_store
                 db_vector_store_ids.add(vector_store_id)
-        
+
         # Process in-memory vector stores
         if litellm.vector_store_registry is not None:
             in_memory_vector_stores = copy.deepcopy(
                 litellm.vector_store_registry.vector_stores
             )
-            
+
             vector_stores_to_delete_from_memory: List[str] = []
-            
+
             for vector_store in in_memory_vector_stores:
                 vector_store_id = vector_store.get("vector_store_id", None)
                 if not vector_store_id:
                     continue
-                
+
                 # If vector store is in memory but NOT in database, it was deleted
                 if vector_store_id not in db_vector_store_ids:
                     verbose_proxy_logger.info(
@@ -291,7 +610,7 @@ async def list_vector_stores(
                 # If not in our map yet, add it (only in-memory, not in DB)
                 elif vector_store_id not in vector_store_map:
                     vector_store_map[vector_store_id] = vector_store
-            
+
             # Synchronize in-memory registry with database
             # 1. Remove deleted vector stores from memory
             for vs_id in vector_stores_to_delete_from_memory:
@@ -301,14 +620,13 @@ async def list_vector_stores(
                 verbose_proxy_logger.debug(
                     f"Removed deleted vector store {vs_id} from in-memory registry"
                 )
-            
+
             # 2. Update in-memory registry with database versions (for updates)
             for vector_store in vector_stores_from_db:
                 vector_store_id = vector_store.get("vector_store_id", None)
                 if vector_store_id:
                     litellm.vector_store_registry.update_vector_store_in_registry(
-                        vector_store_id=vector_store_id,
-                        updated_data=vector_store
+                        vector_store_id=vector_store_id, updated_data=vector_store
                     )
 
         combined_vector_stores = list(vector_store_map.values())
@@ -354,7 +672,7 @@ async def delete_vector_store(
         # Check if vector store exists in database or in-memory registry
         db_vector_store_exists = False
         memory_vector_store_exists = False
-        
+
         existing_vector_store = (
             await prisma_client.db.litellm_managedvectorstorestable.find_unique(
                 where={"vector_store_id": data.vector_store_id}
@@ -362,7 +680,7 @@ async def delete_vector_store(
         )
         if existing_vector_store is not None:
             db_vector_store_exists = True
-        
+
         # Check in-memory registry
         if litellm.vector_store_registry is not None:
             memory_vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
@@ -370,13 +688,82 @@ async def delete_vector_store(
             )
             if memory_vector_store is not None:
                 memory_vector_store_exists = True
-        
+
         # If not found in either location, raise 404
         if not db_vector_store_exists and not memory_vector_store_exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"Vector store with ID {data.vector_store_id} not found",
             )
+
+        # Attempt to delete Qdrant collection when deleting the vector store
+        if existing_vector_store is not None:
+            custom_llm_provider = existing_vector_store.custom_llm_provider or ""
+            if custom_llm_provider.lower() == "qdrant":
+                litellm_params = existing_vector_store.litellm_params or {}
+                if isinstance(litellm_params, str):
+                    litellm_params = json.loads(litellm_params)
+
+                def _resolve_secret_value(value: Any, key: str) -> Any:
+                    if isinstance(value, str):
+                        decrypted_value = decrypt_value_helper(
+                            value=value, key=key, return_original_value=True
+                        )
+                        if isinstance(decrypted_value, str) and decrypted_value.startswith(
+                            "os.environ/"
+                        ):
+                            return get_secret(decrypted_value)
+                        return decrypted_value
+                    return value
+
+                resolved_params: Dict[str, Any] = {
+                    key: _resolve_secret_value(value, key)
+                    for key, value in litellm_params.items()
+                }
+
+                api_base = resolved_params.get("api_base") or get_secret(
+                    "os.environ/QDRANT_API_BASE"
+                )
+                if not api_base:
+                    api_base = get_secret("os.environ/QDRANT_URL")
+                api_key = resolved_params.get("api_key") or get_secret(
+                    "os.environ/QDRANT_API_KEY"
+                )
+
+                vector_store_metadata = existing_vector_store.vector_store_metadata or {}
+                if isinstance(vector_store_metadata, str):
+                    try:
+                        vector_store_metadata = json.loads(vector_store_metadata)
+                    except Exception:
+                        vector_store_metadata = {}
+                collection_name = (
+                    vector_store_metadata.get("qdrant_collection_name")
+                    if isinstance(vector_store_metadata, dict)
+                    else None
+                ) or data.vector_store_id
+
+                if api_base:
+                    delete_headers = {"Content-Type": "application/json"}
+                    if api_key:
+                        delete_headers["api-key"] = api_key
+                    delete_url = f"{api_base.rstrip('/')}/collections/{collection_name}"
+                    try:
+                        async with httpx.AsyncClient() as client:
+                            response = await client.delete(
+                                delete_url, headers=delete_headers
+                            )
+                        if response.status_code >= 400:
+                            verbose_proxy_logger.warning(
+                                "Failed to delete Qdrant collection %s: %s",
+                                collection_name,
+                                response.text,
+                            )
+                    except Exception as delete_error:
+                        verbose_proxy_logger.warning(
+                            "Error deleting Qdrant collection %s: %s",
+                            collection_name,
+                            delete_error,
+                        )
 
         # Delete from database if exists
         if db_vector_store_exists:
@@ -392,7 +779,7 @@ async def delete_vector_store(
 
         return {
             "status": "success",
-            "message": f"Vector store {data.vector_store_id} deleted successfully"
+            "message": f"Vector store {data.vector_store_id} deleted successfully",
         }
     except HTTPException:
         raise
@@ -487,30 +874,31 @@ async def update_vector_store(
     try:
         update_data = data.model_dump(exclude_unset=True)
         vector_store_id = update_data.pop("vector_store_id")
-        
+
         # Handle metadata serialization
         if update_data.get("vector_store_metadata") is not None:
             update_data["vector_store_metadata"] = safe_dumps(
                 update_data["vector_store_metadata"]
             )
-        
+
         # Handle litellm_params if provided
         if "litellm_params" in update_data:
             _input_litellm_params: dict = update_data.get("litellm_params", {}) or {}
-            
+
             # Auto-resolve embedding config if embedding model is provided but config is not
             embedding_model = _input_litellm_params.get("litellm_embedding_model")
-            if embedding_model and not _input_litellm_params.get("litellm_embedding_config"):
+            if embedding_model and not _input_litellm_params.get(
+                "litellm_embedding_config"
+            ):
                 resolved_config = await _resolve_embedding_config_from_db(
-                    embedding_model=embedding_model,
-                    prisma_client=prisma_client
+                    embedding_model=embedding_model, prisma_client=prisma_client
                 )
                 if resolved_config:
                     _input_litellm_params["litellm_embedding_config"] = resolved_config
                     verbose_proxy_logger.info(
                         f"Auto-resolved embedding config for model {embedding_model}"
                     )
-            
+
             litellm_params_dict = GenericLiteLLMParams(
                 **_input_litellm_params
             ).model_dump(exclude_none=True)
@@ -537,7 +925,7 @@ async def update_vector_store(
         return {
             "status": "success",
             "message": f"Vector store {vector_store_id} updated successfully",
-            "vector_store": updated_vs
+            "vector_store": updated_vs,
         }
     except Exception as e:
         verbose_proxy_logger.exception(f"Error updating vector store: {str(e)}")

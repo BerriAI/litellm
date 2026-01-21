@@ -1069,42 +1069,6 @@ def function_setup(  # noqa: PLR0915
                 else kwargs.get("input")
                 or kwargs.get("messages", "default-message-value")
             )
-        elif (
-            call_type == CallTypes.generate_content.value
-            or call_type == CallTypes.agenerate_content.value
-            or call_type == CallTypes.generate_content_stream.value
-            or call_type == CallTypes.agenerate_content_stream.value
-        ):
-            try:
-                from litellm.google_genai.adapters.transformation import (
-                    GoogleGenAIAdapter,
-                )
-                from litellm.litellm_core_utils.prompt_templates.common_utils import (
-                    get_last_user_message,
-                )
-
-                contents_param = args[1] if len(args) > 1 else kwargs.get("contents")
-                model_param = args[0] if len(args) > 0 else kwargs.get("model", "")
-
-                if contents_param:
-                    adapter = GoogleGenAIAdapter()
-                    transformed = adapter.translate_generate_content_to_completion(
-                        model=model_param,
-                        contents=contents_param,
-                        config=kwargs.get("config"),
-                    )
-                    transformed_messages = transformed.get("messages", [])
-                    messages = (
-                        get_last_user_message(transformed_messages)
-                        or "default-message-value"
-                    )
-                else:
-                    messages = "default-message-value"
-            except Exception as e:
-                verbose_logger.debug(
-                    f"Error extracting messages from Google contents: {str(e)}"
-                )
-                messages = "default-message-value"
         else:
             messages = "default-message-value"
         stream = False
@@ -2735,7 +2699,6 @@ def register_model(model_cost: Union[str, dict]):  # noqa: PLR0915
     # Skip get_model_info for these providers during model registration
     _skip_get_model_info_providers = {
         LlmProviders.GITHUB_COPILOT.value,
-        LlmProviders.CHATGPT.value,
     }
 
     for key, value in loaded_model_cost.items():
@@ -4187,21 +4150,7 @@ def get_optional_params(  # noqa: PLR0915
                 ),
             )
         elif "anthropic" in bedrock_base_model and bedrock_route == "invoke":
-            if (
-                bedrock_base_model
-                in litellm.AmazonAnthropicConfig.get_legacy_anthropic_model_names()
-            ):
-                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
-                    non_default_params=non_default_params,
-                    optional_params=optional_params,
-                    model=model,
-                    drop_params=(
-                        drop_params
-                        if drop_params is not None and isinstance(drop_params, bool)
-                        else False
-                    ),
-                )
-            else:
+            if bedrock_base_model.startswith("anthropic.claude-3"):
                 optional_params = (
                     litellm.AmazonAnthropicClaudeConfig().map_openai_params(
                         non_default_params=non_default_params,
@@ -4213,6 +4162,18 @@ def get_optional_params(  # noqa: PLR0915
                             else False
                         ),
                     )
+                )
+
+            else:
+                optional_params = litellm.AmazonAnthropicConfig().map_openai_params(
+                    non_default_params=non_default_params,
+                    optional_params=optional_params,
+                    model=model,
+                    drop_params=(
+                        drop_params
+                        if drop_params is not None and isinstance(drop_params, bool)
+                        else False
+                    ),
                 )
         elif provider_config is not None:
             optional_params = provider_config.map_openai_params(
@@ -4648,8 +4609,6 @@ def add_provider_specific_params_to_optional_params(
     else:
         for k in passed_params.keys():
             if k not in openai_params and passed_params[k] is not None:
-                if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
-                    continue
                 optional_params[k] = passed_params[k]
     return optional_params
 
@@ -5589,13 +5548,6 @@ def _get_model_info_helper(  # noqa: PLR0915
                 ),
                 input_cost_per_image_token=_model_info.get(
                     "input_cost_per_image_token", None
-                ),
-                input_cost_per_image=_model_info.get("input_cost_per_image", None),
-                input_cost_per_audio_per_second=_model_info.get(
-                    "input_cost_per_audio_per_second", None
-                ),
-                input_cost_per_video_per_second=_model_info.get(
-                    "input_cost_per_video_per_second", None
                 ),
                 input_cost_per_token_batches=_model_info.get(
                     "input_cost_per_token_batches"
@@ -7768,7 +7720,6 @@ class ProviderConfigManager:
             LlmProviders.GITHUB: (lambda: litellm.GithubChatConfig(), False),
             LlmProviders.COMPACTIFAI: (lambda: litellm.CompactifAIChatConfig(), False),
             LlmProviders.GITHUB_COPILOT: (lambda: litellm.GithubCopilotConfig(), False),
-            LlmProviders.CHATGPT: (lambda: litellm.ChatGPTConfig(), False),
             LlmProviders.GIGACHAT: (lambda: litellm.GigaChatConfig(), False),
             LlmProviders.RAGFLOW: (lambda: litellm.RAGFlowConfig(), False),
             LlmProviders.CUSTOM: (lambda: litellm.OpenAILikeChatConfig(), False),
@@ -8152,8 +8103,6 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
-
             is_o_series = model and (
                 "o_series" in model.lower()
                 or (supports_reasoning(model) and not is_gpt_model)
@@ -8167,12 +8116,8 @@ class ProviderConfigManager:
             return litellm.XAIResponsesAPIConfig()
         elif litellm.LlmProviders.GITHUB_COPILOT == provider:
             return litellm.GithubCopilotResponsesAPIConfig()
-        elif litellm.LlmProviders.CHATGPT == provider:
-            return litellm.ChatGPTResponsesAPIConfig()
         elif litellm.LlmProviders.LITELLM_PROXY == provider:
             return litellm.LiteLLMProxyResponsesAPIConfig()
-        elif litellm.LlmProviders.VOLCENGINE == provider:
-            return litellm.VolcEngineResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
         return None
@@ -8245,10 +8190,6 @@ class ProviderConfigManager:
             return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
             return litellm.llms.bedrock.common_utils.BedrockModelInfo()
-        elif LlmProviders.AZURE_AI == provider:
-            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
-
-            return AzureFoundryModelInfo(model=model)
         return None
 
     @staticmethod
@@ -8392,6 +8333,12 @@ class ProviderConfigManager:
             )
 
             return MilvusVectorStoreConfig()
+        elif litellm.LlmProviders.QDRANT == provider:
+            from litellm.llms.qdrant.vector_stores.transformation import (
+                QdrantVectorStoreConfig,
+            )
+
+            return QdrantVectorStoreConfig()
         elif litellm.LlmProviders.GEMINI == provider:
             from litellm.llms.gemini.vector_stores.transformation import (
                 GeminiVectorStoreConfig,
@@ -8594,6 +8541,12 @@ class ProviderConfigManager:
             )
 
             return LiteLLMProxyImageEditConfig()
+        elif LlmProviders.AIHPI_PROVIDER == provider:
+            from litellm.llms.aihpi_provider.image_edit import (
+                get_aihpi_provider_image_edit_config,
+            )
+
+            return get_aihpi_provider_image_edit_config(model)
         elif LlmProviders.VERTEX_AI == provider:
             from litellm.llms.vertex_ai.image_edit import (
                 get_vertex_ai_image_edit_config,

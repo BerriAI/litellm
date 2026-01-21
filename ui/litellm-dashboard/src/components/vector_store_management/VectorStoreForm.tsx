@@ -102,6 +102,16 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
     onCancel();
   };
 
+  const handleProviderChange = (value: string) => {
+    setSelectedProvider(value);
+    if (value === "qdrant") {
+      const currentApiBase = form.getFieldValue("api_base");
+      if (!currentApiBase) {
+        form.setFieldsValue({ api_base: "http://qdrant:6333" });
+      }
+    }
+  };
+
   return (
     <Modal title="Add New Vector Store" visible={isVisible} width={1000} footer={null} onCancel={handleCancel}>
       <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
@@ -118,7 +128,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
           rules={[{ required: true, message: "Please select a provider" }]}
           initialValue="bedrock"
         >
-          <Select onChange={(value) => setSelectedProvider(value)}>
+          <Select onChange={handleProviderChange}>
             {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => {
               return (
                 <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
@@ -251,7 +261,7 @@ const VectorStoreForm: React.FC<VectorStoreFormProps> = ({
                   field.required ? [{ required: true, message: `Please select the ${field.label.toLowerCase()}` }] : []
                 }
               >
-                <Select
+                  <Select
                   placeholder={field.placeholder}
                   showSearch={true}
                   filterOption={(input, option) => (option?.label ?? "").toLowerCase().includes(input.toLowerCase())}

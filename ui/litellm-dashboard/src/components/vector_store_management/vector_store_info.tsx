@@ -3,11 +3,24 @@ import { Card, Text, Title, Button, Badge, TabGroup, TabList, Tab, TabPanels, Ta
 import { Form, Input, Select as Select2, Tooltip, Button as AntButton } from "antd";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
-import { vectorStoreInfoCall, vectorStoreUpdateCall, credentialListCall, CredentialItem } from "../networking";
+import {
+  vectorStoreInfoCall,
+  vectorStoreUpdateCall,
+  credentialListCall,
+  CredentialItem,
+  detectEmbeddingDimensionCall,
+} from "../networking";
 import { VectorStore } from "./types";
-import { Providers, providerLogoMap, provider_map } from "../provider_info_helpers";
+import {
+  VectorStoreProviders,
+  vectorStoreProviderLogoMap,
+  vectorStoreProviderMap,
+  getProviderSpecificFields,
+  VectorStoreFieldConfig,
+} from "../vector_store_providers";
 import VectorStoreTester from "./VectorStoreTester";
 import NotificationsManager from "../molecules/notifications_manager";
+import { fetchAvailableModels, ModelGroup } from "../playground/llm_calls/fetch_models";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
@@ -30,6 +43,28 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
   const [metadataString, setMetadataString] = useState<string>("{}");
   const [credentials, setCredentials] = useState<CredentialItem[]>([]);
   const [activeTab, setActiveTab] = useState<string>(editVectorStore ? "details" : "details");
+  const [selectedProvider, setSelectedProvider] = useState<string>("bedrock");
+  const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
+  const [isDetectingEmbeddingDimension, setIsDetectingEmbeddingDimension] = useState(false);
+  const [detectedEmbeddingDimension, setDetectedEmbeddingDimension] = useState<number | null>(null);
+
+  const detectEmbeddingDimension = async (embeddingModel: string | null) => {
+    if (!accessToken || !embeddingModel) {
+      setDetectedEmbeddingDimension(null);
+      return;
+    }
+    setIsDetectingEmbeddingDimension(true);
+    try {
+      const dimension = await detectEmbeddingDimensionCall(accessToken, embeddingModel);
+      setDetectedEmbeddingDimension(dimension);
+    } catch (error) {
+      console.error("Error detecting embedding dimension:", error);
+      NotificationsManager.fromBackend(`Failed to detect embedding dimension: ${error}`);
+      setDetectedEmbeddingDimension(null);
+    } finally {
+      setIsDetectingEmbeddingDimension(false);
+    }
+  };
 
   const fetchVectorStoreDetails = async () => {
     if (!accessToken) return;
@@ -37,6 +72,8 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
       const response = await vectorStoreInfoCall(accessToken, vectorStoreId);
       if (response && response.vector_store) {
         setVectorStoreDetails(response.vector_store);
+        const provider = response.vector_store.custom_llm_provider || "bedrock";
+        setSelectedProvider(provider);
 
         // If metadata exists and is an object, stringify it for display/editing
         if (response.vector_store.vector_store_metadata) {
@@ -47,13 +84,35 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
           setMetadataString(JSON.stringify(metadata, null, 2));
         }
 
+        let parsedLitellmParams: Record<string, any> = {};
+        if (response.vector_store.litellm_params) {
+          if (typeof response.vector_store.litellm_params === "string") {
+            try {
+              parsedLitellmParams = JSON.parse(response.vector_store.litellm_params);
+            } catch (error) {
+              console.error("Error parsing litellm_params:", error);
+            }
+          } else if (typeof response.vector_store.litellm_params === "object") {
+            parsedLitellmParams = response.vector_store.litellm_params;
+          }
+        }
+
+        const embeddingModel =
+          parsedLitellmParams.litellm_embedding_model || parsedLitellmParams.embedding_model || null;
+
         if (editVectorStore) {
           form.setFieldsValue({
             vector_store_id: response.vector_store.vector_store_id,
             custom_llm_provider: response.vector_store.custom_llm_provider,
             vector_store_name: response.vector_store.vector_store_name,
             vector_store_description: response.vector_store.vector_store_description,
+            litellm_credential_name: response.vector_store.litellm_credential_name,
+            ...parsedLitellmParams,
           });
+        }
+
+        if (embeddingModel) {
+          detectEmbeddingDimension(embeddingModel);
         }
       }
     } catch (error) {
@@ -78,6 +137,23 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     fetchCredentials();
   }, [vectorStoreId, accessToken]);
 
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const loadModels = async () => {
+      try {
+        const uniqueModels = await fetchAvailableModels(accessToken);
+        if (uniqueModels.length > 0) {
+          setModelInfo(uniqueModels);
+        }
+      } catch (error) {
+        console.error("Error fetching model info:", error);
+      }
+    };
+
+    loadModels();
+  }, [accessToken]);
+
   const handleSave = async (values: any) => {
     if (!accessToken) return;
     try {
@@ -90,12 +166,23 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         return;
       }
 
+      const providerFields = getProviderSpecificFields(values.custom_llm_provider);
+      const litellmParams = providerFields.reduce(
+        (acc, field) => {
+          acc[field.name] = values[field.name];
+          return acc;
+        },
+        {} as Record<string, any>,
+      );
+
       const updateData = {
         vector_store_id: values.vector_store_id,
         custom_llm_provider: values.custom_llm_provider,
         vector_store_name: values.vector_store_name,
         vector_store_description: values.vector_store_description,
         vector_store_metadata: metadata,
+        litellm_credential_name: values.litellm_credential_name,
+        litellm_params: litellmParams,
       };
 
       await vectorStoreUpdateCall(accessToken, updateData);
@@ -169,39 +256,111 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                       name="custom_llm_provider"
                       rules={[{ required: true, message: "Please select a provider" }]}
                     >
-                      <Select2>
-                        {Object.entries(Providers).map(([providerEnum, providerDisplayName]) => {
-                          // Currently only showing Bedrock since it's the only supported provider
-                          if (providerEnum === "Bedrock") {
-                            return (
-                              <Select2.Option key={providerEnum} value={provider_map[providerEnum]}>
-                                <div className="flex items-center space-x-2">
-                                  <img
-                                    src={providerLogoMap[providerDisplayName]}
-                                    alt={`${providerEnum} logo`}
-                                    className="w-5 h-5"
-                                    onError={(e) => {
-                                      // Create a div with provider initial as fallback
-                                      const target = e.target as HTMLImageElement;
-                                      const parent = target.parentElement;
-                                      if (parent) {
-                                        const fallbackDiv = document.createElement("div");
-                                        fallbackDiv.className =
-                                          "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
-                                        fallbackDiv.textContent = providerDisplayName.charAt(0);
-                                        parent.replaceChild(fallbackDiv, target);
-                                      }
-                                    }}
-                                  />
-                                  <span>{providerDisplayName}</span>
-                                </div>
-                              </Select2.Option>
-                            );
-                          }
-                          return null;
+                      <Select2 onChange={(value) => setSelectedProvider(value)}>
+                        {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => {
+                          return (
+                            <Select2.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
+                              <div className="flex items-center space-x-2">
+                                <img
+                                  src={vectorStoreProviderLogoMap[providerDisplayName]}
+                                  alt={`${providerEnum} logo`}
+                                  className="w-5 h-5"
+                                  onError={(e) => {
+                                    const target = e.target as HTMLImageElement;
+                                    const parent = target.parentElement;
+                                    if (parent) {
+                                      const fallbackDiv = document.createElement("div");
+                                      fallbackDiv.className =
+                                        "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                                      fallbackDiv.textContent = providerDisplayName.charAt(0);
+                                      parent.replaceChild(fallbackDiv, target);
+                                    }
+                                  }}
+                                />
+                                <span>{providerDisplayName}</span>
+                              </div>
+                            </Select2.Option>
+                          );
                         })}
                       </Select2>
                     </Form.Item>
+
+                    {getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => {
+                      if (field.type === "select") {
+                        const embeddingModels = modelInfo
+                          .filter((option: ModelGroup) => option.mode === "embedding")
+                          .map((option: ModelGroup) => ({
+                            value: option.model_group,
+                            label: option.model_group,
+                          }));
+
+                        return (
+                          <Form.Item
+                            key={field.name}
+                            label={
+                              <span>
+                                {field.label}{" "}
+                                <Tooltip title={field.tooltip}>
+                                  <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                                </Tooltip>
+                              </span>
+                            }
+                            name={field.name}
+                            rules={
+                              field.required
+                                ? [{ required: true, message: `Please select the ${field.label.toLowerCase()}` }]
+                                : []
+                            }
+                          >
+                            <Select2
+                              placeholder={field.placeholder}
+                              showSearch={true}
+                              filterOption={(input, option) =>
+                                (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                              }
+                              options={embeddingModels}
+                              onChange={(value) => {
+                                if (field.name === "litellm_embedding_model") {
+                                  detectEmbeddingDimension(value);
+                                }
+                              }}
+                            />
+                          </Form.Item>
+                        );
+                      }
+
+                      return (
+                        <Form.Item
+                          key={field.name}
+                          label={
+                            <span>
+                              {field.label}{" "}
+                              <Tooltip title={field.tooltip}>
+                                <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                              </Tooltip>
+                            </span>
+                          }
+                          name={field.name}
+                          rules={
+                            field.required
+                              ? [{ required: true, message: `Please input the ${field.label.toLowerCase()}` }]
+                              : []
+                          }
+                        >
+                          <Input type={field.type || "text"} placeholder={field.placeholder} />
+                        </Form.Item>
+                      );
+                    })}
+
+                    {detectedEmbeddingDimension !== null && (
+                      <Form.Item label="Detected Embedding Dimension">
+                        <Input
+                          value={detectedEmbeddingDimension}
+                          disabled
+                          placeholder={isDetectingEmbeddingDimension ? "Detecting..." : ""}
+                        />
+                      </Form.Item>
+                    )}
 
                     {/* Credentials */}
                     <div className="mb-4">
@@ -288,18 +447,23 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                         {(() => {
                           const provider = vectorStoreDetails.custom_llm_provider || "bedrock";
                           const { displayName, logo } = (() => {
-                            // Find the enum key by matching provider_map values
-                            const enumKey = Object.keys(provider_map).find(
-                              (key) => provider_map[key].toLowerCase() === provider.toLowerCase(),
+                            // Find the enum key by matching vectorStoreProviderMap values
+                            const enumKey = Object.keys(vectorStoreProviderMap).find(
+                              (key) =>
+                                vectorStoreProviderMap[key].toLowerCase() === provider.toLowerCase(),
                             );
 
                             if (!enumKey) {
                               return { displayName: provider, logo: "" };
                             }
 
-                            // Get the display name from Providers enum and logo from map
-                            const displayName = Providers[enumKey as keyof typeof Providers];
-                            const logo = providerLogoMap[displayName];
+                            // Get the display name from VectorStoreProviders enum and logo from map
+                            const displayName =
+                              VectorStoreProviders[enumKey as keyof typeof VectorStoreProviders];
+                            const logo =
+                              vectorStoreProviderLogoMap[
+                                displayName as keyof typeof vectorStoreProviderLogoMap
+                              ];
 
                             return { displayName, logo };
                           })();
@@ -324,7 +488,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                                   }}
                                 />
                               )}
-                              <Badge color="blue">{displayName}</Badge>
+                              <Badge color="orange">{displayName}</Badge>
                             </>
                           );
                         })()}

@@ -63,19 +63,6 @@ def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
 
 
-
-class SafeAttributeModel:
-    """
-    A base model that provides safe attribute access.
-    """
-    def __delattr__(self, name):
-        try:
-            super().__delattr__(name)
-        except AttributeError:
-            # noop if attribute does not exist
-            pass
-
-
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
@@ -125,13 +112,14 @@ class SearchContextCostPerQuery(TypedDict, total=False):
 class AgenticLoopParams(TypedDict, total=False):
     """
     Parameters passed to agentic loop hooks (e.g., WebSearch interception).
-    
+
     Stored in logging_obj.model_call_details["agentic_loop_params"] to provide
     agentic hooks with the original request context needed for follow-up calls.
     """
+
     model: str
     """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
-    
+
     custom_llm_provider: str
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
@@ -1033,7 +1021,7 @@ def add_provider_specific_fields(
     setattr(object, "provider_specific_fields", provider_specific_fields)
 
 
-class Message(SafeAttributeModel, OpenAIObject):
+class Message(OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
     tool_calls: Optional[List[ChatCompletionMessageToolCall]]
@@ -1153,7 +1141,7 @@ class Message(SafeAttributeModel, OpenAIObject):
             return self.dict()
 
 
-class Delta(SafeAttributeModel, OpenAIObject):
+class Delta(OpenAIObject):
     reasoning_content: Optional[str] = None
     thinking_blocks: Optional[
         List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
@@ -1250,7 +1238,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         setattr(self, key, value)
 
 
-class Choices(SafeAttributeModel, OpenAIObject):
+class Choices(OpenAIObject):
     finish_reason: str
     index: int
     message: Message
@@ -1343,7 +1331,6 @@ class CacheCreationTokenDetails(BaseModel):
 
 
 class PromptTokensDetailsWrapper(
-    SafeAttributeModel,
     PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
     text_tokens: Optional[int] = None
@@ -1391,7 +1378,7 @@ class ServerToolUse(BaseModel):
     tool_search_requests: Optional[int] = None
 
 
-class Usage(SafeAttributeModel, CompletionUsage):
+class Usage(CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
     )  # hidden param for prompt caching. Might change, once openai introduces their equivalent.
@@ -2972,7 +2959,6 @@ GenericBudgetConfigType = Dict[str, BudgetConfig]
 
 class LlmProviders(str, Enum):
     OPENAI = "openai"
-    CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only
     JINA_AI = "jina_ai"
     XAI = "xai"
@@ -3028,6 +3014,7 @@ class LlmProviders(str, Enum):
     MORPH = "morph"
     LAMBDA_AI = "lambda_ai"
     DEEPSEEK = "deepseek"
+    QDRANT = "qdrant"
     SAMBANOVA = "sambanova"
     MARITALK = "maritalk"
     VOYAGE = "voyage"
@@ -3058,6 +3045,7 @@ class LlmProviders(str, Enum):
     ELEVENLABS = "elevenlabs"
     NOVITA = "novita"
     AIOHTTP_OPENAI = "aiohttp_openai"
+    AIHPI_PROVIDER = "aihpi-provider"
     LANGFUSE = "langfuse"
     HUMANLOOP = "humanloop"
     TOPAZ = "topaz"
