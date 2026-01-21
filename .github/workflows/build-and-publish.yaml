@@ -1,0 +1,104 @@
+name: Build and Publish Docker Image
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - aihpi-provider
+      - "dev/**"
+    paths-ignore:
+      - ".github/workflows/**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+      - master
+      - aihpi-provider
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=dev-{{branch}}-{{sha}},enable=${{ github.ref_type == 'branch' && startsWith(github.ref_name, 'dev/') }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          no-cache: true
+          platforms: linux/amd64
+
+      - name: Generate image URL
+        run: |
+          echo "## Docker Image Published" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Image: \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Pull command:" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`bash" >> $GITHUB_STEP_SUMMARY
+          echo "docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+
+  cleanup-dev-images:
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.ref_type == 'branch' && (github.ref_name == 'aihpi-provider' || github.ref_name == 'main' || github.ref_name == 'master')
+    permissions:
+      packages: write
+      contents: read
+    steps:
+      - name: Delete dev images from GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OWNER: ${{ github.repository_owner }}
+          IMAGE: ${{ github.event.repository.name }}
+          OWNER_TYPE: ${{ github.event.repository.owner.type }}
+        run: |
+          if [ "$OWNER_TYPE" = "Organization" ]; then
+            API_ROOT="/orgs/${OWNER}"
+          else
+            API_ROOT="/users/${OWNER}"
+          fi
+
+          gh api -H "Accept: application/vnd.github+json" "${API_ROOT}/packages/container/${IMAGE}/versions" \
+            | jq -r '.[] | select(.metadata.container.tags[]? | startswith("dev-")) | .id' \
+            | xargs -I {} gh api -X DELETE "${API_ROOT}/packages/container/${IMAGE}/versions/{}"
