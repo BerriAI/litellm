@@ -482,16 +482,16 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
     from fastapi.testclient import TestClient
     from litellm.proxy.proxy_server import app
 
-    # Mock the Anthropic CountTokens handler
-    with patch(
-        "litellm.llms.anthropic.count_tokens.handler.AnthropicCountTokensHandler"
-    ) as MockHandler:
-        mock_handler_instance = MagicMock()
-        mock_handler_instance.handle_count_tokens_request = AsyncMock(
-            return_value={"input_tokens": 42}
-        )
-        MockHandler.return_value = mock_handler_instance
+    # Mock the global handler instance in token_counter module
+    mock_handler = MagicMock()
+    mock_handler.handle_count_tokens_request = AsyncMock(
+        return_value={"input_tokens": 42}
+    )
 
+    with patch(
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
+        mock_handler
+    ):
         # Mock router to return Anthropic deployment
         with patch("litellm.proxy.proxy_server.llm_router") as mock_router:
             mock_router.model_list = [
@@ -529,7 +529,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
                 assert data["input_tokens"] == 42
 
                 # Verify that Anthropic handler was called
-                mock_handler_instance.handle_count_tokens_request.assert_called_once()
+                mock_handler.handle_count_tokens_request.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -539,16 +539,16 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
     from fastapi.testclient import TestClient
     from litellm.proxy.proxy_server import app
 
-    # Mock the Anthropic CountTokens handler
-    with patch(
-        "litellm.llms.anthropic.count_tokens.handler.AnthropicCountTokensHandler"
-    ) as MockHandler:
-        mock_handler_instance = MagicMock()
-        mock_handler_instance.handle_count_tokens_request = AsyncMock(
-            return_value={"input_tokens": 42}
-        )
-        MockHandler.return_value = mock_handler_instance
+    # Mock the global handler instance in token_counter module
+    mock_handler = MagicMock()
+    mock_handler.handle_count_tokens_request = AsyncMock(
+        return_value={"input_tokens": 42}
+    )
 
+    with patch(
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
+        mock_handler
+    ):
         # Mock litellm token counter
         with patch("litellm.token_counter") as mock_litellm_counter:
             mock_litellm_counter.return_value = 50
@@ -588,7 +588,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
                 assert data["input_tokens"] == 50
 
                 # Verify that Anthropic handler was NOT called
-                mock_handler_instance.handle_count_tokens_request.assert_not_called()
+                mock_handler.handle_count_tokens_request.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -598,16 +598,16 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
     from fastapi.testclient import TestClient
     from litellm.proxy.proxy_server import app
 
-    # Mock the Anthropic CountTokens handler
-    with patch(
-        "litellm.llms.anthropic.count_tokens.handler.AnthropicCountTokensHandler"
-    ) as MockHandler:
-        mock_handler_instance = MagicMock()
-        mock_handler_instance.handle_count_tokens_request = AsyncMock(
-            return_value={"input_tokens": 42}
-        )
-        MockHandler.return_value = mock_handler_instance
+    # Mock the global handler instance in token_counter module
+    mock_handler = MagicMock()
+    mock_handler.handle_count_tokens_request = AsyncMock(
+        return_value={"input_tokens": 42}
+    )
 
+    with patch(
+        "litellm.llms.anthropic.count_tokens.token_counter.anthropic_count_tokens_handler",
+        mock_handler
+    ):
         # Mock litellm token counter
         with patch("litellm.token_counter") as mock_litellm_counter:
             mock_litellm_counter.return_value = 35
@@ -651,7 +651,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
                 assert data["total_tokens"] == 35
 
                 # Verify that Anthropic handler was NOT called (since call_endpoint=False)
-                mock_handler_instance.handle_count_tokens_request.assert_not_called()
+                mock_handler.handle_count_tokens_request.assert_not_called()
 
 
 @pytest.mark.asyncio
