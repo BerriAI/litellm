@@ -377,6 +377,86 @@ output:
       { role: "user", content: "Enter task specifics. Use {{template_variables}} for dynamic inputs" },
     ]);
   });
+
+  it("should parse tools from frontmatter", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          dotprompt_content: `---
+model: gpt-4
+temperature: 1
+max_tokens: 1000
+input:
+  schema:
+    query: string
+output:
+  format: text
+tools:
+  - {"type":"function","function":{"name":"get_weather","description":"Get the current weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}}}}
+  - {"type":"function","function":{"name":"search","description":"Search the web","parameters":{"type":"object","properties":{"query":{"type":"string"}}}}}
+---
+
+User: Hello`,
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.tools).toHaveLength(2);
+    expect(result.tools[0].name).toBe("get_weather");
+    expect(result.tools[0].description).toBe("Get the current weather");
+    expect(result.tools[1].name).toBe("search");
+    expect(result.tools[1].description).toBe("Search the web");
+  });
+
+  it("should skip tools without function name", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          dotprompt_content: `---
+model: gpt-4
+input:
+  schema:
+output:
+  format: text
+tools:
+  - {"type":"function","function":{"description":"No name tool"}}
+  - {"type":"function","function":{"name":"valid_tool","description":"Valid tool"}}
+---
+
+User: Hello`,
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.tools).toHaveLength(1);
+    expect(result.tools[0].name).toBe("valid_tool");
+  });
+
+  it("should return empty tools array when no tools defined", () => {
+    const apiResponse = {
+      prompt_spec: {
+        litellm_params: {
+          dotprompt_content: `---
+model: gpt-4
+input:
+  schema:
+output:
+  format: text
+---
+
+User: Hello`,
+        },
+        prompt_id: "test-prompt",
+      },
+    };
+
+    const result = parseExistingPrompt(apiResponse);
+    expect(result.tools).toEqual([]);
+  });
 });
 
 describe("getVersionNumber", () => {

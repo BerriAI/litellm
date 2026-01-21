@@ -144,7 +144,34 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
 
   // Parse tools from frontmatter if present
   const tools: Tool[] = [];
-  // TODO: Add tool parsing if needed
+  const toolsMatch = frontmatter.match(/tools:\s*\n((?:\s+-\s+\{.*\}\s*\n?)*)/);
+  if (toolsMatch) {
+    const toolLines = toolsMatch[1].match(/\s+-\s+(\{.*\})/g);
+    if (toolLines) {
+      toolLines.forEach((line: string) => {
+        const jsonMatch = line.match(/\s+-\s+(\{.*\})/);
+        if (jsonMatch) {
+          try {
+            const toolJson = jsonMatch[1];
+            const parsed = JSON.parse(toolJson);
+            const functionName = parsed.function?.name;
+            // Skip tools without a function name (name is mandatory)
+            if (!functionName) {
+              console.warn("Skipping tool without function name:", toolJson);
+              return;
+            }
+            tools.push({
+              name: functionName,
+              description: parsed.function?.description || "",
+              json: toolJson,
+            });
+          } catch (e) {
+            console.error("Failed to parse tool JSON:", e);
+          }
+        }
+      });
+    }
+  }
 
   // Strip version suffix from prompt name for display
   const promptId = apiResponse?.prompt_spec?.prompt_id || "Unnamed Prompt";
