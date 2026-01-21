@@ -89,6 +89,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0  
+        self._cached_reasoning_item_id: Optional[str] = None
+        # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
+        self._pending_response_events: List[BaseLiteLLMOpenAIResponseObject] = []
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
@@ -509,9 +512,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         elif self.sent_response_in_progress_event is False:
             self.sent_response_in_progress_event = True
             return self.create_response_in_progress_event()
-        elif self.sent_content_part_added_event is False:
-            self.sent_content_part_added_event = True
-            return self.create_content_part_added_event()
         return None
 
     def is_stream_finished(self) -> bool:
@@ -558,6 +558,58 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             else:
                 raise StopAsyncIteration
 
+    def _ensure_output_item_for_chunk(self, chunk: ModelResponseStream) -> None:
+        # Change: Never return a value, just enqueue output item events
+        if self.sent_output_item_added_event:
+            return
+        print("first chunk=", chunk)
+        delta = chunk.choices[0].delta
+
+        self._sequence_number += 1
+        self.sent_output_item_added_event = True
+
+        # Reasoning-first
+        if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+            if self._cached_reasoning_item_id is None:
+                self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+
+            event = OutputItemAddedEvent(
+                type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+                output_index=0,
+                item=BaseLiteLLMOpenAIResponseObject(
+                    id=self._cached_reasoning_item_id,
+                    type="reasoning",
+                    status="in_progress",
+                    summary=None,
+                ),
+                sequence_number=self._sequence_number,
+            )
+            self._pending_response_events.append(event)
+            return
+
+        # Tool-first
+        if hasattr(delta, "tool_calls") and delta.tool_calls:
+            # Tool calls already handled via _queue_tool_call_delta_events
+            # DO NOT create message item
+            return
+
+        # Default: message
+        self._cached_item_id = self._cached_item_id or f"msg_{uuid.uuid4()}"
+        event = OutputItemAddedEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
+            output_index=0,
+            item=BaseLiteLLMOpenAIResponseObject(
+                id=self._cached_item_id,
+                type="message",
+                role="assistant",
+                status="in_progress",
+                content=[],
+            ),
+            sequence_number=self._sequence_number,
+        )
+        self._pending_response_events.append(event)
+        return
+
     async def __anext__(
         self,
     ) -> Union[
@@ -573,11 +625,19 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 result = self.return_default_initial_events()
                 if result:
                     return result
-                # Get the next chunk from the stream
+                # Emit any pending output_item or other response events before reading a new chunk
+                if self._pending_response_events:
+                    return self._pending_response_events.pop(0)
+                # Emit any pending tool events before reading a new chunk
+                if self._pending_tool_events:
+                    return self._pending_tool_events.pop(0)
+
                 try:
                     chunk = await self.litellm_custom_stream_wrapper.__anext__()
                     if chunk is not None:
                         chunk = cast(ModelResponseStream, chunk)
+                        self._ensure_output_item_for_chunk(chunk)
+                        # Proceed to transformation
                         self.collected_chat_completion_chunks.append(chunk)
                         response_api_chunk = (
                             self._transform_chat_completion_chunk_to_response_api_chunk(
@@ -585,7 +645,11 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             )
                         )
                         if response_api_chunk:
-                            return response_api_chunk
+                            self._pending_response_events.append(response_api_chunk)
+                
+                    if self._pending_response_events:
+                        return self._pending_response_events.pop(0)
+
                 except StopAsyncIteration:
                     return self.common_done_event_logic(sync_mode=False)
 
@@ -608,13 +672,21 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             while True:
                 if self.finished is True:
                     raise StopIteration
-                # Get the next chunk from the stream
-
                 result = self.return_default_initial_events()
                 if result:
                     return result
+                # Emit any pending output_item or other response events before reading a new chunk
+                if self._pending_response_events:
+                    return self._pending_response_events.pop(0)
+                # Emit any pending tool events before reading a new chunk
+                if self._pending_tool_events:
+                    return self._pending_tool_events.pop(0)
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
+                    self._ensure_output_item_for_chunk(chunk)
+                    # Emit any just-queued output_item event
+                    if self._pending_response_events:
+                        return self._pending_response_events.pop(0)
                     self.collected_chat_completion_chunks.append(chunk)
                     response_api_chunk = (
                         self._transform_chat_completion_chunk_to_response_api_chunk(
@@ -623,6 +695,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     )
                     if response_api_chunk:
                         return response_api_chunk
+                    # Otherwise, loop to next chunk
                 except StopIteration:
                     return self.common_done_event_logic(sync_mode=True)
         except Exception as e:
