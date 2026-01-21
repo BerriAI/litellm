@@ -301,6 +301,8 @@ async def aresponses_api_with_mcp(
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers_from_request,
+                litellm_call_id=kwargs.get("litellm_call_id"),
+                litellm_trace_id=kwargs.get("litellm_trace_id"),
             )
 
             if tool_results:
@@ -349,6 +351,7 @@ async def aresponses_api_with_mcp(
                         tool_server_map=tool_server_map,
                         base_iterator=final_response,
                         mcp_events=tool_execution_events,
+                        user_api_key_auth=user_api_key_auth,
                     )
 
                 # Add custom output elements to the final response (for non-streaming)

@@ -298,6 +298,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.custom_llm_provider = self.original_request_params.get(
             "custom_llm_provider", None
         )
+        self.litellm_call_id = self.original_request_params.get("litellm_call_id")
+        self.litellm_trace_id = self.original_request_params.get("litellm_trace_id")
 
         self._extract_mcp_headers_from_params()
 
@@ -568,6 +570,8 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 mcp_server_auth_headers=self.mcp_server_auth_headers,
                 oauth2_headers=self.oauth2_headers,
                 raw_headers=self.raw_headers,
+                litellm_call_id=self.litellm_call_id,
+                litellm_trace_id=self.litellm_trace_id,
             )
 
             # Create completion events and output_item.done events for tool execution
