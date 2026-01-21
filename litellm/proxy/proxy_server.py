@@ -12,6 +12,7 @@ import time
 import traceback
 import warnings
 from datetime import datetime, timedelta
+from urllib.parse import urlparse
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -520,6 +521,11 @@ from fastapi.security.api_key import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
 
 from litellm.types.agents import AgentConfig
+from litellm.proxy.common_utils.logo_utils import (
+    cache_extension_for_logo,
+    infer_logo_content_type,
+    normalize_logo_content_type,
+)
 
 # import enterprise folder
 enterprise_router = APIRouter()
@@ -8871,6 +8877,7 @@ async def login_v2(request: Request):  # noqa: PLR0915
             )
 
 
+
 @app.get("/onboarding/get_token", include_in_schema=False)
 async def onboarding(invite_link: str, request: Request):
     """
@@ -9077,7 +9084,13 @@ def get_logo_url():
 
 @app.get("/get_image", include_in_schema=False)
 def get_image():
-    """Get logo to show on admin UI"""
+    """
+    Get logo to show on admin UI.
+
+    Note: SVG files can contain embedded scripts. This endpoint assumes logos
+    are admin-controlled via UI_LOGO_PATH environment variable.
+    """
+    default_media_type = "image/jpeg"
 
     # get current_dir
     current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -9096,6 +9109,8 @@ def get_image():
         default_logo = default_site_logo
 
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
+    if not logo_path or not logo_path.strip():
+        logo_path = default_logo
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
     # Check if the logo path is an HTTP/HTTPS URL
@@ -9104,20 +9119,46 @@ def get_image():
         client = HTTPHandler()
         response = client.get(logo_path)
         if response.status_code == 200:
+            url_path = urlparse(logo_path).path
+            inferred_media_type, inferred_encoding = infer_logo_content_type(
+                url_path, default_media_type
+            )
+
+            content_type_header = response.headers.get("Content-Type")
+            media_type = (
+                normalize_logo_content_type(content_type_header)
+                if content_type_header
+                else inferred_media_type
+            )
+            if media_type in {"application/octet-stream", "binary/octet-stream"}:
+                media_type = inferred_media_type
+
+            content_encoding_header = response.headers.get("Content-Encoding")
+            content_encoding = content_encoding_header or inferred_encoding
+
+            cache_ext = cache_extension_for_logo(media_type, content_encoding)
+
             # Save the image to a local file
             cache_dir = assets_dir if is_non_root else current_dir
-            cache_path = os.path.join(cache_dir, "cached_logo.jpg")
+            cache_path = os.path.join(cache_dir, f"cached_logo{cache_ext}")
             with open(cache_path, "wb") as f:
                 f.write(response.content)
 
             # Return the cached image as a FileResponse
-            return FileResponse(cache_path, media_type="image/jpeg")
+            headers = (
+                {"Content-Encoding": content_encoding} if content_encoding else None
+            )
+            return FileResponse(cache_path, media_type=media_type, headers=headers)
         else:
             # Handle the case when the image cannot be downloaded
-            return FileResponse(default_logo, media_type="image/jpeg")
+            return FileResponse(default_logo, media_type=default_media_type)
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
-        return FileResponse(logo_path, media_type="image/jpeg")
+        media_type, content_encoding = infer_logo_content_type(
+            logo_path, default_media_type
+        )
+        headers = {"Content-Encoding": content_encoding} if content_encoding else None
+        return FileResponse(logo_path, media_type=media_type, headers=headers)
 
 
 #### INVITATION MANAGEMENT ####
