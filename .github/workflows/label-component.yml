@@ -80,3 +80,37 @@ jobs:
                 break;
               }
             }
+
+            // Check for 'claude code' keyword (can be applied alongside component labels)
+            if (/claude code/i.test(body)) {
+              const claudeLabel = {
+                name: 'claude code',
+                color: '7c3aed',
+                description: 'Issues related to Claude Code usage'
+              };
+
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: claudeLabel.name
+                });
+              } catch (error) {
+                if (error.status === 404) {
+                  await github.rest.issues.createLabel({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    name: claudeLabel.name,
+                    color: claudeLabel.color,
+                    description: claudeLabel.description
+                  });
+                }
+              }
+
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                labels: [claudeLabel.name]
+              });
+            }

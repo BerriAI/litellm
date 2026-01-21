@@ -982,6 +982,8 @@ OTEL_ENDPOINT="http:/0.0.0.0:4317"
 OTEL_HEADERS="x-honeycomb-team=<your-api-key>" # Optional
 ```
 
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+
 Add `otel` as a callback on your `litellm_config.yaml`
 
 ```shell
@@ -1826,6 +1828,64 @@ This approach allows you to:
 - Centrally manage callback files across multiple proxy instances
 - Share callbacks across different environments
 - Version control callback files in cloud storage
+
+#### Step 2c - Mounting Custom Callbacks in Helm/Kubernetes (Alternative)
+
+When deploying with Helm or Kubernetes, you can mount custom callback Python files alongside your `config.yaml` using `subPath` to avoid overwriting the config directory.
+
+**The Problem:**
+Mounting a volume to a directory (e.g., `/app/`) would normally hide all existing files in that directory, including your `config.yaml`.
+
+**The Solution:**
+Use `subPath` in your `volumeMounts` to mount individual files without overwriting the entire directory.
+
+**Example - Helm values.yaml:**
+
+```yaml
+# values.yaml
+volumes:
+  - name: callback-files
+    configMap:
+      name: litellm-callback-files
+
+volumeMounts:
+  - name: callback-files
+    mountPath: /app/custom_callbacks.py  # Mount to specific FILE path
+    subPath: custom_callbacks.py         # Required to avoid overwriting directory
+```
+
+**Create the ConfigMap with your callback file:**
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-callback-files
+data:
+  custom_callbacks.py: |
+    from litellm.integrations.custom_logger import CustomLogger
+    
+    class MyCustomHandler(CustomLogger):
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            print(f"Success! Model: {kwargs.get('model')}")
+    
+    proxy_handler_instance = MyCustomHandler()
+```
+
+**Reference in your config.yaml:**
+
+```yaml
+litellm_settings:
+  callbacks: custom_callbacks.proxy_handler_instance
+```
+
+**How it works:**
+1. The `subPath` parameter tells Kubernetes to mount only the specific file
+2. This places `custom_callbacks.py` in `/app/` alongside your existing `config.yaml`
+3. LiteLLM automatically finds the callback file in the same directory as the config
+4. No files are overwritten or hidden
+
+**Note:** You can mount multiple callback files by adding more `volumeMounts` entries, each with its own `subPath`.
 
 #### Step 3 - Start proxy + test request
 

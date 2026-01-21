@@ -374,6 +374,29 @@ class BedrockLLM(BaseAWSLLM):
     def __init__(self) -> None:
         super().__init__()
 
+    @staticmethod
+    def is_claude_messages_api_model(model: str) -> bool:
+        """
+        Check if the model uses the Claude Messages API (Claude 3+).
+
+        Handles:
+        - Regional prefixes: eu.anthropic.claude-*, us.anthropic.claude-*
+        - Claude 3 models: claude-3-haiku, claude-3-sonnet, claude-3-opus, claude-3-5-*, claude-3-7-*
+        - Claude 4 models: claude-opus-4, claude-sonnet-4, claude-haiku-4
+        """
+        # Normalize model string to lowercase for matching
+        model_lower = model.lower()
+
+        # Claude 3+ indicators (all use Messages API)
+        messages_api_indicators = [
+            "claude-3",      # Claude 3.x models
+            "claude-opus-4", # Claude Opus 4
+            "claude-sonnet-4", # Claude Sonnet 4
+            "claude-haiku-4",  # Claude Haiku 4
+        ]
+
+        return any(indicator in model_lower for indicator in messages_api_indicators)
+
     def convert_messages_to_prompt(
         self, model, messages, provider, custom_prompt_dict
     ) -> Tuple[str, Optional[list]]:
@@ -465,7 +488,7 @@ class BedrockLLM(BaseAWSLLM):
                         completion_response["generations"][0]["finish_reason"]
                     )
             elif provider == "anthropic":
-                if model.startswith("anthropic.claude-3"):
+                if self.is_claude_messages_api_model(model):
                     json_schemas: dict = {}
                     _is_function_call = False
                     ## Handle Tool Calling
@@ -595,13 +618,12 @@ class BedrockLLM(BaseAWSLLM):
                         outputText = choice["message"].get("content")
                     elif "text" in choice:  # fallback for completion format
                         outputText = choice["text"]
-                    
                     # Set finish reason
                     if "finish_reason" in choice:
                         model_response.choices[0].finish_reason = map_finish_reason(
                             choice["finish_reason"]
                         )
-                    
+
                     # Set usage if available
                     if "usage" in completion_response:
                         usage = completion_response["usage"]
@@ -729,8 +751,6 @@ class BedrockLLM(BaseAWSLLM):
         client: Optional[Union[AsyncHTTPHandler, HTTPHandler]] = None,
     ) -> Union[ModelResponse, CustomStreamWrapper]:
         try:
-            from botocore.auth import SigV4Auth
-            from botocore.awsrequest import AWSRequest
             from botocore.credentials import Credentials
         except ImportError:
             raise ImportError("Missing boto3 to call bedrock. Run 'pip install boto3'.")
@@ -808,8 +828,6 @@ class BedrockLLM(BaseAWSLLM):
             endpoint_url = f"{endpoint_url}/model/{modelId}/invoke"
             proxy_endpoint_url = f"{proxy_endpoint_url}/model/{modelId}/invoke"
 
-        sigv4 = SigV4Auth(credentials, "bedrock", aws_region_name)
-
         prompt, chat_history = self.convert_messages_to_prompt(
             model, messages, provider, custom_prompt_dict
         )
@@ -842,7 +860,7 @@ class BedrockLLM(BaseAWSLLM):
                     ] = True  # cohere requires stream = True in inference params
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
-            if model.startswith("anthropic.claude-3"):
+            if self.is_claude_messages_api_model(model):
                 # Separate system prompt from rest of message
                 system_prompt_idx: list[int] = []
                 system_messages: list[str] = []
@@ -940,13 +958,13 @@ class BedrockLLM(BaseAWSLLM):
             # Use AmazonBedrockOpenAIConfig for proper OpenAI transformation
             openai_config = AmazonBedrockOpenAIConfig()
             supported_params = openai_config.get_supported_openai_params(model=model)
-            
+
             # Filter to only supported OpenAI params
             filtered_params = {
-                k: v for k, v in inference_params.items() 
+                k: v for k, v in inference_params.items()
                 if k in supported_params
             }
-            
+
             # OpenAI uses messages format, not prompt
             data = json.dumps({"messages": messages, **filtered_params})
         else:
@@ -970,15 +988,14 @@ class BedrockLLM(BaseAWSLLM):
         headers = {"Content-Type": "application/json"}
         if extra_headers is not None:
             headers = {"Content-Type": "application/json", **extra_headers}
-        request = AWSRequest(
-            method="POST", url=endpoint_url, data=data, headers=headers
+        prepped = self.get_request_headers(
+            credentials=credentials,
+            aws_region_name=aws_region_name,
+            extra_headers=extra_headers,
+            endpoint_url=endpoint_url,
+            data=data,
+            headers=headers,
         )
-        sigv4.add_auth(request)
-        if (
-            extra_headers is not None and "Authorization" in extra_headers
-        ):  # prevent sigv4 from overwriting the auth header
-            request.headers["Authorization"] = extra_headers["Authorization"]
-        prepped = request.prepare()
 
         ## LOGGING
         logging_obj.pre_call(

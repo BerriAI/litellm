@@ -14,6 +14,17 @@ import TabItem from '@theme/TabItem';
 | Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models), [`/rerank`](#rerank-api) |
 
+:::tip Vertex AI vs Gemini API
+| Model Format | Provider | Auth Required |
+|-------------|----------|---------------|
+| `vertex_ai/gemini-2.0-flash` | Vertex AI | GCP credentials + project |
+| `gemini-2.0-flash` (no prefix) | Vertex AI | GCP credentials + project |
+| `gemini/gemini-2.0-flash` | Gemini API | `GEMINI_API_KEY` (simple API key) |
+
+**If you just want to use an API key** (like OpenAI), use the `gemini/` prefix instead. See [Gemini - Google AI Studio](./gemini.md).
+
+Models without a prefix default to Vertex AI which requires GCP authentication.
+:::
 
 <br />
 <br />
@@ -1389,6 +1400,77 @@ model_list:
 
 
 
+
+### **Workload Identity Federation**
+
+LiteLLM supports [Google Cloud Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation), which allows you to grant on-premises or multi-cloud workloads access to Google Cloud resources without using a service account key. This is the recommended approach for workloads running in other cloud environments (AWS, Azure, etc.) or on-premises.
+
+To use Workload Identity Federation, pass the path to your WIF credentials configuration file via `vertex_credentials`:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-1.5-pro",
+    messages=[{"role": "user", "content": "Hello!"}],
+    vertex_credentials="/path/to/wif-credentials.json",  # 👈 WIF credentials file
+    vertex_project="your-gcp-project-id",
+    vertex_location="us-central1"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gemini-model
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+      vertex_credentials: /path/to/wif-credentials.json  # 👈 WIF credentials file
+```
+
+Alternatively, you can create credentials in **LLM Credentials** in the LiteLLM UI and use those to authenticate your models:
+
+```yaml
+model_list:
+  - model_name: gemini-model
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+      litellm_credential_name: my-vertex-wif-credential  # 👈 Reference credential stored in UI
+```
+
+</TabItem>
+</Tabs>
+
+**WIF Credentials File Format**
+
+Your WIF credentials JSON file typically looks like this (for AWS federation):
+
+```json
+{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+  "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:generateAccessToken",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": {
+    "environment_id": "aws1",
+    "region_url": "http://169.254.169.254/latest/meta-data/placement/availability-zone",
+    "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials",
+    "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+  }
+}
+```
+
+For more details on setting up Workload Identity Federation, see [Google Cloud WIF documentation](https://cloud.google.com/iam/docs/workload-identity-federation).
 
 ### **Environment Variables**
 

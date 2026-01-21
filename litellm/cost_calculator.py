@@ -952,7 +952,8 @@ def completion_cost(  # noqa: PLR0915
         )
 
         potential_model_names = [selected_model, _get_response_model(completion_response)]
-
+        if model is not None:
+            potential_model_names.append(model)
 
         for idx, model in enumerate(potential_model_names):
             try:

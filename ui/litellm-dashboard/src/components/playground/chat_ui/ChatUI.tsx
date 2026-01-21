@@ -10,6 +10,7 @@ import {
   FilePdfOutlined,
   InfoCircleOutlined,
   KeyOutlined,
+  LinkOutlined,
   LoadingOutlined,
   PictureOutlined,
   RobotOutlined,
@@ -29,34 +30,33 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { v4 as uuidv4 } from "uuid";
 import { truncateString } from "../../../utils/textUtils";
 import GuardrailSelector from "../../guardrails/GuardrailSelector";
+import { MCPServer } from "../../mcp_tools/types";
 import NotificationsManager from "../../molecules/notifications_manager";
+import { fetchMCPServers, listMCPTools } from "../../networking";
 import TagSelector from "../../tag_management/TagSelector";
 import VectorStoreSelector from "../../vector_store_management/VectorStoreSelector";
+import { makeA2ASendMessageRequest } from "../llm_calls/a2a_send_message";
+import { makeAnthropicMessagesRequest } from "../llm_calls/anthropic_messages";
+import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
+import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
+import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
+import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
+import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
+import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
+import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
+import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
+import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
+import A2AMetrics from "./A2AMetrics";
 import AdditionalModelSettings from "./AdditionalModelSettings";
 import AudioRenderer from "./AudioRenderer";
 import { OPEN_AI_VOICE_SELECT_OPTIONS, OpenAIVoice } from "./chatConstants";
 import ChatImageRenderer from "./ChatImageRenderer";
 import ChatImageUpload from "./ChatImageUpload";
 import { createChatDisplayMessage, createChatMultimodalMessage } from "./ChatImageUtils";
+import CodeInterpreterOutput from "./CodeInterpreterOutput";
+import CodeInterpreterTool from "./CodeInterpreterTool";
 import { generateCodeSnippet } from "./CodeSnippets";
 import EndpointSelector from "./EndpointSelector";
-import { makeAnthropicMessagesRequest } from "../llm_calls/anthropic_messages";
-import { makeOpenAIAudioSpeechRequest } from "../llm_calls/audio_speech";
-import { makeOpenAIAudioTranscriptionRequest } from "../llm_calls/audio_transcriptions";
-import { makeOpenAIChatCompletionRequest } from "../llm_calls/chat_completion";
-import { makeOpenAIEmbeddingsRequest } from "../llm_calls/embeddings_api";
-import { listMCPTools, fetchMCPServers } from "../../networking";
-import { MCPServer } from "../../mcp_tools/types";
-import { fetchAvailableModels, ModelGroup } from "../llm_calls/fetch_models";
-import { makeOpenAIImageEditsRequest } from "../llm_calls/image_edits";
-import { makeOpenAIImageGenerationRequest } from "../llm_calls/image_generation";
-import { makeOpenAIResponsesRequest } from "../llm_calls/responses_api";
-import CodeInterpreterOutput from "./CodeInterpreterOutput";
-import { useCodeInterpreter } from "./useCodeInterpreter";
-import { Agent, fetchAvailableAgents } from "../llm_calls/fetch_agents";
-import { makeA2AStreamMessageRequest, makeA2ASendMessageRequest } from "../llm_calls/a2a_send_message";
-import A2AMetrics from "./A2AMetrics";
-import { A2ATaskMetadata } from "./types";
 import MCPEventsDisplay, { MCPEvent } from "./MCPEventsDisplay";
 import { EndpointType, getEndpointType } from "./mode_endpoint_mapping";
 import ReasoningContent from "./ReasoningContent";
@@ -66,8 +66,8 @@ import ResponsesImageUpload from "./ResponsesImageUpload";
 import { createDisplayMessage, createMultimodalMessage } from "./ResponsesImageUtils";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
 import SessionManagement from "./SessionManagement";
-import { MessageType } from "./types";
-import CodeInterpreterTool from "./CodeInterpreterTool";
+import { A2ATaskMetadata, MessageType } from "./types";
+import { useCodeInterpreter } from "./useCodeInterpreter";
 
 const { TextArea } = Input;
 const { Dragger } = Upload;
@@ -1173,9 +1173,23 @@ const ChatUI: React.FC<ChatUIProps> = ({
 
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <Text className="font-medium text-gray-700 flex items-center">
+                  <Text className="font-medium block text-gray-700 flex items-center">
                     <SettingOutlined className="mr-2" /> Custom Proxy Base URL
                   </Text>
+                  {proxySettings?.LITELLM_UI_API_DOC_BASE_URL && !customProxyBaseUrl && (
+                    <Button
+                      type="link"
+                      size="small"
+                      icon={<LinkOutlined />}
+                      onClick={() => {
+                        setCustomProxyBaseUrl(proxySettings.LITELLM_UI_API_DOC_BASE_URL || "");
+                        sessionStorage.setItem("customProxyBaseUrl", proxySettings.LITELLM_UI_API_DOC_BASE_URL || "");
+                      }}
+                      className="text-gray-500 hover:text-gray-700"
+                    >
+                      Fill
+                    </Button>
+                  )}
                   {customProxyBaseUrl && (
                     <Button
                       type="link"
@@ -1220,7 +1234,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     try {
                       sessionStorage.removeItem("selectedModel");
                       sessionStorage.removeItem("selectedAgent");
-                    } catch {}
+                    } catch { }
                   }}
                   className="mb-4"
                 />
@@ -1576,7 +1590,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     enabled={codeInterpreter.enabled}
                     onEnabledChange={codeInterpreter.setEnabled}
                     selectedContainerId={null}
-                    onContainerChange={() => {}}
+                    onContainerChange={() => { }}
                     selectedModel={selectedModel || ""}
                   />
                 </div>
@@ -2072,11 +2086,10 @@ const ChatUI: React.FC<ChatUIProps> = ({
                         }
                       >
                         <button
-                          className={`p-1.5 rounded-md transition-colors ${
-                            codeInterpreter.enabled
-                              ? "bg-blue-100 text-blue-600"
-                              : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-                          }`}
+                          className={`p-1.5 rounded-md transition-colors ${codeInterpreter.enabled
+                            ? "bg-blue-100 text-blue-600"
+                            : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                            }`}
                           onClick={() => {
                             codeInterpreter.toggle();
                             if (!codeInterpreter.enabled) {
@@ -2097,9 +2110,9 @@ const ChatUI: React.FC<ChatUIProps> = ({
                     onKeyDown={handleKeyDown}
                     placeholder={
                       endpointType === EndpointType.CHAT ||
-                      endpointType === EndpointType.EMBEDDINGS ||
-                      endpointType === EndpointType.RESPONSES ||
-                      endpointType === EndpointType.ANTHROPIC_MESSAGES
+                        endpointType === EndpointType.EMBEDDINGS ||
+                        endpointType === EndpointType.RESPONSES ||
+                        endpointType === EndpointType.ANTHROPIC_MESSAGES
                         ? "Type your message... (Shift+Enter for new line)"
                         : endpointType === EndpointType.A2A_AGENTS
                           ? "Send a message to the A2A agent..."

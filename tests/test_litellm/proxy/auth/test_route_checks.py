@@ -371,6 +371,9 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
     with patch(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
         mock_registered_routes,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+        return_value="/",
     ):
         # Create a virtual key with llm_api_routes permission
         valid_token = UserAPIKeyAuth(
@@ -417,6 +420,9 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
     with patch(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
         mock_registered_routes,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+        return_value="/",
     ):
         # Create a virtual key without llm_api_routes permission
         valid_token = UserAPIKeyAuth(
@@ -729,6 +735,25 @@ def test_videos_route_is_llm_api_route(route):
     """Test that video routes are recognized as LLM API routes"""
 
     # Test that all video routes are recognized as LLM API routes
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/containers",
+        "/v1/containers",
+        "/containers/container_123",
+        "/v1/containers/container_123",
+        "/containers/container_123/files",
+        "/v1/containers/container_123/files",
+        "/containers/container_123/files/file_456",
+        "/v1/containers/container_123/files/file_456",
+    ],
+)
+def test_containers_routes_are_llm_api_routes(route):
+    """Test that container routes are recognized as LLM API routes"""
+
     assert RouteChecks.is_llm_api_route(route) is True
 
 
