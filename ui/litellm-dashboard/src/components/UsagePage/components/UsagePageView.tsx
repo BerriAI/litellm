@@ -47,6 +47,7 @@ import AdvancedDatePicker from "../../shared/advanced_date_picker";
 import { ChartLoader } from "../../shared/chart_loader";
 import { Tag } from "../../tag_management/types";
 import UserAgentActivity from "../../user_agent_activity";
+import UserUsage from "./UserUsage/UserUsage";
 import ViewUserSpend from "../../view_user_spend";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "../types";
 import { valueFormatterSpend } from "../utils/value_formatters";
@@ -886,6 +887,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {usageView === "user-agent-activity" && (
             <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
           )}
+          {/* User Usage Panel */}
+          {usageView === "user-usage" && <UserUsage accessToken={accessToken} dateValue={dateValue} />}
         </div>
       </div>
 

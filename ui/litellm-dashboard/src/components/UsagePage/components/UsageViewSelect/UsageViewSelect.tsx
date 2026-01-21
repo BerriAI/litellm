@@ -7,10 +7,11 @@ import {
   ShoppingCartOutlined,
   TagsOutlined,
   TeamOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
 import { Badge, Select } from "antd";
 import React from "react";
-export type UsageOption = "global" | "organization" | "team" | "customer" | "tag" | "agent" | "user-agent-activity";
+export type UsageOption = "global" | "organization" | "team" | "customer" | "tag" | "agent" | "user-agent-activity" | "user-usage";
 export interface UsageViewSelectProps {
   value: UsageOption;
   onChange: (value: UsageOption) => void;
@@ -84,6 +85,13 @@ const OPTIONS: OptionConfig[] = [
     label: "User Agent Activity",
     description: "View detailed user agent activity logs",
     icon: <LineChartOutlined style={{ fontSize: "16px" }} />,
+    adminOnly: true,
+  },
+  {
+    value: "user-usage",
+    label: "User Usage",
+    description: "View usage metrics per user with filtering",
+    icon: <UserOutlined style={{ fontSize: "16px" }} />,
     adminOnly: true,
   },
 ];
