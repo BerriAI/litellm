@@ -312,6 +312,58 @@ class AWSSecretsManagerV2(BaseAWSLLM, BaseSecretManager):
         except httpx.TimeoutException:
             raise ValueError("Timeout error occurred")
 
+    async def async_update_secret_value(
+        self,
+        secret_name: str,
+        secret_value: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Async function to update an existing secret's value in AWS Secrets Manager
+        using PutSecretValue API.
+
+        Args:
+            secret_name: Name of the secret to update
+            secret_value: New value for the secret
+            optional_params: Additional AWS parameters
+            timeout: Request timeout
+
+        Returns:
+            dict: Response from AWS Secrets Manager containing update details
+        """
+        from litellm._uuid import uuid
+
+        data: Dict[str, Any] = {
+            "SecretId": secret_name,
+            "SecretString": secret_value,
+            "ClientRequestToken": str(uuid.uuid4()),
+        }
+
+        endpoint_url, headers, body = self._prepare_request(
+            action="PutSecretValue",
+            secret_name=secret_name,
+            secret_value=secret_value,
+            optional_params=optional_params,
+            request_data=data,
+        )
+
+        async_client = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.SecretManager,
+            params={"timeout": timeout},
+        )
+
+        try:
+            response = await async_client.post(
+                url=endpoint_url, headers=headers, data=body.decode("utf-8")
+            )
+            response.raise_for_status()
+            return response.json()
+        except httpx.HTTPStatusError as err:
+            raise ValueError(f"HTTP error occurred: {err.response.text}")
+        except httpx.TimeoutException:
+            raise ValueError("Timeout error occurred")
+
     async def async_delete_secret(
         self,
         secret_name: str,

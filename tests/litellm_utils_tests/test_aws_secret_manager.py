@@ -402,6 +402,109 @@ def test_load_aws_secret_manager_with_settings():
 
 
 @pytest.mark.asyncio
+async def test_update_secret_value():
+    """Test updating an existing secret's value using PutSecretValue"""
+    check_aws_credentials()
+
+    secret_manager = AWSSecretsManagerV2()
+    test_secret_name = f"litellm_test_{uuid.uuid4().hex[:8]}_update"
+    initial_value = "initial_value"
+    updated_value = "updated_value"
+
+    try:
+        # Create initial secret
+        write_response = await secret_manager.async_write_secret(
+            secret_name=test_secret_name,
+            secret_value=initial_value,
+            description="LiteLLM Test Secret for Update",
+        )
+
+        print("Initial Write Response:", write_response)
+        assert write_response is not None
+        assert "ARN" in write_response
+
+        # Verify initial value
+        read_value = await secret_manager.async_read_secret(
+            secret_name=test_secret_name
+        )
+        assert read_value == initial_value
+
+        # Update the secret value
+        update_response = await secret_manager.async_update_secret_value(
+            secret_name=test_secret_name,
+            secret_value=updated_value,
+        )
+
+        print("Update Response:", update_response)
+        assert update_response is not None
+        assert "ARN" in update_response
+
+        # Verify updated value
+        read_value = await secret_manager.async_read_secret(
+            secret_name=test_secret_name
+        )
+        assert read_value == updated_value
+    finally:
+        # Cleanup: Delete the secret
+        delete_response = await secret_manager.async_delete_secret(
+            secret_name=test_secret_name
+        )
+        print("Delete Response:", delete_response)
+        assert delete_response is not None
+
+
+@pytest.mark.asyncio
+async def test_rotate_secret_same_name():
+    """Test rotating a secret while keeping the same name (uses PutSecretValue)"""
+    check_aws_credentials()
+
+    secret_manager = AWSSecretsManagerV2()
+    test_secret_name = f"litellm_test_{uuid.uuid4().hex[:8]}_rotate"
+    initial_value = "initial_key_value"
+    rotated_value = "rotated_key_value"
+
+    try:
+        # Create initial secret
+        write_response = await secret_manager.async_write_secret(
+            secret_name=test_secret_name,
+            secret_value=initial_value,
+            description="LiteLLM Test Secret for Rotation",
+        )
+
+        print("Initial Write Response:", write_response)
+        assert write_response is not None
+
+        # Verify initial value
+        read_value = await secret_manager.async_read_secret(
+            secret_name=test_secret_name
+        )
+        assert read_value == initial_value
+
+        # Rotate the secret (same name)
+        rotate_response = await secret_manager.async_rotate_secret(
+            current_secret_name=test_secret_name,
+            new_secret_name=test_secret_name,  # Same name
+            new_secret_value=rotated_value,
+        )
+
+        print("Rotate Response:", rotate_response)
+        assert rotate_response is not None
+
+        # Verify rotated value
+        read_value = await secret_manager.async_read_secret(
+            secret_name=test_secret_name
+        )
+        assert read_value == rotated_value
+    finally:
+        # Cleanup: Delete the secret
+        delete_response = await secret_manager.async_delete_secret(
+            secret_name=test_secret_name
+        )
+        print("Delete Response:", delete_response)
+        assert delete_response is not None
+
+
+@pytest.mark.asyncio
 async def test_end_to_end_iam_role_secret_write():
     """
     Test writing a secret using IAM role assumption (integration test)

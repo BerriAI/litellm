@@ -109,18 +109,19 @@ class BaseSecretManager(ABC):
         timeout: Optional[Union[float, httpx.Timeout]] = None,
     ) -> dict:
         """
-        Async function to rotate a secret by creating a new one and deleting the old one.
-        This allows for both value and name changes during rotation.
+        Async function to rotate a secret. If the secret name stays the same,
+        updates the existing secret's value. If the name changes, creates a new
+        secret and deletes the old one.
 
         Args:
             current_secret_name: Current name of the secret
             new_secret_name: New name for the secret
             new_secret_value: New value for the secret
-            optional_params: Additional AWS parameters
+            optional_params: Additional parameters specific to the secret manager
             timeout: Request timeout
 
         Returns:
-            dict: Response containing the new secret details
+            dict: Response containing the secret details
 
         Raises:
             ValueError: If the secret doesn't exist or if there's an HTTP error
@@ -136,7 +137,17 @@ class BaseSecretManager(ABC):
             if old_secret is None:
                 raise ValueError(f"Current secret {current_secret_name} not found")
 
-            # Create new secret with new name and value
+            # If secret name stays the same, update the existing secret's value
+            if current_secret_name == new_secret_name:
+                update_response = await self.async_update_secret_value(
+                    secret_name=current_secret_name,
+                    secret_value=new_secret_value,
+                    optional_params=optional_params,
+                    timeout=timeout,
+                )
+                return update_response
+
+            # Secret name is changing - create new secret and delete old one
             create_response = await self.async_write_secret(
                 secret_name=new_secret_name,
                 secret_value=new_secret_value,
@@ -167,7 +178,7 @@ class BaseSecretManager(ABC):
 
         except httpx.HTTPStatusError as err:
             verbose_logger.exception(
-                "Error rotating secret in AWS Secrets Manager: %s",
+                "Error rotating secret in secret manager: %s",
                 str(err.response.text),
             )
             raise ValueError(f"HTTP error occurred: {err.response.text}")
@@ -175,6 +186,30 @@ class BaseSecretManager(ABC):
             raise ValueError("Timeout error occurred")
         except Exception as e:
             verbose_logger.exception(
-                "Error rotating secret in AWS Secrets Manager: %s", str(e)
+                "Error rotating secret in secret manager: %s", str(e)
             )
             raise
+
+    async def async_update_secret_value(
+        self,
+        secret_name: str,
+        secret_value: str,
+        optional_params: Optional[dict] = None,
+        timeout: Optional[Union[float, httpx.Timeout]] = None,
+    ) -> dict:
+        """
+        Async function to update an existing secret's value.
+        Subclasses should override this method if they support updating secrets.
+
+        Args:
+            secret_name: Name of the secret to update
+            secret_value: New value for the secret
+            optional_params: Additional parameters specific to the secret manager
+            timeout: Request timeout
+
+        Returns:
+            dict: Response from the secret manager containing update details
+        """
+        raise NotImplementedError(
+            "async_update_secret_value must be implemented by subclasses that support secret updates"
+        )
