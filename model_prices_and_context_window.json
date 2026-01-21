@@ -16732,14 +16732,14 @@
         "supports_vision": true
     },
     "gpt-4o-audio-preview": {
-        "input_cost_per_audio_token": 0.0001,
+        "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_audio_token": 0.0002,
+        "output_cost_per_audio_token": 8e-05,
         "output_cost_per_token": 1e-05,
         "supports_audio_input": true,
         "supports_audio_output": true,
@@ -16749,14 +16749,14 @@
         "supports_tool_choice": true
     },
     "gpt-4o-audio-preview-2024-10-01": {
-        "input_cost_per_audio_token": 0.0001,
+        "input_cost_per_audio_token": 4e-05,
         "input_cost_per_token": 2.5e-06,
         "litellm_provider": "openai",
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
         "mode": "chat",
-        "output_cost_per_audio_token": 0.0002,
+        "output_cost_per_audio_token": 8e-05,
         "output_cost_per_token": 1e-05,
         "supports_audio_input": true,
         "supports_audio_output": true,
