@@ -139,6 +139,33 @@ export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-5-20251101
 claude
 ```
 
+### Using 1M Context Window
+
+Claude Code supports extended context (1 million tokens) using the `[1m]` suffix:
+
+```bash
+# Use Sonnet with 1M context (requires quotes in shell)
+claude --model 'claude-sonnet-4-5-20250929[1m]'
+
+# Inside a Claude Code session (no quotes needed)
+/model claude-sonnet-4-5-20250929[1m]
+```
+
+:::warning
+**Important:** When using `--model` with `[1m]` in the shell, you must use quotes to prevent the shell from interpreting the brackets.
+:::
+
+**How it works:**
+- Claude Code strips the `[1m]` suffix before sending to LiteLLM
+- Claude Code automatically adds the header `anthropic-beta: context-1m-2025-08-07`
+- Your LiteLLM config should **NOT** include `[1m]` in model names
+
+**Verify 1M context is active:**
+```bash
+/context
+# Should show: 21k/1000k tokens (2%)
+```
+
 Example conversation:
 
 ## Troubleshooting
