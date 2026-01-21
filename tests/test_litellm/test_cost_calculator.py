@@ -803,6 +803,79 @@ def test_gemini_25_explicit_caching_cost_direct_usage():
     assert expected_actual_cost == total_cost
 
 
+def test_azure_ai_cache_cost_calculation():
+    """
+    Test that azure_ai provider correctly calculates cache costs using generic_cost_per_token.
+
+    This verifies that azure_ai models with custom cache pricing in model_info
+    will have their cache_creation_input_token_cost and cache_read_input_token_cost
+    applied correctly.
+    """
+    from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
+    from litellm.types.utils import (
+        PromptTokensDetailsWrapper,
+        Usage,
+    )
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Register a custom azure_ai model with cache pricing
+    test_model_id = "test-azure-ai-claude-model"
+    litellm.register_model(
+        model_cost={
+            test_model_id: {
+                "input_cost_per_token": 5.0e-06,
+                "output_cost_per_token": 2.5e-05,
+                "cache_creation_input_token_cost": 6.25e-06,
+                "cache_read_input_token_cost": 5.0e-07,
+                "litellm_provider": "azure_ai",
+                "max_tokens": 200000,
+            }
+        }
+    )
+
+    # Create usage with cache tokens
+    usage = Usage(
+        completion_tokens=100,
+        prompt_tokens=1000,
+        total_tokens=1100,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cached_tokens=800,  # 800 cache read tokens
+            text_tokens=100,  # 100 regular text tokens
+        ),
+        cache_creation_input_tokens=100,  # 100 cache creation tokens
+    )
+
+    input_cost, output_cost = generic_cost_per_token(
+        model=test_model_id,
+        usage=usage,
+        custom_llm_provider="azure_ai",
+    )
+
+    total_cost = input_cost + output_cost
+
+    # Calculate expected cost manually
+    model_info = litellm.model_cost[test_model_id]
+    expected_input_cost = (
+        model_info["input_cost_per_token"] * 100  # text tokens
+        + model_info["cache_read_input_token_cost"] * 800  # cached tokens
+        + model_info["cache_creation_input_token_cost"] * 100  # cache creation tokens
+    )
+    expected_output_cost = model_info["output_cost_per_token"] * 100
+
+    print(f"Input cost: {input_cost}, Expected: {expected_input_cost}")
+    print(f"Output cost: {output_cost}, Expected: {expected_output_cost}")
+    print(f"Total cost: {total_cost}")
+
+    assert abs(input_cost - expected_input_cost) < 1e-10, (
+        f"Input cost mismatch: got {input_cost}, expected {expected_input_cost}"
+    )
+    assert abs(output_cost - expected_output_cost) < 1e-10, (
+        f"Output cost mismatch: got {output_cost}, expected {expected_output_cost}"
+    )
+
+
 def test_cost_discount_vertex_ai():
     """
     Test that cost discount is applied correctly for Vertex AI provider
