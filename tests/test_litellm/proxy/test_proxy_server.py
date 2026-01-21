@@ -3216,3 +3216,412 @@ async def test_get_hierarchical_router_settings():
         prisma_client=mock_prisma_client,
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_pagination_basic(monkeypatch):
+    """
+    Test basic pagination functionality for /v2/model/info endpoint.
+    Tests multiple pages with different page sizes.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Create 75 mock models for testing pagination
+    mock_models = [
+        {
+            "model_name": f"model-{i}",
+            "litellm_params": {"model": f"gpt-{i}"},
+            "model_info": {"id": f"model-{i}"},
+        }
+        for i in range(1, 76)  # 75 models total
+    ]
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.model_list = mock_models
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test page 1 with size 25 (should return models 1-25)
+        response = client.get("/v2/model/info", params={"page": 1, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 1
+        assert data["size"] == 25
+        assert data["total_pages"] == 3  # ceil(75/25) = 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-1"
+        assert data["data"][24]["model_name"] == "model-25"
+
+        # Test page 2 with size 25 (should return models 26-50)
+        response = client.get("/v2/model/info", params={"page": 2, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 2
+        assert data["size"] == 25
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-26"
+        assert data["data"][24]["model_name"] == "model-50"
+
+        # Test page 3 with size 25 (should return models 51-75)
+        response = client.get("/v2/model/info", params={"page": 3, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 3
+        assert data["size"] == 25
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-51"
+        assert data["data"][24]["model_name"] == "model-75"
+
+        # Test different page size (size 10)
+        response = client.get("/v2/model/info", params={"page": 1, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 1
+        assert data["size"] == 10
+        assert data["total_pages"] == 8  # ceil(75/10) = 8
+        assert len(data["data"]) == 10
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_pagination_edge_cases(monkeypatch):
+    """
+    Test edge cases for pagination in /v2/model/info endpoint.
+    Tests empty results, last page with partial results, and boundary conditions.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test Case 1: Empty model list (no models configured)
+        mock_router_empty = MagicMock()
+        mock_router_empty.model_list = []
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_empty)
+
+        response = client.get("/v2/model/info", params={"page": 1, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["current_page"] == 1
+        assert data["size"] == 25
+        assert data["total_pages"] == 0
+        assert len(data["data"]) == 0
+
+        # Test Case 2: Last page with partial results (23 models, page size 10)
+        mock_models_partial = [
+            {
+                "model_name": f"model-{i}",
+                "litellm_params": {"model": f"gpt-{i}"},
+                "model_info": {"id": f"model-{i}"},
+            }
+            for i in range(1, 24)  # 23 models total
+        ]
+        mock_router_partial = MagicMock()
+        mock_router_partial.model_list = mock_models_partial
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_partial)
+
+        # Page 1 should have 10 models
+        response = client.get("/v2/model/info", params={"page": 1, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 3  # ceil(23/10) = 3
+        assert len(data["data"]) == 10
+
+        # Page 2 should have 10 models
+        response = client.get("/v2/model/info", params={"page": 2, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 2
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 10
+
+        # Page 3 (last page) should have only 3 models
+        response = client.get("/v2/model/info", params={"page": 3, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 3
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 3
+        assert data["data"][0]["model_name"] == "model-21"
+        assert data["data"][2]["model_name"] == "model-23"
+
+        # Test Case 3: Page beyond available pages (should return empty data)
+        response = client.get("/v2/model/info", params={"page": 4, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 4
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 0  # No data for page beyond total_pages
+
+        # Test Case 4: Single model with page size 1
+        mock_models_single = [
+            {
+                "model_name": "single-model",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "single-model"},
+            }
+        ]
+        mock_router_single = MagicMock()
+        mock_router_single.model_list = mock_models_single
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_single)
+
+        response = client.get("/v2/model/info", params={"page": 1, "size": 1})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_name"] == "single-model"
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+def test_enrich_model_info_with_litellm_data():
+    """
+    Test the _enrich_model_info_with_litellm_data helper function.
+    Tests model info enrichment, debug mode, and sensitive info removal.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data
+
+    # Test Case 1: Basic model enrichment without debug
+    model = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "gpt-3.5-turbo"},
+        "model_info": {"id": "test-model"},
+        "api_key": "sk-secret-key",  # Should be removed
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "max_tokens": 4096,
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+            "model_info": {
+                "id": "test-model",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "max_tokens": 4096,
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model, debug=False)
+
+        # Verify get_litellm_model_info was called
+        mock_get_info.assert_called_once_with(model=model)
+        # Verify remove_sensitive_info_from_deployment was called
+        mock_remove_sensitive.assert_called_once()
+        # Verify result doesn't have api_key
+        assert "api_key" not in result
+        # Verify model_info was enriched
+        assert "input_cost_per_token" in result["model_info"]
+
+    # Test Case 2: Model enrichment with debug mode
+    model_with_debug = {
+        "model_name": "test-model-debug",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {},
+    }
+
+    mock_router = MagicMock()
+    mock_client = MagicMock()
+    mock_router._get_client.return_value = mock_client
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {}
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-debug",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {},
+            "openai_client": str(mock_client),
+        }
+
+        result = _enrich_model_info_with_litellm_data(
+            model=model_with_debug, debug=True, llm_router=mock_router
+        )
+
+        # Verify debug info was added
+        mock_remove_sensitive.assert_called_once()
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert "openai_client" in call_args
+        # Verify router._get_client was called for debug
+        mock_router._get_client.assert_called_once()
+
+    # Test Case 3: Model with fallback to litellm.get_model_info
+    model_fallback = {
+        "model_name": "test-model-fallback",
+        "litellm_params": {"model": "claude-3-opus"},
+        "model_info": {},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.get_model_info"
+    ) as mock_litellm_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        # First call returns empty, triggering fallback
+        mock_get_info.return_value = {}
+        mock_litellm_info.return_value = {
+            "input_cost_per_token": 0.015,
+            "output_cost_per_token": 0.075,
+            "max_tokens": 200000,
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-fallback",
+            "litellm_params": {"model": "claude-3-opus"},
+            "model_info": {
+                "input_cost_per_token": 0.015,
+                "output_cost_per_token": 0.075,
+                "max_tokens": 200000,
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_fallback, debug=False)
+
+        # Verify fallback was attempted
+        mock_litellm_info.assert_called_once_with(model="claude-3-opus")
+        # Verify model_info was enriched with fallback data
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert call_args["model_info"]["input_cost_per_token"] == 0.015
+
+    # Test Case 4: Model with split model name fallback
+    model_split = {
+        "model_name": "test-model-split",
+        "litellm_params": {"model": "azure/gpt-4"},
+        "model_info": {},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.get_model_info"
+    ) as mock_litellm_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        # Both first and second pass return empty, triggering third pass
+        mock_get_info.return_value = {}
+        # Second pass (no split)
+        mock_litellm_info.side_effect = [
+            {},  # First call returns empty
+            {"max_tokens": 8192},  # Third pass with split succeeds
+        ]
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-split",
+            "litellm_params": {"model": "azure/gpt-4"},
+            "model_info": {"max_tokens": 8192},
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_split, debug=False)
+
+        # Verify third pass was attempted with split model name
+        assert mock_litellm_info.call_count == 2
+        # Check that second call used split model name
+        second_call = mock_litellm_info.call_args_list[1]
+        assert second_call[1]["model"] == "gpt-4"
+        assert second_call[1]["custom_llm_provider"] == "azure"
+
+    # Test Case 5: Model with existing model_info (should preserve existing keys)
+    model_existing = {
+        "model_name": "test-model-existing",
+        "litellm_params": {"model": "gpt-3.5-turbo"},
+        "model_info": {"id": "existing-id", "custom_key": "custom_value"},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "id": "new-id",  # Should not override existing "id"
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-existing",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+            "model_info": {
+                "id": "existing-id",  # Existing key preserved
+                "custom_key": "custom_value",  # Existing key preserved
+                "input_cost_per_token": 0.001,  # New key added
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_existing, debug=False)
+
+        # Verify existing keys are preserved
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert call_args["model_info"]["id"] == "existing-id"
+        assert call_args["model_info"]["custom_key"] == "custom_value"
+        assert call_args["model_info"]["input_cost_per_token"] == 0.001
