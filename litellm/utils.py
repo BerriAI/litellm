@@ -8244,6 +8244,10 @@ class ProviderConfigManager:
             return litellm.ClarifaiConfig()
         elif LlmProviders.BEDROCK == provider:
             return litellm.llms.bedrock.common_utils.BedrockModelInfo()
+        elif LlmProviders.AZURE_AI == provider:
+            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+
+            return AzureFoundryModelInfo(model=model)
         return None
 
     @staticmethod
