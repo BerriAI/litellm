@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Union
 import httpx
 
 import litellm
+from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
@@ -14,10 +15,36 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_OAUTH_BETA_HEADER,
+    ANTHROPIC_OAUTH_TOKEN_PREFIX,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
 )
 from litellm.types.llms.openai import AllMessageValues
+
+
+def optionally_handle_anthropic_oauth(
+    headers: dict, api_key: Optional[str]
+) -> tuple[dict, Optional[str]]:
+    """
+    Handle Anthropic OAuth token detection and header setup.
+
+    If an OAuth token is detected in the Authorization header, extracts it
+    and sets the required OAuth headers.
+
+    Args:
+        headers: Request headers dict
+        api_key: Current API key (may be None)
+
+    Returns:
+        Tuple of (updated headers, api_key)
+    """
+    auth_header = headers.get("authorization", "")
+    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.replace("Bearer ", "")
+        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-dangerous-direct-browser-access"] = "true"
+    return headers, api_key
 
 
 class AnthropicError(BaseLLMException):
@@ -371,6 +398,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
+        # Check for Anthropic OAuth token in headers
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         if api_key is None:
             raise litellm.AuthenticationError(
                 message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
