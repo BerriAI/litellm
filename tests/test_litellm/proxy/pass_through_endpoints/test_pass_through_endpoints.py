@@ -763,6 +763,49 @@ async def test_create_pass_through_route_with_cost_per_request():
         assert call_kwargs["cost_per_request"] == 3.75
 
 
+@pytest.mark.asyncio
+async def test_create_pass_through_route_with_async_client():
+    """
+    Test that create_pass_through_route correctly passes async_client to the endpoint function
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_route,
+    )
+
+    mock_client = MagicMock()
+
+    # Create the endpoint function with async_client
+    endpoint_func = create_pass_through_route(
+        endpoint="/test/path",
+        target="http://example.com",
+        async_client=mock_client,
+    )
+
+    # Mock the pass_through_request function to capture its call
+    with patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
+    ) as mock_pass_through:
+        mock_pass_through.return_value = MagicMock()
+
+        # Create mock request
+        mock_request = MagicMock(spec=Request)
+
+        # Call the endpoint function
+        # Create a proper UserAPIKeyAuth mock
+        mock_user_api_key_dict = MagicMock()
+
+        await endpoint_func(
+            request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+            fastapi_response=MagicMock(),
+        )
+
+        # Verify that pass_through_request was called with cost_per_request
+        mock_pass_through.assert_called_once()
+        call_kwargs = mock_pass_through.call_args[1]
+        assert call_kwargs["async_client"] == mock_client
+
+
 def test_initialize_pass_through_endpoints_with_cost_per_request():
     """
     Test that initialize_pass_through_endpoints correctly passes cost_per_request to route creation
@@ -1508,6 +1551,34 @@ async def test_pass_through_with_httpbin_redirect():
         import pytest
 
         pytest.skip(f"Could not reach httpbin.org for integration test: {e}")
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_with_async_client():
+    """
+    Test that when an httpx client is passed, it's used
+    """
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        pass_through_request,
+    )
+
+    mock_request = MagicMock(spec=Request)
+    mock_user_api_key_dict = MagicMock()
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aread = AsyncMock(return_value=b'{"result": "success"}')
+    mock_client.request = AsyncMock(return_value=mock_response)
+
+    result = await pass_through_request(
+        request=mock_request,
+        target="https://api.example.com/v1/test",
+        custom_headers={},
+        user_api_key_dict=mock_user_api_key_dict,
+        async_client=mock_client,
+    )
+
+    assert mock_client.request.called
 
 
 @pytest.mark.asyncio
