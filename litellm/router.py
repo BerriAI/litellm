@@ -1698,7 +1698,7 @@ class Router:
         dep_num_retries = litellm_params.get("num_retries")
         if dep_num_retries is not None:
             try:
-                exception.num_retries = int(dep_num_retries)  # Handle both int and str
+                exception.num_retries = int(dep_num_retries)  # type: ignore  # Handle both int and str
             except (ValueError, TypeError):
                 pass  # Skip if value can't be converted to int
 
