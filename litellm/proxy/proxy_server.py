@@ -7646,7 +7646,7 @@ async def model_info_v2(
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
     for i, _model in enumerate(all_models):
         all_models[i] = _enrich_model_info_with_litellm_data(
-            model=_model, debug=debug, llm_router=llm_router
+            model=_model, debug=debug if debug is not None else False, llm_router=llm_router
         )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
