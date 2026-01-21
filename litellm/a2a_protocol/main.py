@@ -252,11 +252,6 @@ async def asend_message(
         completion_tokens,
         _,
     ) = A2ARequestUtils.calculate_usage_from_request_response(
-    (
-        prompt_tokens,
-        completion_tokens,
-        _,
-    ) = A2ARequestUtils.calculate_usage_from_request_response(
         request=request,
         response_dict=response_dict,
     )
