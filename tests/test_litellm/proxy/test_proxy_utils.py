@@ -1,3 +1,4 @@
+import datetime as real_datetime
 import json
 import os
 import sys
@@ -135,20 +136,12 @@ def test_join_paths_nested_path():
 
 
 def _patch_today(monkeypatch, year, month, day):
-    import datetime as real_datetime
-    import types
-
-    fake_dt = types.ModuleType("datetime")
-    for key, value in real_datetime.__dict__.items():
-        setattr(fake_dt, key, value)
-
     class PatchedDate(real_datetime.date):
         @classmethod
         def today(cls):
             return real_datetime.date(year, month, day)
 
-    fake_dt.date = PatchedDate
-    monkeypatch.setitem(sys.modules, "datetime", fake_dt)
+    monkeypatch.setattr("litellm.proxy.utils.date", PatchedDate)
 
 
 def test_get_projected_spend_over_limit_day_one(monkeypatch):
@@ -173,3 +166,15 @@ def test_get_projected_spend_over_limit_december(monkeypatch):
     projected_spend, projected_exceeded_date = result
     assert projected_spend > 0
     assert projected_exceeded_date is not None
+
+
+def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
+    from litellm.proxy.utils import _get_projected_spend_over_limit
+
+    _patch_today(monkeypatch, 2026, 4, 11)
+    result = _get_projected_spend_over_limit(100.0, 200.0)
+
+    assert result is not None
+    projected_spend, projected_exceeded_date = result
+    assert projected_spend == 290.0
+    assert projected_exceeded_date == real_datetime.date(2026, 4, 21)
