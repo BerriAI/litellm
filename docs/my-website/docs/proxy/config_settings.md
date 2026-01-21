@@ -397,6 +397,7 @@ router_settings:
 | AUDIO_SPEECH_CHUNK_SIZE | Chunk size for audio speech processing. Default is 1024
 | ANTHROPIC_API_KEY | API key for Anthropic service
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
+| ANTHROPIC_TOKEN_COUNTING_BETA_VERSION | Beta version header for Anthropic token counting API. Default is `token-counting-2024-11-01`
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_BATCH_ROLE_ARN | ARN of the AWS IAM role for batch operations
 | AWS_DEFAULT_REGION | Default AWS region for service interactions when AWS_REGION is not set
@@ -412,6 +413,8 @@ router_settings:
 | AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
 | AWS_WEB_IDENTITY_TOKEN_FILE | Path to file containing web identity token for AWS
 | AZURE_API_VERSION | Version of the Azure API being used
+| AZURE_AI_API_BASE | Base URL for Azure AI services (e.g., Azure AI Anthropic)
+| AZURE_AI_API_KEY | API key for Azure AI services (e.g., Azure AI Anthropic)
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CERTIFICATE_PASSWORD | Password for Azure OpenAI certificate
 | AZURE_CLIENT_ID | Client ID for Azure services
