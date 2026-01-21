@@ -152,7 +152,8 @@ class KeyManagementEventHooks:
                 )
                 await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
                     current_secret_name=initial_secret_name,
-                    new_secret_name=data.key_alias
+                    new_secret_name=response.key_alias
+                    or data.key_alias
                     or f"virtual-key-{response.token_id}",
                     new_secret_value=response.key,
                 )
