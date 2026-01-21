@@ -371,6 +371,9 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
     with patch(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
         mock_registered_routes,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+        return_value="/",
     ):
         # Create a virtual key with llm_api_routes permission
         valid_token = UserAPIKeyAuth(
@@ -417,6 +420,9 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
     with patch(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
         mock_registered_routes,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+        return_value="/",
     ):
         # Create a virtual key without llm_api_routes permission
         valid_token = UserAPIKeyAuth(

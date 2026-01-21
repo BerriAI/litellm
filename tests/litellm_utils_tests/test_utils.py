@@ -37,6 +37,7 @@ from litellm.utils import (
     trim_messages,
     validate_environment,
 )
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from unittest.mock import AsyncMock, MagicMock, patch
 
 
@@ -1383,7 +1384,7 @@ def test_models_by_provider():
             providers.add(v["litellm_provider"])
 
     for provider in providers:
-        assert provider in models_by_provider.keys()
+        assert provider in models_by_provider.keys() or JSONProviderRegistry.exists(provider)
 
 
 @pytest.mark.parametrize(
