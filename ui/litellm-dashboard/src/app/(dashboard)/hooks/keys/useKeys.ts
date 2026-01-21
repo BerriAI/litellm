@@ -53,7 +53,7 @@ const keyListCall = async (
    */
   try {
     const baseUrl = getProxyBaseUrl();
-    
+
     const params = new URLSearchParams(
       Object.entries({
         team_id: options.teamID,
@@ -93,10 +93,8 @@ const keyListCall = async (
     }
 
     const data = await response.json();
-    console.log("/key/list API Response:", data);
     return data;
   } catch (error) {
-    console.error("Failed to list keys:", error);
     throw error;
   }
 };
