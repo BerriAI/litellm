@@ -27,7 +27,7 @@ class TestAzureAnthropicStructuredOutput(BaseAnthropicMessagesStructuredOutputTe
     """
 
     def get_model(self) -> str:
-        return "azure_ai/claude-haiku-4-5"
+        return "azure_ai/claude-opus-4-5"
 
     def get_api_base(self) -> Optional[str]:
         return "https://krish-mh44t553-eastus2.services.ai.azure.com/"
