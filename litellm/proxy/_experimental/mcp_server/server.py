@@ -807,9 +807,9 @@ if MCP_AVAILABLE:
                         "user_api_key"
                     ] = user_api_key
 
-                user_identifier = getattr(user_api_key_auth, "end_user_id", None) or getattr(
-                    user_api_key_auth, "user_id", None
-                )
+                user_identifier = getattr(
+                    user_api_key_auth, "end_user_id", None
+                ) or getattr(user_api_key_auth, "user_id", None)
                 if user_identifier:
                     list_tools_request_data["user"] = user_identifier
 
@@ -838,7 +838,9 @@ if MCP_AVAILABLE:
             # Decide whether to add prefix based on number of allowed servers
             add_prefix = not (len(allowed_mcp_servers) == 1)
 
-            async def _fetch_and_filter_server_tools(server: MCPServer) -> List[MCPTool]:
+            async def _fetch_and_filter_server_tools(
+                server: MCPServer,
+            ) -> List[MCPTool]:
                 """Fetch and filter tools from a single server with error handling."""
                 if server is None:
                     return []
@@ -1517,11 +1519,9 @@ if MCP_AVAILABLE:
                 **kwargs,
             )
         except Exception as e:
-            traceback_str = traceback.format_exc(
-                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG
-            )
+            traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             from litellm.proxy.proxy_server import proxy_logging_obj
-            
+
             if proxy_logging_obj and user_api_key_auth:
                 await proxy_logging_obj.post_call_failure_hook(
                     request_data=kwargs,
