@@ -152,8 +152,8 @@ def test_get_projected_spend_over_limit_day_one(monkeypatch):
 
     assert result is not None
     projected_spend, projected_exceeded_date = result
-    assert projected_spend > 0
-    assert projected_exceeded_date is not None
+    assert projected_spend == 3100.0
+    assert projected_exceeded_date == real_datetime.date(2026, 1, 1)
 
 
 def test_get_projected_spend_over_limit_december(monkeypatch):
@@ -164,8 +164,8 @@ def test_get_projected_spend_over_limit_december(monkeypatch):
 
     assert result is not None
     projected_spend, projected_exceeded_date = result
-    assert projected_spend > 0
-    assert projected_exceeded_date is not None
+    assert projected_spend == pytest.approx(214.28571428571428)
+    assert projected_exceeded_date == real_datetime.date(2026, 12, 15)
 
 
 def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
