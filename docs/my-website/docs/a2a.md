@@ -66,6 +66,26 @@ Follow [this guide, to add your langgraph agent to LiteLLM Agent Gateway](./prov
 
 Follow [this guide, to add your pydantic ai agent to LiteLLM Agent Gateway](./providers/pydantic_ai_agent#litellm-a2a-gateway)
 
+## Custom Headers & Authentication
+
+If your agent requires custom headers (e.g., for its own authentication, or specific metadata), you can configure them in the `litellm_params` section of the agent configuration.
+
+```yaml
+# config.yaml
+agent_list:
+  - agent_name: "my-secure-agent"
+    agent_card_params:
+      url: "http://my-agent:8000"
+      name: "Secure Agent"
+      # ... other agent card fields ...
+    litellm_params:
+      extra_headers:
+        Authorization: "Bearer my-secret-token"
+        X-Custom-Header: "some-value"
+```
+
+These headers will be attached to the underlying `httpx.AsyncClient` used by the A2A SDK when communicating with your agent.
+
 ## Invoking your Agents
 
 Use the [A2A Python SDK](https://pypi.org/project/a2a/) to invoke agents through LiteLLM.

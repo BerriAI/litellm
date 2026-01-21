@@ -305,14 +305,17 @@ class AsyncHTTPHandler:
         client_alias: Optional[str] = None,  # name for client in logs
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         self.timeout = timeout
         self.event_hooks = event_hooks
+        self.extra_headers = extra_headers
         self.client = self.create_client(
             timeout=timeout,
             event_hooks=event_hooks,
             ssl_verify=ssl_verify,
             shared_session=shared_session,
+            extra_headers=extra_headers,
         )
         self.client_alias = client_alias
 
@@ -322,6 +325,7 @@ class AsyncHTTPHandler:
         event_hooks: Optional[Mapping[str, List[Callable[..., Any]]]],
         ssl_verify: Optional[VerifyTypes] = None,
         shared_session: Optional["ClientSession"] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ) -> httpx.AsyncClient:
         # Get unified SSL configuration
         ssl_config = get_ssl_configuration(ssl_verify)
@@ -340,13 +344,24 @@ class AsyncHTTPHandler:
             shared_session=shared_session,
         )
 
+        # Prepare headers
+        client_headers = headers.copy()
+        # Use provided extra_headers or fallback to instance extra_headers
+        _extra_headers = (
+            extra_headers
+            if extra_headers is not None
+            else getattr(self, "extra_headers", None)
+        )
+        if _extra_headers:
+            client_headers.update(_extra_headers)
+
         return httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
             cert=cert,
-            headers=headers,
+            headers=client_headers,
             follow_redirects=True,
         )
 
@@ -822,9 +837,9 @@ class AsyncHTTPHandler:
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
-            transport_connector_kwargs["limit_per_host"] = (
-                AIOHTTP_CONNECTOR_LIMIT_PER_HOST
-            )
+            transport_connector_kwargs[
+                "limit_per_host"
+            ] = AIOHTTP_CONNECTOR_LIMIT_PER_HOST
 
         return LiteLLMAiohttpTransport(
             client=lambda: ClientSession(
