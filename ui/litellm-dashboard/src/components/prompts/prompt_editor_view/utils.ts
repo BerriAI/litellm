@@ -144,12 +144,13 @@ export const parseExistingPrompt = (apiResponse: any): PromptType => {
 
   // Parse tools from frontmatter if present
   const tools: Tool[] = [];
-  const toolsMatch = frontmatter.match(/tools:\s*\n((?:\s+-\s+\{.*\}\s*\n?)*)/);
+  // Use [ \t] instead of \s to avoid matching newlines incorrectly
+  const toolsMatch = frontmatter.match(/tools:\s*\n((?:[ \t]*-[ \t]+\{.*\}[ \t]*\n)*)/);
   if (toolsMatch) {
-    const toolLines = toolsMatch[1].match(/\s+-\s+(\{.*\})/g);
+    const toolLines = toolsMatch[1].match(/[ \t]*-[ \t]+(\{.*\})/g);
     if (toolLines) {
       toolLines.forEach((line: string) => {
-        const jsonMatch = line.match(/\s+-\s+(\{.*\})/);
+        const jsonMatch = line.match(/[ \t]*-[ \t]+(\{.*\})/);
         if (jsonMatch) {
           try {
             const toolJson = jsonMatch[1];
