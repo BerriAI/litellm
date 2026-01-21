@@ -115,15 +115,28 @@ export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 
 ### 5. Use Claude Code
 
-Start Claude Code and it will automatically use your configured models:
+Start Claude Code with the model you want to use:
 
 ```bash
-# Claude Code will use the models configured in your LiteLLM proxy
-claude
+# Specify model at startup
+claude --model claude-sonnet-4-5-20250929
 
-# Or specify a model if you have multiple configured
-claude --model claude-3-5-sonnet-20241022
-claude --model claude-3-5-haiku-20241022
+# Or specify a different model
+claude --model claude-haiku-4-5-20251001
+claude --model claude-opus-4-5-20251101
+
+# Or change model during a session
+claude
+/model claude-sonnet-4-5-20250929
+```
+
+Alternatively, set default models with environment variables:
+
+```bash
+export ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-5-20250929
+export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5-20251001
+export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-5-20251101
+claude
 ```
 
 Example conversation:
