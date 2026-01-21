@@ -2,13 +2,21 @@ import Image from '@theme/IdealImage';
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
-# Claude Code + Max Plan Integration
+# Using Claude Code Max Subscription
 
 {/* <Image img={require('../../img/claude_code_max/overview.png')} style={{ width: '100%', maxWidth: '900px', height: 'auto' }} /> */}
 
-Route your Claude Code Max subscription traffic through LiteLLM AI Gateway to add guardrails, track costs per user/key, set budgets, and apply rate limits - without changing how your developers use Claude Code.
+Route Claude Code Max subscription traffic through LiteLLM AI Gateway.
 
-**Ideal for:** Organizations with power users already on Claude Code Max who need centralized visibility and control over usage.
+**Why Claude Code Max over direct API?**
+- **Lower costs** — Claude Code Max subscriptions are cheaper for Claude Code power users than per-token API pricing
+
+**Why route through LiteLLM?**
+- **Cost attribution** — Track spend per user, team, or key
+- **Budgets & rate limits** — Set spending caps and request limits
+- **Guardrails** — Apply content filtering and safety controls to all requests
+
+
 
 ## Quick Start Video
 
