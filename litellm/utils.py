@@ -771,7 +771,8 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## LAZY LOAD COROUTINE CHECKER ##
-        get_coroutine_checker = getattr(sys.modules[__name__], "get_coroutine_checker")
+        get_coroutine_checker_fn = getattr(sys.modules[__name__], "get_coroutine_checker")
+        coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Optional[
@@ -825,7 +826,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if get_coroutine_checker().is_async_callable(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -835,7 +836,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if get_coroutine_checker().is_async_callable(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -860,7 +861,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if get_coroutine_checker().is_async_callable(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -893,7 +894,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
-                    get_coroutine_checker().is_async_callable(callback)
+                    coroutine_checker.is_async_callable(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
