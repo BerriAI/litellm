@@ -18,6 +18,7 @@ poetry env info
 
 pip install detect_secrets
 pip install google.auth
+pip install pycryptodome==3.23.0
 
 # eval $(poetry env activate)
 # pip install -e ".[all]"
