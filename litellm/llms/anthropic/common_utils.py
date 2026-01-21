@@ -7,7 +7,6 @@ from typing import Dict, List, Optional, Union
 import httpx
 
 import litellm
-from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     get_file_ids_from_messages,
 )
