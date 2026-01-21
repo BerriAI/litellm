@@ -1240,6 +1240,13 @@ if MCP_AVAILABLE:
         # Remove prefix from tool name for logging and processing
         original_tool_name, server_name = split_server_prefix_from_name(name)
 
+        # ✅ 优先：检查上下文  只有 1 个可选 server，直接使用
+        if not server_name and len(allowed_mcp_servers) == 1:
+            server_name = allowed_mcp_servers[0].name
+            verbose_logger.debug(
+                f"Using single allowed server: {server_name}"
+            )
+
         # If tool name is unprefixed, resolve its server so we can enforce permissions
         if not server_name:
             mcp_server = global_mcp_server_manager._get_mcp_server_from_tool_name(name)

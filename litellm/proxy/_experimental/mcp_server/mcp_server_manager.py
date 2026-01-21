@@ -2050,7 +2050,7 @@ class MCPServerManager:
             if server.auth_type == MCPAuth.oauth2:
                 # Skip OAuth2 servers for now as they may require user-specific tokens
                 continue
-            tools = await self._get_tools_from_server(server)
+            tools = await self._get_tools_from_server(server, add_prefix=True)
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
