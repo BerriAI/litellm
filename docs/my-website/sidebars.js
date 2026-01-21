@@ -562,6 +562,7 @@ const sidebars = {
             "search/perplexity",
             "search/tavily",
             "search/exa_ai",
+            "search/brave",
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
