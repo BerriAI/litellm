@@ -208,7 +208,7 @@ describe("MCPServers", () => {
     vi.mocked(networking.fetchMCPServers).mockResolvedValue(mockServers);
     // Mock health check to never resolve (to test loading state)
     vi.mocked(networking.fetchMCPServerHealth).mockImplementation(
-      () => new Promise(() => {}), // Never resolves
+      () => new Promise(() => { }), // Never resolves
     );
 
     const queryClient = createQueryClient();
