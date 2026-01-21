@@ -32,17 +32,17 @@ class TestPerDeploymentNumRetries:
         )
 
         deployment = router.model_list[0]
-        
+
         # Create a mock exception without num_retries
         class MockException(Exception):
             pass
-        
+
         exc = MockException("test error")
         assert not hasattr(exc, "num_retries") or exc.num_retries is None
-        
+
         # Call the helper
         router._set_deployment_num_retries_on_exception(exc, deployment)
-        
+
         # Verify num_retries was set from deployment
         assert exc.num_retries == 5
 
@@ -66,16 +66,16 @@ class TestPerDeploymentNumRetries:
         )
 
         deployment = router.model_list[0]
-        
+
         # Create an exception that already has num_retries
         class MockException(Exception):
             num_retries = 10  # Already set
-        
+
         exc = MockException("test error")
-        
+
         # Call the helper
         router._set_deployment_num_retries_on_exception(exc, deployment)
-        
+
         # Verify num_retries was NOT overridden
         assert exc.num_retries == 10
 
@@ -99,15 +99,15 @@ class TestPerDeploymentNumRetries:
         )
 
         deployment = router.model_list[0]
-        
+
         class MockException(Exception):
             pass
-        
+
         exc = MockException("test error")
-        
+
         # Call the helper
         router._set_deployment_num_retries_on_exception(exc, deployment)
-        
+
         # Verify num_retries was not set (deployment has no num_retries)
         assert not hasattr(exc, "num_retries") or exc.num_retries is None
 
@@ -177,14 +177,14 @@ class TestPerDeploymentNumRetries:
         )
 
         deployment = router.model_list[0]
-        
+
         class MockException(Exception):
             pass
-        
+
         exc = MockException("test error")
-        
+
         # Call the helper
         router._set_deployment_num_retries_on_exception(exc, deployment)
-        
+
         # Verify num_retries was converted from string to int
         assert exc.num_retries == 6
