@@ -2,7 +2,7 @@ import { isAdminRole } from "@/utils/roles";
 import { QuestionCircleOutlined } from "@ant-design/icons";
 import { Button, Tab, TabGroup, TabList, TabPanel, TabPanels, Text, Title } from "@tremor/react";
 import { Descriptions, Modal, Select, Tooltip, Typography } from "antd";
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useMCPServers } from "../../app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "../../app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import NotificationsManager from "../molecules/notifications_manager";
@@ -115,20 +115,8 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     );
   }, [serversWithHealth]);
 
-  // Handle team filter change
-  const handleTeamChange = (teamId: string) => {
-    setSelectedTeam(teamId);
-    filterServers(teamId, selectedMcpAccessGroup);
-  };
-
-  // Handle MCP access group filter change
-  const handleMcpAccessGroupChange = (group: string) => {
-    setSelectedMcpAccessGroup(group);
-    filterServers(selectedTeam, group);
-  };
-
   // Filtering logic for both team and access group
-  const filterServers = (teamId: string, group: string) => {
+  const filterServers = useCallback((teamId: string, group: string) => {
     if (!serversWithHealth) return setFilteredServers([]);
     let filtered = serversWithHealth;
     if (teamId === "personal") {
@@ -144,12 +132,24 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
       );
     }
     setFilteredServers(filtered);
+  }, [serversWithHealth]);
+
+  // Handle team filter change
+  const handleTeamChange = (teamId: string) => {
+    setSelectedTeam(teamId);
+    filterServers(teamId, selectedMcpAccessGroup);
+  };
+
+  // Handle MCP access group filter change
+  const handleMcpAccessGroupChange = (group: string) => {
+    setSelectedMcpAccessGroup(group);
+    filterServers(selectedTeam, group);
   };
 
   // Initial and effect-based filtering (trigger on query data updates and health data updates)
   useEffect(() => {
     filterServers(selectedTeam, selectedMcpAccessGroup);
-  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup]);
+  }, [serversWithHealth, selectedTeam, selectedMcpAccessGroup, filterServers]);
 
   const columns = React.useMemo(
     () =>
@@ -207,11 +207,6 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setModalVisible(false);
   };
 
-  if (!accessToken || !userRole || !userID) {
-    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
-    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
-  }
-
   // Memoize the selected server to prevent unnecessary re-renders
   const selectedServer = React.useMemo(() => {
     return filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
@@ -234,6 +229,11 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     setSelectedServerId(null);
     refetch();
   }, [refetch]);
+
+  if (!accessToken || !userRole || !userID) {
+    console.log("Missing required authentication parameters", { accessToken, userRole, userID });
+    return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
+  }
 
   return (
     <div className="w-full h-full p-6">
