@@ -128,16 +128,18 @@ class ProxyInitializationHelpers:
         """
         import litellm
 
+        from litellm._logging import verbose_proxy_logger
+
         uvicorn_args = {
             "app": "litellm.proxy.proxy_server:app",
             "host": host,
             "port": port,
         }
         if log_config is not None:
-            print(f"Using log_config: {log_config}")  # noqa
+            verbose_proxy_logger.info(f"Using log_config: {log_config}")
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
-            print("Using json logs. Setting log_config to None.")  # noqa
+            verbose_proxy_logger.info("Using json logs. Setting log_config to None.")
             uvicorn_args["log_config"] = None
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
