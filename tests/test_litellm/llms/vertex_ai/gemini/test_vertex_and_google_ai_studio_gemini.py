@@ -713,13 +713,13 @@ def test_vertex_ai_usage_metadata_with_image_tokens_auto_calculated_text():
 
 def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
     """Test promptTokensDetails with IMAGE modality for multimodal inputs
-    
+
     This test verifies the fix for issue #18182 where image_tokens were missing
     from prompt_tokens_details when calling Gemini models with image inputs.
-    
+
     Example scenario: User sends a text prompt + image, and Gemini generates an image response.
     The promptTokensDetails should include both TEXT and IMAGE token counts.
-    
+
     In this test case, candidatesTokenCount is INCLUSIVE of thoughtsTokenCount because:
     promptTokenCount (533) + candidatesTokenCount (1337) = totalTokenCount (1870)
     """
@@ -740,21 +740,21 @@ def test_vertex_ai_usage_metadata_with_image_tokens_in_prompt():
     usage_metadata = UsageMetadata(**usage_metadata)
     result = v._calculate_usage(completion_response={"usageMetadata": usage_metadata})
     print("result", result)
-    
+
     # Verify basic token counts
     assert result.prompt_tokens == 533
     # candidatesTokenCount is INCLUSIVE, so completion_tokens = candidatesTokenCount
     assert result.completion_tokens == 1337
     assert result.total_tokens == 1870
-    
+
     # Verify prompt_tokens_details includes both text and image tokens
     assert result.prompt_tokens_details.text_tokens == 6
     assert result.prompt_tokens_details.image_tokens == 527
-    
+
     # Verify completion_tokens_details
     assert result.completion_tokens_details.image_tokens == 1120
     assert result.completion_tokens_details.reasoning_tokens == 217
-    
+
     # Verify the math: prompt_tokens = text + image
     # 533 = 6 (text) + 527 (image)
     assert (
@@ -1300,7 +1300,7 @@ def test_vertex_ai_process_candidates_with_grounding_metadata():
 def test_vertex_ai_tool_call_id_format():
     """
     Test that tool call IDs have the correct format and length.
-    
+
     The ID should be in format 'call_' + 28 hex characters (total 33 characters).
     This test verifies the fix for keeping the code line under 40 characters.
     """
@@ -1319,7 +1319,7 @@ def test_vertex_ai_tool_call_id_format():
         ),
         HttpxPartType(
             functionCall={
-                "name": "get_time", 
+                "name": "get_time",
                 "args": {"timezone": "PST"}
             }
         ),
@@ -1337,17 +1337,17 @@ def test_vertex_ai_tool_call_id_format():
     # Test ID format for both tool calls
     for tool in tools:
         tool_id = tool["id"]
-        
+
         # Should start with 'call_'
         assert tool_id.startswith("call_"), f"ID should start with 'call_', got: {tool_id}"
-        
+
         # Should have exactly 33 total characters (call_ + 28 hex chars)
         assert len(tool_id) == 33, f"ID should be 33 characters long, got {len(tool_id)}: {tool_id}"
-        
+
         # The part after 'call_' should be 28 hex characters
         hex_part = tool_id[5:]  # Remove 'call_' prefix
         assert len(hex_part) == 28, f"Hex part should be 28 characters, got {len(hex_part)}: {hex_part}"
-        
+
         # Should only contain valid hex characters
         assert re.match(r'^[0-9a-f]{28}$', hex_part), f"Should contain only lowercase hex chars, got: {hex_part}"
 
@@ -1364,7 +1364,7 @@ def test_vertex_ai_tool_call_id_format():
         )
         if test_tools:
             ids_generated.add(test_tools[0]["id"])
-    
+
     # All generated IDs should be unique
     assert len(ids_generated) == 10, f"All 10 IDs should be unique, got {len(ids_generated)} unique IDs"
 
@@ -1372,7 +1372,7 @@ def test_vertex_ai_tool_call_id_format():
 def test_vertex_ai_code_line_length():
     """
     Test that the specific code line generating tool call IDs is within character limit.
-    
+
     This is a meta-test to ensure the code change meets the 40-character requirement.
     """
     import inspect
@@ -1383,20 +1383,20 @@ def test_vertex_ai_code_line_length():
 
     # Get the source code of the _transform_parts method
     source_lines = inspect.getsource(VertexGeminiConfig._transform_parts).split('\n')
-    
+
     # Find the line that generates the ID
     id_line = None
     for line in source_lines:
         if '"id": f"call_' in line and 'uuid.uuid4().hex[:28]' in line:
             id_line = line.strip()  # Remove indentation for length check
             break
-    
+
     assert id_line is not None, "Could not find the ID generation line in source code"
-    
+
     # Check that the line is 40 characters or less (excluding indentation)
     line_length = len(id_line)
     assert line_length <= 40, f"ID generation line is {line_length} characters, should be ≤40: {id_line}"
-    
+
     # Verify it contains the expected UUID format
     assert 'uuid.uuid4().hex[:28]' in id_line, f"Line should contain shortened UUID format: {id_line}"
 
@@ -1404,23 +1404,23 @@ def test_vertex_ai_code_line_length():
 def test_vertex_ai_map_google_maps_tool_simple():
     """
     Test googleMaps tool transformation without location data.
-    
+
     Input:
         value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
         optional_params={}
-    
+
     Expected Output:
         tools=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}]
         optional_params={} (unchanged)
     """
     v = VertexGeminiConfig()
     optional_params = {}
-    
+
     tools = v._map_function(
         value=[{"googleMaps": {"enableWidget": "ENABLE_WIDGET"}}],
         optional_params=optional_params
     )
-    
+
     assert len(tools) == 1
     assert "googleMaps" in tools[0]
     assert tools[0]["googleMaps"]["enableWidget"] == "ENABLE_WIDGET"
@@ -1431,7 +1431,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
     """
     Test googleMaps tool transformation with location data.
     Verifies latitude/longitude/languageCode are extracted to toolConfig.retrievalConfig.
-    
+
     Input:
         value=[{
             "googleMaps": {
@@ -1442,7 +1442,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
             }
         }]
         optional_params={}
-    
+
     Expected Output:
         tools=[{
             "googleMaps": {"enableWidget": "ENABLE_WIDGET"}
@@ -1461,7 +1461,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
     """
     v = VertexGeminiConfig()
     optional_params = {}
-    
+
     tools = v._map_function(
         value=[{
             "googleMaps": {
@@ -1473,19 +1473,19 @@ def test_vertex_ai_map_google_maps_tool_with_location():
         }],
         optional_params=optional_params
     )
-    
+
     assert len(tools) == 1
     assert "googleMaps" in tools[0]
-    
+
     google_maps_tool = tools[0]["googleMaps"]
     assert google_maps_tool["enableWidget"] == "ENABLE_WIDGET"
     assert "latitude" not in google_maps_tool
     assert "longitude" not in google_maps_tool
     assert "languageCode" not in google_maps_tool
-    
+
     assert "toolConfig" in optional_params
     assert "retrievalConfig" in optional_params["toolConfig"]
-    
+
     retrieval_config = optional_params["toolConfig"]["retrievalConfig"]
     assert retrieval_config["latLng"]["latitude"] == 37.7749
     assert retrieval_config["latLng"]["longitude"] == -122.4194
@@ -1494,7 +1494,7 @@ def test_vertex_ai_map_google_maps_tool_with_location():
 def test_vertex_ai_penalty_parameters_validation():
     """
     Test that penalty parameters are properly validated for different Gemini models.
-    
+
     This test ensures that:
     1. Models that don't support penalty parameters (like preview models) filter them out
     2. Models that support penalty parameters include them in the request
@@ -1549,7 +1549,7 @@ def test_vertex_ai_penalty_parameters_validation():
 def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
     """
     Test that penalty parameters are not supported for Gemini 3 models.
-    
+
     This test ensures that:
     1. Gemini 3 models do not support penalty parameters
     2. Penalty parameters are excluded from supported params list for Gemini 3 models
@@ -1610,7 +1610,7 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
     non_gemini_3_model = "gemini-2.5-pro"
     assert v._supports_penalty_parameters(non_gemini_3_model) == True, \
         f"Non-Gemini 3 model {non_gemini_3_model} should support penalty parameters"
-    
+
     supported_params = v.get_supported_openai_params(non_gemini_3_model)
     assert "frequency_penalty" in supported_params, \
         f"frequency_penalty should be in supported params for {non_gemini_3_model}"
@@ -1621,7 +1621,7 @@ def test_vertex_ai_gemini_3_penalty_parameters_unsupported():
 def test_vertex_ai_annotation_streaming_events():
     """
     Test that annotation events are properly emitted during streaming for Vertex AI Gemini.
-    
+
     This test verifies:
     1. Grounding metadata is converted to annotations in streaming chunks
     2. Annotations are included in the delta of streaming chunks
@@ -1685,7 +1685,7 @@ def test_vertex_ai_annotation_streaming_events():
     # Verify the chunk was parsed correctly
     assert streaming_chunk.choices is not None
     assert len(streaming_chunk.choices) == 1
-    
+
     # Check that annotations are present in the delta
     delta = streaming_chunk.choices[0].delta
     assert hasattr(delta, "annotations")
@@ -1738,7 +1738,7 @@ async def test_vertex_ai_streaming_bad_request_is_not_wrapped():
 def test_vertex_ai_annotation_conversion():
     """
     Test the conversion of Vertex AI grounding metadata to OpenAI annotations.
-    
+
     This test verifies the _convert_grounding_metadata_to_annotations method
     correctly transforms grounding metadata into the expected format.
     """
@@ -1836,7 +1836,7 @@ def test_vertex_ai_annotation_conversion():
 def test_vertex_ai_annotation_empty_grounding_metadata():
     """
     Test handling of empty or missing grounding metadata.
-    
+
     This test ensures the annotation conversion handles edge cases gracefully.
     """
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -2038,7 +2038,7 @@ def test_media_resolution_from_detail_parameter():
     contents = _gemini_convert_messages_with_history(
         messages=messages, model="gemini-3-pro-preview"
     )
-    
+
     # Verify media_resolution is set at the Part level (not inside inline_data)
     assert len(contents) == 1
     assert len(contents[0]["parts"]) >= 1
@@ -2081,7 +2081,7 @@ def test_media_resolution_low_detail():
     contents = _gemini_convert_messages_with_history(
         messages=messages, model="gemini-3-pro-preview"
     )
-    
+
     # Find the part with inline_data
     image_part = None
     for part in contents[0]["parts"]:
@@ -2103,7 +2103,7 @@ def test_media_resolution_auto_detail():
 
     # Using a minimal valid base64-encoded 1x1 PNG
     base64_image = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    
+
     # Test with auto
     messages_auto = [
         {
@@ -2169,7 +2169,7 @@ def test_media_resolution_per_part():
     # Using minimal valid base64-encoded 1x1 PNGs
     base64_image1 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     base64_image2 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    
+
     messages = [
         {
             "role": "user",
@@ -2199,18 +2199,18 @@ def test_media_resolution_per_part():
     contents = _gemini_convert_messages_with_history(
         messages=messages, model="gemini-3-pro-preview"
     )
-    
+
     # Should have one content with multiple parts
     assert len(contents) == 1
     assert len(contents[0]["parts"]) == 3  # image1, text, image2
-    
+
     # First image should have low resolution (first part is the image)
     image1_part = contents[0]["parts"][0]
     assert "inline_data" in image1_part
     # media_resolution should be at the Part level, not inside inline_data
     assert "media_resolution" in image1_part
     assert image1_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
-    
+
     # Second image should have high resolution (third part is the second image)
     image2_part = contents[0]["parts"][2]
     assert "inline_data" in image2_part
@@ -2685,27 +2685,27 @@ def test_gemini_token_usage_standard_response():
 def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
     """
     Test that image generation models correctly separate prompt and completion token details.
-    
+
     This is a regression test for the bug where prompt_tokens_details.image_tokens
     was incorrectly set to the completion's image token count instead of 0.
-    
+
     Scenario: Text-only prompt generates an image response
     - Input: Text prompt (no images)
     - Output: Generated image + text description
-    
+
     Expected behavior:
     - prompt_tokens_details.image_tokens should be 0 (text-only input)
     - completion_tokens_details.image_tokens should be 1290 (generated image)
-    
+
     Bug behavior (before fix):
     - prompt_tokens_details.image_tokens was 1290 (incorrect!)
     - completion_tokens_details.image_tokens was 1290 (correct)
-    
+
     The bug was caused by reusing the same variables (image_tokens, audio_tokens, text_tokens)
     for both prompt and completion token details.
     """
     v = VertexGeminiConfig()
-    
+
     # Simulate Gemini image generation model response metadata
     # User sends text-only prompt, model generates image + text
     usage_metadata_dict = {
@@ -2721,15 +2721,15 @@ def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
             {"modality": "IMAGE", "tokenCount": 1290}
         ],
     }
-    
+
     completion_response = {"usageMetadata": usage_metadata_dict}
     result = v._calculate_usage(completion_response=completion_response)
-    
+
     # Verify basic token counts
     assert result.prompt_tokens == 101
     assert result.completion_tokens == 1290
     assert result.total_tokens == 1391
-    
+
     # CRITICAL: Prompt tokens details should show NO image tokens (text-only input)
     assert result.prompt_tokens_details.text_tokens == 101, \
         "Prompt text tokens should be 101"
@@ -2737,12 +2737,69 @@ def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
         "Prompt image tokens should be None (text-only input, no images in prompt)"
     assert result.prompt_tokens_details.audio_tokens is None, \
         "Prompt audio tokens should be None"
-    
+
     # Completion tokens details should show the generated image tokens
     assert result.completion_tokens_details.image_tokens == 1290, \
         "Completion image tokens should be 1290 (generated image)"
-    
+
     # Verify text_tokens is auto-calculated for completion
     # candidatesTokenCount (1290) - image_tokens (1290) = 0
     assert result.completion_tokens_details.text_tokens == 0, \
         "Completion text tokens should be 0 (image-only response)"
+
+def test_validate_environment_gemini_cli_user_agent():
+    """Test that User-Agent header is added for Gemini CLI API base"""
+    v = VertexGeminiConfig()
+
+    headers = v.validate_environment(
+        headers=None,
+        model="gemini-pro",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="fake-key",
+        api_base="https://example.com",
+    )
+
+    assert "User-Agent" not in headers
+
+    headers = v.validate_environment(
+        headers=None,
+        model="gemini-pro",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key="fake-key",
+        api_base="https://example-cli.com",
+    )
+
+    assert headers["User-Agent"] == "GeminiCLI/1.0"
+
+
+def test_transform_response_unwrapping():
+    """Test that response is unwrapped for Gemini CLI"""
+    v = VertexGeminiConfig()
+
+    wrapped_response = {
+        "data": {
+            "candidates": [{"content": {"parts": [{"text": "Hello"}]}}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 20},
+        }
+    }
+
+    raw_response = MagicMock()
+    raw_response.json.return_value = wrapped_response
+
+    result = v.transform_response(
+        model="gemini-pro",
+        raw_response=raw_response,
+        model_response=ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.content == "Hello"

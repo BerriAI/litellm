@@ -2066,7 +2066,11 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
 
         ## RESPONSE OBJECT
         try:
-            completion_response = GenerateContentResponseBody(**raw_response.json())  # type: ignore
+            response_json = raw_response.json()
+            # Unwrap response for Gemini CLI
+            if isinstance(response_json, dict) and "data" in response_json:
+                response_json = response_json["data"]
+            completion_response = GenerateContentResponseBody(**response_json)  # type: ignore
         except Exception as e:
             raise VertexAIError(
                 message="Received={}, Error converting to valid response block={}. File an issue if litellm error - https://github.com/BerriAI/litellm/issues".format(
@@ -2230,6 +2234,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             default_headers["Authorization"] = f"Bearer {api_key}"
         if headers is not None:
             default_headers.update(headers)
+
+        # Add User-Agent for Gemini CLI
+        if api_base and "cli" in api_base.lower():
+            default_headers["User-Agent"] = "GeminiCLI/1.0"
 
         return default_headers
 

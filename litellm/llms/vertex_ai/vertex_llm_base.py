@@ -55,6 +55,8 @@ class VertexBase:
     def load_auth(
         self, credentials: Optional[VERTEX_CREDENTIALS_TYPES], project_id: Optional[str]
     ) -> Tuple[Any, str]:
+        creds = None
+        json_obj = None
         if credentials is not None:
             if isinstance(credentials, str):
                 verbose_logger.debug(
@@ -72,12 +74,16 @@ class VertexBase:
                         json_obj = json.load(open(credentials))
                     else:
                         json_obj = json.loads(credentials)
-                except Exception:
-                    raise Exception(
-                        "Unable to load vertex credentials from environment. Got={}".format(
-                            credentials
-                        )
+                except json.JSONDecodeError:
+                    # Assume it's an OAuth2 access token from Gemini CLI
+                    verbose_logger.debug(
+                        "Vertex: Treating credentials as OAuth2 access token"
                     )
+                    creds = self._credentials_from_oauth2_token(credentials)
+                    if project_id is None:
+                        project_id = getattr(creds, "quota_project_id", None) or getattr(
+                            creds, "project_id", None
+                        )
             elif isinstance(credentials, dict):
                 json_obj = credentials
             else:
@@ -85,43 +91,50 @@ class VertexBase:
                     "Invalid credentials type: {}".format(type(credentials))
                 )
 
-            # Check if the JSON object contains Workload Identity Federation configuration
-            if "type" in json_obj and json_obj["type"] == "external_account":
-                # If environment_id key contains "aws" value it corresponds to an AWS config file
-                credential_source = json_obj.get("credential_source", {})
-                environment_id = (
-                    credential_source.get("environment_id", "")
-                    if isinstance(credential_source, dict)
-                    else ""
-                )
-                if isinstance(environment_id, str) and "aws" in environment_id:
-                    creds = self._credentials_from_identity_pool_with_aws(
+            if json_obj is not None:
+                # Check if the JSON object contains Workload Identity Federation configuration
+                if "type" in json_obj and json_obj["type"] == "external_account":
+                    # If environment_id key contains "aws" value it corresponds to an AWS config file
+                    credential_source = json_obj.get("credential_source", {})
+                    environment_id = (
+                        credential_source.get("environment_id", "")
+                        if isinstance(credential_source, dict)
+                        else ""
+                    )
+                    if isinstance(environment_id, str) and "aws" in environment_id:
+                        creds = self._credentials_from_identity_pool_with_aws(
+                            json_obj,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
+                    else:
+                        creds = self._credentials_from_identity_pool(
+                            json_obj,
+                            scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                        )
+                # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
+                elif "type" in json_obj and json_obj["type"] == "authorized_user":
+                    creds = self._credentials_from_authorized_user(
+                        json_obj,
+                        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                    )
+                    if project_id is None:
+                        project_id = (
+                            creds.quota_project_id
+                        )  # authorized user credentials don't have a project_id, only quota_project_id
+                # Check if the JSON object contains OAuth2 credentials with access_token
+                elif "access_token" in json_obj:
+                    creds = self._credentials_from_oauth2_dict(
                         json_obj,
                         scopes=["https://www.googleapis.com/auth/cloud-platform"],
                     )
                 else:
-                    creds = self._credentials_from_identity_pool(
+                    creds = self._credentials_from_service_account(
                         json_obj,
                         scopes=["https://www.googleapis.com/auth/cloud-platform"],
                     )
-            # Check if the JSON object contains Authorized User configuration (via gcloud auth application-default login)
-            elif "type" in json_obj and json_obj["type"] == "authorized_user":
-                creds = self._credentials_from_authorized_user(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
-                if project_id is None:
-                    project_id = (
-                        creds.quota_project_id
-                    )  # authorized user credentials don't have a project_id, only quota_project_id
-            else:
-                creds = self._credentials_from_service_account(
-                    json_obj,
-                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
-                )
 
-            if project_id is None:
-                project_id = getattr(creds, "project_id", None)
+                if project_id is None:
+                    project_id = getattr(creds, "project_id", None)
         else:
             creds, creds_project_id = self._credentials_from_default_auth(
                 scopes=["https://www.googleapis.com/auth/cloud-platform"]
@@ -172,6 +185,23 @@ class VertexBase:
 
         return google.oauth2.credentials.Credentials.from_authorized_user_info(
             json_obj, scopes=scopes
+        )
+
+    def _credentials_from_oauth2_token(self, token: str):
+        import google.oauth2.credentials
+
+        return google.oauth2.credentials.Credentials(token=token)
+
+    def _credentials_from_oauth2_dict(self, oauth2_dict: Dict[str, Any], scopes):
+        import google.oauth2.credentials
+
+        return google.oauth2.credentials.Credentials(
+            token=oauth2_dict.get("access_token"),
+            refresh_token=oauth2_dict.get("refresh_token"),
+            token_uri=oauth2_dict.get("token_uri"),
+            client_id=oauth2_dict.get("client_id"),
+            client_secret=oauth2_dict.get("client_secret"),
+            scopes=scopes,
         )
 
     def _credentials_from_service_account(self, json_obj, scopes):
