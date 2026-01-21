@@ -9,6 +9,7 @@ Requires Azure AI credentials and model deployment.
 
 import os
 import sys
+from typing import Optional
 
 sys.path.insert(0, os.path.abspath("../../../.."))
 
@@ -26,4 +27,10 @@ class TestAzureAnthropicStructuredOutput(BaseAnthropicMessagesStructuredOutputTe
     """
 
     def get_model(self) -> str:
-        return "azure_ai/claude-3-5-sonnet-20241022"
+        return "azure_ai/claude-haiku-4-5"
+
+    def get_api_base(self) -> Optional[str]:
+        return "https://krish-mh44t553-eastus2.services.ai.azure.com/"
+
+    def get_api_key(self) -> Optional[str]:
+        return os.environ.get("AZURE_ANTHROPIC_API_KEY")

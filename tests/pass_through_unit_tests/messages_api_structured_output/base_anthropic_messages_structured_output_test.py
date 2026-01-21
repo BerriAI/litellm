@@ -9,7 +9,7 @@ import json
 import os
 import sys
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
@@ -23,6 +23,10 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
 
     Subclasses must implement:
     - get_model(): Returns the model string to use for tests
+
+    Subclasses may optionally implement:
+    - get_api_base(): Returns the API base URL (for Azure, etc.)
+    - get_api_key(): Returns the API key (for Azure, etc.)
     """
 
     @abstractmethod
@@ -31,6 +35,18 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
         Returns the model string to use for tests.
         """
         pass
+
+    def get_api_base(self) -> Optional[str]:
+        """
+        Returns the API base URL. Override for providers like Azure.
+        """
+        return None
+
+    def get_api_key(self) -> Optional[str]:
+        """
+        Returns the API key. Override for providers like Azure.
+        """
+        return None
 
     def get_output_format_schema(self) -> Dict[str, Any]:
         """
@@ -71,12 +87,23 @@ class BaseAnthropicMessagesStructuredOutputTest(ABC):
         messages = self.get_test_messages()
         output_format = self.get_output_format_schema()
 
-        response = await litellm.anthropic.messages.acreate(
-            model=self.get_model(),
-            messages=messages,
-            max_tokens=100,
-            output_format=output_format,
-        )
+        # Build kwargs with optional api_base and api_key
+        kwargs: Dict[str, Any] = {
+            "model": self.get_model(),
+            "messages": messages,
+            "max_tokens": 100,
+            "output_format": output_format,
+        }
+
+        api_base = self.get_api_base()
+        if api_base:
+            kwargs["api_base"] = api_base
+
+        api_key = self.get_api_key()
+        if api_key:
+            kwargs["api_key"] = api_key
+
+        response = await litellm.anthropic.messages.acreate(**kwargs)
 
         print(f"Response: {response}")
 
