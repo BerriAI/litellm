@@ -1897,6 +1897,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     status="success",
                     standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
+                if (
+                    standard_logging_payload := self.model_call_details.get(
+                        "standard_logging_object"
+                    )
+                ) is not None:
+                    # Only emit for sync requests (async_success_handler handles async)
+                    if is_sync_request:
+                        emit_standard_logging_payload(standard_logging_payload)
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
@@ -2190,10 +2198,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 print_verbose=print_verbose,
                             )
 
-                    if (
-                        callback == "openmeter"
-                        and is_sync_request
-                    ):
+                    if callback == "openmeter" and is_sync_request:
                         global openMeterLogger
                         if openMeterLogger is None:
                             print_verbose("Instantiates openmeter client")
@@ -2405,6 +2410,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 status="success",
                 standard_built_in_tools_params=self.standard_built_in_tools_params,
             )
+
+            # print standard logging payload
+            if (
+                standard_logging_payload := self.model_call_details.get(
+                    "standard_logging_object"
+                )
+            ) is not None:
+                emit_standard_logging_payload(standard_logging_payload)
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -2799,8 +2812,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             callback_func=callback,
                         )
                     if (
-                        isinstance(callback, CustomLogger)
-                        and is_sync_request
+                        isinstance(callback, CustomLogger) and is_sync_request
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,
@@ -3743,10 +3755,13 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 OpenTelemetry,
                 OpenTelemetryConfig,
             )
-            logfire_base_url = os.getenv("LOGFIRE_BASE_URL", "https://logfire-api.pydantic.dev")
+
+            logfire_base_url = os.getenv(
+                "LOGFIRE_BASE_URL", "https://logfire-api.pydantic.dev"
+            )
             otel_config = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint = f"{logfire_base_url.rstrip('/')}/v1/traces",
+                endpoint=f"{logfire_base_url.rstrip('/')}/v1/traces",
                 headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
             )
             for callback in _in_memory_loggers:
@@ -4342,32 +4357,38 @@ class StandardLoggingPayloadSetup:
     def merge_litellm_metadata(litellm_params: dict) -> dict:
         """
         Merge both litellm_metadata and metadata from litellm_params.
-        
+
         litellm_metadata contains model-related fields, metadata contains user API key fields.
         We need both for complete standard logging payload.
-        
+
         Args:
             litellm_params: Dictionary containing metadata and litellm_metadata
-            
+
         Returns:
             dict: Merged metadata with user API key fields taking precedence
         """
         merged_metadata: dict = {}
-        
+
         # Start with metadata (user API key fields) - but skip non-serializable objects
-        if litellm_params.get("metadata") and isinstance(litellm_params.get("metadata"), dict):
+        if litellm_params.get("metadata") and isinstance(
+            litellm_params.get("metadata"), dict
+        ):
             for key, value in litellm_params["metadata"].items():
                 # Skip non-serializable objects like UserAPIKeyAuth
                 if key == "user_api_key_auth":
                     continue
                 merged_metadata[key] = value
-        
+
         # Then merge litellm_metadata (model-related fields) - this will NOT overwrite existing keys
-        if litellm_params.get("litellm_metadata") and isinstance(litellm_params.get("litellm_metadata"), dict):
+        if litellm_params.get("litellm_metadata") and isinstance(
+            litellm_params.get("litellm_metadata"), dict
+        ):
             for key, value in litellm_params["litellm_metadata"].items():
-                if key not in merged_metadata:  # Don't overwrite existing keys from metadata
+                if (
+                    key not in merged_metadata
+                ):  # Don't overwrite existing keys from metadata
                     merged_metadata[key] = value
-        
+
         return merged_metadata
 
     @staticmethod
@@ -4810,7 +4831,9 @@ class StandardLoggingPayloadSetup:
         """
         Extract additional header tags for spend tracking based on config.
         """
-        extra_headers: List[str] = getattr(litellm, "extra_spend_tag_headers", None) or []
+        extra_headers: List[str] = (
+            getattr(litellm, "extra_spend_tag_headers", None) or []
+        )
         if not extra_headers:
             return None
 
@@ -4959,7 +4982,9 @@ def get_standard_logging_object_payload(
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
 
         # Merge both litellm_metadata and metadata to get complete metadata
-        metadata: dict = StandardLoggingPayloadSetup.merge_litellm_metadata(litellm_params)
+        metadata: dict = StandardLoggingPayloadSetup.merge_litellm_metadata(
+            litellm_params
+        )
 
         completion_start_time = kwargs.get("completion_start_time", end_time)
         call_type = kwargs.get("call_type")
@@ -5129,7 +5154,8 @@ def get_standard_logging_object_payload(
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
 
-        emit_standard_logging_payload(payload)
+        # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
+
         return payload
     except Exception as e:
         verbose_logger.exception(

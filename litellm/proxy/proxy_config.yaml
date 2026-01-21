@@ -1,50 +1,26 @@
 model_list:
-  - model_name: gemini/*
+  # Anthropic direct
+  - model_name: anthropic-claude
     litellm_params:
-      model: gemini/*
-  - model_name: claude-sonnet-4-5-20250929
-    litellm_params:
-      model: bedrock/invoke/us.anthropic.claude-sonnet-4-5-20250929-v1:0
-    model_info:
-      cache_creation_input_token_cost: 3.75e-06
-      cache_read_input_token_cost: 3e-07
-      input_cost_per_token: 3e-06
-      input_cost_per_token_above_200k_tokens: 6e-06
-      output_cost_per_token_above_200k_tokens: 2.25e-05
-      cache_creation_input_token_cost_above_200k_tokens: 7.5e-06
-      cache_read_input_token_cost_above_200k_tokens: 6e-07
-      litellm_provider: bedrock_converse
-      max_input_tokens: 200000
-      max_output_tokens: 64000
-      max_tokens: 200000
-      mode: chat
-      output_cost_per_token: 1.5e-05
-      search_context_cost_per_query:
-        search_context_size_high: 0.01
-        search_context_size_low: 0.01
-        search_context_size_medium: 0.01
-      supports_assistant_prefill: true
-      supports_computer_use: true
-      supports_function_calling: true
-      supports_pdf_input: true
-      supports_prompt_caching: true
-      supports_reasoning: true
-      supports_response_schema: true
-      supports_tool_choice: true
-      supports_vision: true
-      tool_use_system_prompt_tokens: 346
+      model: anthropic/claude-sonnet-4-20250514
+      api_key: os.environ/ANTHROPIC_API_KEY
 
-  - model_name: us.anthropic.claude-sonnet-4-20250514-v1:0
+  # Azure AI Anthropic
+  - model_name: azure-ai-claude
     litellm_params:
-      model: bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0
-    model_info:
-      litellm_provider: bedrock_converse
-      mode: chat
-  - model_name: azure-claude-opus-4-5
-    litellm_params:
-      model: azure_ai/claude-opus-4-5
-      api_base: https://krish-mh44t553-eastus2.services.ai.azure.com
+      model: azure_ai/claude-3-5-sonnet
+      api_base: https://krish-mh44t553-eastus2.services.ai.azure.com/
       api_key: os.environ/AZURE_ANTHROPIC_API_KEY
+
+  # Azure AI Anthropic (alternate endpoint format)
+  - model_name: claude-4.5-haiku
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_base: https://krish-mh44t553-eastus2.services.ai.azure.com/anthropic/v1/messages
+      api_version: "2023-06-01"
+      api_key: os.environ/AZURE_ANTHROPIC_API_KEY
+
+
 
 # Search Tools Configuration - Define search providers for WebSearch interception
 # search_tools:
