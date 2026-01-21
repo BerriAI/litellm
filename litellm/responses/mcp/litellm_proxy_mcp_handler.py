@@ -19,7 +19,12 @@ from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_fro
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CallTypes, Choices, ModelResponse, StandardLoggingMCPToolCall
+from litellm.types.utils import (
+    CallTypes,
+    Choices,
+    ModelResponse,
+    StandardLoggingMCPToolCall,
+)
 from litellm.utils import Rules, function_setup
 
 if TYPE_CHECKING:
@@ -564,9 +569,9 @@ class LiteLLM_Proxy_MCP_Handler:
                     if user_api_key:
                         logging_request_data["metadata"]["user_api_key"] = user_api_key
 
-                    user_identifier = getattr(user_api_key_auth, "end_user_id", None) or getattr(
-                        user_api_key_auth, "user_id", None
-                    )
+                    user_identifier = getattr(
+                        user_api_key_auth, "end_user_id", None
+                    ) or getattr(user_api_key_auth, "user_id", None)
                 if user_identifier:
                     logging_request_data["user"] = user_identifier
 
@@ -620,7 +625,9 @@ class LiteLLM_Proxy_MCP_Handler:
                         standard_logging_mcp_tool_call["mcp_server_logo_url"] = logo_url
                     cost_info = mcp_info.get("mcp_server_cost_info")
                     if cost_info:
-                        standard_logging_mcp_tool_call["mcp_server_cost_info"] = cost_info
+                        standard_logging_mcp_tool_call[
+                            "mcp_server_cost_info"
+                        ] = cost_info
 
                 if litellm_logging_obj:
                     litellm_logging_obj.model_call_details[
@@ -895,9 +902,7 @@ class LiteLLM_Proxy_MCP_Handler:
             return
 
         try:
-            traceback_str = traceback.format_exc(
-                limit=MAXIMUM_TRACEBACK_LINES_TO_LOG
-            )
+            traceback_str = traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG)
             await proxy_logging_obj.post_call_failure_hook(
                 request_data=request_data,
                 original_exception=error,
@@ -948,7 +953,8 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_events=mcp_discovery_events,  # Pre-generated MCP discovery events
             tool_server_map=tool_server_map,
             mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
-            user_api_key_auth=kwargs.get("user_api_key_auth") or kwargs.get("litellm_metadata", {}).get("user_api_key_auth"),
+            user_api_key_auth=kwargs.get("user_api_key_auth")
+            or kwargs.get("litellm_metadata", {}).get("user_api_key_auth"),
             original_request_params=request_params,
         )
 
