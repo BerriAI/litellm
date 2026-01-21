@@ -4,9 +4,11 @@ import TabItem from '@theme/TabItem';
 
 # Using Claude Code Max Subscription
 
+<div style={{ textAlign: 'center' }}>
 <Image img={require('../../img/claude_code_max.png')} style={{ width: '100%', maxWidth: '800px', height: 'auto' }} />
 
 Route Claude Code Max subscription traffic through LiteLLM AI Gateway.
+</div>
 
 **Why Claude Code Max over direct API?**
 - **Lower costs** — Claude Code Max subscriptions are cheaper for Claude Code power users than per-token API pricing
