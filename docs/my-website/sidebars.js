@@ -121,6 +121,7 @@ const sidebars = {
           label: "Claude Code",
           items: [
             "tutorials/claude_responses_api",
+            "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
@@ -718,6 +719,7 @@ const sidebars = {
         "providers/galadriel",
         "providers/github",
         "providers/github_copilot",
+        "providers/chatgpt",
         "providers/gradient_ai",
         "providers/groq",
         "providers/helicone",

@@ -9,7 +9,7 @@ import {
 } from "@ant-design/icons";
 import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 
 interface ContainerFileCitation {
   type: "container_file_citation";
@@ -55,7 +55,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
               `${proxyBaseUrl}/v1/containers/${annotation.container_id}/files/${annotation.file_id}/content`,
               {
                 headers: {
-                  Authorization: `Bearer ${accessToken}`,
+                  [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
                 },
               }
             );
@@ -90,7 +90,7 @@ const CodeInterpreterOutput: React.FC<CodeInterpreterOutputProps> = ({
         `${proxyBaseUrl}/v1/containers/${annotation.container_id}/files/${annotation.file_id}/content`,
         {
           headers: {
-            Authorization: `Bearer ${accessToken}`,
+            [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           },
         }
       );

@@ -654,6 +654,8 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     file_id: str
     filename: str
     format: str
+    detail: str  # For video/image resolution control (low, medium, high, ultra_high)
+    video_metadata: Dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -1191,7 +1193,7 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     text: Optional[Union["ResponseText", Dict[str, Any]]] = None
     truncation: Optional[Literal["auto", "disabled"]] = None
-    usage: Optional[ResponseAPIUsage] = None
+    usage: Optional[Any] = None
     user: Optional[str] = None
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
