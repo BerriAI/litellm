@@ -212,103 +212,28 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
     return <div className="p-6 text-center text-gray-500">Missing required authentication parameters.</div>;
   }
 
-  const ServersTab = () =>
-    selectedServerId ? (
-      <MCPServerView
-        mcpServer={
-          filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
-            server_id: "",
-            server_name: "",
-            alias: "",
-            url: "",
-            transport: "",
-            auth_type: "",
-            created_at: "",
-            created_by: "",
-            updated_at: "",
-            updated_by: "",
-          }
-        }
-        onBack={() => {
-          setEditServer(false);
-          setSelectedServerId(null);
-          refetch();
-        }}
-        isProxyAdmin={isAdminRole(userRole)}
-        isEditing={editServer}
-        accessToken={accessToken}
-        userID={userID}
-        userRole={userRole}
-        availableAccessGroups={uniqueMcpAccessGroups}
-      />
-    ) : (
-      <div className="w-full h-full">
-        <div className="w-full px-6">
-          <div className="flex flex-col space-y-4">
-            <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
-              <div className="flex items-center gap-4">
-                <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
-                <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 300 }}>
-                  <Option value="all">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
-                    </div>
-                  </Option>
-                  <Option value="personal">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                      <span className="font-medium">Personal</span>
-                    </div>
-                  </Option>
-                  {uniqueTeams.map((team) => (
-                    <Option key={team.team_id} value={team.team_id}>
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="font-medium">{team.team_alias || team.team_id}</span>
-                      </div>
-                    </Option>
-                  ))}
-                </Select>
-                <Text className="text-lg font-semibold text-gray-900 ml-6">
-                  Access Group:
-                  <Tooltip title="An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers.">
-                    <QuestionCircleOutlined style={{ marginLeft: 4, color: "#888" }} />
-                  </Tooltip>
-                </Text>
-                <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 300 }}>
-                  <Option value="all">
-                    <div className="flex items-center gap-2">
-                      <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                      <span className="font-medium">All Access Groups</span>
-                    </div>
-                  </Option>
-                  {uniqueMcpAccessGroups.map((group) => (
-                    <Option key={group} value={group}>
-                      <div className="flex items-center gap-2">
-                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                        <span className="font-medium">{group}</span>
-                      </div>
-                    </Option>
-                  ))}
-                </Select>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div className="w-full px-6 mt-6">
-          <DataTable
-            data={filteredServers}
-            columns={columns}
-            renderSubComponent={() => <div></div>}
-            getRowCanExpand={() => false}
-            isLoading={isLoadingServers}
-            noDataMessage="No MCP servers configured"
-            loadingMessage="🚅 Loading MCP servers..."
-          />
-        </div>
-      </div>
-    );
+  // Memoize the selected server to prevent unnecessary re-renders
+  const selectedServer = React.useMemo(() => {
+    return filteredServers.find((server: MCPServer) => server.server_id === selectedServerId) || {
+      server_id: "",
+      server_name: "",
+      alias: "",
+      url: "",
+      transport: "",
+      auth_type: "",
+      created_at: "",
+      created_by: "",
+      updated_at: "",
+      updated_by: "",
+    };
+  }, [filteredServers, selectedServerId]);
+
+  // Memoize the onBack callback to prevent unnecessary re-renders
+  const handleBack = React.useCallback(() => {
+    setEditServer(false);
+    setSelectedServerId(null);
+    refetch();
+  }, [refetch]);
 
   return (
     <div className="w-full h-full p-6">
@@ -381,7 +306,86 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID })
         </TabList>
         <TabPanels>
           <TabPanel>
-            <ServersTab />
+            {selectedServerId ? (
+              <MCPServerView
+                key={selectedServerId}
+                mcpServer={selectedServer}
+                onBack={handleBack}
+                isProxyAdmin={isAdminRole(userRole)}
+                isEditing={editServer}
+                accessToken={accessToken}
+                userID={userID}
+                userRole={userRole}
+                availableAccessGroups={uniqueMcpAccessGroups}
+              />
+            ) : (
+              <div className="w-full h-full">
+                <div className="w-full px-6">
+                  <div className="flex flex-col space-y-4">
+                    <div className="flex items-center justify-between bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                      <div className="flex items-center gap-4">
+                        <Text className="text-lg font-semibold text-gray-900">Current Team:</Text>
+                        <Select value={selectedTeam} onChange={handleTeamChange} style={{ width: 300 }}>
+                          <Option value="all">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                              <span className="font-medium">{isInternalUser ? "All Available Servers" : "All Servers"}</span>
+                            </div>
+                          </Option>
+                          <Option value="personal">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                              <span className="font-medium">Personal</span>
+                            </div>
+                          </Option>
+                          {uniqueTeams.map((team) => (
+                            <Option key={team.team_id} value={team.team_id}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                <span className="font-medium">{team.team_alias || team.team_id}</span>
+                              </div>
+                            </Option>
+                          ))}
+                        </Select>
+                        <Text className="text-lg font-semibold text-gray-900 ml-6">
+                          Access Group:
+                          <Tooltip title="An MCP Access Group is a set of users or teams that have permission to access specific MCP servers. Use access groups to control and organize who can connect to which servers.">
+                            <QuestionCircleOutlined style={{ marginLeft: 4, color: "#888" }} />
+                          </Tooltip>
+                        </Text>
+                        <Select value={selectedMcpAccessGroup} onChange={handleMcpAccessGroupChange} style={{ width: 300 }}>
+                          <Option value="all">
+                            <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                              <span className="font-medium">All Access Groups</span>
+                            </div>
+                          </Option>
+                          {uniqueMcpAccessGroups.map((group) => (
+                            <Option key={group} value={group}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                <span className="font-medium">{group}</span>
+                              </div>
+                            </Option>
+                          ))}
+                        </Select>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="w-full px-6 mt-6">
+                  <DataTable
+                    data={filteredServers}
+                    columns={columns}
+                    renderSubComponent={() => <div></div>}
+                    getRowCanExpand={() => false}
+                    isLoading={isLoadingServers}
+                    noDataMessage="No MCP servers configured"
+                    loadingMessage="🚅 Loading MCP servers..."
+                  />
+                </div>
+              </div>
+            )}
           </TabPanel>
           <TabPanel>
             <MCPConnect />
