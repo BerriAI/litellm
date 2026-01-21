@@ -7,7 +7,6 @@ import {
   flexRender,
   getCoreRowModel,
   getPaginationRowModel,
-  getSortedRowModel,
   PaginationState,
   SortingState,
   useReactTable,
@@ -77,16 +76,17 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     isFetching,
     refetch,
   } = useKeys(tablePagination.pageIndex + 1, tablePagination.pageSize);
+
   const totalCount = keys?.total_count || 0;
   const [expandedAccordions, setExpandedAccordions] = useState<Record<string, boolean>>({});
 
   // Use the filter logic hook
-
   const { filters, filteredKeys, allKeyAliases, allTeams, allOrganizations, handleFilterChange, handleFilterReset } =
     useFilterLogic({
       keys: keys?.keys || [],
       teams,
       organizations,
+      pageSize: tablePagination.pageSize,
     });
 
   // Add a useEffect to call refresh when a key is created
@@ -471,8 +471,6 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
   ];
 
-  console.log(`keys: ${JSON.stringify(keys)}`);
-
   const table = useReactTable({
     data: filteredKeys,
     columns: columns.filter((col) => col.id !== "expander"),
@@ -484,27 +482,31 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
     onSortingChange: (updaterOrValue) => {
       const newSorting = typeof updaterOrValue === "function" ? updaterOrValue(sorting) : updaterOrValue;
-      console.log(`newSorting: ${JSON.stringify(newSorting)}`);
       setSorting(newSorting);
+
       if (newSorting && newSorting.length > 0) {
         const sortState = newSorting[0];
         const sortBy = sortState.id;
         const sortOrder = sortState.desc ? "desc" : "asc";
-        console.log(`sortBy: ${sortBy}, sortOrder: ${sortOrder}`);
-        handleFilterChange({
+
+        // Reset pagination to page 1 when sorting changes
+        setTablePagination(prev => ({ ...prev, pageIndex: 0 }));
+
+        const filtersToSend = {
           ...filters,
           "Sort By": sortBy,
           "Sort Order": sortOrder,
-        });
+        };
+
+        handleFilterChange(filtersToSend);
         onSortChange?.(sortBy, sortOrder);
       }
     },
     onPaginationChange: setTablePagination,
     getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     enableSorting: true,
-    manualSorting: false,
+    manualSorting: true,
     manualPagination: true,
     pageCount: Math.ceil(totalCount / tablePagination.pageSize),
   });
@@ -525,6 +527,7 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
   const start = pageIndex * pageSize + 1;
   const end = Math.min((pageIndex + 1) * pageSize, totalCount);
   const rangeLabel = `${start} - ${end}`;
+
   return (
     <div className="w-full h-full overflow-hidden">
       {selectedKey ? (

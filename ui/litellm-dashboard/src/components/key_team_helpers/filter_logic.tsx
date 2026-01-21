@@ -22,10 +22,12 @@ export function useFilterLogic({
   keys,
   teams,
   organizations,
+  pageSize,
 }: {
   keys: KeyResponse[];
   teams: Team[] | null;
   organizations: Organization[] | null;
+  pageSize?: number;
 }) {
   const defaultFilters: FilterState = {
     "Team ID": "",
@@ -41,6 +43,8 @@ export function useFilterLogic({
   const [allOrganizations, setAllOrganizations] = useState<Organization[]>(organizations || []);
   const [filteredKeys, setFilteredKeys] = useState<KeyResponse[]>(keys);
   const lastSearchTimestamp = useRef(0);
+  const isServerSideFilterActive = useRef(false);
+
   const debouncedSearch = useCallback(
     debounce(async (filters: FilterState) => {
       if (!accessToken) {
@@ -51,7 +55,7 @@ export function useFilterLogic({
       lastSearchTimestamp.current = currentTimestamp;
 
       try {
-        // Make the API call using userListCall with all filter parameters
+        // Make the API call using keyListCall with all filter parameters
         const data = await keyListCall(
           accessToken,
           filters["Organization ID"] || null,
@@ -60,7 +64,7 @@ export function useFilterLogic({
           filters["User ID"] || null,
           filters["Key Hash"] || null,
           1, // Reset to first page when searching
-          defaultPageSize,
+          pageSize ?? defaultPageSize,
           filters["Sort By"] || null,
           filters["Sort Order"] || null,
         );
@@ -69,18 +73,24 @@ export function useFilterLogic({
         if (currentTimestamp === lastSearchTimestamp.current) {
           if (data) {
             setFilteredKeys(data.keys);
-            console.log("called from debouncedSearch filters:", JSON.stringify(filters));
-            console.log("called from debouncedSearch data:", JSON.stringify(data));
           }
         }
       } catch (error) {
-        console.error("Error searching users:", error);
+        console.error("Error searching keys:", error);
       }
     }, 300),
-    [accessToken],
+    [accessToken, pageSize],
   );
+
   // Apply filters to keys whenever keys or filters change
+  // BUT only if we're not using server-side filtering (sorting, key alias search, etc.)
   useEffect(() => {
+    // If server-side filtering is active, don't overwrite the results from debouncedSearch
+    // The server already returned the filtered/sorted data
+    if (isServerSideFilterActive.current) {
+      return;
+    }
+
     if (!keys) {
       setFilteredKeys([]);
       return;
@@ -88,12 +98,12 @@ export function useFilterLogic({
 
     let result = [...keys];
 
-    // Apply Team ID filter
+    // Apply Team ID filter (client-side, only when not using server-side filters)
     if (filters["Team ID"]) {
       result = result.filter((key) => key.team_id === filters["Team ID"]);
     }
 
-    // Apply Organization ID filter
+    // Apply Organization ID filter (client-side, only when not using server-side filters)
     if (filters["Organization ID"]) {
       result = result.filter((key) => key.organization_id === filters["Organization ID"]);
     }
@@ -152,15 +162,28 @@ export function useFilterLogic({
   }, [organizations]);
 
   const handleFilterChange = (newFilters: Record<string, string>) => {
-    // Update filters state
-    setFilters({
+    // Check if any server-side filter will be active after this change
+    // This must be set BEFORE setFilters to prevent the useEffect from overwriting
+    const hasServerSideFilter =
+      (newFilters["Sort By"] && newFilters["Sort By"] !== "created_at") ||
+      (newFilters["Sort Order"] && newFilters["Sort Order"] !== "desc") ||
+      newFilters["Key Alias"] ||
+      newFilters["User ID"] ||
+      newFilters["Key Hash"];
+
+    isServerSideFilterActive.current = !!hasServerSideFilter;
+
+    const newFiltersState = {
       "Team ID": newFilters["Team ID"] || "",
       "Organization ID": newFilters["Organization ID"] || "",
       "Key Alias": newFilters["Key Alias"] || "",
       "User ID": newFilters["User ID"] || "",
       "Sort By": newFilters["Sort By"] || "created_at",
       "Sort Order": newFilters["Sort Order"] || "desc",
-    });
+    };
+
+    // Update filters state
+    setFilters(newFiltersState);
 
     // Fetch keys based on new filters
     const updatedFilters = {
@@ -171,6 +194,9 @@ export function useFilterLogic({
   };
 
   const handleFilterReset = () => {
+    // Reset the server-side filter flag so client-side filtering can take over
+    isServerSideFilterActive.current = false;
+
     // Reset filters state
     setFilters(defaultFilters);
 

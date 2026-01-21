@@ -3314,7 +3314,6 @@ export const keyListCall = async (
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/key/list` : `/key/list`;
-    console.log("in keyListCall");
     const queryParams = new URLSearchParams();
 
     if (teamID) {
@@ -3386,11 +3385,8 @@ export const keyListCall = async (
     }
 
     const data = await response.json();
-    console.log("/team/list API Response:", data);
     return data;
-    // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
-    console.error("Failed to create key:", error);
     throw error;
   }
 };
