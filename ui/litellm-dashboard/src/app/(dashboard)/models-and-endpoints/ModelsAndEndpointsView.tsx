@@ -15,7 +15,7 @@ import { transformModelData } from "./utils/modelDataTransformer";
 import { all_admin_roles, internalUserRoles, isProxyAdminRole, isUserTeamAdminForAnyTeam } from "@/utils/roles";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { useQueryClient } from "@tanstack/react-query";
-import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels, Text } from "@tremor/react";
+import { Col, Grid, Icon, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
 import type { UploadProps } from "antd";
 import { Form, Typography } from "antd";
 import { PlusCircleOutlined } from "@ant-design/icons";
@@ -62,6 +62,12 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
   const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
   const [selectedTabIndex, setSelectedTabIndex] = useState(0);
+  const [showMissingProviderBanner, setShowMissingProviderBanner] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("hideMissingProviderBanner") !== "true";
+    }
+    return true;
+  });
 
   const queryClient = useQueryClient();
   const { data: modelDataResponse, isLoading: isLoadingModels, refetch: refetchModels } = useModelsInfo();
@@ -153,7 +159,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
 
   const handleRefreshClick = () => {
     const currentDate = new Date();
-    setLastRefreshed(currentDate.toLocaleString());
+    setLastRefreshed(currentDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
     queryClient.invalidateQueries({ queryKey: ["models", "list"] });
     refetchModels();
   };
@@ -275,43 +281,75 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 <p className="text-sm text-gray-600">Add and manage models for the proxy</p>
               )}
             </div>
+            {!showMissingProviderBanner && (
+              <a
+                href="https://models.litellm.ai/?request=true"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-[#6366f1] hover:text-[#5558e3] border border-[#6366f1] hover:border-[#5558e3] rounded-lg transition-colors"
+              >
+                <PlusCircleOutlined style={{ fontSize: "12px" }} />
+                Request Provider
+              </a>
+            )}
           </div>
 
           {/* Missing Provider Banner */}
-          <div className="mb-4 px-4 py-3 bg-blue-50 rounded-lg border border-blue-100 flex items-center gap-4">
-            <div className="flex-shrink-0 w-10 h-10 bg-white rounded-full flex items-center justify-center border border-blue-200">
-              <PlusCircleOutlined style={{ fontSize: "18px", color: "#6366f1" }} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <h4 className="text-gray-900 font-semibold text-sm m-0">Missing a provider?</h4>
-              <p className="text-gray-500 text-xs m-0 mt-0.5">
-                The LiteLLM engineering team is constantly adding support for new LLM models, providers, endpoints. If
-                you don&apos;t see the one you need, let us know and we&apos;ll prioritize it.
-              </p>
-            </div>
-            <a
-              href="https://models.litellm.ai/?request=true"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
-            >
-              Request Provider
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                className="h-4 w-4"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke="currentColor"
-                strokeWidth={2}
+          {showMissingProviderBanner && (
+            <div className="mb-4 px-4 py-3 bg-blue-50 rounded-lg border border-blue-100 flex items-center gap-4">
+              <div className="flex-shrink-0 w-10 h-10 bg-white rounded-full flex items-center justify-center border border-blue-200">
+                <PlusCircleOutlined style={{ fontSize: "18px", color: "#6366f1" }} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-gray-900 font-semibold text-sm m-0">Missing a provider?</h4>
+                <p className="text-gray-500 text-xs m-0 mt-0.5">
+                  The LiteLLM engineering team is constantly adding support for new LLM models, providers, endpoints. If
+                  you don&apos;t see the one you need, let us know and we&apos;ll prioritize it.
+                </p>
+              </div>
+              <a
+                href="https://models.litellm.ai/?request=true"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-[#6366f1] hover:bg-[#5558e3] text-white text-sm font-medium rounded-lg transition-colors"
               >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
-                />
-              </svg>
-            </a>
-          </div>
+                Request Provider
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-4 w-4"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                  />
+                </svg>
+              </a>
+              <button
+                onClick={() => {
+                  setShowMissingProviderBanner(false);
+                  localStorage.setItem("hideMissingProviderBanner", "true");
+                }}
+                className="flex-shrink-0 p-1 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-full transition-colors"
+                aria-label="Dismiss banner"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  className="h-5 w-5"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  strokeWidth={2}
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          )}
           {selectedModelId && !isLoading ? (
             <ModelInfoView
               modelId={selectedModelId}
@@ -341,13 +379,13 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                   {all_admin_roles.includes(userRole) && <Tab>Price Data Reload</Tab>}
                 </div>
 
-                <div className="flex items-center space-x-2">
-                  {lastRefreshed && <Text>Last Refreshed: {lastRefreshed}</Text>}
+                <div className="flex items-center space-x-2 self-center">
+                  {lastRefreshed && <span className="text-xs text-gray-500">Last Refreshed: {lastRefreshed}</span>}
                   <Icon
-                    icon={RefreshIcon} // Modify as necessary for correct icon name
+                    icon={RefreshIcon}
                     variant="shadow"
                     size="xs"
-                    className="self-center"
+                    className="cursor-pointer"
                     onClick={handleRefreshClick}
                   />
                 </div>

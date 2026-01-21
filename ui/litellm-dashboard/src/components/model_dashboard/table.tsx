@@ -30,6 +30,7 @@ interface ModelDataTableProps<TData, TValue> {
   pagination?: PaginationState;
   onPaginationChange?: OnChangeFn<PaginationState>;
   enablePagination?: boolean;
+  onRowClick?: (row: TData) => void;
 }
 
 export function ModelDataTable<TData, TValue>({
@@ -40,6 +41,7 @@ export function ModelDataTable<TData, TValue>({
   pagination,
   onPaginationChange,
   enablePagination = false,
+  onRowClick,
 }: ModelDataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>(defaultSorting);
   const [columnResizeMode] = React.useState<ColumnResizeMode>("onChange");
@@ -157,7 +159,11 @@ export function ModelDataTable<TData, TValue>({
                 </TableRow>
               ) : tableInstance.getRowModel().rows.length > 0 ? (
                 tableInstance.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
+                  <TableRow
+                    key={row.id}
+                    onClick={() => onRowClick?.(row.original)}
+                    className={onRowClick ? "cursor-pointer hover:bg-gray-50" : ""}
+                  >
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
