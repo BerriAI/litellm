@@ -1872,6 +1872,39 @@ export const agentDailyActivityCall = async (
   });
 };
 
+export const adminUsersDailyActivityCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  page: number = 1,
+  tagFilters: string[] | null = null,
+  minSpend: number | null = null,
+  maxSpend: number | null = null,
+  sortBy: string = "spend",
+  sortOrder: string = "desc",
+  topN: number = 10,
+) => {
+  /**
+   * Get admin-level user usage analytics
+   * Returns top users, paginated user list, and summary stats
+   */
+  return fetchDailyActivity({
+    accessToken,
+    endpoint: "/admin/users/daily/activity",
+    startTime,
+    endTime,
+    page,
+    extraQueryParams: {
+      tag_filters: tagFilters,
+      min_spend: minSpend,
+      max_spend: maxSpend,
+      sort_by: sortBy,
+      sort_order: sortOrder,
+      top_n: topN,
+    },
+  });
+};
+
 export const getTotalSpendCall = async (accessToken: string) => {
   /**
    * Get all models on proxy
