@@ -29,6 +29,7 @@ def load_vertex_ai_credentials():
     # Define the path to the vertex_key.json file
     print("loading vertex ai credentials")
     os.environ["GCS_FLUSH_INTERVAL"] = "1"
+    os.environ["GCS_USE_BATCHED_LOGGING"] = "false"
     filepath = os.path.dirname(os.path.abspath(__file__))
     vertex_key_path = filepath + "/vertex_key.json"
 
