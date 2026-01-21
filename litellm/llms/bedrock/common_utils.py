@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Common utilities used across bedrock chat/embedding/image generation
 """
@@ -8,6 +10,7 @@ from typing import TYPE_CHECKING, Dict, List, Literal, Optional, Union
 
 if TYPE_CHECKING:
     from litellm.types.llms.bedrock import BedrockCreateBatchRequest
+    from litellm.types.utils import ProviderSpecificModelInfo
 
 import httpx
 
@@ -482,6 +485,22 @@ class BedrockModelInfo(BaseLLMModelInfo):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> List[str]:
         return []
+
+    def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
+        """
+        Handles Bedrock throughput suffixes like ":28k", ":51k".
+        """
+        import re
+
+        overrides: ProviderSpecificModelInfo = {}
+
+        # Parse context window suffix (e.g., :28k, :51k)
+        match = re.search(r":(\d+)k$", model)
+        if match:
+            throughput_value = int(match.group(1)) * 1000
+            overrides["max_input_tokens"] = throughput_value
+
+        return overrides if overrides else None
 
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
