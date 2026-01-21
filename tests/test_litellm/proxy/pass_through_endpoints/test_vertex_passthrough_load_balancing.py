@@ -220,3 +220,91 @@ async def test_async_get_available_deployment_for_pass_through():
     assert deployment is not None
     assert deployment["litellm_params"]["use_in_pass_through"] is True
 
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_forwards_anthropic_beta_header():
+    """
+    Test that _prepare_vertex_auth_headers forwards the anthropic-beta header
+    (and other important headers) from the incoming request when credentials are available.
+
+    This test validates the fix for the issue where the 1M context window header
+    (anthropic-beta: context-1m-2025-08-07) was being dropped when forwarding
+    requests to Vertex AI.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _prepare_vertex_auth_headers,
+    )
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    from starlette.datastructures import Headers
+
+    # Create a mock request with anthropic-beta header
+    mock_request = MagicMock()
+    mock_request.headers = Headers({
+        "authorization": "Bearer old-token",
+        "anthropic-beta": "context-1m-2025-08-07",
+        "content-type": "application/json",
+        "user-agent": "test-client",
+        "content-length": "1234",  # Should be removed
+        "host": "localhost:4000",  # Should be removed
+    })
+
+    # Create mock vertex credentials
+    mock_vertex_credentials = MagicMock()
+    mock_vertex_credentials.vertex_project = "test-project"
+    mock_vertex_credentials.vertex_location = "us-central1"
+    mock_vertex_credentials.vertex_credentials = "test-credentials"
+
+    # Create mock handler
+    mock_handler = MagicMock()
+    mock_handler.update_base_target_url_with_credential_location.return_value = (
+        "https://us-central1-aiplatform.googleapis.com"
+    )
+
+    with patch.object(
+        VertexBase,
+        "_ensure_access_token_async",
+        new_callable=AsyncMock,
+        return_value=("test-auth-header", "test-project"),
+    ) as mock_ensure_token, patch.object(
+        VertexBase,
+        "_get_token_and_url",
+        return_value=("new-access-token", None),
+    ) as mock_get_token:
+
+        # Call the function
+        (
+            headers,
+            base_target_url,
+            headers_passed_through,
+            vertex_project,
+            vertex_location,
+        ) = await _prepare_vertex_auth_headers(
+            request=mock_request,
+            vertex_credentials=mock_vertex_credentials,
+            router_credentials=None,
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            base_target_url="https://us-central1-aiplatform.googleapis.com",
+            get_vertex_pass_through_handler=mock_handler,
+        )
+
+        # Verify that the anthropic-beta header is preserved
+        assert "anthropic-beta" in headers
+        assert headers["anthropic-beta"] == "context-1m-2025-08-07"
+
+        # Verify that other headers are preserved
+        assert "content-type" in headers
+        assert headers["content-type"] == "application/json"
+        assert "user-agent" in headers
+
+        # Verify that the Authorization header was updated
+        assert "authorization" in headers
+        assert headers["authorization"] == "Bearer new-access-token"
+
+        # Verify that content-length and host headers were removed
+        assert "content-length" not in headers
+        assert "host" not in headers
+
+        # Verify that headers_passed_through is False (since we have credentials)
+        assert headers_passed_through is False
+
