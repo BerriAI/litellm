@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.proxy._experimental.mcp_server.utils import split_server_prefix_from_name
 from litellm.responses.main import aresponses
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
-from litellm.types.llms.openai import ResponsesAPIResponse, ToolParam
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, Choices, ModelResponse, StandardLoggingMCPToolCall
 from litellm.utils import Rules, function_setup
 
@@ -27,6 +27,10 @@ if TYPE_CHECKING:
     from litellm.proxy.utils import ProxyLogging
 else:
     MCPTool = Any
+
+# NOTE: We intentionally keep ToolParam as a broad type here to avoid tight coupling
+# to optional OpenAI SDK typing symbols in environments that may not have them available.
+ToolParam = Dict[str, Any]
 
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
@@ -123,6 +127,8 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_auth_header=None,
             mcp_servers=mcp_servers,
             mcp_server_auth_headers=None,
+            log_list_tools_to_spendlogs=True,
+            list_tools_log_source="responses",
         )
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
@@ -495,7 +501,7 @@ class LiteLLM_Proxy_MCP_Handler:
         rules_obj = Rules()
         for tool_call in tool_calls:
             logging_request_data: Dict[str, Any] = {}
-            tool_name: str = ""
+            tool_name: Optional[str] = None
             try:
                 (
                     tool_name,
@@ -539,7 +545,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     }
                 ]
                 tool_logging_call_id = litellm_call_id or str(uuid.uuid4())
-                logging_request_data: Dict[str, Any] = {
+                logging_request_data = {
                     "model": f"MCP: {tool_name}",
                     "metadata": {
                         "tool_call_id": tool_call_id,
