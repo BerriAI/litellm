@@ -2628,6 +2628,45 @@ def validate_membership(
         )
 
 
+def validate_team_admin(
+    user_api_key_dict: UserAPIKeyAuth, team_table: LiteLLM_TeamTable
+):
+    """Validates that user is a team admin. Used for sensitive operations."""
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value
+    ):
+        return
+
+    if user_api_key_dict.user_id is None:
+        raise HTTPException(
+            status_code=403,
+            detail={"error": "Team keys cannot access other teams' information"}
+        )
+    
+    for member in team_table.members_with_roles:
+        if member.user_id == user_api_key_dict.user_id:
+            if member.role == "admin":
+                return
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "User={} must be team admin. Current role: {}".format(
+                        user_api_key_dict.user_id, member.role
+                    )
+                }
+            )
+    
+    raise HTTPException(
+        status_code=403,
+        detail={
+            "error": "User={} not authorized to access team={}".format(
+                user_api_key_dict.user_id, team_table.team_id
+            )
+        }
+    )
+
+
 def _unfurl_all_proxy_models(
     team_info: LiteLLM_TeamTable, llm_router: Router
 ) -> LiteLLM_TeamTable:
@@ -2716,7 +2755,7 @@ async def team_info(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"message": f"Team not found, passed team id: {team_id}."},
             )
-        validate_membership(
+        validate_team_admin(
             user_api_key_dict=user_api_key_dict,
             team_table=LiteLLM_TeamTable(**team_info.model_dump()),
         )
