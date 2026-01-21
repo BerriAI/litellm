@@ -4681,26 +4681,35 @@ class Router:
                 parent_otel_span=parent_otel_span,
             )
 
-            # raises an exception if this error should not be retries
-            self.should_retry_this_error(
-                error=e,
-                healthy_deployments=_healthy_deployments,
-                all_deployments=_all_deployments,
-                context_window_fallbacks=context_window_fallbacks,
-                regular_fallbacks=fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-            )
-
+            # Check retry policy FIRST, before should_retry_this_error
+            # This allows retry policies to override the healthy deployments check
+            _retry_policy_applies = False
             if (
                 self.retry_policy is not None
                 or self.model_group_retry_policy is not None
             ):
                 # get num_retries from retry policy
+                # Use the model_group captured at the start of the function, or get it from metadata
+                # kwargs.get("model") at this point is the deployment model, not the model_group
+                _model_group_for_retry_policy = model_group or _metadata.get("model_group") or kwargs.get("model")
                 _retry_policy_retries = self.get_num_retries_from_retry_policy(
-                    exception=original_exception, model_group=kwargs.get("model")
+                    exception=original_exception, model_group=_model_group_for_retry_policy
                 )
                 if _retry_policy_retries is not None:
                     num_retries = _retry_policy_retries
+                    _retry_policy_applies = True
+
+            # raises an exception if this error should not be retries
+            # Skip this check if retry policy applies (retry policy takes precedence)
+            if not _retry_policy_applies:
+                self.should_retry_this_error(
+                    error=e,
+                    healthy_deployments=_healthy_deployments,
+                    all_deployments=_all_deployments,
+                    context_window_fallbacks=context_window_fallbacks,
+                    regular_fallbacks=fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                )
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
@@ -4864,6 +4873,12 @@ class Router:
             and content_policy_fallbacks is not None
         ):
             raise error
+
+        status_code = getattr(error, "status_code", None)
+        if status_code is not None and not litellm._should_retry(status_code):
+            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
+            if status_code not in (401, 403):
+                raise error
 
         if isinstance(error, litellm.NotFoundError):
             raise error

@@ -1,10 +1,12 @@
-# this workflow is triggered by an API call when there is a new PyPI release of LiteLLM
+# Standalone workflow to publish LiteLLM Helm Chart
+# Note: The main ghcr_deploy.yml workflow also publishes the Helm chart as part of a full release
 name: Build, Publish LiteLLM Helm Chart. New Release
 on:
   workflow_dispatch:
     inputs:
-      chartVersion:
-        description: "Update the helm chart's version to this"
+      tag:
+        description: "LiteLLM version tag (e.g., v1.81.0)"
+        required: true
 
 # Defines two custom environment variables for the workflow. Used for the Container registry domain, and a name for the Docker image that this workflow builds.
 env:
@@ -31,24 +33,22 @@ jobs:
         run: |
           echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
 
-      - name: Get LiteLLM Latest Tag
-        id: current_app_tag
-        uses: WyriHaximus/github-action-get-previous-tag@v1.3.0
-
-      - name: Get last published chart version
-        id: current_version
+      # Sync Helm chart version with LiteLLM release version (1-1 versioning)
+      - name: Calculate chart and app versions
+        id: chart_version
         shell: bash
-        run: helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/litellm-helm | grep '^version:' | awk 'BEGIN{FS=":"}{print "current-version="$2}' | tr -d " " | tee -a $GITHUB_OUTPUT
-        env:
-          HELM_EXPERIMENTAL_OCI: '1'
+        run: |
+          INPUT_TAG="${{ github.event.inputs.tag }}"
 
-      # Automatically update the helm chart version one "patch" level
-      - name: Bump release version
-        id: bump_version
-        uses: christian-draeger/increment-semantic-version@1.1.0
-        with:
-          current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
-          version-fragment: 'bug'
+          # Chart version = LiteLLM version without 'v' prefix
+          # v1.81.0 -> 1.81.0
+          CHART_VERSION="${INPUT_TAG#v}"
+
+          # App version = Docker tag (keeps 'v' prefix)
+          APP_VERSION="${INPUT_TAG}"
+
+          echo "version=${CHART_VERSION}" | tee -a $GITHUB_OUTPUT
+          echo "app_version=${APP_VERSION}" | tee -a $GITHUB_OUTPUT
 
       - name: Lint helm chart
         run: helm lint deploy/charts/litellm-helm
@@ -57,8 +57,8 @@ jobs:
         with:
           name: litellm-helm
           repository: ${{ env.REPO_OWNER }}
-          tag: ${{ github.event.inputs.chartVersion || steps.bump_version.outputs.next-version || '0.1.0' }}
-          app_version: ${{ steps.current_app_tag.outputs.tag || 'latest' }}
+          tag: ${{ steps.chart_version.outputs.version }}
+          app_version: ${{ steps.chart_version.outputs.app_version }}
           path: deploy/charts/litellm-helm
           registry: ${{ env.REGISTRY }}
           registry_username: ${{ github.actor }}

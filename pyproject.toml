@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.81.0"
+version = "1.81.1"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -53,14 +53,15 @@ azure-keyvault-secrets = {version = "^4.8.0", optional = true}
 azure-storage-blob = {version="^12.25.1", optional=true}
 google-cloud-kms = {version = "^2.21.3", optional = true}
 google-cloud-iam = {version = "^2.19.1", optional = true}
+google-cloud-aiplatform = {version = ">=1.38.0", optional = true}
 resend = {version = ">=0.8.0", optional = true}
 pynacl = {version = "^1.5.0", optional = true}
 websockets = {version = "^15.0.1", optional = true}
-boto3 = {version = "1.36.0", optional = true}
+boto3 = { version = "1.40.76", optional = true }
 redisvl = {version = "^0.4.1", optional = true, markers = "python_version >= '3.9' and python_version < '3.14'"}
 mcp = {version = ">=1.25.0,<2.0.0", optional = true, python = ">=3.10"}
 a2a-sdk = {version = "^0.3.22", optional = true, python = ">=3.10"}
-litellm-proxy-extras = {version = "0.4.23", optional = true}
+litellm-proxy-extras = {version = "0.4.25", optional = true}
 rich = {version = "13.7.1", optional = true}
 litellm-enterprise = {version = "0.1.27", optional = true}
 diskcache = {version = "^5.6.1", optional = true}
@@ -126,6 +127,7 @@ semantic-router = ["semantic-router"]
 
 mlflow = ["mlflow"]
 
+google = ["google-cloud-aiplatform"]
 
 [tool.isort]
 profile = "black"
@@ -169,7 +171,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.81.0"
+version = "1.81.1"
 version_files = [
     "pyproject.toml:^version"
 ]

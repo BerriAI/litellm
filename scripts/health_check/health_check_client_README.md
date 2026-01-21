@@ -30,6 +30,14 @@ export LITELLM_MODELS_YAML="/path/to/config.yaml"
 python scripts/health_check/health_check_client.py
 ```
 
+**Option 3: Use custom authentication header**
+```bash
+export LITELLM_BASE_URL="https://litellm.example.com"
+export LITELLM_API_KEY="your-api-key"
+export LITELLM_CUSTOM_AUTH_HEADER="x-custom-auth-header"
+python scripts/health_check/health_check_client.py
+```
+
 ### As a Docker Container
 
 1. Build the Docker image:
@@ -44,6 +52,16 @@ docker build -f docker/Dockerfile.health_check -t litellm/litellm-health-check:l
 docker run --rm \
   -e LITELLM_BASE_URL="https://litellm.example.com" \
   -e LITELLM_API_KEY="your-api-key" \
+  litellm/litellm-health-check:latest
+```
+
+3. Run with custom authentication header:
+
+```bash
+docker run --rm \
+  -e LITELLM_BASE_URL="https://litellm.example.com" \
+  -e LITELLM_API_KEY="your-api-key" \
+  -e LITELLM_CUSTOM_AUTH_HEADER="x-custom-auth-header" \
   litellm/litellm-health-check:latest
 ```
 
@@ -65,6 +83,30 @@ export LITELLM_API_KEY="your-api-key"
 ./scripts/health_check/run_parallel_health_checks.sh 16
 ```
 
+**With Custom Auth Header:**
+```powershell
+$env:LITELLM_BASE_URL="https://litellm.example.com"
+$env:LITELLM_API_KEY="your-api-key"
+$env:LITELLM_CUSTOM_AUTH_HEADER="x-custom-auth-header"
+.\scripts\health_check\run_parallel_health_checks.ps1 16
+```
+
+**With Custom Docker Image:**
+```powershell
+$env:LITELLM_BASE_URL="https://litellm.example.com"
+$env:LITELLM_API_KEY="your-api-key"
+$env:LITELLM_CUSTOM_AUTH_HEADER="x-custom-auth-header"
+.\scripts\health_check\run_parallel_health_checks.ps1 -NumParallelJobs 16 -ImageName "your-registry/your-image:tag"
+```
+
+**Bash with Custom Image:**
+```bash
+export LITELLM_BASE_URL="https://litellm.example.com"
+export LITELLM_API_KEY="your-api-key"
+export LITELLM_CUSTOM_AUTH_HEADER="x-custom-auth-header"
+./scripts/health_check/run_parallel_health_checks.sh 16 "your-registry/your-image:tag"
+```
+
 
 ## Configuration
 
@@ -73,13 +115,28 @@ export LITELLM_API_KEY="your-api-key"
 - `LITELLM_BASE_URL` (required): Base URL of the LiteLLM proxy
   - Example: `https://litellm.example.com`
 - `LITELLM_API_KEY` (required): API key for authentication
+- `LITELLM_CUSTOM_AUTH_HEADER` (optional): Custom header name for authentication
+  - Use this when your LiteLLM proxy uses a custom authentication header instead of the standard `Authorization` header
+  - Example: `x-custom-auth-header` (the API key will be sent as `Bearer <api_key>` in this header)
 - `LITELLM_MODELS_YAML` (optional): Path to YAML config file with model_list
   - If provided, reads models from YAML instead of fetching from API
   - Example: `/path/to/config.yaml`
 - `LITELLM_TIMEOUT` (optional): Request timeout in seconds (default: 120)
-- `LITELLM_COMPLETION_PROMPT` (optional): Test prompt for chat/completion models (default: "Say this is a test")
-- `LITELLM_EMBEDDING_TEXT` (optional): Test text for embedding models (default: "This is a test for vectorization.")
+- `LITELLM_COMPLETION_PROMPT` (optional): Test prompt for chat/completion models (default: ~100k characters)
+- `LITELLM_EMBEDDING_TEXT` (optional): Test text for embedding models (default: ~100k characters)
 - `LITELLM_JSON_OUTPUT` (optional): Output results as JSON (default: false)
+
+### Parallel Script Parameters
+
+**PowerShell (`run_parallel_health_checks.ps1`):**
+- `-NumParallelJobs` (optional): Number of parallel containers to run (default: 16)
+- `-ImageName` (optional): Docker image to use (default: `litellm/litellm-health-check:latest`)
+- `-ContainerRuntime` (optional): Container runtime to use (default: `docker`)
+
+**Bash (`run_parallel_health_checks.sh`):**
+- `[num_parallel_jobs]` (optional): Number of parallel containers to run (default: 16)
+- `[image_name]` (optional): Docker image to use (default: `litellm/litellm-health-check:latest`)
+- `[container_runtime]` (optional): Container runtime to use (default: `docker`)
 
 ## Output
 
@@ -166,7 +223,20 @@ Run multiple health checks in parallel:
 
 **PowerShell:**
 ```powershell
+# Using default image
 .\scripts\health_check\run_parallel_health_checks.ps1 16
+
+# Using custom image
+.\scripts\health_check\run_parallel_health_checks.ps1 -NumParallelJobs 16 -ImageName "your-registry/your-image:tag"
+```
+
+**Bash:**
+```bash
+# Using default image
+./scripts/health_check/run_parallel_health_checks.sh 16
+
+# Using custom image
+./scripts/health_check/run_parallel_health_checks.sh 16 "your-registry/your-image:tag"
 ```
 
 ### 3. CI/CD Integration
