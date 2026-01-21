@@ -1248,6 +1248,8 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Reasoning summary events
     RESPONSE_PART_ADDED = "response.reasoning_summary_part.added"
     REASONING_SUMMARY_TEXT_DELTA = "response.reasoning_summary_text.delta"
+    REASONING_SUMMARY_TEXT_DONE = "response.reasoning_summary_text.done"
+    REASONING_SUMMARY_PART_DONE = "response.reasoning_summary_part.done"
 
     # Output item events
     OUTPUT_ITEM_ADDED = "response.output_item.added"
@@ -1335,6 +1337,24 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     delta: str
+
+
+class ReasoningSummaryTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE]
+    item_id: str
+    output_index: int
+    sequence_number: int
+    summary_index: int
+    text: str
+
+
+class ReasoningSummaryPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE]
+    item_id: str
+    output_index: int
+    sequence_number: int
+    summary_index: int
+    part: BaseLiteLLMOpenAIResponseObject
 
 
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1591,6 +1611,8 @@ ResponsesAPIStreamingResponse = Annotated[
         ResponseIncompleteEvent,
         ResponsePartAddedEvent,
         ReasoningSummaryTextDeltaEvent,
+        ReasoningSummaryTextDoneEvent,
+        ReasoningSummaryPartDoneEvent,
         OutputItemAddedEvent,
         OutputItemDoneEvent,
         ContentPartAddedEvent,

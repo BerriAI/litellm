@@ -24,6 +24,8 @@ from litellm.types.llms.openai import (
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
     ReasoningSummaryTextDeltaEvent,
+    ReasoningSummaryTextDoneEvent,
+    ReasoningSummaryPartDoneEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseInProgressEvent,
@@ -40,7 +42,6 @@ from litellm.types.utils import (
     StreamingChoices,
     TextCompletionResponse,
 )
-
 
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     """
@@ -90,8 +91,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._final_tool_events_queued: bool = False
         self._sequence_number: int = 0  
         self._cached_reasoning_item_id: Optional[str] = None
+        self._sent_reasoning_summary_text_done_event: bool = False
+        self._sent_reasoning_summary_part_done_event: bool = False
+        self._reasoning_summary_text: str = ""
         # -- GENERIC RESPONSE-EVENTS PENDING QUEUE as required by fix --
         self._pending_response_events: List[BaseLiteLLMOpenAIResponseObject] = []
+        self._reasoning_active = False
+        self._reasoning_done_emitted = False
+        self._reasoning_item_id = None
+
 
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
@@ -101,6 +109,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._next_tool_output_index += 1
         self._tool_output_index_by_call_id[call_id] = idx
         return idx
+
+
+    def _is_reasoning_end(self, chunk):
+        delta = chunk.choices[0].delta
+
+        # if this indicates reasoning content, don't consider reasoning ended
+        if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+            return False
+        if hasattr(delta, "thinking_blocks") and delta.thinking_blocks:
+            return False
+
+        return (
+            delta.content
+            or delta.function_call
+            or delta.tool_calls
+            or chunk.choices[0].finish_reason is not None
+        )
 
     def _queue_tool_call_delta_events(self, tool_calls: object) -> None:
         """
@@ -405,6 +430,70 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             ),
         )
 
+    def create_reasoning_summary_text_done_event(
+        self,
+        reasoning_item_id: str,
+        reasoning_content: str,
+        sequence_number: int,
+    ) -> ReasoningSummaryTextDoneEvent:
+        """
+        Create response.reasoning_summary_text.done event.
+        
+        Example:
+        {
+            "type": "response.reasoning_summary_text.done",
+            "item_id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
+            "output_index": 0,
+            "sequence_number": 97,
+            "summary_index": 0,
+            "text": "**Clarifying the first humans**\n\nThe  I'm addressing the user's specific interest."
+        }
+        """
+        return ReasoningSummaryTextDoneEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE,
+            item_id=reasoning_item_id,
+            output_index=0,
+            sequence_number=sequence_number,
+            summary_index=0,
+            text=reasoning_content,
+        )
+
+    def create_reasoning_summary_part_done_event(
+        self, 
+        reasoning_item_id: str,
+        reasoning_content: str,
+        sequence_number: int,
+    ) -> ReasoningSummaryPartDoneEvent:
+        """
+        Create response.reasoning_summary_part.done event.
+        
+        Example:
+        {
+            "type": "response.reasoning_summary_part.done",
+            "item_id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
+            "output_index": 0,
+            "part": {
+                "type": "summary_text",
+                "text": "**Clarifying the first humans**\n\nThe  earlier hominins. It feels important to ensure I'm addressing the user's specific interest."
+            },
+            "sequence_number": 98,
+            "summary_index": 0
+        }
+        """
+        return ReasoningSummaryPartDoneEvent(
+            type=ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE,
+            item_id=reasoning_item_id,
+            output_index=0,
+            sequence_number=sequence_number,
+            summary_index=0,
+            part=BaseLiteLLMOpenAIResponseObject(
+                **{
+                    "type": "summary_text",
+                    "text": reasoning_content,
+                }
+            ),
+        )
+
     def create_output_text_done_event(
         self, litellm_complete_object: ModelResponse
     ) -> OutputTextDoneEvent:
@@ -483,6 +572,50 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "type": "output_text",
                             "text": text,
                             "annotations": response_annotations,
+                        }
+                    ],
+                }
+            ),
+        )
+
+    def create_reasoning_output_item_done_event(
+        self,
+        reasoning_item_id: str,
+        reasoning_content: str,
+        sequence_number: int,
+    ) -> OutputItemDoneEvent:
+        """
+        Create response.output_item.done event for reasoning items.
+        
+        Example:
+        {
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "sequence_number": 99,
+            "item": {
+                "id": "rs_0c5dae30e53172980069708ba2f59c8197b71ca9820edad07c",
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": "**Clarifying the first humans**..."
+                    }
+                ]
+            }
+        }
+        """
+        return OutputItemDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            output_index=0,
+            sequence_number=sequence_number,
+            item=BaseLiteLLMOpenAIResponseObject(
+                **{
+                    "id": reasoning_item_id,
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": reasoning_content,
                         }
                     ],
                 }
@@ -570,8 +703,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
 
         # Reasoning-first
         if hasattr(delta, "reasoning_content") and delta.reasoning_content:
+            self._reasoning_active = True
             if self._cached_reasoning_item_id is None:
                 self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+            self._reasoning_item_id = self._cached_reasoning_item_id
 
             event = OutputItemAddedEvent(
                 type=ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -639,6 +774,46 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(chunk)
+                        if self._reasoning_active and not self._reasoning_done_emitted:
+                            # get raw ModelResponse
+                            text_reasoning = self.create_litellm_model_response()
+                            # reasoning_content only
+                            if self._is_reasoning_end(chunk):
+                                reasoning_content = ""
+                                # best effort to obtain reasoning_content from chat model response
+                                if text_reasoning and text_reasoning.choices and hasattr(text_reasoning.choices[0].message, "reasoning_content"):
+                                    reasoning_content = getattr(text_reasoning.choices[0].message, "reasoning_content", "") or ""
+                                
+                                # Create text.done event first with its own sequence number
+                                self._sequence_number += 1
+                                text_done_event = self.create_reasoning_summary_text_done_event(
+                                    reasoning_item_id=self._reasoning_item_id,
+                                    reasoning_content=reasoning_content,
+                                    sequence_number=self._sequence_number
+                                )
+                                
+                                # Create part.done event second with its own sequence number
+                                self._sequence_number += 1
+                                part_done_event = self.create_reasoning_summary_part_done_event(
+                                    reasoning_item_id=self._reasoning_item_id,
+                                    reasoning_content=reasoning_content,
+                                    sequence_number=self._sequence_number
+                                )
+                                
+                                self._sequence_number += 1
+                                reasoning_output_item_done_event = self.create_reasoning_output_item_done_event(
+                                    reasoning_item_id=self._reasoning_item_id,
+                                    reasoning_content=reasoning_content,
+                                    sequence_number=self._sequence_number
+                                )
+                                self._pending_response_events.extend([
+                                    text_done_event,
+                                    part_done_event,
+                                    reasoning_output_item_done_event,
+                                ])
+                                self._reasoning_done_emitted = True
+                                self._reasoning_active = False
+
                         response_api_chunk = (
                             self._transform_chat_completion_chunk_to_response_api_chunk(
                                 chunk
