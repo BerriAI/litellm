@@ -142,13 +142,16 @@ claude --model 'claude-sonnet-4-5-20250929[1m]'
 
 # Inside a Claude Code session (no quotes needed)
 /model claude-sonnet-4-5-20250929[1m]
-
-# With environment variables
-export ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-4-5-20250929[1m]'
-claude
 ```
 
 **Important:** When using `--model` with `[1m]` in the shell, you must use quotes to prevent the shell from interpreting the brackets.
+
+Alternatively, set as default with environment variables:
+
+```bash
+export ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-4-5-20250929[1m]'
+claude
+```
 
 **How it works:**
 - Claude Code strips the `[1m]` suffix before sending to LiteLLM
