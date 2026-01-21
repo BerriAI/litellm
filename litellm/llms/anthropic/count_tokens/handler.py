@@ -101,12 +101,8 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
 
             verbose_logger.debug(f"Anthropic response: {anthropic_response}")
 
-            # Transform response
-            final_response = self.transform_response(anthropic_response)
-
-            verbose_logger.debug(f"Final response: {final_response}")
-
-            return final_response
+            # Return Anthropic response directly - no transformation needed
+            return anthropic_response
 
         except AnthropicError:
             # Re-raise Anthropic exceptions as-is
