@@ -1322,6 +1322,32 @@ def completion(  # type: ignore # noqa: PLR0915
         elif not isinstance(timeout, httpx.Timeout):
             timeout = float(timeout)  # type: ignore
 
+        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
+        model_info, model = responses_api_bridge_check(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+        if model_info.get("mode") == "responses":
+            from litellm.completion_extras import responses_api_bridge
+
+            return responses_api_bridge.completion(
+                model=model,
+                messages=messages,
+                headers=headers,
+                model_response=model_response,
+                api_key=api_key,
+                api_base=api_base,
+                acompletion=acompletion,
+                logging_obj=logging,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                timeout=timeout,  # type: ignore
+                client=client,  # pass AsyncOpenAI, OpenAI client
+                custom_llm_provider=custom_llm_provider,
+                encoding=_get_encoding(),
+                stream=stream,
+            )
+
         ### REGISTER CUSTOM MODEL PRICING -- IF GIVEN ###
         if input_cost_per_token is not None and output_cost_per_token is not None:
             litellm.register_model(
@@ -1537,31 +1563,6 @@ def completion(  # type: ignore # noqa: PLR0915
                 timeout=timeout,
             )
 
-        ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
-        model_info, model = responses_api_bridge_check(
-            model=model, custom_llm_provider=custom_llm_provider
-        )
-
-        if model_info.get("mode") == "responses":
-            from litellm.completion_extras import responses_api_bridge
-
-            return responses_api_bridge.completion(
-                model=model,
-                messages=messages,
-                headers=headers,
-                model_response=model_response,
-                api_key=api_key,
-                api_base=api_base,
-                acompletion=acompletion,
-                logging_obj=logging,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                timeout=timeout,  # type: ignore
-                client=client,  # pass AsyncOpenAI, OpenAI client
-                custom_llm_provider=custom_llm_provider,
-                encoding=_get_encoding(),
-                stream=stream,
-            )
 
         if custom_llm_provider == "azure":
             # azure configs
