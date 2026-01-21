@@ -132,3 +132,44 @@ def test_join_paths_nested_path():
     """Test path joining with nested paths"""
     result = join_paths(base_path="http://0.0.0.0:4000/v1", route="chat/completions")
     assert result == "http://0.0.0.0:4000/v1/chat/completions"
+
+
+def _patch_today(monkeypatch, year, month, day):
+    import datetime as real_datetime
+    import types
+
+    fake_dt = types.ModuleType("datetime")
+    for key, value in real_datetime.__dict__.items():
+        setattr(fake_dt, key, value)
+
+    class PatchedDate(real_datetime.date):
+        @classmethod
+        def today(cls):
+            return real_datetime.date(year, month, day)
+
+    fake_dt.date = PatchedDate
+    monkeypatch.setitem(sys.modules, "datetime", fake_dt)
+
+
+def test_get_projected_spend_over_limit_day_one(monkeypatch):
+    from litellm.proxy.utils import _get_projected_spend_over_limit
+
+    _patch_today(monkeypatch, 2026, 1, 1)
+    result = _get_projected_spend_over_limit(100.0, 1.0)
+
+    assert result is not None
+    projected_spend, projected_exceeded_date = result
+    assert projected_spend > 0
+    assert projected_exceeded_date is not None
+
+
+def test_get_projected_spend_over_limit_december(monkeypatch):
+    from litellm.proxy.utils import _get_projected_spend_over_limit
+
+    _patch_today(monkeypatch, 2026, 12, 15)
+    result = _get_projected_spend_over_limit(100.0, 1.0)
+
+    assert result is not None
+    projected_spend, projected_exceeded_date = result
+    assert projected_spend > 0
+    assert projected_exceeded_date is not None
