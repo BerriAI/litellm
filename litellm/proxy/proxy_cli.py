@@ -797,11 +797,7 @@ def run_server(  # noqa: PLR0915
                 ):
                     check_prisma_schema_diff(db_url=None)
                 else:
-                    if not PrismaManager.setup_database(
-                        use_migrate=not use_prisma_db_push
-                    ):
-                        print("LiteLLM: Database setup failed. Exiting...")  # noqa
-                        sys.exit(1)
+                    PrismaManager.setup_database(use_migrate=not use_prisma_db_push)
             else:
                 print(  # noqa
                     f"Unable to connect to DB. DATABASE_URL found in environment, but prisma package not found."  # noqa
