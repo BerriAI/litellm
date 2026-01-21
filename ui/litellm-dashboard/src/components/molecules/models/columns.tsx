@@ -14,7 +14,6 @@ export const columns = (
   getDisplayModelName: (model: any) => string,
   handleEditClick: (model: any) => void,
   handleRefreshClick: () => void,
-  setEditModel: (edit: boolean) => void,
   expandedRows: Set<string>,
   setExpandedRows: (expandedRows: Set<string>) => void,
 ): ColumnDef<ModelData>[] => [
@@ -301,7 +300,6 @@ export const columns = (
                 onClick={() => {
                   if (canEditModel) {
                     setSelectedModelId(model.model_info.id);
-                    setEditModel(false);
                   }
                 }}
                 className={!canEditModel ? "opacity-50 cursor-not-allowed" : "cursor-pointer hover:text-red-600"}

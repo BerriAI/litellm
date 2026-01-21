@@ -721,3 +721,189 @@ def test_convert_tool_response_text_only():
     
     # Check inline_data does NOT exist (no image provided)
     assert "inline_data" not in result
+
+
+def test_file_data_field_order():
+    """
+    Test that file_data fields are in the correct order (mime_type before file_uri).
+    
+    The Gemini API is sensitive to field order in the file_data object.
+    This test verifies that mime_type comes before file_uri in both:
+    1. Dictionary key order
+    2. JSON serialization
+    
+    Related issue: Gemini API returns 400 INVALID_ARGUMENT when fields are in wrong order.
+    """
+    import json
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+    
+    # Test with HTTPS URL and explicit format (audio file)
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/test123"
+    format = "audio/mpeg"
+    
+    result = _process_gemini_image(image_url=file_url, format=format)
+    
+    # Verify the result has file_data
+    assert "file_data" in result
+    file_data = result["file_data"]
+    
+    # Verify both fields are present
+    assert "mime_type" in file_data
+    assert "file_uri" in file_data
+    assert file_data["mime_type"] == "audio/mpeg"
+    assert file_data["file_uri"] == file_url
+    
+    # Verify field order by checking dictionary keys
+    # In Python 3.7+, dict maintains insertion order
+    file_data_keys = list(file_data.keys())
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
+        "mime_type must come before file_uri in the file_data dict"
+    
+    # Also verify by serializing to JSON string
+    json_str = json.dumps(file_data)
+    mime_type_pos = json_str.find('"mime_type"')
+    file_uri_pos = json_str.find('"file_uri"')
+    assert mime_type_pos < file_uri_pos, \
+        "mime_type must appear before file_uri in JSON serialization"
+
+
+def test_file_data_field_order_gcs_urls():
+    """Test that GCS URLs also maintain correct field order."""
+    import json
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+    
+    # Test with GCS URL
+    gcs_url = "gs://bucket/audio.mp3"
+    
+    result = _process_gemini_image(image_url=gcs_url)
+    
+    # Verify the result has file_data
+    assert "file_data" in result
+    file_data = result["file_data"]
+    
+    # Verify both fields are present
+    assert "mime_type" in file_data
+    assert "file_uri" in file_data
+    
+    # Verify field order
+    file_data_keys = list(file_data.keys())
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
+        "mime_type must come before file_uri in the file_data dict"
+
+
+def test_extract_file_data_with_path_object():
+    """
+    Test that filename is correctly extracted from Path objects for MIME type detection.
+    
+    When uploading files using Path objects (e.g., Path("speech.mp3")), the filename
+    must be extracted to enable proper MIME type detection. Without this, files get
+    uploaded with 'application/octet-stream' instead of the correct MIME type.
+    
+    Related issue: Files uploaded with wrong MIME type cause Gemini API to reject
+    requests where the specified format doesn't match the uploaded file's MIME type.
+    """
+    from pathlib import Path
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    import tempfile
+    import os
+    
+    # Create a temporary MP3 file
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp.write(b"fake mp3 content")
+        tmp_path = tmp.name
+    
+    try:
+        # Test with Path object
+        path_obj = Path(tmp_path)
+        extracted = extract_file_data(path_obj)
+        
+        # Verify filename was extracted
+        assert extracted["filename"] is not None
+        assert extracted["filename"].endswith(".mp3")
+        
+        # Verify MIME type was correctly detected
+        assert extracted["content_type"] == "audio/mpeg", \
+            f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
+        
+        # Verify content was read
+        assert extracted["content"] == b"fake mp3 content"
+        
+    finally:
+        # Clean up temporary file
+        os.unlink(tmp_path)
+
+
+def test_extract_file_data_with_string_path():
+    """Test that filename is correctly extracted from string paths."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    import tempfile
+    import os
+    
+    # Create a temporary WAV file
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(b"fake wav content")
+        tmp_path = tmp.name
+    
+    try:
+        # Test with string path
+        extracted = extract_file_data(tmp_path)
+        
+        # Verify filename was extracted
+        assert extracted["filename"] is not None
+        assert extracted["filename"].endswith(".wav")
+        
+        # Verify MIME type was correctly detected (can be audio/wav or audio/x-wav depending on system)
+        assert extracted["content_type"] in ["audio/wav", "audio/x-wav"], \
+            f"Expected 'audio/wav' or 'audio/x-wav' but got '{extracted['content_type']}'"
+        
+        # Verify content was read
+        assert extracted["content"] == b"fake wav content"
+        
+    finally:
+        # Clean up temporary file
+        os.unlink(tmp_path)
+
+
+def test_extract_file_data_with_tuple_format():
+    """Test that tuple format (with explicit content_type) still works correctly."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    
+    # Test with tuple format: (filename, content, content_type)
+    filename = "test_audio.mp3"
+    content = b"test audio content"
+    content_type = "audio/mpeg"
+    
+    extracted = extract_file_data((filename, content, content_type))
+    
+    # Verify all fields are correct
+    assert extracted["filename"] == filename
+    assert extracted["content"] == content
+    assert extracted["content_type"] == content_type
+
+
+def test_extract_file_data_fallback_to_octet_stream():
+    """Test that unknown file types fall back to application/octet-stream."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    import tempfile
+    import os
+    
+    # Create a temporary file with unknown extension
+    with tempfile.NamedTemporaryFile(suffix=".xyz123", delete=False) as tmp:
+        tmp.write(b"unknown content")
+        tmp_path = tmp.name
+    
+    try:
+        # Test with unknown file type
+        extracted = extract_file_data(tmp_path)
+        
+        # Verify filename was extracted
+        assert extracted["filename"] is not None
+        assert extracted["filename"].endswith(".xyz123")
+        
+        # Verify MIME type falls back to octet-stream
+        assert extracted["content_type"] == "application/octet-stream", \
+            f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
+        
+    finally:
+        # Clean up temporary file
+        os.unlink(tmp_path)

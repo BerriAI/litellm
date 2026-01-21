@@ -108,8 +108,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
                     if compiled_patterns:
                         self._compiled_rule_patterns[rule.id] = compiled_patterns
 
-        self.default_action = default_action
-        self.on_disallowed_action = on_disallowed_action
+        # Normalize to lowercase for case-insensitive handling
+        self.default_action = default_action.lower() if isinstance(default_action, str) else default_action
+        self.on_disallowed_action = on_disallowed_action.lower() if isinstance(on_disallowed_action, str) else on_disallowed_action
 
         verbose_proxy_logger.debug(
             "Tool Permission Guardrail initialized with %d rules, default_action: %s",

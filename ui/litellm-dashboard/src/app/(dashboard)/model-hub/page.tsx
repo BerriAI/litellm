@@ -1,6 +1,6 @@
 "use client";
 
-import ModelHubTable from "@/components/model_hub_table";
+import ModelHubTable from "@/components/AIHub/ModelHubTable";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const ModelHubPage = () => {

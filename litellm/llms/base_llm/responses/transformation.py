@@ -242,3 +242,30 @@ class BaseResponsesAPIConfig(ABC):
     #########################################################
     ########## END CANCEL RESPONSE API TRANSFORMATION #######
     #########################################################
+
+    #########################################################
+    ########## COMPACT RESPONSE API TRANSFORMATION ##########
+    #########################################################
+    @abstractmethod
+    def transform_compact_response_api_request(
+        self,
+        model: str,
+        input: Union[str, ResponseInputParam],
+        response_api_optional_request_params: Dict,
+        api_base: str,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> Tuple[str, Dict]:
+        pass
+
+    @abstractmethod
+    def transform_compact_response_api_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: LiteLLMLoggingObj,
+    ) -> ResponsesAPIResponse:
+        pass
+
+    #########################################################
+    ########## END COMPACT RESPONSE API TRANSFORMATION ######
+    #########################################################

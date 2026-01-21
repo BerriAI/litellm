@@ -97,6 +97,7 @@ class DynamoAIGuardrails(CustomGuardrail):
     async def _call_dynamoai_guardrails(
         self,
         messages: List[Dict[str, Any]],
+        event_type: GuardrailEventHooks,
         text_type: str = "input",
         request_data: Optional[dict] = None,
     ) -> DynamoAIResponse:
@@ -157,6 +158,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             return response_json
@@ -177,6 +179,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                     start_time=start_time.timestamp(),
                     end_time=end_time.timestamp(),
                     duration=duration,
+                    event_type=event_type,
                 )
 
             raise
@@ -332,6 +335,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 messages=_messages,
                 text_type="input",
                 request_data=data,
+                event_type=GuardrailEventHooks.pre_call,
             )
 
             verbose_proxy_logger.debug(
@@ -380,6 +384,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                 messages=_messages,
                 text_type="input",
                 request_data=data,
+                event_type=GuardrailEventHooks.during_call,
             )
 
             verbose_proxy_logger.debug(
@@ -460,6 +465,7 @@ class DynamoAIGuardrails(CustomGuardrail):
                     messages=dynamoai_messages,
                     text_type="output",
                     request_data=data,
+                    event_type=GuardrailEventHooks.post_call,
                 )
 
                 verbose_proxy_logger.debug(

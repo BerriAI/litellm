@@ -71,28 +71,29 @@ class TestMCPCustomFields:
         manager = MCPServerManager()
 
         # Mock database record with custom fields
-        mock_server = Mock(spec=LiteLLM_MCPServerTable)
-        mock_server.server_id = "test-server-id"
-        mock_server.server_name = "Test Server"
-        mock_server.description = "A test server"
-        mock_server.url = "http://localhost:3000"
-        mock_server.transport = "http"
-        mock_server.auth_type = MCPAuth.bearer_token
-        mock_server.alias = None
-        mock_server.mcp_info = {
-            "server_name": "Test Server",
-            "description": "A test server",
-            "custom_db_field": "database_value",
-            "metadata": {"source": "database"},
-            "version": "1.0.0"
-        }
-        mock_server.command = None
-        mock_server.args = None
-        mock_server.env = None
-        mock_server.mcp_access_groups = None
+        mock_server = LiteLLM_MCPServerTable(
+            server_id="test-server-id",
+            server_name="Test Server",
+            alias=None,
+            description="A test server",
+            url="http://localhost:3000",
+            transport="http",
+            auth_type=MCPAuth.bearer_token,
+            mcp_info={
+                "server_name": "Test Server",
+                "description": "A test server",
+                "custom_db_field": "database_value",
+                "metadata": {"source": "database"},
+                "version": "1.0.0",
+            },
+            command=None,
+            args=[],
+            env={},
+            mcp_access_groups=[],
+        )
 
         # Add server to manager
-        await manager.add_update_server(mock_server)
+        await manager.add_server(mock_server)
 
         # Get the added server
         server = manager.get_mcp_server_by_id("test-server-id")

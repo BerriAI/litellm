@@ -43,7 +43,7 @@ def _get_container_provider_config(custom_llm_provider: str):
         raise ValueError(f"Container API not supported for provider: {custom_llm_provider}")
 
 
-def _create_handler_for_path_params(path_params: List[str], route_type: str, returns_binary: bool = False):
+def _create_handler_for_path_params(path_params: List[str], route_type: str, returns_binary: bool = False, is_multipart: bool = False):
     """
     Dynamically create a handler with the correct path parameter signature.
     """
@@ -62,6 +62,23 @@ def _create_handler_for_path_params(path_params: List[str], route_type: str, ret
                 user_api_key_dict=user_api_key_dict,
             )
         return handler_binary_content
+    
+    # For multipart file upload endpoints
+    if is_multipart:
+        async def handler_multipart_upload(
+            request: Request,
+            container_id: str,
+            fastapi_response: Response,
+            user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        ):
+            return await _process_multipart_upload_request(
+                request=request,
+                fastapi_response=fastapi_response,
+                user_api_key_dict=user_api_key_dict,
+                route_type=route_type,
+                container_id=container_id,
+            )
+        return handler_multipart_upload
     
     # Create handlers for different path parameter combinations
     if path_params == ["container_id"]:
@@ -193,6 +210,83 @@ async def _process_binary_request(
         raise e
 
 
+async def _process_multipart_upload_request(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    route_type: str,
+    container_id: str,
+):
+    """Process multipart file upload requests."""
+    from litellm.proxy.common_utils.http_parsing_utils import (
+        convert_upload_files_to_file_data,
+        get_form_data,
+    )
+    from litellm.proxy.proxy_server import (
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    # Parse multipart form data and convert files
+    form_data = await get_form_data(request)
+    data = await convert_upload_files_to_file_data(form_data)
+    
+    if "file" not in data:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Missing required 'file' field")
+    
+    # convert_upload_files_to_file_data returns list of tuples, extract single file
+    file_list = data["file"]
+    if isinstance(file_list, list) and len(file_list) > 0:
+        data["file"] = file_list[0]
+    
+    data["container_id"] = container_id
+
+    custom_llm_provider = (
+        get_custom_llm_provider_from_request_headers(request=request)
+        or get_custom_llm_provider_from_request_query(request=request)
+        or "openai"
+    )
+    data["custom_llm_provider"] = custom_llm_provider
+
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type=route_type,  # type: ignore[arg-type]
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
 async def _process_request(
     request: Request,
     fastapi_response: Response,
@@ -272,9 +366,10 @@ def register_container_file_endpoints(router: APIRouter) -> None:
         path_params = endpoint_config.get("path_params", [])
         route_type = endpoint_config["async_name"]
         returns_binary = endpoint_config.get("returns_binary", False)
+        is_multipart = endpoint_config.get("is_multipart", False)
         
         # Create handler with correct signature for path params
-        handler = _create_handler_for_path_params(path_params, route_type, returns_binary)
+        handler = _create_handler_for_path_params(path_params, route_type, returns_binary, is_multipart)
         
         # Register routes
         route_method = getattr(router, method)

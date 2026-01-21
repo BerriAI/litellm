@@ -1022,6 +1022,53 @@ async def test_vertex_ai_token_counter_routes_partner_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_ai_token_counter_uses_count_tokens_location():
+    """
+    Test that VertexAITokenCounter uses vertex_count_tokens_location to override
+    vertex_location when counting tokens for partner models.
+
+    Count tokens API is not available on global location for partner models:
+    https://docs.cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/count-tokens
+    """
+    from unittest.mock import patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    # Mock the partner models handler
+    with patch(
+        "litellm.llms.vertex_ai.vertex_ai_partner_models.main.VertexAIPartnerModels.count_tokens"
+    ) as mock_partner_count_tokens:
+        mock_partner_count_tokens.return_value = {
+            "input_tokens": 42,
+            "tokenizer_used": "vertex_ai_partner_models",
+        }
+
+        # Test with vertex_count_tokens_location overriding vertex_location
+        await token_counter.count_tokens(
+            model_to_use="claude-3-5-sonnet-20241022",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "global",  # Original location (not supported for count_tokens)
+                    "vertex_count_tokens_location": "us-east5",  # Override for count_tokens
+                }
+            },
+            request_model="vertex_ai/claude-3-5-sonnet-20241022",
+        )
+
+        # Verify the partner models handler was called with the overridden location
+        assert mock_partner_count_tokens.called
+        call_kwargs = mock_partner_count_tokens.call_args.kwargs
+        assert call_kwargs["vertex_location"] == "us-east5"
+        assert call_kwargs["vertex_project"] == "test-project"
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_token_counter_routes_gemini_models():
     """
     Test that VertexAITokenCounter correctly routes Gemini models
@@ -1126,6 +1173,30 @@ def test_vertex_ai_moonshot_uses_openai_handler():
     assert VertexAIPartnerModels.should_use_openai_handler(
         "moonshotai/kimi-k2-thinking-maas"
     )
+
+
+def test_vertex_ai_zai_uses_openai_handler():
+    """
+    Ensure ZAI partner models re-use the OpenAI-format handler.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.should_use_openai_handler(
+        "zai-org/glm-4.7-maas"
+    )
+
+
+def test_vertex_ai_zai_is_partner_model():
+    """
+    Ensure ZAI models are detected as Vertex AI partner models.
+    """
+    from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
+        VertexAIPartnerModels,
+    )
+
+    assert VertexAIPartnerModels.is_vertex_partner_model("zai-org/glm-4.7-maas")
 
 
 def test_build_vertex_schema_empty_properties():

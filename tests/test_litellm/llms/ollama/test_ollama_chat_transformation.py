@@ -216,10 +216,8 @@ class TestOllamaChatConfigResponseFormat:
         # Verify image was extracted to images list
         assert "images" in result["messages"][0]
         assert len(result["messages"][0]["images"]) == 1
-        assert (
-            result["messages"][0]["images"][0]
-            == "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQ..."
-        )
+        # Ollama expects pure base64 data without the data URL prefix
+        assert result["messages"][0]["images"][0] == "/9j/4AAQSkZJRgABAQAAAQ..."
 
     def test_transform_request_multiple_images_extraction(self):
         """Test extraction of multiple images from a single message"""
@@ -263,12 +261,9 @@ class TestOllamaChatConfigResponseFormat:
         # Verify both images were extracted
         assert "images" in result["messages"][0]
         assert len(result["messages"][0]["images"]) == 2
-        assert (
-            result["messages"][0]["images"][0] == "data:image/jpeg;base64,image1data..."
-        )
-        assert (
-            result["messages"][0]["images"][1] == "data:image/png;base64,image2data..."
-        )
+        # Ollama expects pure base64 data without the data URL prefix
+        assert result["messages"][0]["images"][0] == "image1data..."
+        assert result["messages"][0]["images"][1] == "image2data..."
 
     def test_transform_request_image_url_as_string(self):
         """Test handling of image_url as direct string (edge case)"""

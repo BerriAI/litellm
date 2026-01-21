@@ -336,8 +336,8 @@ class SkillsInjectionHook(CustomLogger):
         )
 
         # Check if code execution is enabled for this request
-        litellm_metadata = request_data.get("litellm_metadata", {})
-        metadata = request_data.get("metadata", {})
+        litellm_metadata = request_data.get("litellm_metadata") or {}
+        metadata = request_data.get("metadata") or {}
         
         code_exec_enabled = (
             litellm_metadata.get("_litellm_code_execution_enabled") or

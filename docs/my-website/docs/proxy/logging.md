@@ -67,7 +67,7 @@ Set `litellm.turn_off_message_logging=True` This will prevent the messages and r
 
 <TabItem value="global" label="Global">
 
-**1. Setup config.yaml **
+**1. Setup config.yaml**
 ```yaml
 model_list:
  - model_name: gpt-3.5-turbo
@@ -1736,7 +1736,6 @@ class MyCustomHandler(CustomLogger):
 proxy_handler_instance = MyCustomHandler()
 
 # Set litellm.callbacks = [proxy_handler_instance] on the proxy
-# need to set litellm.callbacks = [proxy_handler_instance] # on the proxy
 ```
 
 #### Step 2 - Pass your custom callback class in `config.yaml`

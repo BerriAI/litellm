@@ -497,6 +497,57 @@ def test_convert_gemini_messages():
     )
 
 
+def test_convert_gemini_tool_call_result_with_image_url():
+    """
+    Test that image_url content type in tool results is handled correctly for Gemini.
+    Fixes: https://github.com/BerriAI/litellm/issues/18187
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_gemini_tool_call_result,
+    )
+    from litellm.types.llms.openai import ChatCompletionToolMessage
+
+    # Test with string image_url format
+    message_str_format = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_123",
+        content=[{"type": "image_url", "image_url": "data:image/jpeg;base64,/9j/4AAQ"}],
+    )
+    last_message_with_tool_calls = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_123",
+                "type": "function",
+                "index": 0,
+                "function": {"name": "get_image", "arguments": "{}"},
+            }
+        ],
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        message=message_str_format,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    # Should have inline_data for the image
+    assert isinstance(result, list) and any("inline_data" in p for p in result)
+
+    # Test with dict image_url format (OpenAI standard)
+    message_dict_format = ChatCompletionToolMessage(
+        role="tool",
+        tool_call_id="call_456",
+        content=[{"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ"}}],
+    )
+    last_message_with_tool_calls["tool_calls"][0]["id"] = "call_456"
+
+    result2 = convert_to_gemini_tool_call_result(
+        message=message_dict_format,
+        last_message_with_tool_calls=last_message_with_tool_calls,
+    )
+    assert isinstance(result2, list) and any("inline_data" in p for p in result2)
+
+
 def test_bedrock_tools_unpack_defs():
     """
     Test that the unpack_defs method handles nested $ref inside anyOf items correctly
@@ -569,26 +620,26 @@ def test_bedrock_tools_unpack_defs():
 
 def test_bedrock_image_processor_content_type_fallback_url_extension():
     """
-    Test that _post_call_image_processing falls back to URL extension 
+    Test that _post_call_image_processing falls back to URL extension
     when content-type is binary/octet-stream or application/octet-stream
     """
     import base64
-    
+
     # Create mock response with binary/octet-stream content-type
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "binary/octet-stream"
-    
+
     # Create a simple PNG header (magic bytes)
     png_header = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a"
     png_content = png_header + b"\x00" * 100  # Add some padding
     mock_response.content = png_content
-    
+
     # Test with .png URL
     image_url = "https://example.com/test-image.png"
     base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
         mock_response, image_url
     )
-    
+
     assert content_type == "image/png"
     assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
 
@@ -599,22 +650,22 @@ def test_bedrock_image_processor_content_type_fallback_binary_detection():
     when content-type is missing and URL extension is not recognized
     """
     import base64
-    
+
     # Create mock response with no content-type
     mock_response = MagicMock()
     mock_response.headers.get.return_value = None
-    
+
     # Create a JPEG header (magic bytes)
     jpeg_header = b"\xff\xd8\xff"
     jpeg_content = jpeg_header + b"\x00" * 100  # Add some padding
     mock_response.content = jpeg_content
-    
+
     # Test with URL without extension
     image_url = "https://example.com/test-image-without-extension"
     base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
         mock_response, image_url
     )
-    
+
     assert content_type == "image/jpeg"
     assert base64_bytes == base64.b64encode(jpeg_content).decode("utf-8")
 
@@ -624,22 +675,22 @@ def test_bedrock_image_processor_content_type_fallback_application_octet_stream(
     Test that _post_call_image_processing handles application/octet-stream correctly
     """
     import base64
-    
+
     # Create mock response with application/octet-stream content-type
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "application/octet-stream"
-    
+
     # Create a GIF header (magic bytes)
     gif_header = b"GIF8" + b"\x00" + b"a"
     gif_content = gif_header + b"\x00" * 100  # Add some padding
     mock_response.content = gif_content
-    
+
     # Test with .gif URL
     image_url = "https://s3.amazonaws.com/bucket/image.gif"
     base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
         mock_response, image_url
     )
-    
+
     assert content_type == "image/gif"
     assert base64_bytes == base64.b64encode(gif_content).decode("utf-8")
 
@@ -649,22 +700,22 @@ def test_bedrock_image_processor_content_type_with_query_params():
     Test that _post_call_image_processing correctly extracts extension from URL with query parameters
     """
     import base64
-    
+
     # Create mock response with binary/octet-stream content-type
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "binary/octet-stream"
-    
+
     # Create a WebP header (magic bytes)
     webp_header = b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP"
     webp_content = webp_header + b"\x00" * 100  # Add some padding
     mock_response.content = webp_content
-    
+
     # Test with URL containing query parameters (common in S3 signed URLs)
     image_url = "https://s3.amazonaws.com/bucket/image.webp?AWSAccessKeyId=123&Expires=456&Signature=789"
     base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
         mock_response, image_url
     )
-    
+
     assert content_type == "image/webp"
     assert base64_bytes == base64.b64encode(webp_content).decode("utf-8")
 
@@ -674,21 +725,21 @@ def test_bedrock_image_processor_content_type_normal_header():
     Test that _post_call_image_processing works normally when content-type is correctly set
     """
     import base64
-    
+
     # Create mock response with correct content-type
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "image/png"
-    
+
     # Create a PNG header
     png_header = b"\x89\x50\x4e\x47\x0d\x0a\x1a\x0a"
     png_content = png_header + b"\x00" * 100
     mock_response.content = png_content
-    
+
     image_url = "https://example.com/test-image.png"
     base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
         mock_response, image_url
     )
-    
+
     assert content_type == "image/png"
     assert base64_bytes == base64.b64encode(png_content).decode("utf-8")
 
@@ -700,16 +751,16 @@ def test_bedrock_image_processor_content_type_fallback_failure():
     # Create mock response with binary/octet-stream content-type
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "binary/octet-stream"
-    
+
     # Create content with unrecognizable image format
     mock_response.content = b"\x00" * 100
-    
+
     # Test with URL without recognizable extension
     image_url = "https://example.com/unknown-file"
-    
+
     with pytest.raises(ValueError) as excinfo:
         BedrockImageProcessor._post_call_image_processing(mock_response, image_url)
-    
+
     assert "Unable to determine content type" in str(excinfo.value)
 
 
@@ -720,18 +771,18 @@ def test_bedrock_image_processor_content_type_jpeg_variants():
     # Create mock response with binary/octet-stream
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "binary/octet-stream"
-    
+
     jpeg_header = b"\xff\xd8\xff"
     jpeg_content = jpeg_header + b"\x00" * 100
     mock_response.content = jpeg_content
-    
+
     # Test with .jpg extension
     image_url_jpg = "https://example.com/photo.jpg"
     _, content_type_jpg = BedrockImageProcessor._post_call_image_processing(
         mock_response, image_url_jpg
     )
     assert content_type_jpg == "image/jpeg"
-    
+
     # Test with .jpeg extension
     image_url_jpeg = "https://example.com/photo.jpeg"
     _, content_type_jpeg = BedrockImageProcessor._post_call_image_processing(
@@ -746,22 +797,22 @@ def test_bedrock_image_processor_content_type_pdf_document():
     when content-type is binary/octet-stream
     """
     import base64
-    
+
     # Create mock response with binary/octet-stream content-type
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "binary/octet-stream"
-    
+
     # Create a PDF header (magic bytes: %PDF)
     pdf_header = b"%PDF-1.4"
     pdf_content = pdf_header + b"\x00" * 100
     mock_response.content = pdf_content
-    
+
     # Test with .pdf URL
     pdf_url = "https://s3.amazonaws.com/bucket/document.pdf"
     base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
         mock_response, pdf_url
     )
-    
+
     assert content_type == "application/pdf"
     assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
 
@@ -771,12 +822,12 @@ def test_bedrock_image_processor_content_type_document_formats():
     Test that _post_call_image_processing handles various document formats
     """
     import base64
-    
+
     # Create mock response
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "application/octet-stream"
     mock_response.content = b"\x00" * 100
-    
+
     # Test various document formats
     test_cases = [
         ("https://example.com/doc.pdf", "application/pdf"),
@@ -786,7 +837,7 @@ def test_bedrock_image_processor_content_type_document_formats():
         ("https://example.com/page.html", "text/html"),
         ("https://example.com/readme.txt", "text/plain"),
     ]
-    
+
     for url, expected_mime in test_cases:
         _, content_type = BedrockImageProcessor._post_call_image_processing(
             mock_response, url
@@ -799,21 +850,21 @@ def test_bedrock_image_processor_content_type_s3_pdf_with_query():
     Test that _post_call_image_processing handles S3 PDF with query parameters
     """
     import base64
-    
+
     # Create mock response
     mock_response = MagicMock()
     mock_response.headers.get.return_value = "binary/octet-stream"
-    
+
     pdf_content = b"%PDF-1.4" + b"\x00" * 100
     mock_response.content = pdf_content
-    
+
     # S3 signed URL with query parameters
     s3_url = "https://my-bucket.s3.us-east-1.amazonaws.com/documents/report.pdf?AWSAccessKeyId=AKIAIOSFODNN7EXAMPLE&Expires=1234567890&Signature=abcdef123456"
-    
+
     base64_bytes, content_type = BedrockImageProcessor._post_call_image_processing(
         mock_response, s3_url
     )
-    
+
     assert content_type == "application/pdf"
     assert base64_bytes == base64.b64encode(pdf_content).decode("utf-8")
 
@@ -1086,3 +1137,258 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert f"DocumentPDFmessages_" in block["document"]["name"]
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
+
+
+def test_convert_to_anthropic_tool_result_image_with_cache_control():
+    """
+    Test that cache_control is properly applied to image content in tool results.
+    This tests the functionality added in the uncommitted changes where
+    add_cache_control_to_content is called for image_url content types.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    # Test with base64 image data URI
+    message = {
+        "role": "tool",
+        "tool_call_id": "call_test_123",
+        "content": [
+            {
+                "type": "text",
+                "text": "Here is the image you requested:",
+            },
+            {
+                "type": "image_url",
+                "image_url": "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQ",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    # Verify the result structure
+    assert result["type"] == "tool_result"
+    assert result["tool_use_id"] == "call_test_123"
+    assert isinstance(result["content"], list)
+    assert len(result["content"]) == 2
+
+    # Verify text content
+    assert result["content"][0]["type"] == "text"
+    assert result["content"][0]["text"] == "Here is the image you requested:"
+
+    # Verify image content with cache_control
+    assert result["content"][1]["type"] == "image"
+    assert result["content"][1]["source"]["type"] == "base64"
+    assert result["content"][1]["source"]["media_type"] == "image/jpeg"
+    assert "cache_control" in result["content"][1]
+    assert result["content"][1]["cache_control"]["type"] == "ephemeral"
+
+
+def test_convert_to_anthropic_tool_result_image_without_cache_control():
+    """
+    Test that images without cache_control in tool results work correctly.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    message = {
+        "role": "tool",
+        "tool_call_id": "call_test_456",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAUA",
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    # Verify the result structure
+    assert result["type"] == "tool_result"
+    assert result["tool_use_id"] == "call_test_456"
+    assert isinstance(result["content"], list)
+    assert len(result["content"]) == 1
+
+    # Verify image content without cache_control (cache_control will be None if not set)
+    assert result["content"][0]["type"] == "image"
+    assert result["content"][0]["source"]["type"] == "base64"
+    assert result["content"][0]["source"]["media_type"] == "image/png"
+    assert result["content"][0].get("cache_control") is None
+
+
+def test_convert_to_anthropic_tool_result_mixed_content_with_cache_control():
+    """
+    Test tool results with mixed content types (text and image) where only some have cache_control.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    message = {
+        "role": "tool",
+        "tool_call_id": "call_test_789",
+        "content": [
+            {
+                "type": "text",
+                "text": "First image:",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "image_url",
+                "image_url": "data:image/jpeg;base64,/9j/4AAQSkZJRg",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "text",
+                "text": "Second image (no cache):",
+            },
+            {
+                "type": "image_url",
+                "image_url": "data:image/png;base64,iVBORw0KGgo",
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    assert result["type"] == "tool_result"
+    assert isinstance(result["content"], list)
+    assert len(result["content"]) == 4
+
+    # First text with cache_control
+    assert result["content"][0]["type"] == "text"
+    assert result["content"][0]["cache_control"]["type"] == "ephemeral"
+
+    # First image with cache_control
+    assert result["content"][1]["type"] == "image"
+    assert result["content"][1]["cache_control"]["type"] == "ephemeral"
+
+    # Second text without cache_control (cache_control will be None if not set)
+    assert result["content"][2]["type"] == "text"
+    assert result["content"][2].get("cache_control") is None
+
+    # Second image without cache_control (cache_control will be None if not set)
+    assert result["content"][3]["type"] == "image"
+    assert result["content"][3].get("cache_control") is None
+
+
+def test_convert_to_anthropic_tool_result_image_url_as_http():
+    """
+    Test that HTTP/HTTPS URLs with cache_control are handled correctly.
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    message = {
+        "role": "tool",
+        "tool_call_id": "call_http_001",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": "https://example.com/image.jpg",
+                "cache_control": {"type": "ephemeral"},
+            },
+        ],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    # Verify image is passed as URL reference with cache_control
+    assert result["content"][0]["type"] == "image"
+    assert result["content"][0]["source"]["type"] == "url"
+    assert result["content"][0]["source"]["url"] == "https://example.com/image.jpg"
+    assert result["content"][0]["cache_control"]["type"] == "ephemeral"
+def test_anthropic_messages_pt_server_tool_use_passthrough():
+    """
+    Test that anthropic_messages_pt passes through server_tool_use and 
+    tool_search_tool_result blocks in assistant message content.
+    
+    These are Anthropic-native content types used for tool search functionality
+    that need to be preserved when reconstructing multi-turn conversations.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    messages = [
+        {
+            "role": "user",
+            "content": "I need help with time information."
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "server_tool_use",
+                    "id": "srvtoolu_01ABC123",
+                    "name": "tool_search_tool_regex",
+                    "input": {"query": ".*time.*"}
+                },
+                {
+                    "type": "tool_search_tool_result",
+                    "tool_use_id": "srvtoolu_01ABC123",
+                    "content": {
+                        "type": "tool_search_tool_search_result",
+                        "tool_references": [
+                            {"type": "tool_reference", "tool_name": "get_time"}
+                        ]
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "I found the time tool. How can I help you?"
+                }
+            ],
+        },
+        {
+            "role": "user",
+            "content": "What's the time in New York?"
+        },
+    ]
+
+    result = anthropic_messages_pt(
+        messages=messages,
+        model="claude-sonnet-4-5-20250929",
+        llm_provider="anthropic",
+    )
+
+    # Verify we have 3 messages (user, assistant, user)
+    assert len(result) == 3
+    
+    # Verify the assistant message content
+    assistant_msg = result[1]
+    assert assistant_msg["role"] == "assistant"
+    assert isinstance(assistant_msg["content"], list)
+    
+    # Find the different content block types
+    content_types = [block.get("type") for block in assistant_msg["content"]]
+    
+    # Verify server_tool_use block is preserved
+    assert "server_tool_use" in content_types
+    server_tool_use_block = next(
+        b for b in assistant_msg["content"] if b.get("type") == "server_tool_use"
+    )
+    assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
+    assert server_tool_use_block["name"] == "tool_search_tool_regex"
+    assert server_tool_use_block["input"] == {"query": ".*time.*"}
+    
+    # Verify tool_search_tool_result block is preserved
+    assert "tool_search_tool_result" in content_types
+    tool_result_block = next(
+        b for b in assistant_msg["content"] if b.get("type") == "tool_search_tool_result"
+    )
+    assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
+    assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
+    assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
+    
+    # Verify text block is also preserved
+    assert "text" in content_types
+    text_block = next(
+        b for b in assistant_msg["content"] if b.get("type") == "text"
+    )
+    assert text_block["text"] == "I found the time tool. How can I help you?"

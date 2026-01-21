@@ -136,6 +136,9 @@ export interface MCPServer {
   url: string;
   transport?: string | null;
   auth_type?: string | null;
+  authorization_url?: string | null;
+  token_url?: string | null;
+  registration_url?: string | null;
   mcp_info?: MCPInfo | null;
   created_at: string;
   created_by: string;
@@ -149,6 +152,7 @@ export interface MCPServer {
   teams?: Team[];
   mcp_access_groups?: string[];
   allowed_tools?: string[];
+  allow_all_keys?: boolean;
 }
 
 export interface MCPServerProps {

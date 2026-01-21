@@ -699,6 +699,88 @@ async def get_response_input_items(
 
 
 @router.post(
+    "/v1/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.post(
+    "/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+@router.post(
+    "/openai/v1/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses"],
+)
+async def compact_response(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Compact a response by running a compaction pass over a conversation.
+    
+    Returns encrypted, opaque items that can be used to reduce context size.
+    
+    Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
+    
+    ```bash
+    curl -X POST http://localhost:4000/v1/responses/compact \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer sk-1234" \
+    -d '{
+        "model": "gpt-4o",
+        "input": [{"role": "user", "content": "Hello"}]
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        _read_request_body,
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    data = await _read_request_body(request=request)
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="acompact_responses",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
+@router.post(
     "/v1/responses/{response_id}/cancel",
     dependencies=[Depends(user_api_key_auth)],
     tags=["responses"],

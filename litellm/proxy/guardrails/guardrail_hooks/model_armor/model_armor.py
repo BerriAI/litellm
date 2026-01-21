@@ -295,7 +295,9 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         filters = (
             list(filter_results.values())
             if isinstance(filter_results, dict)
-            else filter_results if isinstance(filter_results, list) else []
+            else filter_results
+            if isinstance(filter_results, list)
+            else []
         )
 
         # Prefer sanitized text from deidentifyResult if present
@@ -327,6 +329,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         start_time: Optional[float] = None,
         end_time: Optional[float] = None,
         duration: Optional[float] = None,
+        event_type: Optional[GuardrailEventHooks] = None,
     ):
         """
         Override to store only the Model Armor API response, not the entire data dict.
@@ -351,6 +354,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             duration=duration,
             start_time=start_time,
             end_time=end_time,
+            event_type=event_type,
         )
         return response
 

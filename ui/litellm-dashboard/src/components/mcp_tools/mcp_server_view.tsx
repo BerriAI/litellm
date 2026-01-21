@@ -230,6 +230,25 @@ export const MCPServerView: React.FC<MCPServerViewProps> = ({
                     <div>{handleAuth(mcpServer.auth_type)}</div>
                   </div>
                   <div>
+                    <Text className="font-medium">Allow All LiteLLM Keys</Text>
+                    <div className="flex items-center gap-2">
+                      {mcpServer.allow_all_keys ? (
+                        <span className="px-2 py-1 bg-green-50 text-green-700 rounded-md text-sm">
+                          Enabled
+                        </span>
+                      ) : (
+                        <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded-md text-sm">
+                          Disabled
+                        </span>
+                      )}
+                      {mcpServer.allow_all_keys && (
+                        <Text className="text-xs text-gray-500">
+                          All keys can access this MCP server
+                        </Text>
+                      )}
+                    </div>
+                  </div>
+                  <div>
                     <Text className="font-medium">Access Groups</Text>
                     <div>
                       {mcpServer.mcp_access_groups && mcpServer.mcp_access_groups.length > 0 ? (

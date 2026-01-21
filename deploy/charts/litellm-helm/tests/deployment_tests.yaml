@@ -137,3 +137,25 @@ tests:
           content:
             name: litellm-config
             mountPath: /etc/litellm/
+  - it: should work with lifecycle hooks
+    template: deployment.yaml
+    set:
+      lifecycle:
+        preStop:
+          exec:
+            command:
+              - /bin/sh
+              - -c
+              - echo "Container stopping"
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].lifecycle
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command[0]
+          value: /bin/sh
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command[1]
+          value: -c
+      - equal:
+          path: spec.template.spec.containers[0].lifecycle.preStop.exec.command[2]
+          value: echo "Container stopping"

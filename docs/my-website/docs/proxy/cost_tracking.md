@@ -722,7 +722,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```shell
 [
   {
-    "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "api_key": "example-api-key-123",
     "total_cost": 0.3201286305151999,
     "total_input_tokens": 36.0,
     "total_output_tokens": 1593.0,
@@ -766,7 +766,7 @@ curl -X GET 'http://localhost:4000/global/spend/report?start_date=2024-04-01&end
 ```shell
 [
   {
-    "api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+    "api_key": "example-api-key-123",
     "total_cost": 0.00013132,
     "total_input_tokens": 105.0,
     "total_output_tokens": 872.0,
@@ -1151,7 +1151,7 @@ curl -X GET "http://0.0.0.0:4000/spend/logs?request_id=<your-call-id" \ # e.g.: 
         "request_id": "chatcmpl-9ZKMURhVYSi9D6r6PJ9vLcayIK0Vm",
         "call_type": "acompletion",
         "metadata": {
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "example-api-key-123",
             "user_api_key_alias": null,
             "spend_logs_metadata": { # 👈 LOGGED CUSTOM METADATA
                 "hello": "world"

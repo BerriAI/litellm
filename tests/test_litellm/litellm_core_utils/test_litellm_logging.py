@@ -393,6 +393,63 @@ def test_get_request_tags_from_metadata_and_litellm_metadata():
     assert "User-Agent: litellm/1.0.0" in tags
 
 
+def test_get_request_tags_does_not_mutate_original_tags():
+    """
+    Test that _get_request_tags does not mutate the original tags list in metadata.
+
+    This is a regression test for a bug where calling _get_request_tags multiple times
+    would cause User-Agent tags to be duplicated because the function was mutating
+    the original tags list instead of creating a copy.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Create metadata with original tags
+    original_tags = ["custom-tag-1", "custom-tag-2"]
+    metadata = {"tags": original_tags}
+    litellm_params = {"metadata": metadata}
+    proxy_server_request = {
+        "headers": {
+            "user-agent": "AsyncOpenAI/Python 1.99.9",
+        }
+    }
+
+    # Call _get_request_tags multiple times (simulating multiple callbacks)
+    tags1 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+    tags2 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+    tags3 = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params=litellm_params,
+        proxy_server_request=proxy_server_request,
+    )
+
+    # Verify the original tags list was NOT mutated
+    assert original_tags == ["custom-tag-1", "custom-tag-2"], (
+        f"Original tags list was mutated: {original_tags}"
+    )
+    assert metadata["tags"] == ["custom-tag-1", "custom-tag-2"], (
+        f"metadata['tags'] was mutated: {metadata['tags']}"
+    )
+
+    # Verify each returned list has exactly 2 User-Agent tags (not duplicated)
+    user_agent_count_1 = len([t for t in tags1 if t.startswith("User-Agent:")])
+    user_agent_count_2 = len([t for t in tags2 if t.startswith("User-Agent:")])
+    user_agent_count_3 = len([t for t in tags3 if t.startswith("User-Agent:")])
+
+    assert user_agent_count_1 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_1}"
+    assert user_agent_count_2 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_2}"
+    assert user_agent_count_3 == 2, f"Expected 2 User-Agent tags, got {user_agent_count_3}"
+
+    # Verify all returned lists are independent (different objects)
+    assert tags1 is not tags2
+    assert tags2 is not tags3
+    assert tags1 is not original_tags
+
+
 def test_get_extra_header_tags():
     """Test the _get_extra_header_tags method with various scenarios."""
     import litellm

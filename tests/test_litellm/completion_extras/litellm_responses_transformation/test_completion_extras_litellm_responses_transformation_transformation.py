@@ -1007,3 +1007,274 @@ def test_multiple_tool_calls_in_single_choice():
     assert tool_calls[2]["function"]["name"] == "get_horoscope"
 
     print("✓ Multiple tool calls are correctly grouped in a single choice")
+
+
+def test_map_reasoning_effort_adds_summary_detailed():
+    """
+    Test that _map_reasoning_effort behavior with reasoning_auto_summary flag.
+    
+    By default (flag=False), summary should NOT be added to avoid:
+    1. Breaking for users without verified OpenAI orgs (400 errors)
+    2. Making requests more expensive by including summary reasoning tokens
+    
+    When flag is enabled (flag=True or env var), summary="detailed" is added.
+    """
+    import os
+
+    import litellm
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Test all string effort levels - DEFAULT BEHAVIOR (no summary)
+    effort_levels = ["none", "low", "medium", "high", "xhigh", "minimal"]
+    
+    # Save original flag value
+    original_flag = litellm.reasoning_auto_summary
+    original_env = os.environ.get("LITELLM_REASONING_AUTO_SUMMARY")
+    
+    try:
+        # Test 1: Default behavior (flag=False, no env var) - NO summary
+        litellm.reasoning_auto_summary = False
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+        
+        for effort in effort_levels:
+            result = handler._map_reasoning_effort(effort)
+            
+            assert result is not None, f"Result should not be None for effort={effort}"
+            assert result["effort"] == effort, f"Effort should be {effort}"
+            assert "summary" not in result, f"Summary should NOT be present by default for effort={effort}"
+            
+            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}' (no summary by default)")
+        
+        # Test 2: With flag enabled - summary IS added
+        litellm.reasoning_auto_summary = True
+        
+        for effort in effort_levels:
+            result = handler._map_reasoning_effort(effort)
+            
+            assert result is not None, f"Result should not be None for effort={effort}"
+            assert result["effort"] == effort, f"Effort should be {effort}"
+            assert result["summary"] == "detailed", f"Summary should be 'detailed' when flag is enabled for effort={effort}"
+            
+            print(f"✓ reasoning_effort='{effort}' correctly maps to effort='{effort}', summary='detailed' (flag enabled)")
+        
+        # Test 3: With env var enabled (flag disabled) - summary IS added
+        litellm.reasoning_auto_summary = False
+        os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = "true"
+        
+        result = handler._map_reasoning_effort("high")
+        assert result["summary"] == "detailed", "Summary should be 'detailed' when env var is enabled"
+        print("✓ LITELLM_REASONING_AUTO_SUMMARY env var works correctly")
+        
+        # Test 4: Dict input is passed through as-is (no modification)
+        litellm.reasoning_auto_summary = False
+        if "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+        
+        dict_input = {"effort": "high", "summary": "custom_summary"}
+        result_dict = handler._map_reasoning_effort(dict_input)
+        assert result_dict["effort"] == "high"
+        assert result_dict["summary"] == "custom_summary"
+        print("✓ Dict input is passed through without modification")
+        
+        # Test 5: None/unknown values return None
+        result_unknown = handler._map_reasoning_effort("unknown_value")
+        assert result_unknown is None
+        print("✓ Unknown reasoning_effort values return None")
+        
+        print("✓ All reasoning_effort behaviors work correctly with flag/env var control")
+    
+    finally:
+        # Restore original values
+        litellm.reasoning_auto_summary = original_flag
+        if original_env is not None:
+            os.environ["LITELLM_REASONING_AUTO_SUMMARY"] = original_env
+        elif "LITELLM_REASONING_AUTO_SUMMARY" in os.environ:
+            del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
+
+
+def test_transform_response_preserves_annotations():
+    """
+    Test that annotations from Responses API are preserved when transforming to Chat Completions format.
+    
+    This is a regression test for the bug where annotations (like url_citation) were being
+    dropped during the transformation from ResponsesAPIResponse to ModelResponse.
+    
+    The fix ensures annotations are extracted from ResponseOutputText content items and
+    passed through to the Message object in the Chat Completions response.
+    """
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create annotations similar to what OpenAI Responses API returns
+    annotations = [
+        {
+            "type": "url_citation",
+            "start_index": 0,
+            "end_index": 100,
+            "title": "Example Article",
+            "url": "https://example.com/article",
+        },
+        {
+            "type": "url_citation",
+            "start_index": 101,
+            "end_index": 200,
+            "title": "Another Source",
+            "url": "https://example.com/source",
+        },
+    ]
+
+    # Create output text with annotations
+    output_text = ResponseOutputText(
+        annotations=annotations,
+        text="Here is some information with citations.",
+        type="output_text",
+        logprobs=[],
+    )
+
+    # Create output message
+    output_message = ResponseOutputMessage(
+        id="msg_test123",
+        content=[output_text],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    # Create usage information
+    usage = ResponseAPIUsage(
+        input_tokens=10,
+        input_tokens_details=InputTokensDetails(
+            audio_tokens=None, cached_tokens=0, text_tokens=None
+        ),
+        output_tokens=20,
+        output_tokens_details=OutputTokensDetails(
+            reasoning_tokens=0, text_tokens=None
+        ),
+        total_tokens=30,
+        cost=None,
+    )
+
+    # Create the full ResponsesAPIResponse
+    raw_response = ResponsesAPIResponse(
+        id="resp_test123",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.1",
+        object="response",
+        output=[output_message],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning=None,
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=usage,
+        user=None,
+        store=True,
+        background=False,
+        billing={"payer": "openai"},
+        max_tool_calls=None,
+        prompt_cache_key=None,
+        safety_identifier=None,
+        service_tier="default",
+        top_logprobs=0,
+    )
+
+    # Create empty model_response
+    model_response = ModelResponse(
+        id="chatcmpl-test123",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        system_fingerprint=None,
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    # Create mock objects for required parameters
+    logging_obj = Mock()
+    messages = [{"role": "user", "content": "Tell me about AI"}]
+    request_data = {"model": "gpt-5.1"}
+    optional_params = {}
+    litellm_params = {"acompletion": False, "api_key": None}
+    encoding = Mock()
+
+    # Call transform_response
+    result = handler.transform_response(
+        model="gpt-5.1",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data=request_data,
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        encoding=encoding,
+        api_key=None,
+        json_mode=None,
+    )
+
+    # Assertions
+    assert result.model == "gpt-5.1"
+    assert len(result.choices) == 1
+
+    # Check the choice
+    choice = result.choices[0]
+    assert choice.finish_reason == "stop"
+    assert choice.index == 0
+    assert choice.message.role == "assistant"
+    assert choice.message.content == "Here is some information with citations."
+
+    # Check that annotations are preserved
+    assert hasattr(choice.message, "annotations"), "Message should have annotations attribute"
+    assert choice.message.annotations is not None, "Annotations should not be None"
+    assert len(choice.message.annotations) == 2, f"Expected 2 annotations, got {len(choice.message.annotations)}"
+
+    # Verify annotation content
+    annotation1 = choice.message.annotations[0]
+    assert annotation1["type"] == "url_citation"
+    assert annotation1["title"] == "Example Article"
+    assert annotation1["url"] == "https://example.com/article"
+    assert annotation1["start_index"] == 0
+    assert annotation1["end_index"] == 100
+
+    annotation2 = choice.message.annotations[1]
+    assert annotation2["type"] == "url_citation"
+    assert annotation2["title"] == "Another Source"
+    assert annotation2["url"] == "https://example.com/source"
+    assert annotation2["start_index"] == 101
+    assert annotation2["end_index"] == 200
+
+    # Check usage
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 20
+    assert result.usage.total_tokens == 30
+
+    print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")

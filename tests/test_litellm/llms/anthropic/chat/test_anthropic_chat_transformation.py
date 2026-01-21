@@ -1754,3 +1754,61 @@ def test_transform_request_respects_user_max_tokens():
     )
 
     assert result["max_tokens"] == 1000
+
+
+def test_calculate_usage_completion_tokens_details_always_populated():
+    """
+    Test that completion_tokens_details is always populated in Usage object,
+    not just when there's reasoning_content.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/18772
+    Bug: completion_tokens_details was None for regular Claude responses without reasoning
+    """
+    config = AnthropicConfig()
+
+    # Test without reasoning_content - completion_tokens_details should still be populated
+    usage_object = {
+        "input_tokens": 37,
+        "output_tokens": 248,
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    
+    # completion_tokens_details should NOT be None
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.text_tokens == 248
+    assert usage.completion_tokens == 248
+    assert usage.prompt_tokens == 37
+    assert usage.total_tokens == 285
+
+
+def test_calculate_usage_completion_tokens_details_with_reasoning():
+    """
+    Test that completion_tokens_details correctly splits text_tokens and reasoning_tokens
+    when reasoning_content is present.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/18772
+    """
+    config = AnthropicConfig()
+
+    # Test with reasoning_content - should split tokens correctly
+    usage_object = {
+        "input_tokens": 100,
+        "output_tokens": 500,
+    }
+    # Simulating reasoning content that would count as ~50 tokens
+    reasoning_content = "Let me think about this step by step. " * 10  # Roughly 50 tokens
+    
+    usage = config.calculate_usage(
+        usage_object=usage_object, 
+        reasoning_content=reasoning_content
+    )
+    
+    # completion_tokens_details should be populated with both reasoning and text tokens
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is not None
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+    # text_tokens should be total minus reasoning
+    expected_text_tokens = 500 - usage.completion_tokens_details.reasoning_tokens
+    assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+    assert usage.completion_tokens == 500

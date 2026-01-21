@@ -1,5 +1,6 @@
 import * as networking from "@/components/networking";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderWithProviders } from "../../../tests/test-utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import TeamInfoView from "./team_info";
 
@@ -62,7 +63,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -124,7 +125,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -219,7 +220,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -310,7 +311,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.getGuardrailsList).mockResolvedValue({ guardrails: [] });
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -373,7 +374,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: teamResponse.team_info, team_id: "123" } as any);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}
@@ -450,7 +451,7 @@ describe("TeamInfoView", () => {
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
     vi.mocked(networking.teamUpdateCall).mockResolvedValue({ data: teamResponse.team_info, team_id: "123" } as any);
 
-    render(
+    renderWithProviders(
       <TeamInfoView
         teamId="123"
         onUpdate={() => {}}

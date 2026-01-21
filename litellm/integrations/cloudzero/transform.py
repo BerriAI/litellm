@@ -98,6 +98,7 @@ class CBFTransformer:
         # Handle team information with fallbacks
         team_id = row.get('team_id')
         team_alias = row.get('team_alias')
+        user_email = row.get('user_email')
         
         # Use team_alias if available, otherwise team_id, otherwise fallback to 'unknown'
         entity_id = str(team_alias) if team_alias else (str(team_id) if team_id else 'unknown')
@@ -112,6 +113,7 @@ class CBFTransformer:
             'provider': str(row.get('custom_llm_provider', '')),
             'api_key_prefix': api_key_hash,
             'api_key_alias': str(row.get('api_key_alias', '')),
+            'user_email': str(user_email) if user_email else '',
             'api_requests': str(row.get('api_requests', 0)),
             'successful_requests': str(row.get('successful_requests', 0)),
             'failed_requests': str(row.get('failed_requests', 0)),
@@ -183,5 +185,4 @@ class CBFTransformer:
                     return None
 
         return None
-
 

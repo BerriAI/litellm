@@ -23,6 +23,7 @@ from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMExcepti
 from litellm.llms.vertex_ai.agent_engine.sse_iterator import (
     VertexAgentEngineResponseIterator,
 )
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -130,8 +131,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
                 )
             resource_path = f"projects/{vertex_project}/locations/{vertex_location}/reasoningEngines/{engine_id}"
 
-        # Build the base URL
-        base_url = f"https://{vertex_location}-aiplatform.googleapis.com"
+        base_url = get_vertex_base_url(vertex_location)
 
         # Always use :streamQuery endpoint for actual queries
         # The :query endpoint only supports session management methods

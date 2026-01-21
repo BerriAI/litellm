@@ -115,4 +115,77 @@ describe("chat_completion", () => {
       max_tokens: 100,
     });
   });
+
+  it("should configure MCP tools per server with restrictions", async () => {
+    const selectedMCPServers = ["server-1", "server-2"];
+    const mcpServers = [
+      {
+        server_id: "server-1",
+        alias: "alpha",
+        server_name: "Alpha",
+        url: "http://example.com",
+        created_at: "2024-01-01",
+        created_by: "test",
+        updated_at: "2024-01-01",
+        updated_by: "test",
+      },
+      {
+        server_id: "server-2",
+        server_name: "Beta",
+        url: "http://example.com",
+        created_at: "2024-01-01",
+        created_by: "test",
+        updated_at: "2024-01-01",
+        updated_by: "test",
+      },
+    ];
+    const mcpServerToolRestrictions = {
+      "server-1": ["toolA", "toolB"],
+      "server-2": ["toolC"],
+    } as Record<string, string[]>;
+
+    await makeOpenAIChatCompletionRequest(
+      mockChatHistory,
+      mockUpdateUI,
+      "gpt-4",
+      "test-token",
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      undefined, // onUsageData
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      selectedMCPServers,
+      undefined, // onImageGenerated
+      undefined, // onSearchResults
+      undefined, // temperature
+      undefined, // max_tokens
+      undefined, // onTotalLatency
+      undefined, // customBaseUrl
+      mcpServers,
+      mcpServerToolRestrictions,
+    );
+
+    const callArgs = mockCreate.mock.calls[0][0];
+    expect(callArgs.tool_choice).toBe("auto");
+    expect(callArgs.tools).toHaveLength(2);
+
+    // Check first tool
+    const firstTool = callArgs.tools[0];
+    expect(firstTool.type).toBe("mcp");
+    expect(firstTool.server_label).toBe("litellm");
+    expect(firstTool.server_url).toBe("litellm_proxy/mcp/alpha");
+    expect(firstTool.require_approval).toBe("never");
+    expect(firstTool.allowed_tools).toEqual(["toolA", "toolB"]);
+
+    // Check second tool
+    const secondTool = callArgs.tools[1];
+    expect(secondTool.type).toBe("mcp");
+    expect(secondTool.server_label).toBe("litellm");
+    expect(secondTool.server_url).toBe("litellm_proxy/mcp/Beta");
+    expect(secondTool.require_approval).toBe("never");
+    expect(secondTool.allowed_tools).toEqual(["toolC"]);
+  });
 });

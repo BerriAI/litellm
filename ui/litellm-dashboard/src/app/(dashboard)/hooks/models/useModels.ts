@@ -1,24 +1,26 @@
 import { useQuery } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { modelInfoCall, modelHubCall } from "@/components/networking";
-
+import useAuthorized from "../useAuthorized";
 const modelKeys = createQueryKeys("models");
 const modelHubKeys = createQueryKeys("modelHub");
 
-export const useModelsInfo = (accessToken: string | null, userID: string | null, userRole: string | null) => {
+export const useModelsInfo = () => {
+  const { accessToken, userId, userRole } = useAuthorized();
   return useQuery({
     queryKey: modelKeys.list({
       filters: {
-        ...(userID && { userID }),
+        ...(userId && { userId }),
         ...(userRole && { userRole }),
       },
     }),
-    queryFn: async () => await modelInfoCall(accessToken!, userID!, userRole!),
-    enabled: Boolean(accessToken && userID && userRole),
+    queryFn: async () => await modelInfoCall(accessToken!, userId!, userRole!),
+    enabled: Boolean(accessToken && userId && userRole),
   });
 };
 
-export const useModelHub = (accessToken: string | null) => {
+export const useModelHub = () => {
+  const { accessToken } = useAuthorized();
   return useQuery({
     queryKey: modelHubKeys.list({}),
     queryFn: async () => await modelHubCall(accessToken!),

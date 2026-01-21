@@ -116,6 +116,56 @@ class TestCBFTransformer:
             assert result['usage/units'] == 'tokens'
             assert result['resource/id'] == 'test-czrn'
 
+    def test_create_cbf_record_adds_user_email_tag(self):
+        """Test that user_email field is emitted as a resource tag when present."""
+        transformer = CBFTransformer()
+        with patch.object(transformer.czrn_generator, 'create_from_litellm_data') as mock_czrn, \
+             patch.object(transformer.czrn_generator, 'extract_components') as mock_extract:
+
+            mock_czrn.return_value = 'test-czrn'
+            mock_extract.return_value = ('service', 'provider', 'region', 'account', 'resource', 'local_id')
+
+            row = {
+                'date': '2025-01-19',
+                'spend': 1.0,
+                'prompt_tokens': 10,
+                'completion_tokens': 5,
+                'model': 'gpt-4',
+                'api_key': 'sk-useremail',
+                'team_id': 'team-123',
+                'team_alias': 'Dev Team',
+                'user_email': 'user@example.com'
+            }
+
+            result = transformer._create_cbf_record(row)
+
+            assert result['resource/tag:user_email'] == 'user@example.com'
+
+    def test_create_cbf_record_omits_empty_user_email(self):
+        """Test that empty user_email values are not added as resource tags."""
+        transformer = CBFTransformer()
+        with patch.object(transformer.czrn_generator, 'create_from_litellm_data') as mock_czrn, \
+             patch.object(transformer.czrn_generator, 'extract_components') as mock_extract:
+
+            mock_czrn.return_value = 'test-czrn'
+            mock_extract.return_value = ('service', 'provider', 'region', 'account', 'resource', 'local_id')
+
+            row = {
+                'date': '2025-01-19',
+                'spend': 1.0,
+                'prompt_tokens': 10,
+                'completion_tokens': 5,
+                'model': 'gpt-4',
+                'api_key': 'sk-useremail',
+                'team_id': 'team-123',
+                'team_alias': 'Dev Team',
+                'user_email': None
+            }
+
+            result = transformer._create_cbf_record(row)
+
+            assert 'resource/tag:user_email' not in result
+
     def test_create_cbf_record_minimal_data(self):
         """Test _create_cbf_record method with minimal row data."""
         transformer = CBFTransformer()

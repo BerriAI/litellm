@@ -118,7 +118,7 @@ class LassoGuardrail(CustomGuardrail):
         Falls back to UUID if ULID library is not available.
         """
         if ULID_AVAILABLE and ulid is not None:
-            return str(ulid.new())  # type: ignore
+            return str(ulid.ULID())  # type: ignore
         else:
             verbose_proxy_logger.debug("ULID library not available, using UUID")
             return str(uuid.uuid4())

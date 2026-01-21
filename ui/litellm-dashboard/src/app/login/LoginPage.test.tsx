@@ -169,4 +169,27 @@ describe("LoginPage", () => {
 
     expect(mockPush).not.toHaveBeenCalled();
   });
+
+  it("should show alert when admin_ui_disabled is true", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: { admin_ui_disabled: true, server_root_path: "/", proxy_base_url: null },
+      isLoading: false,
+    });
+    (getCookie as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("alert")).toBeInTheDocument();
+      expect(screen.getByText("Admin UI Disabled")).toBeInTheDocument();
+    });
+
+    expect(mockPush).not.toHaveBeenCalled();
+    expect(mockReplace).not.toHaveBeenCalled();
+  });
 });

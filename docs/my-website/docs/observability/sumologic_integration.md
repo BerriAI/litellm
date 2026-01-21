@@ -148,6 +148,51 @@ Example payload:
 
 ## Advanced Configuration
 
+### Log Format
+
+The Sumo Logic integration uses **NDJSON (newline-delimited JSON)** format by default. This format is optimal for Sumo Logic's parsing capabilities and allows Field Extraction Rules to work at ingest time.
+
+#### NDJSON Format
+
+Each log entry is sent as a separate line in the HTTP request:
+```
+{"id":"chatcmpl-1","model":"gpt-3.5-turbo","response_cost":0.0001,...}
+{"id":"chatcmpl-2","model":"gpt-4","response_cost":0.0003,...}
+{"id":"chatcmpl-3","model":"gpt-3.5-turbo","response_cost":0.0001,...}
+```
+
+#### Benefits for Field Extraction Rules (FERs)
+
+With NDJSON format, you can create Field Extraction Rules directly:
+
+```
+_sourceCategory=litellm/logs
+| json field=_raw "model", "response_cost", "user" as model, cost, user
+```
+
+**Before NDJSON** (with JSON array format):
+- Required `parse regex ... multi` workaround
+- FERs couldn't parse at ingest time
+- Query-time parsing impacted dashboard performance
+
+**After NDJSON**:
+- ✅ FERs parse fields at ingest time
+- ✅ No query-time workarounds needed
+- ✅ Better dashboard performance
+- ✅ Simpler query syntax
+
+#### Changing the Log Format (Advanced)
+
+If you need to change the log format (not recommended for Sumo Logic):
+
+```yaml
+callback_settings:
+  sumologic:
+    callback_type: generic_api
+    callback_name: sumologic
+    log_format: json_array  # Override to use JSON array instead
+```
+
 ### Batching Settings
 
 Control how LiteLLM batches logs before sending to Sumo Logic:

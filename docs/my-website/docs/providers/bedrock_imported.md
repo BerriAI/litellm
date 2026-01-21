@@ -432,3 +432,179 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
             "temperature": 0.5
         }'
 ```
+
+### Moonshot Kimi K2 Thinking
+
+Moonshot AI's Kimi K2 Thinking model is now available on Amazon Bedrock. This model features advanced reasoning capabilities with automatic reasoning content extraction.
+
+| Property | Details |
+|----------|---------|
+| Provider Route | `bedrock/moonshot.kimi-k2-thinking`, `bedrock/invoke/moonshot.kimi-k2-thinking` |
+| Provider Documentation | [AWS Bedrock Moonshot Announcement ↗](https://aws.amazon.com/about-aws/whats-new/2025/12/amazon-bedrock-fully-managed-open-weight-models/) |
+| Supported Parameters | `temperature`, `max_tokens`, `top_p`, `stream`, `tools`, `tool_choice` |
+| Special Features | Reasoning content extraction, Tool calling |
+
+#### Supported Features
+
+- **Reasoning Content Extraction**: Automatically extracts `<reasoning>` tags and returns them as `reasoning_content` (similar to OpenAI's o1 models)
+- **Tool Calling**: Full support for function/tool calling with tool responses
+- **Streaming**: Both streaming and non-streaming responses
+- **System Messages**: System message support
+
+#### Basic Usage
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python title="Moonshot Kimi K2 SDK Usage" showLineNumbers
+from litellm import completion
+import os
+
+os.environ["AWS_ACCESS_KEY_ID"] = "your-aws-access-key"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-aws-secret-key"
+os.environ["AWS_REGION_NAME"] = "us-west-2"  # or your preferred region
+
+# Basic completion
+response = completion(
+    model="bedrock/moonshot.kimi-k2-thinking",  # or bedrock/invoke/moonshot.kimi-k2-thinking
+    messages=[
+        {"role": "user", "content": "What is 2+2? Think step by step."}
+    ],
+    temperature=0.7,
+    max_tokens=200
+)
+
+print(response.choices[0].message.content)
+
+# Access reasoning content if present
+if response.choices[0].message.reasoning_content:
+    print("Reasoning:", response.choices[0].message.reasoning_content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="Proxy">
+
+**1. Add to config**
+
+```yaml title="config.yaml" showLineNumbers
+model_list:
+  - model_name: kimi-k2
+    litellm_params:
+      model: bedrock/moonshot.kimi-k2-thinking
+      aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID
+      aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY
+      aws_region_name: us-west-2
+```
+
+**2. Start proxy**
+
+```bash title="Start LiteLLM Proxy" showLineNumbers
+litellm --config /path/to/config.yaml
+
+# RUNNING at http://0.0.0.0:4000
+```
+
+**3. Test it!**
+
+```bash title="Test Kimi K2 via Proxy" showLineNumbers
+curl --location 'http://0.0.0.0:4000/chat/completions' \
+  --header 'Authorization: Bearer sk-1234' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "kimi-k2",
+    "messages": [
+      {
+        "role": "user",
+        "content": "What is 2+2? Think step by step."
+      }
+    ],
+    "temperature": 0.7,
+    "max_tokens": 200
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+#### Tool Calling Example
+
+```python title="Kimi K2 with Tool Calling" showLineNumbers
+from litellm import completion
+import os
+
+os.environ["AWS_ACCESS_KEY_ID"] = "your-aws-access-key"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-aws-secret-key"
+os.environ["AWS_REGION_NAME"] = "us-west-2"
+
+# Tool calling example
+response = completion(
+    model="bedrock/moonshot.kimi-k2-thinking",
+    messages=[
+        {"role": "user", "content": "What's the weather in Tokyo?"}
+    ],
+    tools=[
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather in a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city name"
+                        }
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    ]
+)
+
+if response.choices[0].message.tool_calls:
+    tool_call = response.choices[0].message.tool_calls[0]
+    print(f"Tool called: {tool_call.function.name}")
+    print(f"Arguments: {tool_call.function.arguments}")
+```
+
+#### Streaming Example
+
+```python title="Kimi K2 Streaming" showLineNumbers
+from litellm import completion
+import os
+
+os.environ["AWS_ACCESS_KEY_ID"] = "your-aws-access-key"
+os.environ["AWS_SECRET_ACCESS_KEY"] = "your-aws-secret-key"
+os.environ["AWS_REGION_NAME"] = "us-west-2"
+
+response = completion(
+    model="bedrock/moonshot.kimi-k2-thinking",
+    messages=[
+        {"role": "user", "content": "Explain quantum computing in simple terms."}
+    ],
+    stream=True,
+    temperature=0.7
+)
+
+for chunk in response:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
+    
+    # Check for reasoning content in streaming
+    if hasattr(chunk.choices[0].delta, 'reasoning_content') and chunk.choices[0].delta.reasoning_content:
+        print(f"\n[Reasoning: {chunk.choices[0].delta.reasoning_content}]")
+```
+
+#### Supported Parameters
+
+| Parameter | Type | Description | Supported |
+|-----------|------|-------------|-----------|
+| `temperature` | float (0-1) | Controls randomness in output | ✅ |
+| `max_tokens` | integer | Maximum tokens to generate | ✅ |
+| `top_p` | float | Nucleus sampling parameter | ✅ |
+| `stream` | boolean | Enable streaming responses | ✅ |
+| `tools` | array | Tool/function definitions | ✅ |
+| `tool_choice` | string/object | Tool choice specification | ✅ |
+| `stop` | array | Stop sequences | ❌ (Not supported on Bedrock) |

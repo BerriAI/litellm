@@ -1279,7 +1279,7 @@ async def test_update_team_team_member_budget_not_passed_to_db():
 
         # Mock budget upsert to return updated_kv without team_member_budget
         def mock_upsert_side_effect(
-            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None
+            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None, team_member_budget_duration=None
         ):
             # Remove team_member_budget from updated_kv as the real function does
             result_kv = updated_kv.copy()
@@ -1374,6 +1374,370 @@ async def test_update_team_team_member_budget_not_passed_to_db():
         print(
             "✅ All test cases passed: team_member_budget is properly excluded from database update operations"
         )
+
+
+def test_clean_team_member_fields():
+    """
+    Test that _clean_team_member_fields removes all team member fields from a dictionary.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    data_dict = {
+        "team_id": "test_team",
+        "team_alias": "Test Team",
+        "team_member_budget": 100.0,
+        "team_member_budget_duration": "30d",
+        "team_member_rpm_limit": 50,
+        "team_member_tpm_limit": 1000,
+        "other_field": "should_remain",
+    }
+
+    TeamMemberBudgetHandler._clean_team_member_fields(data_dict)
+
+    assert "team_member_budget" not in data_dict
+    assert "team_member_budget_duration" not in data_dict
+    assert "team_member_rpm_limit" not in data_dict
+    assert "team_member_tpm_limit" not in data_dict
+    assert data_dict["team_id"] == "test_team"
+    assert data_dict["team_alias"] == "Test Team"
+    assert data_dict["other_field"] == "should_remain"
+
+
+def test_clean_team_member_fields_with_missing_fields():
+    """
+    Test that _clean_team_member_fields handles dictionaries without team member fields gracefully.
+    """
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    data_dict = {
+        "team_id": "test_team",
+        "team_alias": "Test Team",
+    }
+
+    TeamMemberBudgetHandler._clean_team_member_fields(data_dict)
+
+    assert data_dict["team_id"] == "test_team"
+    assert data_dict["team_alias"] == "Test Team"
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table():
+    """
+    Test that create_team_member_budget_table creates a budget and adds it to metadata.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    data = NewTeamRequest(
+        team_id="test_team_id",
+        team_alias="Test Team",
+        budget_duration="1mo",
+    )
+    new_team_data_json = {
+        "team_id": "test_team_id",
+        "team_alias": "Test Team",
+        "team_member_budget": 100.0,
+        "team_member_budget_duration": "30d",
+        "team_member_rpm_limit": 50,
+        "team_member_tpm_limit": 1000,
+    }
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget_123"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock
+    ) as mock_new_budget:
+        mock_new_budget.return_value = mock_budget_response
+
+        result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=data,
+            new_team_data_json=new_team_data_json,
+            user_api_key_dict=mock_user_api_key_dict,
+            team_member_budget=100.0,
+            team_member_rpm_limit=50,
+            team_member_tpm_limit=1000,
+            team_member_budget_duration="30d",
+        )
+
+        assert mock_new_budget.called
+        call_args = mock_new_budget.call_args
+        budget_request = call_args[1]["budget_obj"]
+
+        assert budget_request.max_budget == 100.0
+        assert budget_request.rpm_limit == 50
+        assert budget_request.tpm_limit == 1000
+        assert budget_request.budget_duration == "30d"
+        assert budget_request.budget_id is not None
+        assert "team-" in budget_request.budget_id
+
+        assert "team_member_budget_id" in result["metadata"]
+        assert result["metadata"]["team_member_budget_id"] == "budget_123"
+
+        assert "team_member_budget" not in result
+        assert "team_member_budget_duration" not in result
+        assert "team_member_rpm_limit" not in result
+        assert "team_member_tpm_limit" not in result
+
+
+@pytest.mark.asyncio
+async def test_create_team_member_budget_table_without_team_alias():
+    """
+    Test that create_team_member_budget_table generates budget_id correctly when team_alias is None.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, NewTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    data = NewTeamRequest(team_id="test_team_id")
+    new_team_data_json = {
+        "team_id": "test_team_id",
+        "team_member_budget": 100.0,
+    }
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "budget_123"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock
+    ) as mock_new_budget:
+        mock_new_budget.return_value = mock_budget_response
+
+        result = await TeamMemberBudgetHandler.create_team_member_budget_table(
+            data=data,
+            new_team_data_json=new_team_data_json,
+            user_api_key_dict=mock_user_api_key_dict,
+            team_member_budget=100.0,
+        )
+
+        assert mock_new_budget.called
+        call_args = mock_new_budget.call_args
+        budget_request = call_args[1]["budget_obj"]
+
+        assert budget_request.budget_id is not None
+        assert budget_request.budget_id.startswith("team-budget-")
+
+
+@pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_existing_budget():
+    """
+    Test that upsert_team_member_budget_table updates an existing budget when team_member_budget_id exists.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {"team_member_budget_id": "existing_budget_123"}
+
+    updated_kv = {
+        "team_id": "test_team_id",
+        "team_member_budget": 200.0,
+        "team_member_budget_duration": "60d",
+        "team_member_rpm_limit": 100,
+    }
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "existing_budget_123"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.update_budget",
+        new_callable=AsyncMock
+    ) as mock_update_budget:
+        mock_update_budget.return_value = mock_budget_response
+
+        result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            team_member_budget=200.0,
+            team_member_budget_duration="60d",
+            team_member_rpm_limit=100,
+        )
+
+        assert mock_update_budget.called
+        call_args = mock_update_budget.call_args
+        budget_request = call_args[1]["budget_obj"]
+
+        assert budget_request.budget_id == "existing_budget_123"
+        assert budget_request.max_budget == 200.0
+        assert budget_request.budget_duration == "60d"
+        assert budget_request.rpm_limit == 100
+
+        assert "team_member_budget_id" in result["metadata"]
+        assert result["metadata"]["team_member_budget_id"] == "existing_budget_123"
+
+        assert "team_member_budget" not in result
+        assert "team_member_budget_duration" not in result
+        assert "team_member_rpm_limit" not in result
+
+
+@pytest.mark.asyncio
+async def test_upsert_team_member_budget_table_no_existing_budget():
+    """
+    Test that upsert_team_member_budget_table creates a new budget when team_member_budget_id does not exist.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from litellm.proxy._types import LitellmUserRoles, LiteLLM_TeamTable, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import (
+        TeamMemberBudgetHandler,
+    )
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    team_table = MagicMock(spec=LiteLLM_TeamTable)
+    team_table.metadata = {}
+    team_table.team_alias = "Test Team"
+    team_table.budget_duration = None
+
+    updated_kv = {
+        "team_id": "test_team_id",
+        "team_member_budget": 150.0,
+        "team_member_budget_duration": "45d",
+    }
+
+    mock_budget_response = MagicMock()
+    mock_budget_response.budget_id = "new_budget_456"
+
+    with patch(
+        "litellm.proxy.management_endpoints.budget_management_endpoints.new_budget",
+        new_callable=AsyncMock
+    ) as mock_new_budget:
+        mock_new_budget.return_value = mock_budget_response
+
+        result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
+            team_table=team_table,
+            user_api_key_dict=mock_user_api_key_dict,
+            updated_kv=updated_kv,
+            team_member_budget=150.0,
+            team_member_budget_duration="45d",
+        )
+
+        assert mock_new_budget.called
+        assert "team_member_budget_id" in result["metadata"]
+        assert result["metadata"]["team_member_budget_id"] == "new_budget_456"
+
+        assert "team_member_budget" not in result
+        assert "team_member_budget_duration" not in result
+
+
+@pytest.mark.asyncio
+async def test_update_team_with_team_member_budget_duration():
+    """
+    Test that team/update endpoint properly handles team_member_budget_duration.
+    """
+    from unittest.mock import AsyncMock, MagicMock, Mock, patch
+
+    from fastapi import Request
+
+    from litellm.proxy._types import LitellmUserRoles, UpdateTeamRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    mock_request = Mock(spec=Request)
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test_user_id"
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client, patch(
+        "litellm.proxy.proxy_server.llm_router"
+    ) as mock_llm_router, patch(
+        "litellm.proxy.proxy_server.user_api_key_cache"
+    ) as mock_cache, patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj"
+    ) as mock_logging, patch(
+        "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+    ), patch(
+        "litellm.proxy.auth.auth_checks._cache_team_object"
+    ) as mock_cache_team, patch(
+        "litellm.proxy.management_endpoints.team_endpoints.TeamMemberBudgetHandler.upsert_team_member_budget_table"
+    ) as mock_upsert_budget:
+
+        mock_existing_team = MagicMock()
+        mock_existing_team.model_dump.return_value = {
+            "team_id": "test_team_id",
+            "team_alias": "test_team",
+            "metadata": {"team_member_budget_id": "budget_123"},
+        }
+        mock_existing_team.metadata = {"team_member_budget_id": "budget_123"}
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=mock_existing_team
+        )
+
+        mock_updated_team = MagicMock()
+        mock_updated_team.team_id = "test_team_id"
+        mock_updated_team.model_dump.return_value = {"team_id": "test_team_id"}
+        mock_prisma_client.db.litellm_teamtable.update = AsyncMock(
+            return_value=mock_updated_team
+        )
+        mock_prisma_client.jsonify_team_object = MagicMock(
+            side_effect=lambda db_data: db_data
+        )
+
+        def mock_upsert_side_effect(
+            team_table, user_api_key_dict, updated_kv, team_member_budget=None, team_member_rpm_limit=None, team_member_tpm_limit=None, team_member_budget_duration=None
+        ):
+            result_kv = updated_kv.copy()
+            result_kv.pop("team_member_budget", None)
+            result_kv.pop("team_member_budget_duration", None)
+            return result_kv
+
+        mock_upsert_budget.side_effect = mock_upsert_side_effect
+
+        update_request = UpdateTeamRequest(
+            team_id="test_team_id",
+            team_alias="updated_alias",
+            team_member_budget=100.0,
+            team_member_budget_duration="30d",
+        )
+
+        result = await update_team(
+            data=update_request,
+            http_request=mock_request,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert mock_upsert_budget.called
+        call_args = mock_upsert_budget.call_args
+        assert call_args[1]["team_member_budget"] == 100.0
+        assert call_args[1]["team_member_budget_duration"] == "30d"
+
+        assert mock_prisma_client.db.litellm_teamtable.update.called
+        update_call_args = mock_prisma_client.db.litellm_teamtable.update.call_args
+        update_data = update_call_args[1]["data"]
+
+        assert "team_member_budget" not in update_data
+        assert "team_member_budget_duration" not in update_data
 
 
 @pytest.mark.asyncio
@@ -3958,3 +4322,233 @@ async def test_update_team_guardrails_with_org_id():
             assert "include" in first_call_kwargs
             assert "teams" in first_call_kwargs["include"]
             assert first_call_kwargs["include"]["teams"] is True
+
+
+@pytest.mark.asyncio
+async def test_new_team_negative_max_budget():
+    """
+    Test that NewTeamRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    
+    This prevents GET requests from breaking when they receive data with negative budgets.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    # Should not raise any errors at model level
+    request = NewTeamRequest(team_alias="test-team", max_budget=-7.0)
+    assert request.max_budget == -7.0
+
+
+@pytest.mark.asyncio
+async def test_new_team_negative_team_member_budget():
+    """
+    Test that NewTeamRequest model allows negative team_member_budget values.
+    Validation is done at API level, not model level.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    # Should not raise any errors at model level
+    request = NewTeamRequest(team_alias="test-team", team_member_budget=-10.0)
+    assert request.team_member_budget == -10.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_negative_max_budget():
+    """
+    Test that UpdateTeamRequest model allows negative max_budget values.
+    Validation is done at API level, not model level.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    
+    # Should not raise any errors at model level
+    request = UpdateTeamRequest(team_id="test-team-id", max_budget=-5.0)
+    assert request.max_budget == -5.0
+
+
+@pytest.mark.asyncio
+async def test_update_team_negative_team_member_budget():
+    """
+    Test that UpdateTeamRequest model allows negative team_member_budget values.
+    Validation is done at API level, not model level.
+    """
+    from litellm.proxy._types import UpdateTeamRequest
+    
+    # Should not raise any errors at model level
+    request = UpdateTeamRequest(team_id="test-team-id", team_member_budget=-15.0)
+    assert request.team_member_budget == -15.0
+
+
+@pytest.mark.asyncio
+async def test_new_team_positive_budgets_accepted():
+    """
+    Test that NewTeamRequest accepts positive budget values.
+    """
+    from litellm.proxy._types import NewTeamRequest
+    
+    # Should not raise any errors
+    request = NewTeamRequest(
+        team_alias="test-team", 
+        max_budget=100.0, 
+        team_member_budget=50.0
+    )
+    assert request.max_budget == 100.0
+    assert request.team_member_budget == 50.0
+
+
+@pytest.mark.asyncio
+async def test_new_team_with_router_settings(mock_db_client, mock_admin_auth):
+    """
+    Test that /team/new correctly handles router_settings by:
+    1. Accepting router_settings as a dict parameter
+    2. Serializing router_settings to JSON when saving to database
+    3. Storing router_settings in the team record
+    """
+    # Configure mocked prisma client
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.get_data = AsyncMock(return_value=None)
+    mock_db_client.update_data = AsyncMock(return_value=MagicMock())
+    mock_db_client.db = MagicMock()
+
+    # Mock model table creation
+    mock_db_client.db.litellm_modeltable = MagicMock()
+    mock_db_client.db.litellm_modeltable.create = AsyncMock(
+        return_value=MagicMock(id="model123")
+    )
+
+    # Capture team table creation
+    team_create_result = MagicMock(
+        team_id="team-router-456",
+    )
+    team_create_result.model_dump.return_value = {
+        "team_id": "team-router-456",
+    }
+    mock_team_create = AsyncMock(return_value=team_create_result)
+    mock_team_count = AsyncMock(return_value=0)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = mock_team_create
+    mock_db_client.db.litellm_teamtable.count = mock_team_count
+    mock_db_client.db.litellm_teamtable.update = AsyncMock(
+        return_value=team_create_result
+    )
+
+    # Mock user table
+    mock_db_client.db.litellm_usertable = MagicMock()
+    mock_db_client.db.litellm_usertable.update = AsyncMock(return_value=MagicMock())
+
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team
+
+    # Test router_settings with sample data
+    router_settings_data = {
+        "routing_strategy": "usage-based",
+        "num_retries": 3,
+        "retry_policy": {"max_retries": 5},
+    }
+
+    # Build request with router_settings
+    team_request = NewTeamRequest(
+        team_alias="my-team-router",
+        router_settings=router_settings_data,
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Execute the endpoint function
+    await new_team(
+        data=team_request,
+        http_request=dummy_request,
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # Verify team creation was called
+    assert mock_team_create.call_count == 1
+    created_team_kwargs = mock_team_create.call_args.kwargs
+    team_data = created_team_kwargs["data"]
+
+    # Verify router_settings is serialized to JSON string
+    assert "router_settings" in team_data
+    assert isinstance(team_data["router_settings"], str)
+
+    # Verify router_settings can be deserialized and matches input
+    deserialized_settings = json.loads(team_data["router_settings"])
+    assert deserialized_settings == router_settings_data
+
+
+@pytest.mark.asyncio
+async def test_update_team_with_router_settings(mock_db_client, mock_admin_auth):
+    """
+    Test that /team/update correctly handles router_settings by:
+    1. Accepting router_settings as a dict parameter
+    2. Serializing router_settings to JSON when updating database
+    3. Updating router_settings in the team record
+    """
+    # Configure mocked prisma client
+    mock_db_client.jsonify_team_object = lambda db_data: db_data
+    mock_db_client.db = MagicMock()
+
+    # Mock existing team row
+    existing_team_mock = MagicMock()
+    existing_team_mock.team_id = "team-router-update-789"
+    existing_team_mock.organization_id = None
+    existing_team_mock.models = []
+    existing_team_mock.members_with_roles = []
+    existing_team_mock.model_dump.return_value = {
+        "team_id": "team-router-update-789",
+        "organization_id": None,
+        "models": [],
+        "members_with_roles": [],
+    }
+
+    # Mock team table find_unique and update
+    updated_team_result = MagicMock(
+        team_id="team-router-update-789",
+    )
+    updated_team_result.model_dump.return_value = {
+        "team_id": "team-router-update-789",
+    }
+    mock_team_find_unique = AsyncMock(return_value=existing_team_mock)
+    mock_team_update = AsyncMock(return_value=updated_team_result)
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.find_unique = mock_team_find_unique
+    mock_db_client.db.litellm_teamtable.update = mock_team_update
+
+    from fastapi import Request
+
+    from litellm.proxy._types import UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import update_team
+
+    # Test router_settings with updated data
+    router_settings_data = {
+        "routing_strategy": "latency-based",
+        "num_retries": 2,
+    }
+
+    # Build update request with router_settings
+    team_update_request = UpdateTeamRequest(
+        team_id="team-router-update-789",
+        router_settings=router_settings_data,
+    )
+
+    dummy_request = MagicMock(spec=Request)
+
+    # Execute the endpoint function
+    await update_team(
+        data=team_update_request,
+        http_request=dummy_request,
+        user_api_key_dict=mock_admin_auth,
+    )
+
+    # Verify team update was called
+    assert mock_team_update.call_count == 1
+    updated_team_kwargs = mock_team_update.call_args.kwargs
+    team_data = updated_team_kwargs["data"]
+
+    # Verify router_settings is serialized to JSON string
+    assert "router_settings" in team_data
+    assert isinstance(team_data["router_settings"], str)
+
+    # Verify router_settings can be deserialized and matches input
+    deserialized_settings = json.loads(team_data["router_settings"])
+    assert deserialized_settings == router_settings_data

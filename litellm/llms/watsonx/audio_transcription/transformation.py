@@ -7,13 +7,14 @@ WatsonX follows the OpenAI spec for audio transcription.
 from typing import Any, Dict, List, Optional
 
 import litellm
+from httpx import Response
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.types.llms.openai import (
     AllMessageValues,
     OpenAIAudioTranscriptionOptionalParams,
 )
 from litellm.types.llms.watsonx import WatsonXAudioTranscriptionRequestBody
-from litellm.types.utils import FileTypes
+from litellm.types.utils import FileTypes, TranscriptionResponse
 
 from ...base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -156,3 +157,48 @@ class IBMWatsonXAudioTranscriptionConfig(
         url = f"{url}?version={api_version}"
 
         return url
+
+    def transform_audio_transcription_response(
+        self,
+        raw_response: Response,
+    ) -> TranscriptionResponse:
+        """
+        Transform the audio transcription response from WatsonX.
+        
+        WatsonX may include a 'model' field in the response, which needs to be
+        removed before creating the TranscriptionResponse object.
+        """
+        try:
+            raw_response_json = raw_response.json()
+        except Exception as e:
+            raise ValueError(
+                f"Error transforming response to json: {str(e)}\nResponse: {raw_response.text}"
+            )
+
+        # Extract only valid fields for TranscriptionResponse.__init__()
+        # TranscriptionResponse only accepts 'text' and 'usage' in __init__()
+        text = raw_response_json.get("text")
+        usage = raw_response_json.get("usage")
+        
+        # Create response with only valid fields
+        response_kwargs = {}
+        if text is not None:
+            response_kwargs["text"] = text
+        if usage is not None:
+            response_kwargs["usage"] = usage
+        
+        if not response_kwargs:
+            raise ValueError(
+                "Invalid response format. Received response does not match the expected format. Got: ",
+                raw_response_json,
+            )
+        
+        response = TranscriptionResponse(**response_kwargs)
+        
+        # Add other fields using dictionary-style assignment (like duration, task, etc.)
+        # Skip fields that TranscriptionResponse doesn't accept in __init__()
+        for key, value in raw_response_json.items():
+            if key not in ["text", "usage", "model"]:  # text/usage already set, model should be excluded
+                response[key] = value
+        
+        return response

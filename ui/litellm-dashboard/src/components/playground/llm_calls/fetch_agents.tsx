@@ -16,9 +16,12 @@ export interface Agent {
 /**
  * Fetches available A2A agents from /v1/agents endpoint.
  */
-export const fetchAvailableAgents = async (accessToken: string): Promise<Agent[]> => {
+export const fetchAvailableAgents = async (
+  accessToken: string,
+  customBaseUrl?: string,
+): Promise<Agent[]> => {
   try {
-    const proxyBaseUrl = getProxyBaseUrl();
+    const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v1/agents` : `/v1/agents`;
 
     const response = await fetch(url, {

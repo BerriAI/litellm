@@ -6,6 +6,7 @@ import io
 import mimetypes
 import re
 from os import PathLike
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -533,6 +534,12 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
     # Convert content to bytes
     if isinstance(file_content, (str, PathLike)):
         # If it's a path, open and read the file
+        # Extract filename from path if not already set
+        if filename is None:
+            if isinstance(file_content, PathLike):
+                filename = Path(file_content).name
+            else:
+                filename = Path(str(file_content)).name
         with open(file_content, "rb") as f:
             content = f.read()
     elif isinstance(file_content, io.IOBase):
@@ -550,11 +557,11 @@ def extract_file_data(file_data: FileTypes) -> ExtractedFileData:
 
     # Use provided content type or guess based on filename
     if not content_type:
-        content_type = (
-            mimetypes.guess_type(filename)[0]
-            if filename
-            else "application/octet-stream"
-        )
+        if filename:
+            guessed_type = mimetypes.guess_type(filename)[0]
+            content_type = guessed_type if guessed_type else "application/octet-stream"
+        else:
+            content_type = "application/octet-stream"
 
     return ExtractedFileData(
         filename=filename,
@@ -1087,9 +1094,35 @@ def _parse_content_for_reasoning(
     return None, message_text
 
 
+def _extract_base64_data(image_url: str) -> str:
+    """
+    Extract pure base64 data from an image URL.
+
+    If the URL is a data URL (e.g., "data:image/png;base64,iVBOR..."),
+    extract and return only the base64 data portion.
+    Otherwise, return the original URL unchanged.
+
+    This is needed for providers like Ollama that expect pure base64 data
+    rather than full data URLs.
+
+    Args:
+        image_url: The image URL or data URL to process
+
+    Returns:
+        The base64 data if it's a data URL, otherwise the original URL
+    """
+    if image_url.startswith("data:") and ";base64," in image_url:
+        return image_url.split(";base64,", 1)[1]
+    return image_url
+
+
 def extract_images_from_message(message: AllMessageValues) -> List[str]:
     """
-    Extract images from a message
+    Extract images from a message.
+
+    For data URLs (e.g., "data:image/png;base64,iVBOR..."), only the base64
+    data portion is extracted. This is required for providers like Ollama
+    that expect pure base64 data rather than full data URLs.
     """
     images = []
     message_content = message.get("content")
@@ -1098,7 +1131,7 @@ def extract_images_from_message(message: AllMessageValues) -> List[str]:
             image_url = m.get("image_url")
             if image_url:
                 if isinstance(image_url, str):
-                    images.append(image_url)
+                    images.append(_extract_base64_data(image_url))
                 elif isinstance(image_url, dict) and "url" in image_url:
-                    images.append(image_url["url"])
+                    images.append(_extract_base64_data(image_url["url"]))
     return images

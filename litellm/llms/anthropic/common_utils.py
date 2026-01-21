@@ -12,7 +12,11 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool, ANTHROPIC_HOSTED_TOOLS
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_HOSTED_TOOLS,
+    AllAnthropicToolsValues,
+    AnthropicMcpServerTool,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import TokenCountResponse
 
@@ -273,8 +277,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.append(beta_header)
         
-        if prompt_caching_set:
-            betas.append("prompt-caching-2024-07-31")
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         
         if file_id_used:
             betas.append("files-api-2025-04-14")
@@ -305,8 +310,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         container_with_skills_used: bool = False,
     ) -> dict:
         betas = set()
-        if prompt_caching_set:
-            betas.add("prompt-caching-2024-07-31")
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         if computer_tool_used:
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.add(beta_header)

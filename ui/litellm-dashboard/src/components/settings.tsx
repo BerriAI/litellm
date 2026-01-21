@@ -28,6 +28,8 @@ const { Title, Paragraph } = Typography;
 
 import FormItem from "antd/es/form/FormItem";
 import AlertingSettings from "./alerting/alerting_settings";
+import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import {
   deleteCallback,
   getCallbackConfigsCall,
@@ -38,8 +40,6 @@ import {
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
-import DeleteResourceModal from "./common_components/DeleteResourceModal";
-import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
