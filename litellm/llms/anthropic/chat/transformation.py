@@ -222,17 +222,14 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         if not isinstance(schema, dict):
             return schema
-        
-        # Fields that Anthropic doesn't support in output_format
+
         unsupported_fields = {"maxItems", "minItems"}
-        
-        result = {}
+
+        result: Dict[str, Any] = {}
         for key, value in schema.items():
-            # Skip unsupported fields
             if key in unsupported_fields:
                 continue
-            
-            # Recursively filter nested structures
+
             if key == "properties" and isinstance(value, dict):
                 result[key] = {
                     k: AnthropicConfig.filter_anthropic_output_schema(v)
@@ -262,7 +259,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ]
             else:
                 result[key] = value
-        
+
         return result
 
     def get_json_schema_from_pydantic_object(
