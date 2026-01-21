@@ -53,24 +53,6 @@ class AnthropicCountTokensConfig:
             "messages": messages,
         }
 
-    def transform_response(self, response: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Transform Anthropic CountTokens response.
-
-        Input (Anthropic response):
-        {
-            "input_tokens": 123
-        }
-
-        Output:
-        {
-            "input_tokens": 123
-        }
-        """
-        return {
-            "input_tokens": response.get("input_tokens", 0),
-        }
-
     def get_required_headers(self, api_key: str) -> Dict[str, str]:
         """
         Get the required headers for the CountTokens API.

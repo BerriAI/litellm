@@ -106,12 +106,8 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
 
             verbose_logger.debug(f"Azure AI Anthropic response: {azure_response}")
 
-            # Transform response
-            final_response = self.transform_response(azure_response)
-
-            verbose_logger.debug(f"Final response: {final_response}")
-
-            return final_response
+            # Return Anthropic-compatible response directly - no transformation needed
+            return azure_response
 
         except AnthropicError:
             # Re-raise Anthropic exceptions as-is
