@@ -189,6 +189,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             "response_format",
             "user",
             "web_search_options",
+            "custom_user_agent",
         ]
 
         if "claude-3-7-sonnet" in model or supports_reasoning(
@@ -802,6 +803,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 )
             elif param == "extra_headers":
                 optional_params["extra_headers"] = value
+            elif param == "custom_user_agent":
+                optional_params["custom_user_agent"] = value
 
         ## handle thinking tokens
         self.update_optional_params_with_thinking_tokens(

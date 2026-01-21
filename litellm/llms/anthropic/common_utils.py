@@ -397,6 +397,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
+        import os
+
         # Check for Anthropic OAuth token in headers
         headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         if api_key is None:
@@ -443,6 +445,16 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
 
         headers = {**headers, **anthropic_headers}
+
+        # Handle custom User-Agent header
+        # Priority: custom_user_agent parameter > ANTHROPIC_USER_AGENT env var > User-Agent in extra_headers > default
+        custom_user_agent = (
+            optional_params.get("custom_user_agent")
+            or os.getenv("ANTHROPIC_USER_AGENT")
+        )
+
+        if custom_user_agent:
+            headers["User-Agent"] = custom_user_agent
 
         return headers
 

@@ -82,3 +82,100 @@ def test_regular_api_keys_still_work():
     assert extracted_api_key == regular_key
     # OAuth headers should NOT be added
     assert "anthropic-dangerous-direct-browser-access" not in updated_headers
+
+
+def test_custom_user_agent_via_parameter():
+    """Test 5: Custom User-Agent via custom_user_agent parameter"""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    config = AnthropicModelInfo()
+    custom_agent = "Claude Code/1.0"
+
+    updated_headers = config.validate_environment(
+        headers={},
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={"custom_user_agent": custom_agent},
+        litellm_params={},
+        api_key="sk-ant-api03-test-key",
+        api_base=None,
+    )
+
+    assert updated_headers["User-Agent"] == custom_agent
+
+
+def test_custom_user_agent_via_env_var():
+    """Test 6: Custom User-Agent via ANTHROPIC_USER_AGENT environment variable"""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    config = AnthropicModelInfo()
+    custom_agent = "Claude Code/1.0"
+
+    # Set environment variable
+    os.environ["ANTHROPIC_USER_AGENT"] = custom_agent
+
+    try:
+        updated_headers = config.validate_environment(
+            headers={},
+            model="claude-3-haiku-20240307",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key="sk-ant-api03-test-key",
+            api_base=None,
+        )
+
+        assert updated_headers["User-Agent"] == custom_agent
+    finally:
+        # Clean up
+        del os.environ["ANTHROPIC_USER_AGENT"]
+
+
+def test_custom_user_agent_parameter_priority():
+    """Test 7: custom_user_agent parameter takes priority over environment variable"""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    config = AnthropicModelInfo()
+    param_agent = "Claude Code/2.0"
+    env_agent = "Claude Code/1.0"
+
+    # Set environment variable
+    os.environ["ANTHROPIC_USER_AGENT"] = env_agent
+
+    try:
+        updated_headers = config.validate_environment(
+            headers={},
+            model="claude-3-haiku-20240307",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={"custom_user_agent": param_agent},
+            litellm_params={},
+            api_key="sk-ant-api03-test-key",
+            api_base=None,
+        )
+
+        # Parameter should take priority over environment variable
+        assert updated_headers["User-Agent"] == param_agent
+    finally:
+        # Clean up
+        del os.environ["ANTHROPIC_USER_AGENT"]
+
+
+def test_no_custom_user_agent():
+    """Test 8: Default User-Agent is preserved when no custom agent is provided"""
+    from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+    config = AnthropicModelInfo()
+    default_agent = "litellm/1.0.0"
+
+    updated_headers = config.validate_environment(
+        headers={"User-Agent": default_agent},
+        model="claude-3-haiku-20240307",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params={},
+        litellm_params={},
+        api_key="sk-ant-api03-test-key",
+        api_base=None,
+    )
+
+    # Default User-Agent should be preserved
+    assert updated_headers["User-Agent"] == default_agent
