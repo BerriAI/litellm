@@ -54,11 +54,18 @@ echo ""
 
 # Function to run a single health check container
 run_health_check() {
-    "$CONTAINER_RUNTIME" run --rm \
-        -e LITELLM_BASE_URL="$LITELLM_BASE_URL" \
-        -e LITELLM_API_KEY="$LITELLM_API_KEY" \
-        -e LITELLM_JSON_OUTPUT="true" \
-        "$IMAGE_NAME"
+    local env_vars=(
+        -e "LITELLM_BASE_URL=$LITELLM_BASE_URL"
+        -e "LITELLM_API_KEY=$LITELLM_API_KEY"
+        -e "LITELLM_JSON_OUTPUT=true"
+    )
+    
+    # Pass through custom auth header if set
+    if [ -n "$LITELLM_CUSTOM_AUTH_HEADER" ]; then
+        env_vars+=(-e "LITELLM_CUSTOM_AUTH_HEADER=$LITELLM_CUSTOM_AUTH_HEADER")
+    fi
+    
+    "$CONTAINER_RUNTIME" run --rm "${env_vars[@]}" "$IMAGE_NAME"
 }
 
 # Run parallel health checks

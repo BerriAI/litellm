@@ -1,5 +1,5 @@
 import { useState, useCallback } from "react";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import NotificationsManager from "../molecules/notifications_manager";
 import { MarginConfig } from "./types";
 import { getProviderBackendValue } from "./provider_display_helpers";
@@ -42,7 +42,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       const response = await fetch(url, {
         method: "GET",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
       });
@@ -69,7 +69,7 @@ export function useMarginConfig({ accessToken }: UseMarginConfigProps): UseMargi
       const response = await fetch(url, {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${accessToken}`,
+          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(config),

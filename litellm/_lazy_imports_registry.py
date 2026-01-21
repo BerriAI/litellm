@@ -198,6 +198,7 @@ LLM_CONFIG_NAMES = (
     "AzureOpenAIOSeriesResponsesAPIConfig",
     "XAIResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
+    "VolcEngineResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "OpenAIOSeriesConfig",
     "AnthropicSkillsConfig",
@@ -253,6 +254,8 @@ LLM_CONFIG_NAMES = (
     "IBMWatsonXAudioTranscriptionConfig",
     "GithubCopilotConfig",
     "GithubCopilotResponsesAPIConfig",
+    "ChatGPTConfig",
+    "ChatGPTResponsesAPIConfig",
     "ManusResponsesAPIConfig",
     "GithubCopilotEmbeddingConfig",
     "NebiusConfig",
@@ -591,6 +594,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AzureOpenAIOSeriesResponsesAPIConfig": (".llms.azure.responses.o_series_transformation", "AzureOpenAIOSeriesResponsesAPIConfig"),
     "XAIResponsesAPIConfig": (".llms.xai.responses.transformation", "XAIResponsesAPIConfig"),
     "LiteLLMProxyResponsesAPIConfig": (".llms.litellm_proxy.responses.transformation", "LiteLLMProxyResponsesAPIConfig"),
+    "VolcEngineResponsesAPIConfig": (".llms.volcengine.responses.transformation", "VolcEngineResponsesAPIConfig"),
     "ManusResponsesAPIConfig": (".llms.manus.responses.transformation", "ManusResponsesAPIConfig"),
     "GoogleAIStudioInteractionsConfig": (".llms.gemini.interactions.transformation", "GoogleAIStudioInteractionsConfig"),
     "OpenAIOSeriesConfig": (".llms.openai.chat.o_series_transformation", "OpenAIOSeriesConfig"),
@@ -648,6 +652,8 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "GithubCopilotConfig": (".llms.github_copilot.chat.transformation", "GithubCopilotConfig"),
     "GithubCopilotResponsesAPIConfig": (".llms.github_copilot.responses.transformation", "GithubCopilotResponsesAPIConfig"),
     "GithubCopilotEmbeddingConfig": (".llms.github_copilot.embedding.transformation", "GithubCopilotEmbeddingConfig"),
+    "ChatGPTConfig": (".llms.chatgpt.chat.transformation", "ChatGPTConfig"),
+    "ChatGPTResponsesAPIConfig": (".llms.chatgpt.responses.transformation", "ChatGPTResponsesAPIConfig"),
     "NebiusConfig": (".llms.nebius.chat.transformation", "NebiusConfig"),
     "WandbConfig": (".llms.wandb.chat.transformation", "WandbConfig"),
     "GigaChatConfig": (".llms.gigachat.chat.transformation", "GigaChatConfig"),
@@ -774,4 +780,3 @@ __all__ = [
     "_LLM_PROVIDER_LOGIC_IMPORT_MAP",
     "_UTILS_MODULE_IMPORT_MAP",
 ]
-

@@ -17,7 +17,11 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.anthropic_tool_search import get_tool_search_beta_header
 from litellm.types.router import GenericLiteLLMParams
 
-from ...common_utils import AnthropicError, AnthropicModelInfo
+from ...common_utils import (
+    AnthropicError,
+    AnthropicModelInfo,
+    optionally_handle_anthropic_oauth,
+)
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
 DEFAULT_ANTHROPIC_API_VERSION = "2023-06-01"
@@ -68,8 +72,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
     ) -> Tuple[dict, Optional[str]]:
         import os
 
+        # Check for Anthropic OAuth token in Authorization header
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         if api_key is None:
             api_key = os.getenv("ANTHROPIC_API_KEY")
+
         if "x-api-key" not in headers and api_key:
             headers["x-api-key"] = api_key
         if "anthropic-version" not in headers:
