@@ -22,6 +22,30 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import AllMessageValues
 
 
+def optionally_handle_anthropic_oauth(
+    headers: dict, api_key: Optional[str]
+) -> tuple[dict, Optional[str]]:
+    """
+    Handle Anthropic OAuth token detection and header setup.
+
+    If an OAuth token is detected in the Authorization header, extracts it
+    and sets the required OAuth headers.
+
+    Args:
+        headers: Request headers dict
+        api_key: Current API key (may be None)
+
+    Returns:
+        Tuple of (updated headers, api_key)
+    """
+    auth_header = headers.get("authorization", "")
+    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.replace("Bearer ", "")
+        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-dangerous-direct-browser-access"] = "true"
+    return headers, api_key
+
+
 class AnthropicError(BaseLLMException):
     def __init__(
         self,
