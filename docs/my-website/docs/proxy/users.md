@@ -545,6 +545,26 @@ You can set:
 - max parallel requests
 - rpm / tpm limits per model for a given key
 
+### TPM Rate Limit Type (Input/Output/Total)
+
+By default, TPM (tokens per minute) rate limits count **total tokens** (input + output). You can configure this to count only input tokens or only output tokens instead.
+
+Set `token_rate_limit_type` in your `config.yaml`:
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  token_rate_limit_type: "output"  # Options: "input", "output", "total" (default)
+```
+
+| Value | Description |
+|-------|-------------|
+| `total` | Count total tokens (prompt + completion). **Default behavior.** |
+| `input` | Count only prompt/input tokens |
+| `output` | Count only completion/output tokens |
+
+This setting applies globally to all TPM rate limit checks (keys, users, teams, etc.).
+
 
 <Tabs>
 <TabItem value="per-team" label="Per Team">

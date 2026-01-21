@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 # Add the project root to the path
 sys.path.insert(0, os.path.abspath("../../.."))
 
+import litellm.experimental_mcp_client.client as mcp_client_module
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.types.mcp import MCPAuth, MCPTransport
 from mcp.types import Tool as MCPTool, CallToolResult as MCPCallToolResult
@@ -82,8 +83,8 @@ class TestMCPClientUnitTests:
         assert headers == {}
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
     async def test_run_with_session(self, mock_session_class, mock_transport):
         """Test run_with_session establishes session with auth headers."""
         # Setup mocks
@@ -110,16 +111,15 @@ class TestMCPClientUnitTests:
 
         # Verify transport was created with auth headers
         call_args = mock_transport.call_args
-        assert call_args[1]["headers"] == {
-            "Authorization": "Bearer test_token",
-        }
+        http_client = call_args[1]["http_client"]
+        assert http_client.headers.get("Authorization") == "Bearer test_token"
 
         # Verify session was initialized
         mock_session_instance.initialize.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
     async def test_list_tools(self, mock_session_class, mock_transport):
         """Test listing tools from the server."""
         # Setup mocks
@@ -156,8 +156,8 @@ class TestMCPClientUnitTests:
         mock_session_instance.list_tools.assert_called_once()
 
     @pytest.mark.asyncio
-    @patch("litellm.experimental_mcp_client.client.streamablehttp_client")
-    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    @patch.object(mcp_client_module, "streamable_http_client")
+    @patch.object(mcp_client_module, "ClientSession")
     async def test_call_tool(self, mock_session_class, mock_transport):
         """Test calling a tool."""
         from mcp.types import CallToolRequestParams

@@ -1139,17 +1139,16 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
             result_chunks.append(chunk)
 
         # Verify bedrock API calls were made
+        # Note: When event_hook is None (default), the guardrail is considered enabled for all hooks.
+        # In post_call, INPUT validation is skipped if pre_call/during_call is already enabled
+        # to avoid redundant validation. Since event_hook=None means all hooks are enabled,
+        # only OUTPUT validation should be performed in post_call.
         assert (
-            len(bedrock_calls) == 2
-        ), f"Expected 2 bedrock calls (INPUT and OUTPUT), got {len(bedrock_calls)}"
+            len(bedrock_calls) == 1
+        ), f"Expected 1 bedrock call (OUTPUT only), got {len(bedrock_calls)}"
 
-        # Find the OUTPUT call
-        output_calls = [call for call in bedrock_calls if call["source"] == "OUTPUT"]
-        assert (
-            len(output_calls) == 1
-        ), f"Expected 1 OUTPUT call, got {len(output_calls)}"
-
-        output_call = output_calls[0]
+        # Verify the OUTPUT call
+        output_call = bedrock_calls[0]
         assert output_call["source"] == "OUTPUT"
         assert output_call["response"] is not None
         assert output_call["messages"] is None  # OUTPUT calls don't need messages
@@ -1176,7 +1175,10 @@ async def test_convert_to_bedrock_format_post_call_streaming_hook():
         print(
             "✅ Post-call streaming hook test passed - OUTPUT source used for masking"
         )
-        print(f"✅ Bedrock calls made: {[call['source'] for call in bedrock_calls]}")
+        print(
+            f"✅ Bedrock calls made: {[call['source'] for call in bedrock_calls]} "
+            "(INPUT validation skipped due to event_hook=None implying pre_call/during_call enabled)"
+        )
         print(f"✅ Final masked content: {full_content}")
 
 

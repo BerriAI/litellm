@@ -2,9 +2,11 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from typing import TYPE_CHECKING, Any, Coroutine, Union
+from typing import TYPE_CHECKING, Any, Coroutine, Optional, Union
 
 from typing_extensions import TypedDict
+
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
@@ -27,6 +29,71 @@ class ResponsesToCompletionBridgeHandler:
 
         super().__init__()
         self.transformation_handler = LiteLLMResponsesTransformationHandler()
+
+    @staticmethod
+    def _resolve_stream_flag(optional_params: dict, litellm_params: dict) -> bool:
+        stream = optional_params.get("stream")
+        if stream is None:
+            stream = litellm_params.get("stream", False)
+        return bool(stream)
+
+    @staticmethod
+    def _coerce_response_object(
+        response_obj: Any,
+        hidden_params: Optional[dict],
+    ) -> "ResponsesAPIResponse":
+        if isinstance(response_obj, ResponsesAPIResponse):
+            response = response_obj
+        elif isinstance(response_obj, dict):
+            try:
+                response = ResponsesAPIResponse(**response_obj)
+            except Exception:
+                response = ResponsesAPIResponse.model_construct(**response_obj)
+        else:
+            raise ValueError("Unexpected responses stream payload")
+
+        if hidden_params:
+            existing = getattr(response, "_hidden_params", None)
+            if not isinstance(existing, dict) or not existing:
+                setattr(response, "_hidden_params", dict(hidden_params))
+            else:
+                for key, value in hidden_params.items():
+                    existing.setdefault(key, value)
+        return response
+
+    def _collect_response_from_stream(
+        self, stream_iter: Any
+    ) -> "ResponsesAPIResponse":
+        for _ in stream_iter:
+            pass
+
+        completed = getattr(stream_iter, "completed_response", None)
+        response_obj = getattr(completed, "response", None) if completed else None
+        if response_obj is None:
+            raise ValueError("Stream ended without a completed response")
+
+        hidden_params = getattr(stream_iter, "_hidden_params", None)
+        response = self._coerce_response_object(response_obj, hidden_params)
+        if not isinstance(response, ResponsesAPIResponse):
+            raise ValueError("Stream completed response is invalid")
+        return response
+
+    async def _collect_response_from_stream_async(
+        self, stream_iter: Any
+    ) -> "ResponsesAPIResponse":
+        async for _ in stream_iter:
+            pass
+
+        completed = getattr(stream_iter, "completed_response", None)
+        response_obj = getattr(completed, "response", None) if completed else None
+        if response_obj is None:
+            raise ValueError("Stream ended without a completed response")
+
+        hidden_params = getattr(stream_iter, "_hidden_params", None)
+        response = self._coerce_response_object(response_obj, hidden_params)
+        if not isinstance(response, ResponsesAPIResponse):
+            raise ValueError("Stream completed response is invalid")
+        return response
 
     def validate_input_kwargs(
         self, kwargs: dict
@@ -87,7 +154,6 @@ class ResponsesToCompletionBridgeHandler:
 
         from litellm import responses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-        from litellm.types.llms.openai import ResponsesAPIResponse
 
         validated_kwargs = self.validate_input_kwargs(kwargs)
         model = validated_kwargs["model"]
@@ -113,10 +179,26 @@ class ResponsesToCompletionBridgeHandler:
             **request_data,
         )
 
+        stream = self._resolve_stream_flag(optional_params, litellm_params)
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
                 model=model,
                 raw_response=result,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                request_data=request_data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=kwargs.get("encoding"),
+                api_key=kwargs.get("api_key"),
+                json_mode=kwargs.get("json_mode"),
+            )
+        elif not stream:
+            responses_api_response = self._collect_response_from_stream(result)
+            return self.transformation_handler.transform_response(
+                model=model,
+                raw_response=responses_api_response,
                 model_response=model_response,
                 logging_obj=logging_obj,
                 request_data=request_data,
@@ -146,7 +228,6 @@ class ResponsesToCompletionBridgeHandler:
     ) -> Union["ModelResponse", "CustomStreamWrapper"]:
         from litellm import aresponses
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-        from litellm.types.llms.openai import ResponsesAPIResponse
 
         validated_kwargs = self.validate_input_kwargs(kwargs)
         model = validated_kwargs["model"]
@@ -175,10 +256,28 @@ class ResponsesToCompletionBridgeHandler:
             aresponses=True,
         )
 
+        stream = self._resolve_stream_flag(optional_params, litellm_params)
         if isinstance(result, ResponsesAPIResponse):
             return self.transformation_handler.transform_response(
                 model=model,
                 raw_response=result,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                request_data=request_data,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=kwargs.get("encoding"),
+                api_key=kwargs.get("api_key"),
+                json_mode=kwargs.get("json_mode"),
+            )
+        elif not stream:
+            responses_api_response = await self._collect_response_from_stream_async(
+                result
+            )
+            return self.transformation_handler.transform_response(
+                model=model,
+                raw_response=responses_api_response,
                 model_response=model_response,
                 logging_obj=logging_obj,
                 request_data=request_data,

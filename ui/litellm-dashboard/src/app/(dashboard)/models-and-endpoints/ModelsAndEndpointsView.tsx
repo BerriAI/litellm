@@ -94,7 +94,8 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   }, [modelDataResponse?.data]);
 
   const allModelsOnProxy = useMemo<string[]>(() => {
-    return modelDataResponse?.data?.map((model: any) => model.model_name);
+    if (!modelDataResponse?.data) return [];
+    return modelDataResponse.data.map((model: any) => model.model_name);
   }, [modelDataResponse?.data]);
 
   const getProviderFromModel = (model: string) => {

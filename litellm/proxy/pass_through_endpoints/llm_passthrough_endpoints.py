@@ -1037,6 +1037,7 @@ async def bedrock_proxy_route(
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
         is_streaming_request=is_streaming_request,
+        _forward_headers=True
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
@@ -1368,6 +1369,27 @@ def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
 
+def add_incoming_headers(request: Request, auth_header: str) -> dict:
+    """
+    Build headers from incoming request, preserving headers like anthropic-beta,
+    while removing headers that should not be forwarded and adding authorization.
+
+    Args:
+        request: The FastAPI request object
+        auth_header: The authorization token to add
+
+    Returns:
+        dict: Headers dictionary with authorization added
+    """
+    headers = dict(request.headers) or {}
+    # Remove headers that should not be forwarded
+    headers.pop("content-length", None)
+    headers.pop("host", None)
+    # Add/override the Authorization header
+    headers["Authorization"] = f"Bearer {auth_header}"
+    return headers
+
+
 def get_vertex_pass_through_handler(
     call_type: Literal["discovery", "aiplatform"],
 ) -> BaseVertexAIPassThroughHandler:
@@ -1511,9 +1533,13 @@ async def _prepare_vertex_auth_headers(
             api_base="",
         )
 
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-        }
+        # Start with incoming request headers to preserve headers like anthropic-beta
+        headers = dict(request.headers) or {}
+        # Remove headers that should not be forwarded
+        headers.pop("content-length", None)
+        headers.pop("host", None)
+        # Add/override the Authorization header
+        headers["Authorization"] = f"Bearer {auth_header}"
 
         if base_target_url is not None:
             base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(
@@ -1554,6 +1580,7 @@ async def _base_vertex_proxy_route(
     from litellm.llms.vertex_ai.common_utils import (
         construct_target_url,
         get_vertex_location_from_url,
+        get_vertex_model_id_from_url,
         get_vertex_project_id_from_url,
     )
 
@@ -1582,6 +1609,25 @@ async def _base_vertex_proxy_route(
         vertex_project=vertex_project,
         vertex_location=vertex_location,
     )
+
+    if vertex_project is None or vertex_location is None:
+        # Check if model is in router config
+        model_id = get_vertex_model_id_from_url(endpoint)
+        if model_id:
+            from litellm.proxy.proxy_server import llm_router
+
+            if llm_router:
+                try:
+                    # Use the dedicated pass-through deployment selection method to automatically filter use_in_pass_through=True
+                    deployment = llm_router.get_available_deployment_for_pass_through(model=model_id)
+                    if deployment:
+                        litellm_params = deployment.get("litellm_params", {})
+                        vertex_project = litellm_params.get("vertex_project")
+                        vertex_location = litellm_params.get("vertex_location")
+                except Exception as e:
+                    verbose_proxy_logger.debug(
+                        f"Error getting available deployment for model {model_id}: {e}"
+                    )
 
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,

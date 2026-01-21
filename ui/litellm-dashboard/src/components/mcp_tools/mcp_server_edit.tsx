@@ -553,7 +553,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                   />
                 </Form.Item>
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and save it as the authentication value.</p>
+                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
                   <Button
                     variant="secondary"
                     onClick={startOAuthFlow}

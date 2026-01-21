@@ -282,12 +282,27 @@ Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable cac
   ```
 
 **Additional kwargs**  
+:::info
+Use `REDIS_*` environment variables to configure all Redis client library parameters. This is the suggested mechanism for toggling Redis settings as it automatically maps environment variables to Redis client kwargs.
+:::
+
 You can pass in any additional redis.Redis arg, by storing the variable + value in your os
 environment, like this:
 
 ```shell
 REDIS_<redis-kwarg-name> = ""
 ```
+
+For example:
+```shell
+REDIS_SSL = "True"
+REDIS_SSL_CERT_REQS = "None" 
+REDIS_CONNECTION_POOL_KWARGS = '{"max_connections": 20}'
+```
+
+:::warning
+**Note**: For non-string Redis parameters (like integers, booleans, or complex objects), avoid using `REDIS_*` environment variables as they may fail during Redis client initialization. Instead, use `cache_kwargs` in your router configuration for such parameters.
+:::
 
 [**See how it's read from the environment**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/_redis.py#L40)
 

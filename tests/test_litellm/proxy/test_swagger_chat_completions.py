@@ -308,3 +308,42 @@ class TestSwaggerChatCompletions:
         required_fields = schema_def.get("required", [])
         for required_field in required_fields:
             assert required_field in test_request, f"Required field '{required_field}' should be in test request"
+
+    def test_openapi_schema_servers_url_with_root_path(self):
+        """
+        Test that OpenAPI schema includes correct servers URL when server_root_path is set.
+        This ensures Swagger UI works correctly with reverse proxies and subpath deployments.
+        """
+        from unittest.mock import patch
+        from litellm.proxy.proxy_server import get_openapi_schema, custom_openapi, app
+
+        # Test cases: (server_root_path, expected_servers_url)
+        # Note: empty string is falsy in Python, so servers won't be set
+        test_cases = [
+            ("/litellm", "/litellm"),
+            ("/litellm/", "/litellm"),  # trailing slash should be removed
+            ("litellm", "/litellm"),  # missing leading slash should be added
+            ("/api/v1", "/api/v1"),
+        ]
+
+        for root_path, expected_url in test_cases:
+            # Clear cached schema
+            app.openapi_schema = None
+
+            with patch("litellm.proxy.proxy_server.server_root_path", root_path):
+                # Test get_openapi_schema
+                schema = get_openapi_schema()
+
+                # Should have servers field with correct URL
+                assert "servers" in schema, f"servers field should exist when server_root_path={root_path}"
+                assert schema["servers"][0]["url"] == expected_url, \
+                    f"Expected servers URL '{expected_url}', got '{schema['servers'][0]['url']}' for root_path '{root_path}'"
+
+            # Test custom_openapi as well
+            app.openapi_schema = None
+            with patch("litellm.proxy.proxy_server.server_root_path", root_path):
+                schema = custom_openapi()
+
+                assert "servers" in schema, f"servers field should exist in custom_openapi when server_root_path={root_path}"
+                assert schema["servers"][0]["url"] == expected_url, \
+                    f"Expected servers URL '{expected_url}' in custom_openapi, got '{schema['servers'][0]['url']}'"        

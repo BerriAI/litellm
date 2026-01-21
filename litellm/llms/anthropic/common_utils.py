@@ -2,7 +2,7 @@
 This file contains common utils for anthropic calls.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import httpx
 
@@ -14,11 +14,36 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_OAUTH_BETA_HEADER,
+    ANTHROPIC_OAUTH_TOKEN_PREFIX,
     AllAnthropicToolsValues,
     AnthropicMcpServerTool,
 )
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import TokenCountResponse
+
+
+def optionally_handle_anthropic_oauth(
+    headers: dict, api_key: Optional[str]
+) -> tuple[dict, Optional[str]]:
+    """
+    Handle Anthropic OAuth token detection and header setup.
+
+    If an OAuth token is detected in the Authorization header, extracts it
+    and sets the required OAuth headers.
+
+    Args:
+        headers: Request headers dict
+        api_key: Current API key (may be None)
+
+    Returns:
+        Tuple of (updated headers, api_key)
+    """
+    auth_header = headers.get("authorization", "")
+    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.replace("Bearer ", "")
+        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-dangerous-direct-browser-access"] = "true"
+    return headers, api_key
 
 
 class AnthropicError(BaseLLMException):
@@ -372,6 +397,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
+        # Check for Anthropic OAuth token in headers
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         if api_key is None:
             raise litellm.AuthenticationError(
                 message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
@@ -476,45 +503,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Returns:
             AnthropicTokenCounter instance for this provider.
         """
-        return AnthropicTokenCounter()
-
-
-class AnthropicTokenCounter(BaseTokenCounter):
-    """Token counter implementation for Anthropic provider."""
-
-    def should_use_token_counting_api(
-        self, 
-        custom_llm_provider: Optional[str] = None,
-    ) -> bool:
-        from litellm.types.utils import LlmProviders
-        return custom_llm_provider == LlmProviders.ANTHROPIC.value
-    
-    async def count_tokens(
-        self,
-        model_to_use: str,
-        messages: Optional[List[Dict[str, Any]]],
-        contents: Optional[List[Dict[str, Any]]],
-        deployment: Optional[Dict[str, Any]] = None,
-        request_model: str = "",
-    ) -> Optional[TokenCountResponse]:
-        from litellm.proxy.utils import count_tokens_with_anthropic_api
-        
-        result = await count_tokens_with_anthropic_api(
-            model_to_use=model_to_use,
-            messages=messages,
-            deployment=deployment,
+        from litellm.llms.anthropic.count_tokens.token_counter import (
+            AnthropicTokenCounter,
         )
-        
-        if result is not None:
-            return TokenCountResponse(
-                total_tokens=result.get("total_tokens", 0),
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
-            )
-        
-        return None
+
+        return AnthropicTokenCounter()
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:

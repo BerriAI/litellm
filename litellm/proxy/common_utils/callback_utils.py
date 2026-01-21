@@ -269,6 +269,16 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
+            elif isinstance(callback, str) and callback == "websearch_interception":
+                from litellm.integrations.websearch_interception.handler import (
+                    WebSearchInterceptionLogger,
+                )
+
+                websearch_interception_obj = WebSearchInterceptionLogger.initialize_from_proxy_config(
+                    litellm_settings=litellm_settings,
+                    callback_specific_params=callback_specific_params,
+                )
+                imported_list.append(websearch_interception_obj)
             elif isinstance(callback, CustomLogger):
                 imported_list.append(callback)
             else:

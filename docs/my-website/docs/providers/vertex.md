@@ -14,6 +14,17 @@ import TabItem from '@theme/TabItem';
 | Base URL | 1. Regional endpoints<br/>`https://{vertex_location}-aiplatform.googleapis.com/`<br/>2. Global endpoints (limited availability)<br/>`https://aiplatform.googleapis.com/`|
 | Supported Operations | [`/chat/completions`](#sample-usage), `/completions`, [`/embeddings`](#embedding-models), [`/audio/speech`](#text-to-speech-apis), [`/fine_tuning`](#fine-tuning-apis), [`/batches`](#batch-apis), [`/files`](#batch-apis), [`/images`](#image-generation-models), [`/rerank`](#rerank-api) |
 
+:::tip Vertex AI vs Gemini API
+| Model Format | Provider | Auth Required |
+|-------------|----------|---------------|
+| `vertex_ai/gemini-2.0-flash` | Vertex AI | GCP credentials + project |
+| `gemini-2.0-flash` (no prefix) | Vertex AI | GCP credentials + project |
+| `gemini/gemini-2.0-flash` | Gemini API | `GEMINI_API_KEY` (simple API key) |
+
+**If you just want to use an API key** (like OpenAI), use the `gemini/` prefix instead. See [Gemini - Google AI Studio](./gemini.md).
+
+Models without a prefix default to Vertex AI which requires GCP authentication.
+:::
 
 <br />
 <br />
@@ -1390,6 +1401,77 @@ model_list:
 
 
 
+### **Workload Identity Federation**
+
+LiteLLM supports [Google Cloud Workload Identity Federation (WIF)](https://cloud.google.com/iam/docs/workload-identity-federation), which allows you to grant on-premises or multi-cloud workloads access to Google Cloud resources without using a service account key. This is the recommended approach for workloads running in other cloud environments (AWS, Azure, etc.) or on-premises.
+
+To use Workload Identity Federation, pass the path to your WIF credentials configuration file via `vertex_credentials`:
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-1.5-pro",
+    messages=[{"role": "user", "content": "Hello!"}],
+    vertex_credentials="/path/to/wif-credentials.json",  # 👈 WIF credentials file
+    vertex_project="your-gcp-project-id",
+    vertex_location="us-central1"
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```yaml
+model_list:
+  - model_name: gemini-model
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+      vertex_credentials: /path/to/wif-credentials.json  # 👈 WIF credentials file
+```
+
+Alternatively, you can create credentials in **LLM Credentials** in the LiteLLM UI and use those to authenticate your models:
+
+```yaml
+model_list:
+  - model_name: gemini-model
+    litellm_params:
+      model: vertex_ai/gemini-1.5-pro
+      vertex_project: your-gcp-project-id
+      vertex_location: us-central1
+      litellm_credential_name: my-vertex-wif-credential  # 👈 Reference credential stored in UI
+```
+
+</TabItem>
+</Tabs>
+
+**WIF Credentials File Format**
+
+Your WIF credentials JSON file typically looks like this (for AWS federation):
+
+```json
+{
+  "type": "external_account",
+  "audience": "//iam.googleapis.com/projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/POOL_ID/providers/PROVIDER_ID",
+  "subject_token_type": "urn:ietf:params:aws:token-type:aws4_request",
+  "service_account_impersonation_url": "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/SERVICE_ACCOUNT_EMAIL:generateAccessToken",
+  "token_url": "https://sts.googleapis.com/v1/token",
+  "credential_source": {
+    "environment_id": "aws1",
+    "region_url": "http://169.254.169.254/latest/meta-data/placement/availability-zone",
+    "url": "http://169.254.169.254/latest/meta-data/iam/security-credentials",
+    "regional_cred_verification_url": "https://sts.{region}.amazonaws.com?Action=GetCallerIdentity&Version=2011-06-15"
+  }
+}
+```
+
+For more details on setting up Workload Identity Federation, see [Google Cloud WIF documentation](https://cloud.google.com/iam/docs/workload-identity-federation).
+
 ### **Environment Variables**
 
 You can set:
@@ -1886,6 +1968,244 @@ assert isinstance(
 
 ```
 
+## Media Resolution Control (Images & Videos)
+
+For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images and videos in your request, whether using `image_url` or `file` content types.
+
+**Supported `detail` values:**
+- `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
+- `"medium"` - Maps to `media_resolution: "medium"`
+- `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
+- `"ultra_high"` - Maps to `media_resolution: "ultra_high"`
+- `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="images" label="Images">
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/chart.png",
+                    "detail": "high"  # High resolution for detailed chart analysis
+                }
+            },
+            {
+                "type": "text",
+                "text": "Analyze this chart"
+            },
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "https://example.com/icon.png",
+                    "detail": "low"  # Low resolution for simple icon
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=messages,
+)
+```
+
+</TabItem>
+<TabItem value="videos" label="Videos with Files">
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Analyze this video"
+            },
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "gs://my-bucket/video.mp4",
+                    "format": "video/mp4",
+                    "detail": "high"  # High resolution for detailed video analysis
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=messages,
+)
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+**Per-Part Resolution:** Each image or video in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature works with both `image_url` and `file` content types, and is only available for Gemini 3+ models.
+:::
+
+## Video Metadata Control
+
+For Gemini 3+ models, LiteLLM supports fine-grained video processing control through the `video_metadata` field. This allows you to specify frame extraction rates and time ranges for video analysis.
+
+**Supported `video_metadata` parameters:**
+
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `fps` | Number | Frame extraction rate (frames per second) | `5` |
+| `start_offset` | String | Start time for video clip processing | `"10s"` |
+| `end_offset` | String | End time for video clip processing | `"60s"` |
+
+:::note
+**Field Name Conversion:** LiteLLM automatically converts snake_case field names to camelCase for the Gemini API:
+- `start_offset` → `startOffset`
+- `end_offset` → `endOffset`
+- `fps` remains unchanged
+:::
+
+:::warning
+- **Gemini 3+ Only:** This feature is only available for Gemini 3.0 and newer models
+- **Video Files Recommended:** While `video_metadata` is designed for video files, error handling for other media types is delegated to the Vertex AI API
+- **File Formats Supported:** Works with `gs://`, `https://`, and base64-encoded video files
+:::
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="basic" label="Basic Video Metadata">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://my-bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "fps": 5,               # Extract 5 frames per second
+                            "start_offset": "10s",  # Start from 10 seconds
+                            "end_offset": "60s"     # End at 60 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="combined" label="Combined with Detail">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="vertex_ai/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Provide detailed analysis of this video segment"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/presentation.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",  # High resolution for detailed analysis
+                        "video_metadata": {
+                            "fps": 10,              # Extract 10 frames per second
+                            "start_offset": "30s",  # Start from 30 seconds
+                            "end_offset": "90s"     # End at 90 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-3-pro
+    litellm_params:
+      model: vertex_ai/gemini-3-pro-preview
+      vertex_project: your-project
+      vertex_location: us-central1
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-3-pro",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "Analyze this video clip"},
+          {
+            "type": "file",
+            "file": {
+              "file_id": "gs://my-bucket/video.mp4",
+              "format": "video/mp4",
+              "detail": "high",
+              "video_metadata": {
+                "fps": 5,
+                "start_offset": "10s",
+                "end_offset": "60s"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## Usage - PDF / Videos / Audio etc. Files 
 

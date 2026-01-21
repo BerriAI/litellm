@@ -1,5 +1,5 @@
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 
 export async function makeOpenAIEmbeddingsRequest(
   input: string,
@@ -34,7 +34,7 @@ export async function makeOpenAIEmbeddingsRequest(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         ...headers,
       },
       body: JSON.stringify({

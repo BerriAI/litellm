@@ -5,6 +5,7 @@ on:
     inputs:
       tag:
         description: "The tag version you want to build"
+        required: true
       release_type:
         description: "The release type you want to build. Can be 'latest', 'stable', 'dev', 'rc'"
         type: string
@@ -319,59 +320,37 @@ jobs:
         run: |
           echo "REPO_OWNER=`echo ${{github.repository_owner}} | tr '[:upper:]' '[:lower:]'`" >>${GITHUB_ENV}
     
-      - name: Get LiteLLM Latest Tag
-        id: current_app_tag
-        shell: bash
-        run: |
-          LATEST_TAG=$(git describe --tags --exclude "*dev*" --abbrev=0)
-          if [ -z "${LATEST_TAG}" ]; then
-            echo "latest_tag=latest" | tee -a $GITHUB_OUTPUT
-          else
-            echo "latest_tag=${LATEST_TAG}" | tee -a $GITHUB_OUTPUT
-          fi
-
-      - name: Get last published chart version
-        id: current_version
-        shell: bash
-        run: |
-          CHART_LIST=$(helm show chart oci://${{ env.REGISTRY }}/${{ env.REPO_OWNER }}/${{ env.CHART_NAME }} 2>/dev/null || true)
-          if [ -z "${CHART_LIST}" ]; then
-            echo "current-version=0.1.0" | tee -a $GITHUB_OUTPUT
-          else
-            # Extract version and strip any prerelease suffix (e.g., 0.1.827-latest -> 0.1.827)
-            VERSION=$(printf '%s' "${CHART_LIST}" | grep '^version:' | awk 'BEGIN{FS=":"}{print $2}' | tr -d " " | cut -d'-' -f1)
-            echo "current-version=${VERSION}" | tee -a $GITHUB_OUTPUT
-          fi
-        env:
-          HELM_EXPERIMENTAL_OCI: '1'
-
-      # Automatically update the helm chart version one "patch" level
-      - name: Bump release version
-        id: bump_version
-        uses: christian-draeger/increment-semantic-version@1.1.0
-        with:
-          current-version: ${{ steps.current_version.outputs.current-version || '0.1.0' }}
-          version-fragment: 'bug'
-
-      # Add suffix for non-stable releases (semantic versioning)
-      - name: Calculate chart version with prerelease suffix
+      # Sync Helm chart version with LiteLLM release version (1-1 versioning)
+      # This allows users to easily map Helm chart versions to LiteLLM versions
+      # See: https://codefresh.io/docs/docs/ci-cd-guides/helm-best-practices/
+      - name: Calculate chart and app versions
         id: chart_version
         shell: bash
         run: |
-          BASE_VERSION="${{ steps.bump_version.outputs.next-version || '0.1.0' }}"
+          INPUT_TAG="${{ github.event.inputs.tag }}"
           RELEASE_TYPE="${{ github.event.inputs.release_type }}"
-          if [ "$RELEASE_TYPE" = "stable" ]; then
-            echo "version=${BASE_VERSION}" | tee -a $GITHUB_OUTPUT
-          else
-            echo "version=${BASE_VERSION}-${RELEASE_TYPE}" | tee -a $GITHUB_OUTPUT
+
+          # Chart version = LiteLLM version without 'v' prefix (Helm semver convention)
+          # v1.81.0 -> 1.81.0, v1.81.0.rc.1 -> 1.81.0.rc.1
+          CHART_VERSION="${INPUT_TAG#v}"
+
+          # Add suffix for 'latest' releases (rc already has suffix in tag)
+          if [ "$RELEASE_TYPE" = "latest" ]; then
+            CHART_VERSION="${CHART_VERSION}-latest"
           fi
+
+          # App version = Docker tag (keeps 'v' prefix to match Docker image tags)
+          APP_VERSION="${INPUT_TAG}"
+
+          echo "version=${CHART_VERSION}" | tee -a $GITHUB_OUTPUT
+          echo "app_version=${APP_VERSION}" | tee -a $GITHUB_OUTPUT
 
       - uses: ./.github/actions/helm-oci-chart-releaser
         with:
           name: ${{ env.CHART_NAME }}
           repository: ${{ env.REPO_OWNER }}
-          tag: ${{ github.event.inputs.chartVersion || steps.chart_version.outputs.version || '0.1.0' }}
-          app_version: ${{ steps.current_app_tag.outputs.latest_tag }}
+          tag: ${{ steps.chart_version.outputs.version }}
+          app_version: ${{ steps.chart_version.outputs.app_version }}
           path: deploy/charts/${{ env.CHART_NAME }}
           registry: ${{ env.REGISTRY }}
           registry_username: ${{ github.actor }}

@@ -1,5 +1,5 @@
 ---
-title: "v1.80.15 - Manus API Support"
+title: "v1.80.15-stable - Manus API Support"
 slug: "v1-80-15"
 date: 2026-01-10T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:v1.80.15.rc.1
+docker.litellm.ai/berriai/litellm:v1.80.15-stable.1
 ```
 
 </TabItem>
@@ -638,6 +638,6 @@ Users can now see Endpoint Activity Metrics in the UI.
 
 ## Full Changelog
 
-**[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.11.rc.1...v1.80.14.rc.1)**
+**[View complete changelog on GitHub](https://github.com/BerriAI/litellm/compare/v1.80.11.rc.1...v1.80.15-stable.1)**
 
 

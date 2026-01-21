@@ -51,6 +51,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.utils import get_server_root_path
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -226,12 +227,6 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
             and data["model"] in llm_router.model_group_alias
         ):  # model set in model_group_alias
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
-        elif (
-            llm_router is not None and data["model"] in llm_router.deployment_names
-        ):  # model in router deployments, calling a specific deployment on the router
-            llm_response = asyncio.create_task(
-                llm_router.aadapter_completion(**data, specific_deployment=True)
-            )
         elif llm_router is not None and llm_router.has_model_id(
             data["model"]
         ):  # model in router model list
@@ -239,9 +234,15 @@ async def chat_completion_pass_through_endpoint(  # noqa: PLR0915
         elif (
             llm_router is not None
             and data["model"] not in router_model_names
-            and llm_router.default_deployment is not None
-        ):  # model in router deployments, calling a specific deployment on the router
+            and (llm_router.default_deployment is not None or len(llm_router.pattern_router.patterns) > 0)
+        ):  # check for wildcard routes or default deployment before checking deployment_names
             llm_response = asyncio.create_task(llm_router.aadapter_completion(**data))
+        elif (
+            llm_router is not None and data["model"] in llm_router.deployment_names
+        ):  # model in router deployments, calling a specific deployment on the router (lowest priority)
+            llm_response = asyncio.create_task(
+                llm_router.aadapter_completion(**data, specific_deployment=True)
+            )
         elif user_model is not None:  # `litellm --model <your-model-name>`
             llm_response = asyncio.create_task(litellm.aadapter_completion(**data))
         else:
@@ -1973,9 +1974,25 @@ class InitPassThroughEndpointHelpers:
         _registered_pass_through_routes.clear()
 
     @staticmethod
-    def get_registered_pass_through_endpoints_keys() -> List[str]:
+    def get_all_registered_pass_through_routes() -> List[str]:
         """Get all registered pass-through endpoints from the registry"""
         return list(_registered_pass_through_routes.keys())
+
+    @staticmethod
+    def _build_full_path_with_root(path: str) -> str:
+        """
+        Build full path by prepending server root path if needed.
+
+        Args:
+            path: The relative path to build
+
+        Returns:
+            Full path with server root prepended (if root is not "/")
+        """
+        root_path = get_server_root_path()
+        if root_path == "/":
+            return path
+        return f"{root_path}{path}"
 
     @staticmethod
     def is_registered_pass_through_route(route: str) -> bool:
@@ -2003,7 +2020,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
                 if route_type == "exact" and route == registered_path:
                     return True
                 elif route_type == "subpath":
@@ -2021,7 +2040,9 @@ class InitPassThroughEndpointHelpers:
             parts = key.split(":", 2)  # Split into [endpoint_id, type, path]
             if len(parts) == 3:
                 route_type = parts[1]
-                registered_path = parts[2]
+                registered_path = InitPassThroughEndpointHelpers._build_full_path_with_root(
+                    parts[2]
+                )
 
                 if route_type == "exact" and route == registered_path:
                     return _registered_pass_through_routes[key]
@@ -2085,7 +2106,7 @@ async def initialize_pass_through_endpoints(
     # mark the ones that are visited in the list
     # remove the ones that are not visited from the list
     registered_pass_through_endpoints = (
-        InitPassThroughEndpointHelpers.get_registered_pass_through_endpoints_keys()
+        InitPassThroughEndpointHelpers.get_all_registered_pass_through_routes()
     )
 
     visited_endpoints = set()

@@ -7,11 +7,10 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-from typing import Union, List
+from typing import List
 
 # from litellm.litellm_core_utils.prompt_templates.factory import prompt_factory
 import litellm
-from litellm import completion
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_tools_pt,
     anthropic_messages_pt,
@@ -31,7 +30,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _gemini_convert_messages_with_history,
 )
 from litellm.types.llms.openai import AllMessageValues
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 
 def test_llama_3_prompt():
@@ -129,10 +128,6 @@ def test_anthropic_pt_formatting():
 
 
 def test_anthropic_messages_nested_pt():
-    from litellm.types.llms.anthropic import (
-        AnthopicMessagesAssistantMessageParam,
-        AnthropicMessagesUserMessageParam,
-    )
 
     messages = [
         {"content": [{"text": "here is a task", "type": "text"}], "role": "user"},
@@ -214,7 +209,7 @@ def test_create_anthropic_image_param_with_http_url():
     image_param = create_anthropic_image_param(
         "https://example.com/image.jpg", format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "url"
     assert image_param["source"]["url"] == "https://example.com/image.jpg"
@@ -225,7 +220,7 @@ def test_create_anthropic_image_param_with_https_url():
     image_param = create_anthropic_image_param(
         "https://example.com/image.png", format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "url"
     assert image_param["source"]["url"] == "https://example.com/image.png"
@@ -236,7 +231,7 @@ def test_create_anthropic_image_param_with_dict_input():
     image_param = create_anthropic_image_param(
         {"url": "https://example.com/image.jpg", "format": "image/jpeg"}, format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "url"
     assert image_param["source"]["url"] == "https://example.com/image.jpg"
@@ -247,7 +242,7 @@ def test_create_anthropic_image_param_with_base64_data_uri():
     image_param = create_anthropic_image_param(
         "data:image/jpeg;base64,/9j/4AAQSkZJRg==", format=None
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "base64"
     assert image_param["source"]["media_type"] == "image/jpeg"
@@ -259,7 +254,7 @@ def test_create_anthropic_image_param_with_format_override():
     image_param = create_anthropic_image_param(
         "data:image/jpeg;base64,1234", format="image/png"
     )
-    
+
     assert image_param["type"] == "image"
     assert image_param["source"]["type"] == "base64"
     assert image_param["source"]["media_type"] == "image/png"
@@ -279,19 +274,19 @@ def test_anthropic_messages_pt_with_url_image():
             ],
         }
     ]
-    
+
     result = anthropic_messages_pt(
         messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
     )
-    
+
     assert len(result) == 1
     assert result[0]["role"] == "user"
     assert isinstance(result[0]["content"], list)
     assert len(result[0]["content"]) == 2
-    
+
     # Check text content
     assert result[0]["content"][0]["type"] == "text"
-    
+
     # Check image content - should be URL reference, not base64
     assert result[0]["content"][1]["type"] == "image"
     assert result[0]["content"][1]["source"]["type"] == "url"
@@ -312,16 +307,16 @@ def test_anthropic_messages_pt_with_base64_image():
             ],
         }
     ]
-    
+
     result = anthropic_messages_pt(
         messages=messages, model="claude-3-5-sonnet", llm_provider="anthropic"
     )
-    
+
     assert len(result) == 1
     assert result[0]["role"] == "user"
     assert isinstance(result[0]["content"], list)
     assert len(result[0]["content"]) == 2
-    
+
     # Check image content - should be base64, not URL
     assert result[0]["content"][1]["type"] == "image"
     assert result[0]["content"][1]["source"]["type"] == "base64"
@@ -568,7 +563,9 @@ def test_vertex_only_image_user_message():
         },
     ]
 
-    response = _gemini_convert_messages_with_history(messages=messages, model="gemini-1.5-pro")
+    response = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-1.5-pro"
+    )
 
     expected_response = [
         {
@@ -962,8 +959,8 @@ def test_convert_to_anthropic_tool_invoke_regular_tool():
             "type": "function",
             "function": {
                 "name": "get_weather",
-                "arguments": '{"location": "San Francisco"}'
-            }
+                "arguments": '{"location": "San Francisco"}',
+            },
         }
     ]
 
@@ -979,7 +976,7 @@ def test_convert_to_anthropic_tool_invoke_regular_tool():
 def test_convert_to_anthropic_tool_invoke_server_tool():
     """
     Test that server_tool_use (srvtoolu_) is reconstructed as server_tool_use.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
     tool_calls = [
@@ -988,8 +985,8 @@ def test_convert_to_anthropic_tool_invoke_server_tool():
             "type": "function",
             "function": {
                 "name": "web_search",
-                "arguments": '{"query": "elephant weight"}'
-            }
+                "arguments": '{"query": "elephant weight"}',
+            },
         }
     ]
 
@@ -1005,7 +1002,7 @@ def test_convert_to_anthropic_tool_invoke_server_tool():
 def test_convert_to_anthropic_tool_invoke_with_web_search_results():
     """
     Test that web_search_tool_result is included after server_tool_use.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
     tool_calls = [
@@ -1014,8 +1011,8 @@ def test_convert_to_anthropic_tool_invoke_with_web_search_results():
             "type": "function",
             "function": {
                 "name": "web_search",
-                "arguments": '{"query": "elephant weight"}'
-            }
+                "arguments": '{"query": "elephant weight"}',
+            },
         }
     ]
 
@@ -1028,13 +1025,15 @@ def test_convert_to_anthropic_tool_invoke_with_web_search_results():
                     "type": "web_search_result",
                     "url": "https://example.com",
                     "title": "Elephant Facts",
-                    "snippet": "Elephants weigh 5000 kg"
+                    "snippet": "Elephants weigh 5000 kg",
                 }
-            ]
+            ],
         }
     ]
 
-    result = convert_to_anthropic_tool_invoke(tool_calls, web_search_results=web_search_results)
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls, web_search_results=web_search_results
+    )
 
     assert len(result) == 2
     # First: server_tool_use
@@ -1048,7 +1047,7 @@ def test_convert_to_anthropic_tool_invoke_with_web_search_results():
 def test_convert_to_anthropic_tool_invoke_mixed_tools():
     """
     Test that mixed server and regular tools are reconstructed correctly.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
     tool_calls = [
@@ -1057,28 +1056,27 @@ def test_convert_to_anthropic_tool_invoke_mixed_tools():
             "type": "function",
             "function": {
                 "name": "web_search",
-                "arguments": '{"query": "elephant weight"}'
-            }
+                "arguments": '{"query": "elephant weight"}',
+            },
         },
         {
             "id": "toolu_01XYZ789",
             "type": "function",
-            "function": {
-                "name": "add_numbers",
-                "arguments": '{"a": 5000, "b": 100}'
-            }
-        }
+            "function": {"name": "add_numbers", "arguments": '{"a": 5000, "b": 100}'},
+        },
     ]
 
     web_search_results = [
         {
             "type": "web_search_tool_result",
             "tool_use_id": "srvtoolu_01ABC123",
-            "content": [{"url": "https://example.com", "title": "Test"}]
+            "content": [{"url": "https://example.com", "title": "Test"}],
         }
     ]
 
-    result = convert_to_anthropic_tool_invoke(tool_calls, web_search_results=web_search_results)
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls, web_search_results=web_search_results
+    )
 
     assert len(result) == 3
     # First: server_tool_use
@@ -1094,7 +1092,7 @@ def test_convert_to_anthropic_tool_invoke_mixed_tools():
 def test_anthropic_messages_pt_with_server_tool_use():
     """
     Test that anthropic_messages_pt correctly reconstructs server_tool_use from provider_specific_fields.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/17737
     """
     messages = [
@@ -1108,36 +1106,40 @@ def test_anthropic_messages_pt_with_server_tool_use():
                     "type": "function",
                     "function": {
                         "name": "web_search",
-                        "arguments": '{"query": "elephant weight"}'
-                    }
+                        "arguments": '{"query": "elephant weight"}',
+                    },
                 },
                 {
                     "id": "toolu_01XYZ789",
                     "type": "function",
                     "function": {
                         "name": "add_numbers",
-                        "arguments": '{"a": 5000, "b": 100}'
-                    }
-                }
+                        "arguments": '{"a": 5000, "b": 100}',
+                    },
+                },
             ],
             "provider_specific_fields": {
                 "web_search_results": [
                     {
                         "type": "web_search_tool_result",
                         "tool_use_id": "srvtoolu_01ABC123",
-                        "content": [{"url": "https://example.com", "title": "Test", "snippet": "5000 kg"}]
+                        "content": [
+                            {
+                                "url": "https://example.com",
+                                "title": "Test",
+                                "snippet": "5000 kg",
+                            }
+                        ],
                     }
                 ]
-            }
+            },
         },
-        {
-            "role": "tool",
-            "tool_call_id": "toolu_01XYZ789",
-            "content": "5100"
-        }
+        {"role": "tool", "tool_call_id": "toolu_01XYZ789", "content": "5100"},
     ]
 
-    result = anthropic_messages_pt(messages, model="claude-sonnet-4-5", llm_provider="anthropic")
+    result = anthropic_messages_pt(
+        messages, model="claude-sonnet-4-5", llm_provider="anthropic"
+    )
 
     # Find the assistant message
     assistant_msg = next(m for m in result if m["role"] == "assistant")
@@ -1162,3 +1164,73 @@ def test_anthropic_messages_pt_with_server_tool_use():
     # Verify regular tool_use
     tool_use = next(c for c in content if c.get("type") == "tool_use")
     assert tool_use["id"] == "toolu_01XYZ789"
+
+
+# ============ parse_tool_call_arguments Tests ============
+# Tests for the shared utility that parses tool call JSON arguments
+
+
+def test_parse_tool_call_arguments_valid_json():
+    """Test that valid JSON is parsed correctly."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    result = parse_tool_call_arguments('{"city": "Paris", "units": "celsius"}')
+    assert result == {"city": "Paris", "units": "celsius"}
+
+
+def test_parse_tool_call_arguments_empty_input():
+    """Test that None/empty input returns empty dict."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    assert parse_tool_call_arguments(None) == {}
+    assert parse_tool_call_arguments("") == {}
+
+
+def test_parse_tool_call_arguments_malformed_json():
+    """Test that malformed JSON raises ValueError with context."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        parse_tool_call_arguments(
+            '{"skill_name": "pptx',
+            tool_name="load_skill",
+            context="Anthropic tool invoke",
+        )
+
+    error_msg = str(exc_info.value)
+    assert "load_skill" in error_msg
+    assert "Anthropic tool invoke" in error_msg
+    assert '{"skill_name": "pptx' in error_msg
+    assert "Unterminated string" in error_msg
+
+
+def test_convert_to_anthropic_tool_invoke_malformed_json():
+    """
+    Test that convert_to_anthropic_tool_invoke raises ValueError with context
+    when tool arguments contain malformed JSON.
+
+    Fixes: https://github.com/BerriAI/litellm/issues/18920
+    """
+    tool_calls = [
+        {
+            "id": "toolu_01_invalid",
+            "type": "function",
+            "function": {
+                "name": "bad_tool",
+                "arguments": '{"truncated',  # Malformed JSON
+            },
+        }
+    ]
+
+    with pytest.raises(ValueError) as exc_info:
+        convert_to_anthropic_tool_invoke(tool_calls)
+
+    error_msg = str(exc_info.value)
+    assert "bad_tool" in error_msg
+    assert '{"truncated' in error_msg

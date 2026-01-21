@@ -897,3 +897,78 @@ def test_token_counter_with_image_url():
     except ValueError as e:
         assert "Invalid detail value" in str(e), f"Expected detail validation error, got: {e}"
 
+
+def test_token_counter_with_thinking_content():
+    """
+    Test that _count_content_list() correctly handles Claude's extended thinking content blocks.
+    
+    Validates that:
+    - 'thinking' content type is recognized and counted
+    - 'thinking' text field is counted
+    - 'signature' field is skipped (opaque signature blob)
+    - Full conversation with thinking blocks works
+    """
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Analyze this complex problem: who came first, chicken or egg"
+                }
+            ]
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    "thinking": "This is actually a fascinating question that touches on philosophy, biology, and semantics. Let me break this down: The egg came first from an evolutionary biology perspective.",
+                    "signature": "EqcLCkYICxgCKkCrqu6lP..."  # Should be skipped
+                },
+                {
+                    "type": "text",
+                    "text": "# The Chicken-or-Egg Question: A Multi-Layered Answer\n\n## **The Short Answer: The Egg Came First**"
+                }
+            ]
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Thanks"
+                }
+            ]
+        }
+    ]
+    
+    tokens = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages)
+    assert tokens > 0, f"Expected positive token count, got {tokens}"
+    # Should count: user message + thinking text + response text + "Thanks"
+    # The thinking text alone is ~30 tokens, plus other content should be > 50 total
+    assert tokens > 50, f"Expected substantial token count for message with thinking, got {tokens}"
+    
+    # Test that thinking block without 'thinking' field doesn't crash (edge case)
+    messages_no_thinking = [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "thinking",
+                    # No 'thinking' field - should count as 0 tokens
+                    "signature": "EqcLCkYICxgCKkCrqu6lP..."
+                },
+                {
+                    "type": "text",
+                    "text": "Response"
+                }
+            ]
+        }
+    ]
+    
+    tokens_no_thinking = token_counter(model="anthropic/claude-sonnet-4-5-20250929", messages=messages_no_thinking)
+    assert tokens_no_thinking > 0, f"Expected positive token count even with empty thinking, got {tokens_no_thinking}"
+    # Should only count "Response" and message overhead
+    assert tokens_no_thinking < 15, f"Expected minimal token count for empty thinking block, got {tokens_no_thinking}"
+

@@ -265,7 +265,7 @@ class VertexAIMultimodalEmbeddingConfig(BaseEmbeddingConfig):
                 image_count += 1
 
         ## Calculate video embeddings usage
-        video_length_seconds = 0
+        video_length_seconds = 0.0
         for prediction in vertex_predictions["predictions"]:
             video_embeddings = prediction.get("videoEmbeddings")
             if video_embeddings:

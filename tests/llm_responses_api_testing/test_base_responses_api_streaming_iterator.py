@@ -231,7 +231,7 @@ class TestBaseResponsesAPIStreamingIterator:
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
         mock_logging_obj.model_call_details = {"litellm_params": {}}
         mock_config = Mock(spec=BaseResponsesAPIConfig)
-        
+
         # Create the iterator instance
         iterator = BaseResponsesAPIStreamingIterator(
             response=mock_response,
@@ -239,11 +239,73 @@ class TestBaseResponsesAPIStreamingIterator:
             responses_api_provider_config=mock_config,
             logging_obj=mock_logging_obj
         )
-        
+
         # Test with empty chunk
         result = iterator._process_chunk("")
         assert result is None
-        
+
         # Test with None chunk
         result = iterator._process_chunk(None)
         assert result is None
+
+    def test_handle_logging_completed_response_with_unpickleable_objects(self):
+        """
+        Test that _handle_logging_completed_response handles responses containing
+        objects that cannot be pickled (like Pydantic ValidatorIterator).
+
+        This test verifies the fix for issue #17192 where streaming with tool_choice
+        containing allowed_tools would fail with:
+        "cannot pickle 'pydantic_core._pydantic_core.ValidatorIterator' object"
+
+        The fix uses model_dump + model_validate instead of copy.deepcopy.
+        """
+        import asyncio
+        from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+        # Mock dependencies
+        mock_response = Mock()
+        mock_response.headers = {}
+        mock_response.aiter_lines = Mock()
+        mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
+        mock_logging_obj.model_call_details = {"litellm_params": {}}
+        mock_logging_obj.async_success_handler = Mock()
+        mock_logging_obj.success_handler = Mock()
+        mock_config = Mock(spec=BaseResponsesAPIConfig)
+
+        # Create the iterator instance
+        iterator = ResponsesAPIStreamingIterator(
+            response=mock_response,
+            model="gpt-4",
+            responses_api_provider_config=mock_config,
+            logging_obj=mock_logging_obj,
+            litellm_metadata={"model_info": {"id": "model_123"}},
+            custom_llm_provider="openai"
+        )
+
+        # Create a ResponseCompletedEvent with tool_choice that has model_dump
+        mock_completed_response = Mock()
+        mock_completed_response.model_dump.return_value = {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_123",
+                "output": [{"type": "function_call", "name": "search_web"}],
+                "tool_choice": {"type": "function", "name": "search_web"}
+            }
+        }
+        # model_validate should return a new mock (the copy)
+        type(mock_completed_response).model_validate = Mock(return_value=Mock())
+
+        iterator.completed_response = mock_completed_response
+
+        # This should NOT raise an exception
+        # Previously it would fail with: TypeError: cannot pickle 'ValidatorIterator'
+        # Mock asyncio.create_task and executor.submit since we're not in async context
+        with patch('asyncio.create_task') as mock_create_task, \
+             patch('litellm.responses.streaming_iterator.executor') as mock_executor:
+            try:
+                iterator._handle_logging_completed_response()
+            except TypeError as e:
+                if "pickle" in str(e):
+                    pytest.fail(f"_handle_logging_completed_response failed with pickle error: {e}")
+                raise
+

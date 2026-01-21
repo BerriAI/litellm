@@ -21,12 +21,37 @@ from litellm.types.utils import (
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
+    _check_provider_match,
     get_llm_provider,
     get_optional_params_image_gen,
     is_cached_message,
 )
 
 # Adds the parent directory to the system path
+
+
+def test_check_provider_match_azure_ai_allows_openai_and_azure():
+    """
+    Test that azure_ai provider can match openai and azure models.
+    This is needed for Azure Model Router which can route to OpenAI models.
+    """
+    # azure_ai should match openai models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "openai"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should match azure models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "azure"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should NOT match other providers
+    assert _check_provider_match(
+        model_info={"litellm_provider": "anthropic"},
+        custom_llm_provider="azure_ai"
+    ) is False
 
 
 def test_get_optional_params_image_gen():
@@ -520,6 +545,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_character": {"type": "number"},
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
@@ -2805,3 +2831,276 @@ def test_azure_ai_claude_provider_config():
         provider=LlmProviders.AZURE_AI,
     )
     assert isinstance(config, AzureAIStudioConfig)
+
+
+# Tests for thinking blocks helper functions
+# Related to issue: https://github.com/BerriAI/litellm/issues/18926
+
+
+def test_any_assistant_message_has_thinking_blocks_with_thinking():
+    """Test that function returns True when any assistant message has thinking_blocks."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Let me think..."}],
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+        {"role": "tool", "tool_call_id": "123", "content": "result"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "456", "function": {"name": "test2"}}],
+            # No thinking_blocks here - Claude sometimes doesn't include them
+        },
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is True
+
+
+def test_any_assistant_message_has_thinking_blocks_without_thinking():
+    """Test that function returns False when no assistant message has thinking_blocks."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+        {"role": "tool", "tool_call_id": "123", "content": "result"},
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is False
+
+
+def test_any_assistant_message_has_thinking_blocks_empty_list():
+    """Test that function returns False when thinking_blocks is an empty list."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [],  # Empty list
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is False
+
+
+def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
+    """
+    Test the scenario from issue #18926 where:
+    - First assistant message HAS thinking_blocks
+    - Second assistant message has NO thinking_blocks
+
+    The old logic would drop thinking because the LAST tool_call message
+    has no thinking_blocks, but this breaks because the first message
+    still has thinking blocks in the conversation.
+    """
+    from litellm.utils import (
+        any_assistant_message_has_thinking_blocks,
+        last_assistant_with_tool_calls_has_no_thinking_blocks,
+    )
+
+    messages = [
+        {"role": "user", "content": "Build a feature"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Let me analyze the requirements..."}
+            ],
+            "tool_calls": [
+                {"id": "toolu_1", "function": {"name": "file_editor", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_1",
+            "content": "File contents here...",
+        },
+        {
+            "role": "assistant",
+            # NO thinking_blocks - Claude sometimes doesn't include them
+            "content": [{"type": "text", "text": "Let me explore more..."}],
+            "tool_calls": [
+                {"id": "toolu_2", "function": {"name": "file_editor", "arguments": "{}"}}
+            ],
+        },
+    ]
+
+    # Last assistant with tool_calls has no thinking_blocks
+    assert last_assistant_with_tool_calls_has_no_thinking_blocks(messages) is True
+
+    # But ANY assistant message has thinking_blocks
+    assert any_assistant_message_has_thinking_blocks(messages) is True
+
+    # So we should NOT drop thinking - the combination tells us thinking is in use
+    # The fix uses both checks: only drop if last has none AND no message has any
+    should_drop_thinking = (
+        last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+        and not any_assistant_message_has_thinking_blocks(messages)
+    )
+    assert should_drop_thinking is False
+
+
+class TestAdditionalDropParamsForNonOpenAIProviders:
+    """
+    Test additional_drop_params functionality for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    The bug was that additional_drop_params only filtered params for OpenAI/Azure
+    providers, but not for other providers like Bedrock. This caused OpenAI-specific
+    params like prompt_cache_key to be passed to Bedrock, resulting in errors.
+    """
+
+    def test_additional_drop_params_filters_for_bedrock(self):
+        """
+        Test that additional_drop_params correctly filters params for Bedrock provider.
+
+        Before the fix, prompt_cache_key would be passed through to Bedrock even when
+        specified in additional_drop_params, causing:
+        'BedrockException - {"message":"The model returned the following errors:
+        prompt_cache_key: Extra inputs are not permitted"}'
+        """
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key_123",
+            "temperature": 0.7,
+            "model": "bedrock/anthropic.claude-v2",
+        }
+        openai_params = ["temperature", "max_tokens", "top_p", "model"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key"],
+        )
+
+        # prompt_cache_key should be filtered out
+        assert "prompt_cache_key" not in result
+        # temperature should still be there (it's in openai_params, not filtered)
+        # Note: temperature is in openai_params so it won't be added by this function
+        # The function only adds params NOT in openai_params
+
+    def test_additional_drop_params_filters_multiple_params_for_non_openai(self):
+        """Test filtering multiple params for non-OpenAI providers."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "some_openai_only_param": "value1",
+            "another_openai_param": "value2",
+            "keep_this_param": "keep_me",
+        }
+        openai_params = ["temperature", "max_tokens"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="anthropic",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key", "some_openai_only_param"],
+        )
+
+        # Filtered params should not be present
+        assert "prompt_cache_key" not in result
+        assert "some_openai_only_param" not in result
+        # Non-filtered params should be present
+        assert result.get("another_openai_param") == "value2"
+        assert result.get("keep_this_param") == "keep_me"
+
+    def test_additional_drop_params_none_keeps_all_params(self):
+        """Test that when additional_drop_params is None, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=None,
+        )
+
+        # All params should be present when additional_drop_params is None
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+    def test_additional_drop_params_empty_list_keeps_all_params(self):
+        """Test that when additional_drop_params is empty list, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=[],
+        )
+
+        # All params should be present when additional_drop_params is empty
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+
+class TestDropParamsWithPromptCacheKey:
+    """
+    Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    prompt_cache_key is an OpenAI-specific parameter that should be automatically
+    dropped when using providers like Bedrock that don't support it.
+    """
+
+    def test_prompt_cache_key_in_default_params(self):
+        """Verify prompt_cache_key is now in DEFAULT_CHAT_COMPLETION_PARAM_VALUES."""
+        from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+        assert "prompt_cache_key" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+        assert "prompt_cache_retention" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+    def test_drop_params_removes_prompt_cache_key_for_bedrock(self):
+        """
+        Test that get_optional_params with drop_params=True removes prompt_cache_key
+        for Bedrock provider since it's not in Bedrock's supported params.
+        """
+        from litellm.utils import get_optional_params
+
+        # Call get_optional_params for Bedrock with prompt_cache_key
+        # drop_params=True should remove it since Bedrock doesn't support it
+        result = get_optional_params(
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            custom_llm_provider="bedrock",
+            prompt_cache_key="test_cache_key",
+            temperature=0.7,
+            drop_params=True,
+        )
+
+        # prompt_cache_key should be dropped for Bedrock
+        assert "prompt_cache_key" not in result
+        # temperature should remain (it's supported by Bedrock)
+        assert result.get("temperature") == 0.7

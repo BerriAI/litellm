@@ -178,6 +178,33 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
                 },
             )
 
+    def _extract_user_content_from_data(self, data: Dict[str, Any]) -> Optional[str]:
+        """
+        Extract user content from request data, supporting both Chat Completions and Responses API.
+        
+        For Chat Completions: extracts from 'messages' field
+        For Responses API: extracts from 'input' field
+        
+        Returns:
+            The extracted user content string, or None if no content found
+        """
+        # Try to get messages first (Chat Completions API)
+        messages: Optional[List["AllMessageValues"]] = data.get("messages")
+        if messages is not None:
+            return self.get_user_prompt(messages)
+        
+        # Try to get input (Responses API)
+        input_data = data.get("input")
+        if input_data is not None:
+            # input can be a string or a list of message-like objects
+            if isinstance(input_data, str):
+                return input_data
+            elif isinstance(input_data, list):
+                # Treat input as messages and extract user content
+                return self.get_user_prompt(input_data)
+        
+        return None
+
     @log_guardrail_information
     async def async_pre_call_hook(
         self,
@@ -210,14 +237,14 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         if call_type == "moderation":
             return data
 
-        new_messages: Optional[List["AllMessageValues"]] = data.get("messages")
-        if new_messages is None:
+        user_prompt = self._extract_user_content_from_data(data)
+        
+        if user_prompt is None:
             verbose_proxy_logger.warning(
-                "OpenAI Moderation: not running guardrail. No messages in data"
+                "OpenAI Moderation: not running guardrail. No messages or input in data"
             )
             return data
 
-        user_prompt = self.get_user_prompt(new_messages)
         if user_prompt:
             verbose_proxy_logger.debug(
                 f"OpenAI Moderation: User prompt: {user_prompt[:100]}..."  # Log first 100 chars for debugging
@@ -265,14 +292,15 @@ class OpenAIModerationGuardrail(OpenAIGuardrailBase, CustomGuardrail):
         if call_type == "moderation":
             return data
 
-        new_messages: Optional[List["AllMessageValues"]] = data.get("messages")
-        if new_messages is None:
+        # Extract user content from either messages or input field
+        user_prompt = self._extract_user_content_from_data(data)
+        
+        if user_prompt is None:
             verbose_proxy_logger.warning(
-                "OpenAI Moderation: not running guardrail. No messages in data"
+                "OpenAI Moderation: not running guardrail. No messages or input in data"
             )
             return data
 
-        user_prompt = self.get_user_prompt(new_messages)
         if user_prompt:
             moderation_response = await self.async_make_request(
                 input_text=user_prompt,

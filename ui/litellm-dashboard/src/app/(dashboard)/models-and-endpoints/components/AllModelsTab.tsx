@@ -31,10 +31,25 @@ const AllModelsTab = ({
   setSelectedModelId,
   setSelectedTeamId,
 }: AllModelsTabProps) => {
-  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo();
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { userId, userRole, premiumUser } = useAuthorized();
   const { data: teams } = useTeams();
+
+  const [modelNameSearch, setModelNameSearch] = useState<string>("");
+  const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
+  const [currentTeam, setCurrentTeam] = useState<Team | "personal">("personal");
+  const [showFilters, setShowFilters] = useState<boolean>(false);
+  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
+  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize] = useState<number>(50);
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 50,
+  });
+
+  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(currentPage, pageSize);
+  const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = (model: string) => {
     if (modelCostMapData !== null && modelCostMapData !== undefined) {
@@ -50,18 +65,23 @@ const AllModelsTab = ({
     return transformModelData(rawModelData, getProviderFromModel);
   }, [rawModelData, modelCostMapData]);
 
-  const [modelNameSearch, setModelNameSearch] = useState<string>("");
-  const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
-  const [currentTeam, setCurrentTeam] = useState<Team | "personal">("personal");
-  const [showFilters, setShowFilters] = useState<boolean>(false);
-  const [selectedModelAccessGroupFilter, setSelectedModelAccessGroupFilter] = useState<string | null>(null);
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
-  const [pagination, setPagination] = useState<PaginationState>({
-    pageIndex: 0,
-    pageSize: 50,
-  });
-
-  const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
+  // Get pagination metadata from the response
+  const paginationMeta = useMemo(() => {
+    if (!rawModelData) {
+      return {
+        total_count: 0,
+        current_page: 1,
+        total_pages: 1,
+        size: pageSize,
+      };
+    }
+    return {
+      total_count: rawModelData.total_count ?? 0,
+      current_page: rawModelData.current_page ?? 1,
+      total_pages: rawModelData.total_pages ?? 1,
+      size: rawModelData.size ?? pageSize,
+    };
+  }, [rawModelData, pageSize]);
 
   const filteredData = useMemo(() => {
     if (!modelData || !modelData.data || modelData.data.length === 0) {
@@ -114,6 +134,7 @@ const AllModelsTab = ({
     setSelectedModelAccessGroupFilter(null);
     setCurrentTeam("personal");
     setModelViewMode("current_team");
+    setCurrentPage(1);
     setPagination({ pageIndex: 0, pageSize: 50 });
   };
 
@@ -334,10 +355,7 @@ const AllModelsTab = ({
                   ) : (
                     <span className="text-sm text-gray-700">
                       {filteredData.length > 0
-                        ? `Showing ${pagination.pageIndex * pagination.pageSize + 1} - ${Math.min(
-                            (pagination.pageIndex + 1) * pagination.pageSize,
-                            filteredData.length,
-                          )} of ${filteredData.length} results`
+                        ? `Showing 1 - ${filteredData.length} of ${filteredData.length} results`
                         : "Showing 0 results"}
                     </span>
                   )}
@@ -347,15 +365,16 @@ const AllModelsTab = ({
                       <Skeleton.Button active style={{ width: 84, height: 30 }} />
                     ) : (
                       <button
-                        onClick={() =>
-                          setPagination((prev: PaginationState) => ({ ...prev, pageIndex: prev.pageIndex - 1 }))
-                        }
-                        disabled={pagination.pageIndex === 0}
-                        className={`px-3 py-1 text-sm border rounded-md ${
-                          pagination.pageIndex === 0
-                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                            : "hover:bg-gray-50"
-                        }`}
+                        onClick={() => {
+                          const newPage = currentPage - 1;
+                          setCurrentPage(newPage);
+                          setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+                        }}
+                        disabled={currentPage === 1}
+                        className={`px-3 py-1 text-sm border rounded-md ${currentPage === 1
+                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                          : "hover:bg-gray-50"
+                          }`}
                       >
                         Previous
                       </button>
@@ -365,15 +384,16 @@ const AllModelsTab = ({
                       <Skeleton.Button active style={{ width: 56, height: 30 }} />
                     ) : (
                       <button
-                        onClick={() =>
-                          setPagination((prev: PaginationState) => ({ ...prev, pageIndex: prev.pageIndex + 1 }))
-                        }
-                        disabled={pagination.pageIndex >= Math.ceil(filteredData.length / pagination.pageSize) - 1}
-                        className={`px-3 py-1 text-sm border rounded-md ${
-                          pagination.pageIndex >= Math.ceil(filteredData.length / pagination.pageSize) - 1
-                            ? "bg-gray-100 text-gray-400 cursor-not-allowed"
-                            : "hover:bg-gray-50"
-                        }`}
+                        onClick={() => {
+                          const newPage = currentPage + 1;
+                          setCurrentPage(newPage);
+                          setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+                        }}
+                        disabled={currentPage >= paginationMeta.total_pages}
+                        className={`px-3 py-1 text-sm border rounded-md ${currentPage >= paginationMeta.total_pages
+                          ? "bg-gray-100 text-gray-400 cursor-not-allowed"
+                          : "hover:bg-gray-50"
+                          }`}
                       >
                         Next
                       </button>
@@ -391,8 +411,8 @@ const AllModelsTab = ({
                 setSelectedModelId,
                 setSelectedTeamId,
                 getDisplayModelName,
-                () => {},
-                () => {},
+                () => { },
+                () => { },
                 expandedRows,
                 setExpandedRows,
               )}

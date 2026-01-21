@@ -19,7 +19,7 @@ vi.mock("../networking", () => ({
 
 // Mock scrollIntoView which is not available in jsdom
 beforeEach(() => {
-  Element.prototype.scrollIntoView = () => {};
+  Element.prototype.scrollIntoView = () => { };
 });
 
 describe("ChatUI", () => {
@@ -269,5 +269,44 @@ describe("ChatUI", () => {
     await waitFor(() => {
       expect(mcpSelect).not.toHaveClass("ant-select-disabled");
     });
+  });
+
+  it("should show Fill button and populate customProxyBaseUrl when proxySettings.LITELLM_UI_API_DOC_BASE_URL is provided", async () => {
+    const testProxyUrl = "http://localhost:5000";
+
+    render(
+      <ChatUI
+        accessToken="1234567890"
+        token="1234567890"
+        userRole="user"
+        userID="1234567890"
+        disabledPersonalKeyCreation={false}
+        proxySettings={{
+          LITELLM_UI_API_DOC_BASE_URL: testProxyUrl,
+        }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Test Key")).toBeInTheDocument();
+    });
+
+    const fillButton = screen.getByText("Fill");
+    expect(fillButton).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(fillButton);
+    });
+
+    await waitFor(() => {
+      expect(sessionStorage.getItem("customProxyBaseUrl")).toBe(testProxyUrl);
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Fill")).toBeNull();
+    });
+
+    const customProxyInput = screen.getByPlaceholderText("Optional: Enter custom proxy URL (e.g., http://localhost:5000)");
+    expect(customProxyInput).toHaveValue(testProxyUrl);
   });
 });

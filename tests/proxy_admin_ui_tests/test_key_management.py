@@ -1061,6 +1061,7 @@ async def test_list_key_helper(prisma_client):
                 api_key="sk-1234",
                 user_id="admin",
             ),
+            litellm_changed_by=None,
         )
 
 
@@ -1181,6 +1182,7 @@ async def test_list_key_helper_team_filtering(prisma_client):
                     api_key="sk-1234",
                     user_id="admin",
                 ),
+                litellm_changed_by=None,
             )
 
 

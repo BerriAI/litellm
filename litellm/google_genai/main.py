@@ -330,6 +330,7 @@ def generate_content(
                 tools=tools,
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
+                extra_headers=extra_headers,
                 **kwargs,
             )
 
@@ -422,6 +423,7 @@ async def agenerate_content_stream(
                     litellm_params=setup_result.litellm_params,
                     tools=tools,
                     stream=True,
+                    extra_headers=extra_headers,
                     **kwargs,
                 )
             )
@@ -507,6 +509,7 @@ def generate_content_stream(
                 _is_async=_is_async,
                 litellm_params=setup_result.litellm_params,
                 stream=True,
+                extra_headers=extra_headers,
                 **kwargs,
             )
 

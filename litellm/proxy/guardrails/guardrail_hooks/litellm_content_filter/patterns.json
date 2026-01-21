@@ -120,11 +120,11 @@
       "description": "Detects URLs (http/https)"
     },
     {
-    "name": "passport_us",
-    "display_name": "Passport (US)",
-    "pattern": "\\b[0-9]{9}\\b",
-    "category": "PII Patterns",
-    "description": "US passport numbers (9 digits)"
+      "name": "passport_us",
+      "display_name": "Passport (US)",
+      "pattern": "\\b[0-9]{9}\\b",
+      "category": "PII Patterns",
+      "description": "US passport numbers (9 digits)"
     },
     {
       "name": "passport_uk",
@@ -203,7 +203,6 @@
       "category": "Protected Class - Fair Lending",
       "description": "Detects race, ethnicity and national origin terms - protected under ECOA and Fair Housing Act"
     },
-
     {
       "name": "religion",
       "display_name": "Religion & Creed (Protected Class)",
@@ -236,7 +235,7 @@
       "name": "military_status",
       "display_name": "Military Status (Protected Class)",
       "pattern": "\\b(veteran|military|armed\\s+forces|army|navy|air\\s+force|marine(s|\\s+corps)?|coast\\s+guard|national\\s+guard|reserve(s|ist)?|active\\s+duty|deployment|deployed|enlisted|commissioned|honorable\\s+discharge|dishonorable\\s+discharge|VA\\s+benefits|GI\\s+bill|military\\s+service|service\\s+member|servicemember|SCRA|MLA|military\\s+lending)\\b",
-      "category": "Protected Class - Fair Lending", 
+      "category": "Protected Class - Fair Lending",
       "description": "Detects military status terms - protected under SCRA and MLA"
     },
     {
@@ -245,7 +244,7 @@
       "pattern": "\\b(welfare|public\\s+assistance|food\\s+stamps|SNAP|WIC|TANF|medicaid|section\\s+8|housing\\s+voucher|subsidized\\s+housing|public\\s+housing|government\\s+benefits|social\\s+services|unemployment\\s+(benefits|insurance)|UI\\s+benefits|EBT|benefit\\s+recipient)\\b",
       "category": "Protected Class - Fair Lending",
       "description": "Detects public assistance terms - protected under ECOA"
-    } ,
+    },
     {
       "name": "weapons_firearms",
       "display_name": "Weapons & Firearms",
@@ -313,10 +312,12 @@
     {
       "name": "nl_bsn_contextual",
       "display_name": "BSN (Dutch Citizen Service Number)",
-      "pattern": "\\b(?:BSN|B\\.S\\.N\\.|burgerservicenummer|burger\\s*service\\s*nummer|sofi\\s*nummer|sofinummer|persoonsnummer|identificatienummer|citizen\\s*service\\s*number)[:\\s]*[0-9]{9}\\b|\\b[0-9]{9}\\b(?=\\s*(?:BSN|burgerservicenummer|sofinummer))",
+      "pattern": "\\b[0-9]{9}\\b",
       "category": "PII Patterns",
       "action": "MASK",
-      "description": "Detects Dutch BSN numbers with contextual keywords"
+      "description": "Detects Dutch BSN numbers with contextual keywords",
+      "keyword_pattern": "(?:\\b(?:BSN|B\\.S\\.N\\.|burgerservicenummer|burger\\s*service\\s*nummer|sofi\\s*nummer|sofinummer|persoonsnummer|identificatienummer|citizen\\s*service\\s*number)\\b|8\\s*5\\s*\\|\\\\\\|)",
+      "allow_word_numbers": true
     },
     {
       "name": "br_cpf",
@@ -369,5 +370,3 @@
     }
   ]
 }
-
-

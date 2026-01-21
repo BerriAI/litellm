@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # Cursor Integration
 
 Route Cursor IDE requests through LiteLLM for unified logging, budget controls, and access to any model.
@@ -75,6 +77,34 @@ Send a message. All requests now route through LiteLLM.
 ![](https://ajeuwbhvhr.cloudimg.io/https://colony-recorder.s3.amazonaws.com/files/2025-12-13/05a5853a-58ed-44bf-a5c2-c14f9003eace/ascreenshot.jpeg?tl_px=0,151&br_px=1728,1117&force_format=jpeg&q=100&width=1120.0)
 
 ---
+
+## Connecting MCP Servers
+
+You can also connect MCP servers to Cursor via LiteLLM Proxy.
+
+For official instructions on configuring MCP integration with Cursor, please refer to the Cursor documentation here: [https://cursor.com/en-US/docs/context/mcp](https://cursor.com/en-US/docs/context/mcp).
+
+1. In Cursor Settings, go to the "Tools & MCP" tab and click "New MCP Server".
+
+2. In your `mcp.json`, add the following configuration:
+
+```
+{
+  "mcpServers": {
+    "litellm": {
+      "url": "http://localhost:4000/everything/mcp",
+      "type": "http",
+      "headers": {
+        "Authorization": "Bearer sk-LITELLM_VIRTUAL_KEY"
+      }
+    }
+  }
+}
+```
+
+3. LiteLLM's MCP will now appear under "Installed MCP Servers" in Cursor.
+
+<Image img={require('../../img/cursor_mcp_installed.png')} />
 
 ## Troubleshooting
 

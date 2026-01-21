@@ -516,7 +516,7 @@ class MCPRequestHandler:
         Check if the tool is allowed for the given user/key based on permissions
         """
         if len(allowed_mcp_servers) == 0:
-            return True
+            return False
         elif server_name in allowed_mcp_servers:
             return True
         return False

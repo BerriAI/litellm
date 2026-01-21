@@ -1,13 +1,43 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import Papa from "papaparse";
-import type { EntitySpendData, EntityBreakdown, ExportMetadata, ExportScope, EntityType } from "./types";
 import type { DateRangePickerValue } from "@tremor/react";
+import Papa from "papaparse";
+import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";
 
-export const getEntityBreakdown = (spendData: EntitySpendData): EntityBreakdown[] => {
+// Helper function to extract team_id from api_key_breakdown
+const extractTeamIdFromApiKeyBreakdown = (apiKeyBreakdown: Record<string, any> | undefined): string | null => {
+  if (!apiKeyBreakdown) return null;
+
+  // Look through all API keys to find the first non-null team_id
+  for (const apiKeyData of Object.values(apiKeyBreakdown)) {
+    const teamId = (apiKeyData as any)?.metadata?.team_id;
+    if (teamId) {
+      return teamId;
+    }
+  }
+  return null;
+};
+
+export const getEntityBreakdown = (
+  spendData: EntitySpendData,
+  teamAliasMap: Record<string, string> = {},
+): EntityBreakdown[] => {
   const entitySpend: { [key: string]: EntityBreakdown } = {};
 
   spendData.results.forEach((day) => {
     Object.entries(day.breakdown.entities || {}).forEach(([entity, data]: [string, any]) => {
+      // Extract team_id from api_key_breakdown metadata (not data.metadata which is empty)
+      const teamId = extractTeamIdFromApiKeyBreakdown(data.api_key_breakdown) || entity;
+      // Extract key_alias from the first API key that has one
+      const apiKeyBreakdown = data.api_key_breakdown || {};
+      let keyAlias: string | null = null;
+      for (const apiKeyData of Object.values(apiKeyBreakdown)) {
+        const alias = (apiKeyData as any)?.metadata?.key_alias;
+        if (alias) {
+          keyAlias = alias;
+          break;
+        }
+      }
+
       if (!entitySpend[entity]) {
         entitySpend[entity] = {
           metrics: {
@@ -22,8 +52,8 @@ export const getEntityBreakdown = (spendData: EntitySpendData): EntityBreakdown[
             cache_creation_input_tokens: 0,
           },
           metadata: {
-            alias: data.metadata?.team_alias || entity,
-            id: entity,
+            alias: keyAlias || teamAliasMap[teamId] || entity,
+            id: teamId,
           },
         };
       }
@@ -42,15 +72,23 @@ export const getEntityBreakdown = (spendData: EntitySpendData): EntityBreakdown[
   return Object.values(entitySpend).sort((a, b) => b.metrics.spend - a.metrics.spend);
 };
 
-export const generateDailyData = (spendData: EntitySpendData, entityLabel: string): any[] => {
+export const generateDailyData = (
+  spendData: EntitySpendData,
+  entityLabel: string,
+  teamAliasMap: Record<string, string> = {},
+): any[] => {
   const dailyBreakdown: any[] = [];
 
   spendData.results.forEach((day) => {
     Object.entries(day.breakdown.entities || {}).forEach(([entity, data]: [string, any]) => {
+      // Extract team_id from api_key_breakdown metadata (not data.metadata which is empty)
+      const teamId = extractTeamIdFromApiKeyBreakdown(data.api_key_breakdown);
+      const teamAlias = teamId ? teamAliasMap[teamId] || null : null;
+
       dailyBreakdown.push({
         Date: day.date,
-        [entityLabel]: data.metadata?.team_alias || entity,
-        [`${entityLabel} ID`]: entity,
+        [entityLabel]: teamAlias || "-",
+        [`${entityLabel} ID`]: teamId || "-",
         "Spend ($)": formatNumberWithCommas(data.metrics.spend, 4),
         Requests: data.metrics.api_requests,
         "Successful Requests": data.metrics.successful_requests,
@@ -65,15 +103,17 @@ export const generateDailyData = (spendData: EntitySpendData, entityLabel: strin
   return dailyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
 };
 
-export const generateDailyWithModelsData = (spendData: EntitySpendData, entityLabel: string): any[] => {
+export const generateDailyWithModelsData = (
+  spendData: EntitySpendData,
+  entityLabel: string,
+  teamAliasMap: Record<string, string> = {},
+): any[] => {
   const dailyModelBreakdown: any[] = [];
 
   spendData.results.forEach((day) => {
     const dailyEntityModels: { [key: string]: { [key: string]: any } } = {};
 
     Object.entries(day.breakdown.entities || {}).forEach(([entity, entityData]: [string, any]) => {
-      const entityName = entityData.metadata?.team_alias || entity;
-
       if (!dailyEntityModels[entity]) {
         dailyEntityModels[entity] = {};
       }
@@ -102,13 +142,15 @@ export const generateDailyWithModelsData = (spendData: EntitySpendData, entityLa
 
     Object.entries(dailyEntityModels).forEach(([entity, models]) => {
       const entityData = day.breakdown.entities?.[entity];
-      const entityName = entityData?.metadata?.team_alias || entity;
+      // Extract team_id from api_key_breakdown metadata (not entityData.metadata which is empty)
+      const teamId = extractTeamIdFromApiKeyBreakdown(entityData?.api_key_breakdown);
+      const teamAlias = teamId ? teamAliasMap[teamId] || null : null;
 
       Object.entries(models).forEach(([model, metrics]: [string, any]) => {
         dailyModelBreakdown.push({
           Date: day.date,
-          [entityLabel]: entityName,
-          [`${entityLabel} ID`]: entity,
+          [entityLabel]: teamAlias || "-",
+          [`${entityLabel} ID`]: teamId || "-",
           Model: model,
           "Spend ($)": formatNumberWithCommas(metrics.spend, 4),
           Requests: metrics.requests,
@@ -127,14 +169,15 @@ export const generateExportData = (
   spendData: EntitySpendData,
   exportScope: ExportScope,
   entityLabel: string,
+  teamAliasMap: Record<string, string> = {},
 ): any[] => {
   switch (exportScope) {
     case "daily":
-      return generateDailyData(spendData, entityLabel);
+      return generateDailyData(spendData, entityLabel, teamAliasMap);
     case "daily_with_models":
-      return generateDailyWithModelsData(spendData, entityLabel);
+      return generateDailyWithModelsData(spendData, entityLabel, teamAliasMap);
     default:
-      return generateDailyData(spendData, entityLabel);
+      return generateDailyData(spendData, entityLabel, teamAliasMap);
   }
 };
 
@@ -167,8 +210,9 @@ export const handleExportCSV = (
   exportScope: ExportScope,
   entityLabel: string,
   entityType: EntityType,
+  teamAliasMap: Record<string, string> = {},
 ): void => {
-  const data = generateExportData(spendData, exportScope, entityLabel);
+  const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);
   const csv = Papa.unparse(data);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
   const url = window.URL.createObjectURL(blob);
@@ -189,8 +233,9 @@ export const handleExportJSON = (
   entityType: EntityType,
   dateRange: DateRangePickerValue,
   selectedFilters: string[],
+  teamAliasMap: Record<string, string> = {},
 ): void => {
-  const data = generateExportData(spendData, exportScope, entityLabel);
+  const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);
   const metadata = generateMetadata(entityType, dateRange, selectedFilters, exportScope, spendData);
   const exportObject = {
     metadata,

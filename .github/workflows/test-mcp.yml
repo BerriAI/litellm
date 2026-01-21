@@ -34,8 +34,8 @@ jobs:
         poetry run pip install "pytest-cov==5.0.0"
         poetry run pip install "pytest-asyncio==0.21.1"
         poetry run pip install "respx==0.22.0"
-        poetry run pip install "pydantic==2.10.2"
-        poetry run pip install "mcp==1.10.1"
+        poetry run pip install "pydantic==2.11.0"
+        poetry run pip install "mcp==1.25.0"
         poetry run pip install pytest-xdist
 
     - name: Setup litellm-enterprise as local package

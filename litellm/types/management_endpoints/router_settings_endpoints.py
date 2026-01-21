@@ -2,9 +2,70 @@
 Types and field definitions for router settings management endpoints
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+
+# Fallback Management Types
+
+class FallbackCreateRequest(BaseModel):
+    """Request model for creating/updating fallbacks"""
+
+    model: str = Field(
+        description="The model name to configure fallbacks for (e.g., 'gpt-3.5-turbo')"
+    )
+    fallback_models: List[str] = Field(
+        description="List of fallback model names in order of priority",
+        min_length=1,
+    )
+    fallback_type: Literal["general", "context_window", "content_policy"] = Field(
+        default="general",
+        description="Type of fallback: 'general' (default), 'context_window', or 'content_policy'",
+    )
+
+    @field_validator("fallback_models")
+    @classmethod
+    def validate_fallback_models(cls, v: List[str]) -> List[str]:
+        if not v:
+            raise ValueError("fallback_models must contain at least one model")
+        if len(v) != len(set(v)):
+            raise ValueError("fallback_models must not contain duplicates")
+        return v
+
+    @field_validator("model")
+    @classmethod
+    def validate_model(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("model must be a non-empty string")
+        return v.strip()
+
+
+class FallbackResponse(BaseModel):
+    """Response model for fallback operations"""
+
+    model: str = Field(description="The model name")
+    fallback_models: List[str] = Field(description="List of fallback model names")
+    fallback_type: str = Field(description="Type of fallback")
+    message: str = Field(description="Success message")
+
+
+class FallbackGetResponse(BaseModel):
+    """Response model for getting fallbacks"""
+
+    model: str = Field(description="The model name")
+    fallback_models: List[str] = Field(description="List of fallback model names")
+    fallback_type: str = Field(description="Type of fallback")
+
+
+class FallbackDeleteResponse(BaseModel):
+    """Response model for deleting fallbacks"""
+
+    model: str = Field(description="The model name")
+    fallback_type: str = Field(description="Type of fallback")
+    message: str = Field(description="Success message")
+
+
+# Router Settings Types
 
 
 class RouterSettingsField(BaseModel):
