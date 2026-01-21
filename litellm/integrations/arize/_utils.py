@@ -404,12 +404,12 @@ def _sanitize_optional_params(optional_params: Optional[dict]) -> dict:
     return optional_params
 
 
-def _set_metadata_attributes(span: "Span", metadata: Optional[dict], span_attrs) -> None:
+def _set_metadata_attributes(span: "Span", metadata: Optional[Any], span_attrs) -> None:
     if metadata is not None:
         safe_set_attribute(span, span_attrs.METADATA, safe_dumps(metadata))
 
 
-def _extract_metadata_tools(metadata: Optional[dict]) -> Optional[list]:
+def _extract_metadata_tools(metadata: Optional[Any]) -> Optional[list]:
     if not isinstance(metadata, dict):
         return None
     llm_obj = metadata.get("llm")
