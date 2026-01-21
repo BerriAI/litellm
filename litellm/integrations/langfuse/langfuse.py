@@ -593,30 +593,10 @@ class LangFuseLogger:
             trace_id = clean_metadata.pop("trace_id", None)
             # Use standard_logging_object.trace_id if available (when trace_id from metadata is None)
             # This allows standard trace_id to be used when provided in standard_logging_object
-            # However, we skip standard_logging_object.trace_id if it's a UUID (from litellm_trace_id default),
-            # as we want to fall back to litellm_call_id instead for better traceability.
-            # Note: Users can still explicitly set a UUID trace_id via metadata["trace_id"] (highest priority)
             if trace_id is None and standard_logging_object is not None:
-                standard_trace_id = cast(
+                trace_id = cast(
                     Optional[str], standard_logging_object.get("trace_id")
                 )
-                # Only use standard_logging_object.trace_id if it's not a UUID
-                # UUIDs are 36 characters with hyphens in format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-                # We check for this specific pattern to avoid rejecting valid trace_ids that happen to have hyphens
-                # This primarily filters out default litellm_trace_id UUIDs, while still allowing user-provided
-                # trace_ids via metadata["trace_id"] (which is checked first and not affected by this logic)
-                if standard_trace_id is not None:
-                    # Check if it's a UUID: 36 chars, 4 hyphens, specific pattern
-                    is_uuid = (
-                        len(standard_trace_id) == 36
-                        and standard_trace_id.count("-") == 4
-                        and standard_trace_id[8] == "-"
-                        and standard_trace_id[13] == "-"
-                        and standard_trace_id[18] == "-"
-                        and standard_trace_id[23] == "-"
-                    )
-                    if not is_uuid:
-                        trace_id = standard_trace_id
             # Fallback to litellm_call_id if no trace_id found
             if trace_id is None:
                 trace_id = litellm_call_id
