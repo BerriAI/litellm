@@ -3102,11 +3102,12 @@ class ProxyConfig:
         config_data = await proxy_config.get_config()
         search_tools = self.parse_search_tools(config_data)
         try:
+            models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
-                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
 
                 _model_list: list = self.decrypt_model_list_from_db(
-                    new_models=new_models
+                    new_models=models_list
                 )
                 if len(_model_list) > 0:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
@@ -3120,12 +3121,12 @@ class ProxyConfig:
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
-                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
                 ## DELETE MODEL LOGIC
-                await self._delete_deployment(db_models=new_models)
+                await self._delete_deployment(db_models=models_list)
 
                 ## ADD MODEL LOGIC
-                self._add_deployment(db_models=new_models)
+                self._add_deployment(db_models=models_list)
 
         except Exception as e:
             verbose_proxy_logger.exception(
