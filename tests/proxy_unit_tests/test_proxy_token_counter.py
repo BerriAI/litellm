@@ -484,7 +484,7 @@ async def test_factory_anthropic_endpoint_calls_anthropic_counter():
 
     # Mock the Anthropic CountTokens handler
     with patch(
-        "litellm.llms.anthropic.common_utils.AnthropicCountTokensHandler"
+        "litellm.llms.anthropic.count_tokens.handler.AnthropicCountTokensHandler"
     ) as MockHandler:
         mock_handler_instance = MagicMock()
         mock_handler_instance.handle_count_tokens_request = AsyncMock(
@@ -541,7 +541,7 @@ async def test_factory_gpt4_endpoint_does_not_call_anthropic_counter():
 
     # Mock the Anthropic CountTokens handler
     with patch(
-        "litellm.llms.anthropic.common_utils.AnthropicCountTokensHandler"
+        "litellm.llms.anthropic.count_tokens.handler.AnthropicCountTokensHandler"
     ) as MockHandler:
         mock_handler_instance = MagicMock()
         mock_handler_instance.handle_count_tokens_request = AsyncMock(
@@ -600,7 +600,7 @@ async def test_factory_normal_token_counter_endpoint_does_not_call_anthropic():
 
     # Mock the Anthropic CountTokens handler
     with patch(
-        "litellm.llms.anthropic.common_utils.AnthropicCountTokensHandler"
+        "litellm.llms.anthropic.count_tokens.handler.AnthropicCountTokensHandler"
     ) as MockHandler:
         mock_handler_instance = MagicMock()
         mock_handler_instance.handle_count_tokens_request = AsyncMock(
