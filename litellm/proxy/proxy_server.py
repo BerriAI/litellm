@@ -899,7 +899,7 @@ def get_openapi_schema():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -925,7 +925,7 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -1116,8 +1116,13 @@ try:
     # In development, we restructure directly in _experimental/out.
     # In non-root Docker, we restructure in /var/lib/litellm/ui.
     try:
-        _restructure_ui_html_files(ui_path)
-        verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
+        if is_non_root and ui_path == "/var/lib/litellm/ui":
+            verbose_proxy_logger.info(
+                f"Skipping runtime UI restructuring for non-root Docker. UI at {ui_path} is pre-restructured."
+            )
+        else:
+            _restructure_ui_html_files(ui_path)
+            verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"
