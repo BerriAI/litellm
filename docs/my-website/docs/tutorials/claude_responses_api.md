@@ -181,10 +181,6 @@ litellm_settings:
 
 The `model_name` is the alias that must match Claude Code's request. The `model` in `litellm_params` can be any supported provider (Bedrock, Vertex AI, Azure, Anthropic API, etc.).
 
-:::warning
-These model names may change with new Claude Code versions. Check LiteLLM proxy logs for "model not found" errors to identify the correct model names.
-:::
-
 ### Override Default Models
 
 You can override Claude Code's default models using environment variables:
