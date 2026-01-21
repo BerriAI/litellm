@@ -7,6 +7,7 @@ import litellm
 from litellm import constants
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
+    async_convert_url_to_base64,
 )
 
 
@@ -135,6 +136,156 @@ def test_image_size_limit_disabled(monkeypatch):
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
         convert_url_to_base64("https://example.com/image.jpg")
-    
+
     assert "Image URL download is disabled" in str(excinfo.value)
     assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)
+
+
+class StreamingImageClient:
+    """
+    Client that simulates streaming image downloads.
+    Tracks how many bytes were actually downloaded via streaming.
+    """
+
+    def __init__(self, total_size_bytes, include_content_length=False):
+        self.total_size_bytes = total_size_bytes
+        self.include_content_length = include_content_length
+        self.bytes_downloaded = 0
+
+    def get(self, url, follow_redirects=True):
+        client_ref = self
+
+        class StreamingResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"Content-Type": "image/jpeg"}
+                if client_ref.include_content_length:
+                    self.headers["Content-Length"] = str(client_ref.total_size_bytes)
+
+            def iter_bytes(self, chunk_size=8192):
+                """Simulate streaming bytes in chunks"""
+                bytes_sent = 0
+                while bytes_sent < client_ref.total_size_bytes:
+                    chunk_bytes = min(chunk_size, client_ref.total_size_bytes - bytes_sent)
+                    client_ref.bytes_downloaded += chunk_bytes
+                    bytes_sent += chunk_bytes
+                    yield b"x" * chunk_bytes
+
+        return StreamingResponse()
+
+
+class AsyncStreamingImageClient:
+    """
+    Async client that simulates streaming image downloads.
+    Tracks how many bytes were actually downloaded via streaming.
+    """
+
+    def __init__(self, total_size_bytes, include_content_length=False):
+        self.total_size_bytes = total_size_bytes
+        self.include_content_length = include_content_length
+        self.bytes_downloaded = 0
+
+    async def get(self, url, follow_redirects=True):
+        client_ref = self
+
+        class AsyncStreamingResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.headers = {"Content-Type": "image/jpeg"}
+                if client_ref.include_content_length:
+                    self.headers["Content-Length"] = str(client_ref.total_size_bytes)
+
+            async def aiter_bytes(self, chunk_size=8192):
+                """Simulate async streaming bytes in chunks"""
+                bytes_sent = 0
+                while bytes_sent < client_ref.total_size_bytes:
+                    chunk_bytes = min(chunk_size, client_ref.total_size_bytes - bytes_sent)
+                    client_ref.bytes_downloaded += chunk_bytes
+                    bytes_sent += chunk_bytes
+                    yield b"x" * chunk_bytes
+
+        return AsyncStreamingResponse()
+
+
+def test_streaming_download_regular_image(monkeypatch):
+    """
+    E2E test: Verify that streaming download works correctly for regular-sized images.
+    This ensures no regression in normal image download functionality.
+    """
+    # Use a 1MB image (well within the 50MB limit)
+    client = StreamingImageClient(total_size_bytes=1 * 1024 * 1024)
+    monkeypatch.setattr(litellm, "module_level_client", client)
+
+    result = convert_url_to_base64("https://example.com/regular-image.jpg")
+
+    # Verify the image was downloaded successfully
+    assert result.startswith("data:image/jpeg;base64,")
+    # Verify all bytes were downloaded
+    assert client.bytes_downloaded == 1 * 1024 * 1024
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_download_regular_image(monkeypatch):
+    """
+    E2E test: Verify that async streaming download works correctly for regular-sized images.
+    """
+    # Use a 2MB image (well within the 50MB limit)
+    client = AsyncStreamingImageClient(total_size_bytes=2 * 1024 * 1024)
+    monkeypatch.setattr(litellm, "module_level_aclient", client)
+
+    result = await async_convert_url_to_base64("https://example.com/regular-image.jpg")
+
+    # Verify the image was downloaded successfully
+    assert result.startswith("data:image/jpeg;base64,")
+    # Verify all bytes were downloaded
+    assert client.bytes_downloaded == 2 * 1024 * 1024
+
+
+def test_streaming_stops_for_large_image_without_content_length(monkeypatch):
+    """
+    E2E test: Verify that streaming download stops early for images exceeding size limit
+    when Content-Length header is not provided.
+
+    This is the critical test for the streaming validation fix - it ensures we don't
+    download the entire file before validating size.
+    """
+    # Simulate a 100MB image without Content-Length header
+    client = StreamingImageClient(
+        total_size_bytes=100 * 1024 * 1024, include_content_length=False
+    )
+    monkeypatch.setattr(litellm, "module_level_client", client)
+
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        convert_url_to_base64("https://example.com/huge-image.jpg")
+
+    # Verify it was rejected
+    assert "exceeds maximum allowed size" in str(excinfo.value)
+
+    # Critical assertion: verify we did NOT download the entire 100MB
+    # We should have stopped around 50MB (the default limit)
+    mb_downloaded = client.bytes_downloaded / (1024 * 1024)
+    assert mb_downloaded < 55  # Allow for chunk size overhead
+    assert mb_downloaded > 45  # Should download around the limit
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_stops_for_large_image_without_content_length(monkeypatch):
+    """
+    E2E test: Verify that async streaming download stops early for large images.
+    """
+    # Simulate a 100MB image without Content-Length header
+    client = AsyncStreamingImageClient(
+        total_size_bytes=100 * 1024 * 1024, include_content_length=False
+    )
+    monkeypatch.setattr(litellm, "module_level_aclient", client)
+
+    with pytest.raises(litellm.ImageFetchError) as excinfo:
+        await async_convert_url_to_base64("https://example.com/huge-image.jpg")
+
+    # Verify it was rejected
+    assert "exceeds maximum allowed size" in str(excinfo.value)
+
+    # Critical assertion: verify we did NOT download the entire 100MB
+    mb_downloaded = client.bytes_downloaded / (1024 * 1024)
+    assert mb_downloaded < 55  # Allow for chunk size overhead
+    assert mb_downloaded > 45  # Should download around the limit

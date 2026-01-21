@@ -12,6 +12,7 @@ from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 
 MAX_IMGS_IN_MEMORY = 10
+DOWNLOAD_CHUNK_SIZE_BYTES = 8192  # 8KB chunks for streaming downloads
 
 in_memory_cache = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
@@ -38,9 +39,8 @@ async def _async_stream_and_validate_image(response: Response, url: str) -> byte
     # Stream the response and check size incrementally
     max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
     image_bytes = b""
-    chunk_size = 8192  # 8KB chunks
 
-    async for chunk in response.aiter_bytes(chunk_size=chunk_size):
+    async for chunk in response.aiter_bytes(chunk_size=DOWNLOAD_CHUNK_SIZE_BYTES):
         image_bytes += chunk
         if len(image_bytes) > max_bytes:
             size_mb = len(image_bytes) / (1024 * 1024)
@@ -73,9 +73,8 @@ def _stream_and_validate_image(response: Response, url: str) -> bytes:
     # Stream the response and check size incrementally
     max_bytes = int(MAX_IMAGE_URL_DOWNLOAD_SIZE_MB * 1024 * 1024)
     image_bytes = b""
-    chunk_size = 8192  # 8KB chunks
 
-    for chunk in response.iter_bytes(chunk_size=chunk_size):
+    for chunk in response.iter_bytes(chunk_size=DOWNLOAD_CHUNK_SIZE_BYTES):
         image_bytes += chunk
         if len(image_bytes) > max_bytes:
             size_mb = len(image_bytes) / (1024 * 1024)
