@@ -1887,6 +1887,71 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     assert result["thinkingConfig"]["includeThoughts"] is False
 
 
+def test_reasoning_effort_dict_format_gemini_3():
+    """
+    Test that reasoning_effort works when passed as dict format from OpenAI Agents SDK.
+
+    The OpenAI Agents SDK passes reasoning_effort as {"effort": "high", "summary": "auto"}
+    instead of just a string. This test verifies that we correctly extract the effort value.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/19411
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    model = "gemini-3-pro-preview"
+
+    # Test dict format with effort="high" (OpenAI Agents SDK format)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "high", "summary": "auto"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format with effort="low"
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "low"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format with effort="medium"
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "medium"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format without effort key - should fall back to Gemini 3 default (low)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"summary": "auto"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    # Gemini 3 defaults to thinkingLevel="low" when no explicit effort is set
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+
 def test_temperature_default_for_gemini_3():
     """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
