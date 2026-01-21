@@ -23,9 +23,9 @@ from litellm.types.llms.openai import (
     OutputTextAnnotationAddedEvent,
     OutputTextDeltaEvent,
     OutputTextDoneEvent,
+    ReasoningSummaryPartDoneEvent,
     ReasoningSummaryTextDeltaEvent,
     ReasoningSummaryTextDoneEvent,
-    ReasoningSummaryPartDoneEvent,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseInProgressEvent,
@@ -42,6 +42,7 @@ from litellm.types.utils import (
     StreamingChoices,
     TextCompletionResponse,
 )
+
 
 class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     """
