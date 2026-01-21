@@ -509,7 +509,7 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
     )
     if generic_role_mappings is not None:
         verbose_proxy_logger.debug(
-        f"Found role_mappings in environment variables"
+        "Found role_mappings for generic provider in environment variables"
     )  
         import ast
 
@@ -533,7 +533,6 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
                 verbose_proxy_logger.debug(
                     f"Loaded role_mappings from environments for provider '{role_mappings.provider}'."
                 )
-                generic_role_mapping_configured = True
                 return role_mappings
         except TypeError as e:
             verbose_proxy_logger.warning(f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic.")
