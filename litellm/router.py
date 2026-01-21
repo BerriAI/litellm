@@ -63,6 +63,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -5877,7 +5878,8 @@ class Router:
                 ),
             )
             # done reading model["litellm_params"]
-            if custom_llm_provider not in litellm.provider_list:
+            # Check if provider is supported: either in enum or JSON-configured
+            if custom_llm_provider not in litellm.provider_list and not JSONProviderRegistry.exists(custom_llm_provider):
                 raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         #### DEPLOYMENT NAMES INIT ########
