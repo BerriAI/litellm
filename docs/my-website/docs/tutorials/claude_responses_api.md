@@ -64,6 +64,10 @@ export ANTHROPIC_API_KEY="your-anthropic-api-key"
 export LITELLM_MASTER_KEY="sk-1234567890"  # Generate a secure key
 ```
 
+:::tip
+Alternatively, you can store `ANTHROPIC_API_KEY` in a `.env` file in your proxy directory. LiteLLM will automatically load it when starting.
+:::
+
 ### 2. Start proxy
 
 ```bash
