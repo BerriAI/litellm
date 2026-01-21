@@ -11,7 +11,7 @@ These endpoints use optimized single SQL queries with joins to efficiently calcu
 user metrics from tag activity data and return time series for dashboard visualization.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -36,7 +36,6 @@ router = APIRouter()
 
 class TagActiveUsersResponse(BaseModel):
     """Response for tag active users metrics"""
-
     tag: str
     active_users: int
     date: str  # The specific date or period identifier
@@ -46,13 +45,11 @@ class TagActiveUsersResponse(BaseModel):
 
 class ActiveUsersAnalyticsResponse(BaseModel):
     """Response for active users analytics"""
-
     results: List[TagActiveUsersResponse]
 
 
 class TagSummaryMetrics(BaseModel):
     """Summary metrics for a tag"""
-
     tag: str
     unique_users: int
     total_requests: int
@@ -64,25 +61,22 @@ class TagSummaryMetrics(BaseModel):
 
 class TagSummaryResponse(BaseModel):
     """Response for tag summary analytics"""
-
     results: List[TagSummaryMetrics]
 
 
 class DistinctTagResponse(BaseModel):
     """Response for distinct user agent tags"""
-
     tag: str
 
 
 class DistinctTagsResponse(BaseModel):
     """Response for all distinct user agent tags"""
-
     results: List[DistinctTagResponse]
+
 
 
 class PerUserMetrics(BaseModel):
     """Metrics for individual user"""
-
     user_id: str
     user_email: Optional[str] = None
     user_agent: Optional[str] = None
@@ -95,7 +89,6 @@ class PerUserMetrics(BaseModel):
 
 class PerUserAnalyticsResponse(BaseModel):
     """Response for per-user analytics"""
-
     results: List[PerUserMetrics]
     total_count: int
     page: int
@@ -131,7 +124,7 @@ async def get_distinct_user_agent_tags(
 
     try:
         sql_query = f"""
-        SELECT 
+        SELECT
             dts.tag,
             COUNT(*) as usage_count
         FROM "LiteLLM_DailyTagSpend" dts
@@ -143,7 +136,10 @@ async def get_distinct_user_agent_tags(
 
         db_response = await prisma_client.db.query_raw(sql_query)
 
-        results = [DistinctTagResponse(tag=row["tag"]) for row in db_response]
+        results = [
+            DistinctTagResponse(tag=row["tag"])
+            for row in db_response
+        ]
 
         return DistinctTagsResponse(results=results)
 
@@ -161,6 +157,14 @@ async def get_distinct_user_agent_tags(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_daily_active_users(
+    start_date: Optional[str] = Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format (defaults to 7 days ago)",
+    ),
+    end_date: Optional[str] = Query(
+        default=None,
+        description="End date in YYYY-MM-DD format (defaults to today)",
+    ),
     tag_filter: Optional[str] = Query(
         default=None,
         description="Filter by specific tag (optional)",
@@ -176,17 +180,19 @@ async def get_daily_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Daily Active Users (DAU) by tags for the last {MAX_DAYS} days ending on UTC today + 1 day.
+    Get Daily Active Users (DAU) by tags for a customizable date range.
 
-    This endpoint efficiently calculates unique users per tag for each of the last {MAX_DAYS} days
+    This endpoint calculates unique users per tag for each day in the selected range
     using a single optimized SQL query, perfect for dashboard time series visualization.
 
     Args:
+        start_date: Start date for the analytics period (YYYY-MM-DD, defaults to 7 days ago)
+        end_date: End date for the analytics period (YYYY-MM-DD, defaults to today)
         tag_filter: Optional filter to specific tag (legacy)
         tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
 
     Returns:
-        ActiveUsersAnalyticsResponse: DAU data by tag for each of the last {MAX_DAYS} days
+        ActiveUsersAnalyticsResponse: DAU data by tag for each day in the date range
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -197,21 +203,33 @@ async def get_daily_active_users(
         )
 
     try:
-        # Calculate end_date as UTC today + 1 day
+        # Calculate date range
         from datetime import timezone
 
-        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        end_date = end_dt.strftime("%Y-%m-%d")
+        if end_date:
+            # User provided specific end date - interpret as inclusive calendar day
+            # We add 1 day and use the resulting date as the (exclusive) upper bound in the SQL query
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) + timedelta(days=1)
+        else:
+            # Default: use today + 1 day for inclusive query
+            end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
-        # Calculate date range (last MAX_DAYS days)
-        start_dt = end_dt - timedelta(days=MAX_DAYS)
-        start_date = start_dt.strftime("%Y-%m-%d")
+        if start_date:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            # Default to 7 days ago
+            start_dt = end_dt - timedelta(days=7)
+
+        end_date_str = end_dt.strftime("%Y-%m-%d")
+        start_date_str = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s) and custom_llm_provider filter
-        where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        )
-        params = [start_date, end_date]
+        where_clause = "WHERE dts.date >= $1 AND dts.date < $2 AND vt.user_id IS NOT NULL"
+        params = [start_date_str, end_date_str]
 
         # Add custom_llm_provider filter if provided
         if custom_llm_provider:
@@ -221,7 +239,7 @@ async def get_daily_active_users(
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
             tag_conditions = []
-            for i, tag in enumerate(tag_filters):
+            for tag in tag_filters:
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
                 params.append(tag)
@@ -229,6 +247,7 @@ async def get_daily_active_users(
         elif tag_filter:
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
+
 
         sql_query = f"""
         SELECT
@@ -245,12 +264,21 @@ async def get_daily_active_users(
         db_response = await prisma_client.db.query_raw(sql_query, *params)
 
         results = [
-            TagActiveUsersResponse(tag=row["tag"], active_users=row["active_users"], date=row["date"])
+            TagActiveUsersResponse(
+                tag=row["tag"],
+                active_users=row["active_users"],
+                date=row["date"]
+            )
             for row in db_response
         ]
 
         return ActiveUsersAnalyticsResponse(results=results)
 
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -307,7 +335,6 @@ async def get_weekly_active_users(
     try:
         # Calculate end_date as UTC today + 1 day
         from datetime import timezone
-
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
@@ -317,9 +344,7 @@ async def get_weekly_active_users(
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s) and custom_llm_provider filter
-        where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        )
+        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
 
         # Add custom_llm_provider filter if provided
@@ -330,7 +355,7 @@ async def get_weekly_active_users(
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
             tag_conditions = []
-            for i, tag in enumerate(tag_filters):
+            for tag in tag_filters:
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
                 params.append(tag)
@@ -342,7 +367,7 @@ async def get_weekly_active_users(
         # Use window function to group by weeks with clear week numbering
         sql_query = f"""
         WITH weekly_data AS (
-            SELECT 
+            SELECT
                 dts.tag,
                 dts.date,
                 vt.user_id,
@@ -352,11 +377,11 @@ async def get_weekly_active_users(
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
             {where_clause}
         )
-        SELECT 
+        SELECT
             tag,
             COUNT(DISTINCT user_id) as active_users,
             -- Week identifier with month and day (Week 1 (earliest), Week 2, etc.)
-            'Week ' || ({MAX_WEEKS} - week_offset)::text || ' (' || 
+            'Week ' || ({MAX_WEEKS} - week_offset)::text || ' (' ||
             TO_CHAR(DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval, 'Mon DD') || ')' as date,
             -- Calculate week start and end dates for each week
             (DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval)::text as period_start,
@@ -376,7 +401,7 @@ async def get_weekly_active_users(
                 active_users=row["active_users"],
                 date=row["date"],  # This will be "Week 1 (Jan 15)", "Week 2 (Jan 8)", etc.
                 period_start=row["period_start"],
-                period_end=row["period_end"],
+                period_end=row["period_end"]
             )
             for row in db_response
         ]
@@ -397,6 +422,7 @@ async def get_weekly_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_monthly_active_users(
+    months: int = Query(default=7, ge=1, le=12, description="Number of months to show (1-12)"),
     tag_filter: Optional[str] = Query(
         default=None,
         description="Filter by specific tag (optional)",
@@ -412,21 +438,17 @@ async def get_monthly_active_users(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get Monthly Active Users (MAU) by tags for the last {MAX_MONTHS} months ending on UTC today + 1 day.
+    Get Monthly Active Users (MAU) by tags for the last N months ending on UTC today + 1 day.
 
-    Shows month-by-month breakdown:
-    - Month 1 (Nov): Earliest month (7 months ago, 30-day period)
-    - Month 2 (Dec): Next month (6 months ago)
-    - Month 3 (Jan): Next month (5 months ago)
-    - ... and so on for {MAX_MONTHS} months total
-    - Month 7: Most recent month ending on UTC today + 1 day
+    Shows month-by-month breakdown with proper month names (e.g., "December 2025").
 
     Args:
+        months: Number of months to show (1-12, default: 7)
         tag_filter: Optional filter to specific tag (legacy)
         tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
 
     Returns:
-        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last {MAX_MONTHS} months with descriptive month labels (e.g., "Month 1 (Nov)")
+        ActiveUsersAnalyticsResponse: MAU data by tag for each of the last N months
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -439,19 +461,16 @@ async def get_monthly_active_users(
     try:
         # Calculate end_date as UTC today + 1 day
         from datetime import timezone
-
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
-        # Calculate date range for all months (210 days total)
-        # Start from 209 days before end_date to cover exactly MAX_MONTHS complete months
-        start_dt = end_dt - timedelta(days=(MAX_MONTHS * 30 - 1))  # MAX_MONTHS months * 30 days - 1
+        # Calculate date range for N months
+        # Start from (months * 30 - 1) days before end_date
+        start_dt = end_dt - timedelta(days=(months * 30 - 1))
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s) and custom_llm_provider filter
-        where_clause = (
-            "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
-        )
+        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
 
         # Add custom_llm_provider filter if provided
@@ -462,7 +481,7 @@ async def get_monthly_active_users(
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
             tag_conditions = []
-            for i, tag in enumerate(tag_filters):
+            for tag in tag_filters:
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
                 params.append(tag)
@@ -471,31 +490,30 @@ async def get_monthly_active_users(
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
 
-        # Use window function to group by months (30-day periods) with clear month numbering
+        # Use window function to group by months with proper month name labels
         sql_query = f"""
         WITH monthly_data AS (
-            SELECT 
+            SELECT
                 dts.tag,
                 dts.date,
                 vt.user_id,
-                -- Calculate month number (0 = Month 1 most recent, 1 = Month 2, etc.)
+                -- Calculate month number (0 = most recent month, 1 = month before, etc.)
                 FLOOR((DATE '{end_date}' - dts.date::date) / 30) as month_offset
             FROM "LiteLLM_DailyTagSpend" dts
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
             {where_clause}
         )
-        SELECT 
+        SELECT
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Month identifier with month name (Month 1 (earliest), Month 2, etc.)
-            'Month ' || ({MAX_MONTHS} - month_offset)::text || ' (' || 
-            TO_CHAR(DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval, 'Mon') || ')' as date,
-            -- Calculate month start and end dates for each month
+            -- Month label with proper month name and year (e.g., "December 2025")
+            TO_CHAR(DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval, 'Mon YYYY') as date,
+            -- Calculate month start and end dates
             (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
             (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end,
             month_offset
         FROM monthly_data
-        WHERE month_offset < {MAX_MONTHS}
+        WHERE month_offset < {months}
         GROUP BY tag, month_offset
         ORDER BY month_offset DESC, active_users DESC
         """
@@ -506,9 +524,9 @@ async def get_monthly_active_users(
             TagActiveUsersResponse(
                 tag=row["tag"],
                 active_users=row["active_users"],
-                date=row["date"],  # This will be "Month 1 (Jan)", "Month 2 (Dec)", etc.
+                date=row["date"].strip(),  # Remove extra whitespace from Month format
                 period_start=row["period_start"],
-                period_end=row["period_end"],
+                period_end=row["period_end"]
             )
             for row in db_response
         ]
@@ -529,8 +547,12 @@ async def get_monthly_active_users(
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_tag_summary(
-    start_date: str = Query(description="Start date in YYYY-MM-DD format"),
-    end_date: str = Query(description="End date in YYYY-MM-DD format"),
+    start_date: str = Query(
+        description="Start date in YYYY-MM-DD format"
+    ),
+    end_date: str = Query(
+        description="End date in YYYY-MM-DD format"
+    ),
     tag_filter: Optional[str] = Query(
         default=None,
         description="Filter by specific tag (optional)",
@@ -579,10 +601,11 @@ async def get_tag_summary(
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
 
+
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
             tag_conditions = []
-            for i, tag in enumerate(tag_filters):
+            for tag in tag_filters:
                 param_index = len(params) + 1
                 tag_conditions.append(f"dts.tag = ${param_index}")
                 params.append(tag)
@@ -592,7 +615,7 @@ async def get_tag_summary(
             params.append(f"%{tag_filter}%")
 
         sql_query = f"""
-        SELECT 
+        SELECT
             dts.tag,
             COUNT(DISTINCT vt.user_id) as unique_users,
             SUM(dts.api_requests) as total_requests,
@@ -617,7 +640,7 @@ async def get_tag_summary(
                 successful_requests=int(row["successful_requests"] or 0),
                 failed_requests=int(row["failed_requests"] or 0),
                 total_tokens=int(row["total_tokens"] or 0),
-                total_spend=float(row["total_spend"] or 0.0),
+                total_spend=float(row["total_spend"] or 0.0)
             )
             for row in db_response
         ]
@@ -652,7 +675,9 @@ async def get_per_user_analytics(
         description="Filter by multiple specific tags (optional, takes precedence over tag_filter)",
     ),
     page: int = Query(default=1, description="Page number for pagination", ge=1),
-    page_size: int = Query(default=50, description="Items per page", ge=1, le=1000),
+    page_size: int = Query(
+        default=50, description="Items per page", ge=1, le=1000
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -681,7 +706,6 @@ async def get_per_user_analytics(
     try:
         # Calculate end_date as UTC today + 1 day
         from datetime import timezone
-
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
@@ -690,7 +714,9 @@ async def get_per_user_analytics(
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build where clause with date range
-        where_clause: Dict[str, Any] = {"date": {"gte": start_date, "lte": end_date}}
+        where_clause: Dict[str, Any] = {
+            "date": {"gte": start_date, "lte": end_date}
+        }
 
         # Add tag filtering if provided
         if tag_filters and len(tag_filters) > 0:
@@ -740,7 +766,7 @@ async def get_per_user_analytics(
                     user_metrics[user_id] = PerUserMetrics(
                         user_id=user_id,
                         user_email=user_id_to_email.get(user_id),
-                        user_agent=tag,
+                        user_agent=tag
                     )
                 else:
                     # If tag is different, keep the first one or prioritize certain ones
@@ -761,7 +787,7 @@ async def get_per_user_analytics(
         results = sorted(
             list(user_metrics.values()),
             key=lambda x: x.successful_requests,
-            reverse=True,
+            reverse=True
         )
 
         # Apply pagination
@@ -794,8 +820,9 @@ class LeaderboardUser(BaseModel):
 
 
 class LeaderboardResponse(BaseModel):
-    """Response for user leaderboard"""
+    """Response for user leaderboard - returns all users sorted by request count"""
     results: List[LeaderboardUser]
+    total_count: int
 
 
 @router.get(
@@ -805,7 +832,14 @@ class LeaderboardResponse(BaseModel):
     dependencies=[Depends(user_api_key_auth)],
 )
 async def get_user_leaderboard(
-    limit: int = Query(default=10, ge=1, le=100, description="Maximum number of users to return"),
+    start_date: Optional[str] = Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format (defaults to 7 days ago)",
+    ),
+    end_date: Optional[str] = Query(
+        default=None,
+        description="End date in YYYY-MM-DD format (defaults to today)",
+    ),
     custom_llm_provider: Optional[str] = Query(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
@@ -813,9 +847,10 @@ async def get_user_leaderboard(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Get top active users by request count in the last 7 days.
+    Get all active users by request count with customizable date range.
 
-    Returns a leaderboard of users sorted by their total request count.
+    Returns ALL users sorted by their total request count.
+    Frontend handles pagination and email search.
     """
     from litellm.proxy.proxy_server import prisma_client
 
@@ -826,35 +861,60 @@ async def get_user_leaderboard(
         )
 
     try:
-        # Calculate date range (last 7 days)
-        from datetime import timezone
-        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-        end_date = end_dt.strftime("%Y-%m-%d")
-        start_dt = end_dt - timedelta(days=7)
-        start_date = start_dt.strftime("%Y-%m-%d")
+        # Calculate date range
+        if end_date:
+            # User provided specific end date - interpret as inclusive calendar day
+            # We add 1 day and use the resulting date as the (exclusive) upper bound in the SQL query
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) + timedelta(days=1)
+        else:
+            # Default: use today + 1 day for inclusive query
+            end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
 
-        # Build where clause with date range
-        where_clause: Dict[str, Any] = {
-            "date": {"gte": start_date, "lte": end_date},
-        }
+        if start_date:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            # Default to 7 days ago
+            start_dt = end_dt - timedelta(days=7)
+
+        end_date_str = end_dt.strftime("%Y-%m-%d")
+        start_date_str = start_dt.strftime("%Y-%m-%d")
+
+        # Build SQL query with proper pagination using OFFSET/LIMIT for better performance
+        where_clause = "WHERE dts.date >= $1 AND dts.date < $2"
+        params = [start_date_str, end_date_str]
 
         # Add custom_llm_provider filter if provided
         if custom_llm_provider:
-            where_clause["custom_llm_provider"] = custom_llm_provider
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
 
-        # Get all tag records in the date range
-        tag_records = await prisma_client.db.litellm_dailytagspend.find_many(
-            where=where_clause
-        )
+        # First, get all matching api_keys and aggregate counts in a single query
+        sql_query = f"""
+        SELECT
+            dts.api_key,
+            SUM(dts.api_requests) as request_count
+        FROM "LiteLLM_DailyTagSpend" dts
+        {where_clause}
+        AND dts.api_key IS NOT NULL
+        GROUP BY dts.api_key
+        """
 
-        if not tag_records:
-            return LeaderboardResponse(results=[])
+        db_response = await prisma_client.db.query_raw(sql_query, *params)
 
-        # Aggregate request count by api_key (filtering out null api_keys)
+        if not db_response:
+            return LeaderboardResponse(
+                results=[],
+                total_count=0,
+            )
+
+        # Aggregate request count by api_key
         api_key_counts: Dict[str, int] = {}
-        for record in tag_records:
-            if record.api_key:
-                api_key_counts[record.api_key] = api_key_counts.get(record.api_key, 0) + (record.api_requests or 0)
+        for row in db_response:
+            api_key_counts[row["api_key"]] = row["request_count"]
 
         # Get unique api_keys
         api_keys = list(api_key_counts.keys())
@@ -901,12 +961,20 @@ async def get_user_leaderboard(
                 )
             )
 
-        # Sort by request count (descending) and apply limit
+        # Sort by request count (descending)
         leaderboard_entries.sort(key=lambda x: x.request_count, reverse=True)
-        leaderboard_entries = leaderboard_entries[:limit]
 
-        return LeaderboardResponse(results=leaderboard_entries)
+        # Return all users - frontend handles pagination and search
+        return LeaderboardResponse(
+            results=leaderboard_entries,
+            total_count=len(leaderboard_entries),
+        )
 
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,

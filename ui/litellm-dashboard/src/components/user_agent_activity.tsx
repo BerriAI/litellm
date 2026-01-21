@@ -13,11 +13,14 @@ import {
   TabPanel,
   TabPanels,
 } from "@tremor/react";
-import { Select, Tooltip, Switch, Table } from "antd";
+import { Select, Tooltip, Switch, Table, Pagination, Input } from "antd";
+const { Option } = Select;
+const { Search } = Input;
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall, leaderboardCall } from "./networking";
 import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
 import { ChartLoader } from "./shared/chart_loader";
+import { formatDate } from "./networking";
 
 // New interfaces for the updated API response
 interface TagActiveUsersResponse {
@@ -62,6 +65,7 @@ interface LeaderboardUser {
 
 interface LeaderboardResponse {
   results: LeaderboardUser[];
+  total_count: number;
 }
 
 interface UserAgentActivityProps {
@@ -95,16 +99,35 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
 
-  // Leaderboard state
-  const [leaderboardData, setLeaderboardData] = useState<LeaderboardResponse>({ results: [] });
+  // Leaderboard state - now stores ALL users from backend
+  const [leaderboardData, setLeaderboardData] = useState<LeaderboardResponse>({ results: [], total_count: 0 });
+  const [leaderboardPage, setLeaderboardPage] = useState(1);
+  const LEADERBOARD_PAGE_SIZE = 20;
+
+  // Email search state for leaderboard
+  const [leaderboardEmailSearch, setLeaderboardEmailSearch] = useState("");
+
+  // MAU months selector state
+  const [mauMonths, setMauMonths] = useState<number>(7);
+  const MAU_MONTH_OPTIONS = [
+    { value: 1, label: "Last 1 month" },
+    { value: 2, label: "Last 2 months" },
+    { value: 3, label: "Last 3 months" },
+    { value: 4, label: "Last 4 months" },
+    { value: 5, label: "Last 5 months" },
+    { value: 6, label: "Last 6 months" },
+    { value: 7, label: "Last 7 months" },
+    { value: 8, label: "Last 8 months" },
+    { value: 9, label: "Last 9 months" },
+    { value: 10, label: "Last 10 months" },
+    { value: 11, label: "Last 11 months" },
+    { value: 12, label: "Last 12 months" },
+  ];
 
   // Toggle state for filtering by hosted_vllm provider
   const [showHostedVllmOnly, setShowHostedVllmOnly] = useState(false);
   console.log('UserAgentActivity: Component mounted', { showHostedVllmOnly, CUSTOM_LLM_PROVIDER: 'hosted_vllm' });
   const CUSTOM_LLM_PROVIDER = "hosted_vllm"; // Provider name to filter by
-
-  // Use today's date as the end date for all API calls
-  const today = new Date();
 
   const fetchAvailableTags = async () => {
     if (!accessToken) return;
@@ -127,7 +150,8 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     try {
       const data = await tagDauCall(
         accessToken,
-        today,
+        dateValue.from ? formatDate(dateValue.from) : undefined,
+        dateValue.to ? formatDate(dateValue.to) : undefined,
         userAgentFilter || undefined,
         selectedTags.length > 0 ? selectedTags : undefined,
         showHostedVllmOnly ? CUSTOM_LLM_PROVIDER : undefined,
@@ -147,7 +171,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     try {
       const data = await tagWauCall(
         accessToken,
-        today,
         userAgentFilter || undefined,
         selectedTags.length > 0 ? selectedTags : undefined,
         showHostedVllmOnly ? CUSTOM_LLM_PROVIDER : undefined,
@@ -167,7 +190,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     try {
       const data = await tagMauCall(
         accessToken,
-        today,
+        mauMonths,
         userAgentFilter || undefined,
         selectedTags.length > 0 ? selectedTags : undefined,
         showHostedVllmOnly ? CUSTOM_LLM_PROVIDER : undefined,
@@ -207,10 +230,13 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     try {
       const data = await leaderboardCall(
         accessToken,
-        100, // fetch up to 100 users
+        dateValue.from ? formatDate(dateValue.from) : undefined,
+        dateValue.to ? formatDate(dateValue.to) : undefined,
         showHostedVllmOnly ? CUSTOM_LLM_PROVIDER : undefined,
       );
       setLeaderboardData(data);
+      // Reset to first page when data changes
+      setLeaderboardPage(1);
     } catch (error) {
       console.error("Failed to fetch leaderboard data:", error);
     } finally {
@@ -223,7 +249,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     fetchAvailableTags();
   }, [accessToken]);
 
-  // Effect for DAU/WAU/MAU data (independent of date picker)
+  // Effect for DAU/WAU/MAU data (depends on date picker for DAU, mauMonths for MAU)
   useEffect(() => {
     if (!accessToken) return;
 
@@ -234,7 +260,7 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     }, 50);
 
     return () => clearTimeout(timeoutId);
-  }, [accessToken, userAgentFilter, selectedTags, showHostedVllmOnly]);
+  }, [accessToken, userAgentFilter, selectedTags, showHostedVllmOnly, dateValue, mauMonths]);
 
   // Effect for summary data (depends on date picker)
   useEffect(() => {
@@ -256,7 +282,28 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     }, 50);
 
     return () => clearTimeout(timeoutId);
-  }, [accessToken, showHostedVllmOnly]);
+  }, [accessToken, showHostedVllmOnly, dateValue]);
+
+  // Reset to first page when search changes
+  useEffect(() => {
+    setLeaderboardPage(1);
+  }, [leaderboardEmailSearch]);
+
+  // Filter leaderboard data by email search (client-side)
+  const filteredLeaderboardResults = leaderboardData.results.filter((user) => {
+    if (!leaderboardEmailSearch) return true;
+    const searchLower = leaderboardEmailSearch.toLowerCase();
+    return (
+      user.user_email?.toLowerCase().includes(searchLower) ||
+      user.user_id.toLowerCase().includes(searchLower)
+    );
+  });
+
+  // Get paginated results
+  const paginatedLeaderboardResults = filteredLeaderboardResults.slice(
+    (leaderboardPage - 1) * LEADERBOARD_PAGE_SIZE,
+    leaderboardPage * LEADERBOARD_PAGE_SIZE
+  );
 
   // Helper function to extract user agent from tag
   const extractUserAgent = (tag: string): string => {
@@ -295,15 +342,22 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const allWauTags = getAllTagsForData(wauData.results).slice(0, MAX_CATEGORIES);
   const allMauTags = getAllTagsForData(mauData.results).slice(0, MAX_CATEGORIES);
 
-  // Prepare daily chart data (DAU) - always show last 7 days
+  // Prepare daily chart data (DAU) - based on selected date range
   const generateDailyChartData = () => {
     const chartData: any[] = [];
-    const endDate = new Date();
 
-    // Generate all 7 days
-    for (let i = 6; i >= 0; i--) {
-      const date = new Date(endDate);
-      date.setDate(date.getDate() - i);
+    if (!dateValue.from || !dateValue.to) return chartData;
+
+    const startDate = new Date(dateValue.from);
+    const endDate = new Date(dateValue.to);
+
+    // Calculate number of days in range
+    const dayDiff = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+
+    // Generate all days in the range
+    for (let i = 0; i <= dayDiff; i++) {
+      const date = new Date(startDate);
+      date.setDate(date.getDate() + i);
       const dateStr = date.toISOString().split("T")[0]; // YYYY-MM-DD format
 
       const dayEntry: any = { date: dateStr };
@@ -331,13 +385,33 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
 
   const dailyChartData = generateDailyChartData();
 
-  // Prepare weekly chart data (WAU) - always show all 7 weeks
+  // Prepare weekly chart data (WAU) - generate all 7 weeks
   const generateWeeklyChartData = () => {
     const chartData: any[] = [];
 
-    // Generate all 7 weeks (Week 1 through Week 7)
-    for (let weekNum = 1; weekNum <= 7; weekNum++) {
-      const weekEntry: any = { week: `Week ${weekNum}` };
+    // Generate all 7 week labels (most recent first)
+    // Backend format: "Week X (Mon DD)" where X = 1 (earliest) to 7 (most recent)
+    const allWeekLabels: string[] = [];
+    for (let i = 0; i < 7; i++) {
+      const now = new Date();
+      // Add 1 day like backend does
+      const endDate = new Date(now);
+      endDate.setDate(now.getDate() - (i * 7) + 1);
+      const startDate = new Date(endDate);
+      startDate.setDate(endDate.getDate() - 6);
+
+      // Backend format: "Week {7-i} ({startMonth} {startDay})"
+      // Week 1 = earliest (7 weeks ago), Week 7 = most recent
+      const startMonth = startDate.toLocaleDateString('en-US', { month: 'short' });
+      const startDay = startDate.getDate();
+      const weekNum = 7 - i;
+
+      allWeekLabels.push(`Week ${weekNum} (${startMonth} ${startDay})`);
+    }
+
+    // Generate entries for each week (all 7 weeks, even if empty)
+    allWeekLabels.forEach((weekLabel) => {
+      const weekEntry: any = { week: weekLabel };
 
       // Initialize all user agents to 0
       allWauTags.forEach((tag) => {
@@ -346,19 +420,15 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
       });
 
       chartData.push(weekEntry);
-    }
+    });
 
-    // Fill in actual data
+    // Fill in actual data from API response
     wauData.results.forEach((item) => {
       const userAgent = extractUserAgent(item.tag);
-      // Extract week number from the date field (e.g., "Week 1 (Jul 27)" -> "Week 1")
-      const weekMatch = item.date.match(/Week (\d+)/);
-      if (weekMatch) {
-        const weekLabel = `Week ${weekMatch[1]}`;
-        const weekEntry = chartData.find((d) => d.week === weekLabel);
-        if (weekEntry) {
-          weekEntry[userAgent] = item.active_users;
-        }
+      // Match by date label (API format: "Week 1 (Jan 15)")
+      const weekEntry = chartData.find((d) => d.week === item.date);
+      if (weekEntry) {
+        weekEntry[userAgent] = item.active_users;
       }
     });
 
@@ -367,13 +437,23 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
 
   const weeklyChartData = generateWeeklyChartData();
 
-  // Prepare monthly chart data (MAU) - always show all 7 months
+  // Prepare monthly chart data (MAU) - generate all months based on selection
   const generateMonthlyChartData = () => {
-    const chartData: any[] = [];
+      const chartData: any[] = [];
+      const now = new Date();
+        
+        const allMonthLabels: string[] = [];
+        for (let i = 0; i < mauMonths; i++) {
+          const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+          // Use 'short' for month and 'numeric' for year for matching backend format
+          // Backend uses: TO_CHAR(..., 'Mon YYYY')
+      const monthName = d.toLocaleString('default', { month: 'short', year: 'numeric' }); 
+          allMonthLabels.push(monthName);
+        }
 
-    // Generate all 7 months (Month 1 through Month 7)
-    for (let monthNum = 1; monthNum <= 7; monthNum++) {
-      const monthEntry: any = { month: `Month ${monthNum}` };
+    // Generate entries for each month (all months, even if empty)
+    allMonthLabels.forEach((monthLabel) => {
+      const monthEntry: any = { month: monthLabel };
 
       // Initialize all user agents to 0
       allMauTags.forEach((tag) => {
@@ -382,19 +462,14 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
       });
 
       chartData.push(monthEntry);
-    }
+    });
 
-    // Fill in actual data
+    // Fill in actual data from API response
     mauData.results.forEach((item) => {
       const userAgent = extractUserAgent(item.tag);
-      // Extract month number from the date field (e.g., "Month 1 (Jul)" -> "Month 1")
-      const monthMatch = item.date.match(/Month (\d+)/);
-      if (monthMatch) {
-        const monthLabel = `Month ${monthMatch[1]}`;
-        const monthEntry = chartData.find((d) => d.month === monthLabel);
-        if (monthEntry) {
-          monthEntry[userAgent] = item.active_users;
-        }
+      const monthEntry = chartData.find((d) => d.month === item.date);
+      if (monthEntry) {
+        monthEntry[userAgent] = item.active_users;
       }
     });
 
@@ -429,17 +504,25 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
 
   return (
     <div className="space-y-6 mt-6">
-      {/* Summary Section Card */}
+      {/* Main TabGroup for DAU/WAU/MAU vs Per User Usage */}
       <Card>
-        <div className="space-y-6">
-          <div className="flex justify-between items-start">
-            <div>
-              <Title>Summary by User Agent</Title>
-              <Subtitle>Performance metrics for different user agents</Subtitle>
-            </div>
+        <TabGroup>
+          <TabList className="mb-6">
+            <Tab>DAU/WAU/MAU</Tab>
+            <Tab>Per User Usage (Last 30 Days)</Tab>
+          </TabList>
 
-            <div className="flex items-center gap-6">
-              {/* Toggle for hosted_vllm only */}
+          <TabPanels>
+            {/* DAU/WAU/MAU Tab Panel */}
+            <TabPanel>
+            <div className="mb-6 flex items-start justify-between">
+              {/* Left side: Titles */}
+              <div>
+                <Title>DAU, WAU & MAU per Agent</Title>
+                <Subtitle>Active users across different time periods</Subtitle>
+              </div>
+
+              {/* Right side: Toggle */}
               <div className="flex items-center gap-2">
                 <Switch
                   checked={showHostedVllmOnly}
@@ -450,6 +533,266 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                   Self-hosted models only
                 </Text>
               </div>
+            </div>
+
+              <TabGroup>
+                <TabList className="mb-6">
+                  <Tab>DAU</Tab>
+                  <Tab>WAU</Tab>
+                  <Tab>MAU</Tab>
+                </TabList>
+
+                <TabPanels>
+                  <TabPanel>
+                    <div className="flex gap-6">
+                      {/* Left: Today's Active Users Card */}
+                      <Card className="w-64 flex-shrink-0">
+                        <Title className="text-base">Today&apos;s Active Users</Title>
+                        {dauLoading ? (
+                          <ChartLoader isDateChanging={false} />
+                        ) : (
+                          <>
+                            {(() => {
+                              const today = new Date();
+                              const todayStr = today.toISOString().split('T')[0];
+                              const fromDate = dateValue.from ? new Date(dateValue.from) : null;
+                              const toDate = dateValue.to ? new Date(dateValue.to) : null;
+
+                              // Check if today falls within selected date range
+                              const isTodayInRange = (!fromDate || today >= fromDate) && (!toDate || today <= toDate);
+
+                              if (!isTodayInRange) {
+                                return (
+                                  <>
+                                    <Metric className="text-4xl mt-2 text-gray-400">N/A</Metric>
+                                    <Text className="mt-1 text-gray-400">Outside selected range</Text>
+                                  </>
+                                );
+                              }
+
+                              const todayData = dauData.results.find(
+                                (item) => item.date === todayStr
+                              );
+                              return (
+                                <>
+                                  <Metric className="text-4xl mt-2">
+                                    {formatAbbreviatedNumber(Number(todayData?.active_users) || 0)}
+                                  </Metric>
+                                  <Text className="mt-1">users today</Text>
+                                </>
+                              );
+                            })()}
+                          </>
+                        )}
+                      </Card>
+
+                      {/* Right: Bar Chart */}
+                      <div className="flex-1">
+                        <div className="mb-4">
+                          <Title className="text-lg">
+                            Daily Active Users
+                            {dateValue.from && dateValue.to && (
+                              <span className="text-gray-500 font-normal ml-2">
+                                ({formatDate(dateValue.from)} to {formatDate(dateValue.to)})
+                              </span>
+                            )}
+                          </Title>
+                        </div>
+                        {dauLoading ? (
+                          <ChartLoader isDateChanging={false} />
+                        ) : (
+                          <div className="flex-1 overflow-x-auto pb-2">
+                              <BarChart
+                                data={dailyChartData}
+                                index="date"
+                                categories={allDauTags.map(extractUserAgent)}
+                                valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                                yAxisWidth={60}
+                                showLegend={true}
+                                stack={true}
+                                tickGap={5}
+                              />
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </TabPanel>
+
+                  <TabPanel>
+                    <div className="mb-4">
+                      <Title className="text-lg">Weekly Active Users (Last 7 Weeks)</Title>
+                    </div>
+                    {wauLoading ? (
+                      <ChartLoader isDateChanging={false} />
+                    ) : (
+                      <BarChart
+                        data={weeklyChartData}
+                        index="week"
+                        categories={allWauTags.map(extractUserAgent)}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                        stack={true}
+                      />
+                    )}
+                  </TabPanel>
+
+                  <TabPanel>
+                    <div className="mb-4 flex items-center gap-4">
+                      <Title className="text-lg">Monthly Active Users</Title>
+                      <Select
+                        value={mauMonths}
+                        onChange={setMauMonths}
+                        style={{ width: 160 }}
+                        size="small"
+                      >
+                        {MAU_MONTH_OPTIONS.map((opt) => (
+                          <Option key={opt.value} value={opt.value}>{opt.label}</Option>
+                        ))}
+                      </Select>
+                    </div>
+                    {mauLoading ? (
+                      <ChartLoader isDateChanging={false} />
+                    ) : (
+                      <BarChart
+                        data={monthlyChartData}
+                        index="month"
+                        categories={allMauTags.map(extractUserAgent)}
+                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
+                        yAxisWidth={60}
+                        showLegend={true}
+                        stack={true}
+                        tickGap={5} 
+                      />
+                    )}
+                  </TabPanel>
+                </TabPanels>
+              </TabGroup>
+            </TabPanel>
+
+            {/* Per User Usage Tab Panel */}
+            <TabPanel>
+              <PerUserUsage
+                accessToken={accessToken}
+                selectedTags={selectedTags}
+                formatAbbreviatedNumber={formatAbbreviatedNumber}
+              />
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
+      </Card>
+      {/* Leaderboard Section Card */}
+      <Card>
+        <div className="space-y-4">
+          <div className="flex justify-between items-start">
+            <div>
+              <Title>Top Active Users</Title>
+              <Subtitle>
+                Most active users by request count
+                {dateValue.from && dateValue.to && (
+                  <span className="text-gray-500 ml-1">
+                    ({formatDate(dateValue.from)} to {formatDate(dateValue.to)})
+                  </span>
+                )}
+              </Subtitle>
+            </div>
+            <Search
+              placeholder="Search by email or user ID"
+              allowClear
+              value={leaderboardEmailSearch}
+              onChange={(e) => setLeaderboardEmailSearch(e.target.value)}
+              style={{ width: 350 }}
+              size="middle"
+            />
+          </div>
+
+          {leaderboardLoading ? (
+            <ChartLoader isDateChanging={false} />
+          ) : (
+            <>
+              <Table
+                dataSource={paginatedLeaderboardResults.map((user, index) => ({
+                  key: user.user_id,
+                  rank: (leaderboardPage - 1) * LEADERBOARD_PAGE_SIZE + index + 1,
+                  user_id: user.user_id,
+                  user_email: user.user_email || "-",
+                  request_count: user.request_count,
+                }))}
+                columns={[
+                  {
+                    title: "Rank",
+                    dataIndex: "rank",
+                    key: "rank",
+                    width: 60,
+                    render: (rank: number) => (
+                      <span className={`font-bold ${rank <= 3 ? "text-yellow-600" : ""}`}>
+                        {rank <= 3 ? ["🥇", "🥈", "🥉"][rank - 1] : `#${rank}`}
+                      </span>
+                    ),
+                  },
+                  {
+                    title: "User ID",
+                    dataIndex: "user_id",
+                    key: "user_id",
+                    ellipsis: true,
+                  },
+                  {
+                    title: "Email",
+                    dataIndex: "user_email",
+                    key: "user_email",
+                    ellipsis: true,
+                  },
+                  {
+                    title: "Requests",
+                    dataIndex: "request_count",
+                    key: "request_count",
+                    width: 120,
+                    render: (count: number) => formatAbbreviatedNumber(count),
+                  },
+                ]}
+                pagination={false}
+                size="small"
+                scroll={{ y: 400 }}
+              />
+              {filteredLeaderboardResults.length > 0 && (
+                <div className="flex justify-between items-center mt-4">
+                  <Text className="text-sm text-gray-500">
+                    Showing {paginatedLeaderboardResults.length} of {filteredLeaderboardResults.length} users
+                    {leaderboardEmailSearch && filteredLeaderboardResults.length !== leaderboardData.total_count && (
+                      <span className="ml-2">
+                        (filtered from {leaderboardData.total_count} total)
+                      </span>
+                    )}
+                  </Text>
+                  <Pagination
+                    current={leaderboardPage}
+                    pageSize={LEADERBOARD_PAGE_SIZE}
+                    total={filteredLeaderboardResults.length}
+                    onChange={(page) => setLeaderboardPage(page)}
+                    showSizeChanger={false}
+                    showTotal={(total, range) => `${range[0]}-${range[1]} of ${total} users`}
+                  />
+                </div>
+              )}
+              {filteredLeaderboardResults.length === 0 && leaderboardData.total_count > 0 && (
+                <div className="text-center py-4">
+                  <Text className="text-gray-500">No users match your search</Text>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </Card>
+      {/* Summary Section Card */}
+      <Card>
+        <div className="space-y-6">
+          <div className="flex justify-between items-start">
+            <div>
+              <Title>Summary by User Agent</Title>
+              <Subtitle>Performance metrics for different user agents</Subtitle>
+            </div>
+
+            <div className="flex items-center gap-6">
 
               {/* User Agent Filter */}
               <div className="w-80">
@@ -536,161 +879,6 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
             </Grid>
           )}
         </div>
-      </Card>
-
-      {/* Leaderboard Section Card */}
-      <Card>
-        <div className="space-y-4">
-          <div>
-            <Title>Top Active Users</Title>
-            <Subtitle>Most active users in the last 7 days (by request count)</Subtitle>
-          </div>
-
-          {leaderboardLoading ? (
-            <ChartLoader isDateChanging={false} />
-          ) : (
-            <Table
-              dataSource={leaderboardData.results.map((user, index) => ({
-                key: user.user_id,
-                rank: index + 1,
-                user_id: user.user_id,
-                user_email: user.user_email || "-",
-                request_count: user.request_count,
-              }))}
-              columns={[
-                {
-                  title: "Rank",
-                  dataIndex: "rank",
-                  key: "rank",
-                  width: 60,
-                  render: (rank: number) => (
-                    <span className={`font-bold ${rank <= 3 ? "text-yellow-600" : ""}`}>
-                      {rank <= 3 ? ["🥇", "🥈", "🥉"][rank - 1] : `#${rank}`}
-                    </span>
-                  ),
-                },
-                {
-                  title: "User ID",
-                  dataIndex: "user_id",
-                  key: "user_id",
-                  ellipsis: true,
-                },
-                {
-                  title: "Email",
-                  dataIndex: "user_email",
-                  key: "user_email",
-                  ellipsis: true,
-                },
-                {
-                  title: "Requests",
-                  dataIndex: "request_count",
-                  key: "request_count",
-                  width: 120,
-                  render: (count: number) => formatAbbreviatedNumber(count),
-                },
-              ]}
-              pagination={false}
-              size="small"
-              scroll={{ y: 400 }}
-            />
-          )}
-        </div>
-      </Card>
-
-      {/* Main TabGroup for DAU/WAU/MAU vs Per User Usage */}
-      <Card>
-        <TabGroup>
-          <TabList className="mb-6">
-            <Tab>DAU/WAU/MAU</Tab>
-            <Tab>Per User Usage (Last 30 Days)</Tab>
-          </TabList>
-
-          <TabPanels>
-            {/* DAU/WAU/MAU Tab Panel */}
-            <TabPanel>
-              <div className="mb-6">
-                <Title>DAU, WAU & MAU per Agent</Title>
-                <Subtitle>Active users across different time periods</Subtitle>
-              </div>
-
-              <TabGroup>
-                <TabList className="mb-6">
-                  <Tab>DAU</Tab>
-                  <Tab>WAU</Tab>
-                  <Tab>MAU</Tab>
-                </TabList>
-
-                <TabPanels>
-                  <TabPanel>
-                    <div className="mb-4">
-                      <Title className="text-lg">Daily Active Users - Last 7 Days</Title>
-                    </div>
-                    {dauLoading ? (
-                      <ChartLoader isDateChanging={false} />
-                    ) : (
-                      <BarChart
-                        data={dailyChartData}
-                        index="date"
-                        categories={allDauTags.map(extractUserAgent)}
-                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                        yAxisWidth={60}
-                        showLegend={true}
-                        stack={true}
-                      />
-                    )}
-                  </TabPanel>
-
-                  <TabPanel>
-                    <div className="mb-4">
-                      <Title className="text-lg">Weekly Active Users - Last 7 Weeks</Title>
-                    </div>
-                    {wauLoading ? (
-                      <ChartLoader isDateChanging={false} />
-                    ) : (
-                      <BarChart
-                        data={weeklyChartData}
-                        index="week"
-                        categories={allWauTags.map(extractUserAgent)}
-                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                        yAxisWidth={60}
-                        showLegend={true}
-                        stack={true}
-                      />
-                    )}
-                  </TabPanel>
-
-                  <TabPanel>
-                    <div className="mb-4">
-                      <Title className="text-lg">Monthly Active Users - Last 7 Months</Title>
-                    </div>
-                    {mauLoading ? (
-                      <ChartLoader isDateChanging={false} />
-                    ) : (
-                      <BarChart
-                        data={monthlyChartData}
-                        index="month"
-                        categories={allMauTags.map(extractUserAgent)}
-                        valueFormatter={(value: number) => formatAbbreviatedNumber(value)}
-                        yAxisWidth={60}
-                        showLegend={true}
-                        stack={true}
-                      />
-                    )}
-                  </TabPanel>
-                </TabPanels>
-              </TabGroup>
-            </TabPanel>
-
-            {/* Per User Usage Tab Panel */}
-            <TabPanel>
-              <PerUserUsage
-                accessToken={accessToken}
-                selectedTags={selectedTags}
-                formatAbbreviatedNumber={formatAbbreviatedNumber}
-              />
-            </TabPanel>
-          </TabPanels>
-        </TabGroup>
       </Card>
     </div>
   );
