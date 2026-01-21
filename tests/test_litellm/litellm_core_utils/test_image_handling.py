@@ -207,49 +207,47 @@ class AsyncStreamingImageClient:
         return AsyncStreamingResponse()
 
 
-def test_streaming_download_regular_image(monkeypatch):
+def test_streaming_download_real_image():
     """
-    E2E test: Verify that streaming download works correctly for regular-sized images.
+    E2E test: Actually download a real image from the internet.
     This ensures no regression in normal image download functionality.
     """
-    # Use a 1MB image (well within the 50MB limit)
-    client = StreamingImageClient(total_size_bytes=1 * 1024 * 1024)
-    monkeypatch.setattr(litellm, "module_level_client", client)
+    # Use a real small test image (GitHub's logo, ~3KB)
+    real_image_url = "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
 
-    result = convert_url_to_base64("https://example.com/regular-image.jpg")
+    result = convert_url_to_base64(real_image_url)
 
     # Verify the image was downloaded successfully
-    assert result.startswith("data:image/jpeg;base64,")
-    # Verify all bytes were downloaded
-    assert client.bytes_downloaded == 1 * 1024 * 1024
+    assert result.startswith("data:image/png;base64,")
+    # Verify it's not empty
+    assert len(result) > 100
 
 
 @pytest.mark.asyncio
-async def test_async_streaming_download_regular_image(monkeypatch):
+async def test_async_streaming_download_real_image():
     """
-    E2E test: Verify that async streaming download works correctly for regular-sized images.
+    E2E test: Actually download a real image asynchronously.
     """
-    # Use a 2MB image (well within the 50MB limit)
-    client = AsyncStreamingImageClient(total_size_bytes=2 * 1024 * 1024)
-    monkeypatch.setattr(litellm, "module_level_aclient", client)
+    # Use a real small test image
+    real_image_url = "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png"
 
-    result = await async_convert_url_to_base64("https://example.com/regular-image.jpg")
+    result = await async_convert_url_to_base64(real_image_url)
 
     # Verify the image was downloaded successfully
-    assert result.startswith("data:image/jpeg;base64,")
-    # Verify all bytes were downloaded
-    assert client.bytes_downloaded == 2 * 1024 * 1024
+    assert result.startswith("data:image/png;base64,")
+    # Verify it's not empty
+    assert len(result) > 100
 
 
 def test_streaming_stops_for_large_image_without_content_length(monkeypatch):
     """
-    E2E test: Verify that streaming download stops early for images exceeding size limit
+    Unit test: Verify that streaming download stops early for images exceeding size limit
     when Content-Length header is not provided.
 
-    This is the critical test for the streaming validation fix - it ensures we don't
-    download the entire file before validating size.
+    Uses mock to simulate 100MB file without actually downloading it (for efficiency).
+    This is the critical test proving we don't download the entire file before validation.
     """
-    # Simulate a 100MB image without Content-Length header
+    # Simulate a 100MB image without Content-Length header (mock for efficiency)
     client = StreamingImageClient(
         total_size_bytes=100 * 1024 * 1024, include_content_length=False
     )
@@ -271,9 +269,11 @@ def test_streaming_stops_for_large_image_without_content_length(monkeypatch):
 @pytest.mark.asyncio
 async def test_async_streaming_stops_for_large_image_without_content_length(monkeypatch):
     """
-    E2E test: Verify that async streaming download stops early for large images.
+    Unit test: Verify that async streaming download stops early for large images.
+
+    Uses mock to simulate 100MB file without actually downloading it (for efficiency).
     """
-    # Simulate a 100MB image without Content-Length header
+    # Simulate a 100MB image without Content-Length header (mock for efficiency)
     client = AsyncStreamingImageClient(
         total_size_bytes=100 * 1024 * 1024, include_content_length=False
     )
