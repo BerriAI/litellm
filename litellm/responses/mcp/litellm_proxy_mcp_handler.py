@@ -35,7 +35,9 @@ else:
 
 # NOTE: We intentionally keep ToolParam as a broad type here to avoid tight coupling
 # to optional OpenAI SDK typing symbols in environments that may not have them available.
-ToolParam = Dict[str, Any]
+# `Any` is used to keep mypy compatible with the broader OpenAI tool union types
+# passed around in Responses API while still allowing dict-style access at runtime.
+ToolParam = Any
 
 LITELLM_PROXY_MCP_SERVER_URL = "litellm_proxy"
 LITELLM_PROXY_MCP_SERVER_URL_PREFIX = f"{LITELLM_PROXY_MCP_SERVER_URL}/mcp/"
