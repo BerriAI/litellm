@@ -1,0 +1,39 @@
+# Example configuration for custom User-Agent header with Anthropic
+#
+# This is useful when you have Anthropic credentials that are restricted
+# to specific User-Agent values (e.g., Claude Code credentials)
+#
+# See: https://github.com/BerriAI/litellm/issues/19017
+
+model_list:
+  # Option 1: Set custom User-Agent per model
+  - model_name: claude-code
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # Custom User-Agent to avoid credential blocks
+      custom_user_agent: "Claude Code/1.0"
+
+  # Option 2: Use default litellm User-Agent (no custom_user_agent specified)
+  - model_name: claude-regular
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY_REGULAR
+      # Will use default "litellm/{version}" User-Agent
+
+  # Option 3: Set via environment variable (affects all Anthropic models)
+  # Set: export ANTHROPIC_USER_AGENT="Claude Code/1.0"
+  - model_name: claude-env
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+      # ANTHROPIC_USER_AGENT env var will be used if set
+
+# Alternative: Use extra_headers for complete control
+model_list_with_extra_headers:
+  - model_name: claude-extra-headers
+    litellm_params:
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+      extra_headers:
+        User-Agent: "Claude Code/1.0"
