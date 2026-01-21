@@ -397,6 +397,7 @@ router_settings:
 | AUDIO_SPEECH_CHUNK_SIZE | Chunk size for audio speech processing. Default is 1024
 | ANTHROPIC_API_KEY | API key for Anthropic service
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
+| ANTHROPIC_TOKEN_COUNTING_BETA_VERSION | Beta version header for Anthropic token counting API. Default is `token-counting-2024-11-01`
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_BATCH_ROLE_ARN | ARN of the AWS IAM role for batch operations
 | AWS_DEFAULT_REGION | Default AWS region for service interactions when AWS_REGION is not set
@@ -412,6 +413,8 @@ router_settings:
 | AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
 | AWS_WEB_IDENTITY_TOKEN_FILE | Path to file containing web identity token for AWS
 | AZURE_API_VERSION | Version of the Azure API being used
+| AZURE_AI_API_BASE | Base URL for Azure AI services (e.g., Azure AI Anthropic)
+| AZURE_AI_API_KEY | API key for Azure AI services (e.g., Azure AI Anthropic)
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CERTIFICATE_PASSWORD | Password for Azure OpenAI certificate
 | AZURE_CLIENT_ID | Client ID for Azure services
@@ -449,6 +452,13 @@ router_settings:
 | BRAINTRUST_API_KEY | API key for Braintrust integration
 | BRAINTRUST_API_BASE | Base URL for Braintrust API. Default is https://api.braintrustdata.com/v1
 | CACHED_STREAMING_CHUNK_DELAY | Delay in seconds for cached streaming chunks. Default is 0.02
+| CHATGPT_API_BASE | Base URL for ChatGPT API. Default is https://chatgpt.com/backend-api/codex
+| CHATGPT_AUTH_FILE | Filename for ChatGPT authentication data. Default is "auth.json"
+| CHATGPT_DEFAULT_INSTRUCTIONS | Default system instructions for ChatGPT provider
+| CHATGPT_ORIGINATOR | Originator identifier for ChatGPT API requests. Default is "codex_cli_rs"
+| CHATGPT_TOKEN_DIR | Directory to store ChatGPT authentication tokens. Default is "~/.config/litellm/chatgpt"
+| CHATGPT_USER_AGENT | Custom user agent string for ChatGPT API requests
+| CHATGPT_USER_AGENT_SUFFIX | Suffix to append to the ChatGPT user agent string
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
 | CLOUDZERO_API_KEY | CloudZero API key for authentication
@@ -603,6 +613,7 @@ router_settings:
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
 | GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
 | GCS_BATCH_SIZE | Batch size for GCS logging. Specify after how many logs you want to flush to GCS. If `BATCH_SIZE` is set to 10, logs are flushed every 10 logs. **Default is 2048**
+| GCS_USE_BATCHED_LOGGING | Enable batched logging for GCS. When enabled (default), multiple log payloads are combined into single GCS object uploads (NDJSON format), dramatically reducing API calls. When disabled, sends each log individually as separate GCS objects (legacy behavior). **Default is true**
 | GCS_PUBSUB_TOPIC_ID | PubSub Topic ID to send LiteLLM SpendLogs to.
 | GCS_PUBSUB_PROJECT_ID | PubSub Project ID to send LiteLLM SpendLogs to.
 | GENERIC_AUTHORIZATION_ENDPOINT | Authorization endpoint for generic OAuth providers
@@ -793,6 +804,7 @@ router_settings:
 | OPENAI_BASE_URL | Base URL for OpenAI API
 | OPENAI_API_BASE | Base URL for OpenAI API. Default is https://api.openai.com/
 | OPENAI_API_KEY | API key for OpenAI services
+| OPENAI_CHATGPT_API_BASE | Alternative to CHATGPT_API_BASE. Base URL for ChatGPT API
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI
 | OPENID_BASE_URL | Base URL for OpenID Connect services
@@ -866,6 +878,7 @@ router_settings:
 | SECRET_MANAGER_REFRESH_INTERVAL | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)
 | SEPARATE_HEALTH_APP | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.
 | SEPARATE_HEALTH_PORT | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.
+| SUPERVISORD_STOPWAITSECS | Upper bound timeout in seconds for graceful shutdown when SEPARATE_HEALTH_APP=1. Default: 3600 (1 hour).
 | SERVER_ROOT_PATH | Root path for the server application
 | SEND_USER_API_KEY_ALIAS | Flag to send user API key alias to Zscaler AI Guard. Default is False
 | SEND_USER_API_KEY_TEAM_ID | Flag to send user API key team ID to Zscaler AI Guard. Default is False

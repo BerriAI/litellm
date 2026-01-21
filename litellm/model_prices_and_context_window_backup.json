@@ -7857,6 +7857,24 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "dall-e-2": {
+        "input_cost_per_image": 0.02,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits",
+            "/v1/images/variations"
+        ]
+    },
+    "dall-e-3": {
+        "input_cost_per_image": 0.04,
+        "litellm_provider": "openai",
+        "mode": "image_generation",
+        "supported_endpoints": [
+            "/v1/images/generations"
+        ]
+    },
     "deepseek-chat": {
         "cache_read_input_token_cost": 2.8e-08,
         "input_cost_per_token": 2.8e-07,
@@ -13447,6 +13465,31 @@
         "supports_vision": true,
         "supports_web_search": true
     },
+    "gemini-2.5-computer-use-preview-10-2025": {
+        "input_cost_per_token": 1.25e-06,
+        "input_cost_per_token_above_200k_tokens": 2.5e-06,
+        "litellm_provider": "vertex_ai-language-models",
+        "max_images_per_prompt": 3000,
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "output_cost_per_token_above_200k_tokens": 1.5e-05,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/docs/computer-use",
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "text"
+        ],
+        "supports_computer_use": true,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
     "gemini-embedding-001": {
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "vertex_ai-embedding-models",
@@ -15931,6 +15974,63 @@
         "max_input_tokens": 8191,
         "max_tokens": 8191,
         "mode": "embedding"
+    },
+    "chatgpt/gpt-5.2-codex": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.2": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.1-codex-max": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 128000,
+        "max_tokens": 128000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
+    },
+    "chatgpt/gpt-5.1-codex-mini": {
+        "litellm_provider": "chatgpt",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 64000,
+        "max_tokens": 64000,
+        "mode": "responses",
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_parallel_function_calling": true,
+        "supports_response_schema": true,
+        "supports_vision": true
     },
     "gigachat/GigaChat-2-Lite": {
         "input_cost_per_token": 0.0,
@@ -18808,13 +18908,14 @@
         "supports_tool_choice": true
     },
     "groq/openai/gpt-oss-120b": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "groq",
         "max_input_tokens": 131072,
         "max_output_tokens": 32766,
         "max_tokens": 32766,
         "mode": "chat",
-        "output_cost_per_token": 7.5e-07,
+        "output_cost_per_token": 6e-07,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -18823,13 +18924,14 @@
         "supports_web_search": true
     },
     "groq/openai/gpt-oss-20b": {
-        "input_cost_per_token": 1e-07,
+        "cache_read_input_token_cost": 3.75e-08,
+        "input_cost_per_token": 7.5e-08,
         "litellm_provider": "groq",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 5e-07,
+        "output_cost_per_token": 3e-07,
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
         "supports_reasoning": true,
@@ -26700,15 +26802,15 @@
         "tool_use_system_prompt_tokens": 159
     },
     "us.anthropic.claude-opus-4-5-20251101-v1:0": {
-        "cache_creation_input_token_cost": 6.25e-06,
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 5e-06,
+        "cache_creation_input_token_cost": 6.875e-06,
+        "cache_read_input_token_cost": 5.5e-07,
+        "input_cost_per_token": 5.5e-06,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 200000,
         "max_output_tokens": 64000,
         "max_tokens": 64000,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-05,
+        "output_cost_per_token": 2.75e-05,
         "search_context_cost_per_query": {
             "search_context_size_high": 0.01,
             "search_context_size_low": 0.01,

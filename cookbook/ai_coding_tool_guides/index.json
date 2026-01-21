@@ -110,7 +110,7 @@
     ]
 },
 {
-    "title": "Use Web Search with Claude Code (across OpenAI/Anthropic/Gemini/etc.)",
+    "title": "Use Web Search with Claude Code (across Bedrock/OpenAI/Gemini/etc.)",
     "description": "This is a guide for using Web Search with Claude Code via LiteLLM.",
     "url": "https://docs.litellm.ai/docs/tutorials/claude_code_websearch",
     "date": "2026-01-17",
