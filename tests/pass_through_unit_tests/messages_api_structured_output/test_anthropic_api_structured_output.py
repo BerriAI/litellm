@@ -26,4 +26,4 @@ class TestAnthropicAPIStructuredOutput(BaseAnthropicMessagesStructuredOutputTest
     """
 
     def get_model(self) -> str:
-        return "claude-3-5-sonnet-20241022"
+        return "claude-sonnet-4-5-20250929"
