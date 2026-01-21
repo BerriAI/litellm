@@ -3441,3 +3441,187 @@ async def test_model_info_v2_pagination_edge_cases(monkeypatch):
 
     finally:
         app.dependency_overrides = original_overrides
+
+
+def test_enrich_model_info_with_litellm_data():
+    """
+    Test the _enrich_model_info_with_litellm_data helper function.
+    Tests model info enrichment, debug mode, and sensitive info removal.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data
+
+    # Test Case 1: Basic model enrichment without debug
+    model = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "gpt-3.5-turbo"},
+        "model_info": {"id": "test-model"},
+        "api_key": "sk-secret-key",  # Should be removed
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "max_tokens": 4096,
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+            "model_info": {
+                "id": "test-model",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "max_tokens": 4096,
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model, debug=False)
+
+        # Verify get_litellm_model_info was called
+        mock_get_info.assert_called_once_with(model=model)
+        # Verify remove_sensitive_info_from_deployment was called
+        mock_remove_sensitive.assert_called_once()
+        # Verify result doesn't have api_key
+        assert "api_key" not in result
+        # Verify model_info was enriched
+        assert "input_cost_per_token" in result["model_info"]
+
+    # Test Case 2: Model enrichment with debug mode
+    model_with_debug = {
+        "model_name": "test-model-debug",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {},
+    }
+
+    mock_router = MagicMock()
+    mock_client = MagicMock()
+    mock_router._get_client.return_value = mock_client
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {}
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-debug",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {},
+            "openai_client": str(mock_client),
+        }
+
+        result = _enrich_model_info_with_litellm_data(
+            model=model_with_debug, debug=True, llm_router=mock_router
+        )
+
+        # Verify debug info was added
+        mock_remove_sensitive.assert_called_once()
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert "openai_client" in call_args
+        # Verify router._get_client was called for debug
+        mock_router._get_client.assert_called_once()
+
+    # Test Case 3: Model with fallback to litellm.get_model_info
+    model_fallback = {
+        "model_name": "test-model-fallback",
+        "litellm_params": {"model": "claude-3-opus"},
+        "model_info": {},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.get_model_info"
+    ) as mock_litellm_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        # First call returns empty, triggering fallback
+        mock_get_info.return_value = {}
+        mock_litellm_info.return_value = {
+            "input_cost_per_token": 0.015,
+            "output_cost_per_token": 0.075,
+            "max_tokens": 200000,
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-fallback",
+            "litellm_params": {"model": "claude-3-opus"},
+            "model_info": {
+                "input_cost_per_token": 0.015,
+                "output_cost_per_token": 0.075,
+                "max_tokens": 200000,
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_fallback, debug=False)
+
+        # Verify fallback was attempted
+        mock_litellm_info.assert_called_once_with(model="claude-3-opus")
+        # Verify model_info was enriched with fallback data
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert call_args["model_info"]["input_cost_per_token"] == 0.015
+
+    # Test Case 4: Model with split model name fallback
+    model_split = {
+        "model_name": "test-model-split",
+        "litellm_params": {"model": "azure/gpt-4"},
+        "model_info": {},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.get_model_info"
+    ) as mock_litellm_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        # Both first and second pass return empty, triggering third pass
+        mock_get_info.return_value = {}
+        # Second pass (no split)
+        mock_litellm_info.side_effect = [
+            {},  # First call returns empty
+            {"max_tokens": 8192},  # Third pass with split succeeds
+        ]
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-split",
+            "litellm_params": {"model": "azure/gpt-4"},
+            "model_info": {"max_tokens": 8192},
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_split, debug=False)
+
+        # Verify third pass was attempted with split model name
+        assert mock_litellm_info.call_count == 2
+        # Check that second call used split model name
+        second_call = mock_litellm_info.call_args_list[1]
+        assert second_call[1]["model"] == "gpt-4"
+        assert second_call[1]["custom_llm_provider"] == "azure"
+
+    # Test Case 5: Model with existing model_info (should preserve existing keys)
+    model_existing = {
+        "model_name": "test-model-existing",
+        "litellm_params": {"model": "gpt-3.5-turbo"},
+        "model_info": {"id": "existing-id", "custom_key": "custom_value"},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "id": "new-id",  # Should not override existing "id"
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-existing",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+            "model_info": {
+                "id": "existing-id",  # Existing key preserved
+                "custom_key": "custom_value",  # Existing key preserved
+                "input_cost_per_token": 0.001,  # New key added
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_existing, debug=False)
+
+        # Verify existing keys are preserved
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert call_args["model_info"]["id"] == "existing-id"
+        assert call_args["model_info"]["custom_key"] == "custom_value"
+        assert call_args["model_info"]["input_cost_per_token"] == 0.001
