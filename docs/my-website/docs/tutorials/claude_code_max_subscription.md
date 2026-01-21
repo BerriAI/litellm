@@ -4,7 +4,7 @@ import TabItem from '@theme/TabItem';
 
 # Claude Code + Max Plan Integration
 
-<Image img={require('../../img/claude_code_max/overview.png')} style={{ width: '100%', maxWidth: '900px', height: 'auto' }} />
+{/* <Image img={require('../../img/claude_code_max/overview.png')} style={{ width: '100%', maxWidth: '900px', height: 'auto' }} /> */}
 
 Route your Claude Code Max subscription traffic through LiteLLM AI Gateway to add guardrails, track costs per user/key, set budgets, and apply rate limits - without changing how your developers use Claude Code.
 
