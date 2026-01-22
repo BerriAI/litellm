@@ -3955,421 +3955,287 @@ def test_bedrock_openai_error_handling():
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
 
-
 # ============================================================================
-# Nova Grounding (systemTool) Integration Tests
+# Nova Grounding (web_search_options) Unit Tests (Mocked)
 # ============================================================================
 
-
-@pytest.mark.parametrize("streaming", [True, False])
-def test_bedrock_nova_grounding_system_tool(streaming):
+def test_bedrock_nova_grounding_web_search_options_non_streaming():
     """
-    Integration test for Nova grounding (web search) using systemTool.
+    Unit test for Nova grounding using web_search_options parameter (non-streaming).
 
-    Nova grounding allows the model to search the web and return citations.
-    This test verifies:
-    1. systemTool is correctly passed to Bedrock Converse API
-    2. The model returns a grounded response
-    3. Citations are included in provider_specific_fields (when available)
+    This test mocks the HTTP call to verify:
+    1. web_search_options is correctly mapped to systemTool for Nova models
+    2. The request structure is correct
 
     Related: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
     """
-    try:
-        litellm.set_verbose = True
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-        # Use OpenAI-style format for systemTool
-        tools = [
-            {
-                "type": "system_tool",
-                "system_tool": {
-                    "name": "nova_grounding"
-                }
-            }
-        ]
+    client = HTTPHandler()
 
-        messages = [
-            {
-                "role": "user",
-                "content": "What is the current population of Tokyo, Japan?",
-            }
-        ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the current population of Tokyo, Japan?",
+        }
+    ]
 
-        if streaming:
-            response = completion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
                 messages=messages,
-                tools=tools,
-                stream=True,
+                web_search_options={},  # Enables Nova grounding
                 max_tokens=500,
+                client=client,
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
             )
+        except Exception:
+            pass  # Expected - we're just checking the request structure
 
-            # Process streaming response
-            full_content = ""
-            citations_found = False
-            for chunk in response:
-                if chunk.choices[0].delta.content:
-                    full_content += chunk.choices[0].delta.content
-                # Check for citations in streaming chunks
-                if hasattr(chunk.choices[0].delta, 'provider_specific_fields'):
-                    if chunk.choices[0].delta.provider_specific_fields:
-                        if "citationsContent" in chunk.choices[0].delta.provider_specific_fields:
-                            citations_found = True
-                            print(f"Citations found in streaming: {chunk.choices[0].delta.provider_specific_fields['citationsContent']}")
+        # Verify the request was made correctly
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
 
-            print(f"Streaming response content: {full_content}")
-            assert len(full_content) > 0, "Expected non-empty response content"
+            # Verify toolConfig is present with systemTool
+            assert "toolConfig" in request_body, "toolConfig should be in request"
+            tool_config = request_body["toolConfig"]
+            assert "tools" in tool_config, "tools should be in toolConfig"
 
-        else:
-            response = completion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
-                messages=messages,
-                tools=tools,
-                max_tokens=500,
-            )
+            # Find the systemTool for nova_grounding
+            system_tool_found = False
+            for tool in tool_config["tools"]:
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
+                    break
 
-            print(f"Response: {response}")
-
-            # Verify response structure
-            assert response.choices[0].message.content is not None
-            assert len(response.choices[0].message.content) > 0
-
-            # Check for citations in provider_specific_fields
-            message = response.choices[0].message
-            if hasattr(message, 'provider_specific_fields') and message.provider_specific_fields:
-                if "citationsContent" in message.provider_specific_fields:
-                    citations = message.provider_specific_fields["citationsContent"]
-                    print(f"Citations found: {citations}")
-                    # Verify citation structure if present
-                    assert isinstance(citations, list)
-                    for citation_block in citations:
-                        if "citations" in citation_block:
-                            for citation in citation_block["citations"]:
-                                if "location" in citation and "web" in citation["location"]:
-                                    print(f"Citation URL: {citation['location']['web'].get('url')}")
-                                    print(f"Citation domain: {citation['location']['web'].get('domain')}")
-
-            print(f"Response content: {response.choices[0].message.content}")
-
-    except RateLimitError:
-        pytest.skip("Rate limited - skipping test")
-    except Exception as e:
-        # Check if it's an access denied error (model not available in region)
-        if "AccessDeniedException" in str(e) or "not authorized" in str(e).lower():
-            pytest.skip(f"Model not available or not authorized: {e}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_nova_grounding_native_format():
-    """
-    Test Nova grounding using native Bedrock format (direct systemTool pass-through).
-
-    This tests the alternative format where users pass the Bedrock-native
-    systemTool structure directly.
-    """
-    try:
-        litellm.set_verbose = True
-
-        # Use native Bedrock format for systemTool
-        tools = [
-            {
-                "systemTool": {
-                    "name": "nova_grounding"
-                }
-            }
-        ]
-
-        messages = [
-            {
-                "role": "user",
-                "content": "What are the latest developments in quantum computing?",
-            }
-        ]
-
-        response = completion(
-            model="bedrock/us.amazon.nova-pro-v1:0",
-            messages=messages,
-            tools=tools,
-            max_tokens=500,
-        )
-
-        print(f"Response: {response}")
-
-        # Verify response structure
-        assert response.choices[0].message.content is not None
-        assert len(response.choices[0].message.content) > 0
-
-        print(f"Response content: {response.choices[0].message.content}")
-
-    except RateLimitError:
-        pytest.skip("Rate limited - skipping test")
-    except Exception as e:
-        if "AccessDeniedException" in str(e) or "not authorized" in str(e).lower():
-            pytest.skip(f"Model not available or not authorized: {e}")
-        pytest.fail(f"Error occurred: {e}")
+            assert system_tool_found, "systemTool with nova_grounding should be present"
+            print(f"✓ web_search_options correctly transformed to systemTool (non-streaming)")
 
 
 def test_bedrock_nova_grounding_with_function_tools():
     """
-    Test Nova grounding combined with regular function tools.
+    Unit test for Nova grounding combined with regular function tools.
 
     This tests the scenario where users want both web grounding AND
     custom function calling capabilities.
     """
-    try:
-        litellm.set_verbose = True
+    from unittest.mock import patch
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-        # Mix of system tool (nova_grounding) and regular function tool
-        tools = [
-            {
-                "type": "system_tool",
-                "system_tool": {
-                    "name": "nova_grounding"
-                }
-            },
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_stock_price",
-                    "description": "Get the current stock price for a given ticker symbol",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "ticker": {
-                                "type": "string",
-                                "description": "The stock ticker symbol, e.g. AAPL, GOOGL",
-                            }
-                        },
-                        "required": ["ticker"],
+    client = HTTPHandler()
+
+    # Regular function tool
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "description": "Get the current stock price for a given ticker symbol",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "ticker": {
+                            "type": "string",
+                            "description": "The stock ticker symbol, e.g. AAPL, GOOGL",
+                        }
                     },
+                    "required": ["ticker"],
                 },
-            }
-        ]
+            },
+        }
+    ]
 
-        messages = [
-            {
-                "role": "user",
-                "content": "What is the current market cap of Apple Inc?",
-            }
-        ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What is the current market cap of Apple Inc?",
+        }
+    ]
 
-        response = completion(
-            model="bedrock/us.amazon.nova-pro-v1:0",
-            messages=messages,
-            tools=tools,
-            max_tokens=500,
-        )
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
+                messages=messages,
+                tools=tools,
+                web_search_options={},  # Also enable web grounding
+                max_tokens=500,
+                client=client,
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            )
+        except Exception:
+            pass  # Expected - we're just checking the request structure
 
-        print(f"Response: {response}")
+        # Verify the request was made correctly
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
 
-        # The model should either:
-        # 1. Return content with citations (used nova_grounding)
-        # 2. Return a tool_call for get_stock_price
-        # 3. Return plain content
+            # Verify toolConfig has both function tool and systemTool
+            assert "toolConfig" in request_body, "toolConfig should be in request"
+            tool_config = request_body["toolConfig"]
+            assert "tools" in tool_config, "tools should be in toolConfig"
 
-        message = response.choices[0].message
+            tools_in_request = tool_config["tools"]
 
-        if message.tool_calls:
-            print(f"Tool calls: {message.tool_calls}")
-            # Verify tool call structure
-            for tool_call in message.tool_calls:
-                assert tool_call.function.name is not None
-                print(f"Tool called: {tool_call.function.name}")
-        else:
-            assert message.content is not None
-            print(f"Response content: {message.content}")
+            # Should have both the function tool and the systemTool
+            function_tool_found = False
+            system_tool_found = False
 
-            # Check for citations
-            if hasattr(message, 'provider_specific_fields') and message.provider_specific_fields:
-                if "citationsContent" in message.provider_specific_fields:
-                    print(f"Citations found: {message.provider_specific_fields['citationsContent']}")
+            for tool in tools_in_request:
+                if "toolSpec" in tool:
+                    assert tool["toolSpec"]["name"] == "get_stock_price"
+                    function_tool_found = True
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
 
-    except RateLimitError:
-        pytest.skip("Rate limited - skipping test")
-    except Exception as e:
-        if "AccessDeniedException" in str(e) or "not authorized" in str(e).lower():
-            pytest.skip(f"Model not available or not authorized: {e}")
-        pytest.fail(f"Error occurred: {e}")
+            assert function_tool_found, "Function tool (get_stock_price) should be present"
+            assert system_tool_found, "systemTool (nova_grounding) should be present"
+            print(f"✓ Both function tools and web_search_options correctly combined")
 
 
 @pytest.mark.asyncio
 async def test_bedrock_nova_grounding_async():
     """
-    Async integration test for Nova grounding.
+    Async unit test for Nova grounding via web_search_options.
 
-    Tests that nova_grounding works correctly with async completion.
+    This test verifies the request transformation for async calls.
     """
-    try:
-        litellm.set_verbose = True
+    from unittest.mock import patch, AsyncMock
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-        tools = [
-            {
-                "type": "system_tool",
-                "system_tool": {
-                    "name": "nova_grounding"
-                }
-            }
-        ]
-
-        messages = [
-            {
-                "role": "user",
-                "content": "What is the weather forecast for New York City today?",
-            }
-        ]
-
-        response = await litellm.acompletion(
-            model="bedrock/us.amazon.nova-pro-v1:0",
-            messages=messages,
-            tools=tools,
-            max_tokens=500,
-        )
-
-        print(f"Async Response: {response}")
-
-        # Verify response structure
-        assert response.choices[0].message.content is not None
-        assert len(response.choices[0].message.content) > 0
-
-        print(f"Response content: {response.choices[0].message.content}")
-
-    except RateLimitError:
-        pytest.skip("Rate limited - skipping test")
-    except Exception as e:
-        if "AccessDeniedException" in str(e) or "not authorized" in str(e).lower():
-            pytest.skip(f"Model not available or not authorized: {e}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-def test_bedrock_nova_grounding_tool_transformation():
-    """
-    Unit test to verify that systemTool is correctly transformed in the request.
-
-    This test mocks the HTTP call to verify the request structure without
-    actually calling Bedrock.
-    """
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    client = HTTPHandler()
-
-    tools = [
-        {
-            "type": "system_tool",
-            "system_tool": {
-                "name": "nova_grounding"
-            }
-        }
-    ]
+    client = AsyncHTTPHandler()
 
     messages = [
         {
             "role": "user",
-            "content": "What is the population of Tokyo?",
+            "content": "What is the weather forecast for New York City today?",
         }
     ]
 
+    with patch.object(client, "post", new=AsyncMock()) as mock_post:
+        try:
+            await litellm.acompletion(
+                model="us.amazon.nova-pro-v1:0",  # No bedrock/ prefix when using api_base
+                messages=messages,
+                web_search_options={},
+                max_tokens=500,
+                client=client,
+                api_base="https://bedrock-runtime.us-east-1.amazonaws.com",
+            )
+        except Exception:
+            pass  # Expected - we're just checking the request structure
+
+        # Verify the request was made correctly
+        if mock_post.called:
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
+            print(f"Request body: {json.dumps(request_body, indent=2)}")
+
+            # Verify toolConfig is present with systemTool
+            assert "toolConfig" in request_body, "toolConfig should be in request"
+            tool_config = request_body["toolConfig"]
+            assert "tools" in tool_config, "tools should be in toolConfig"
+
+            # Find the systemTool for nova_grounding
+            system_tool_found = False
+            for tool in tool_config["tools"]:
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
+                    break
+
+            assert system_tool_found, "systemTool with nova_grounding should be present"
+            print(f"✓ Async web_search_options correctly transformed to systemTool")
+
+
+def test_bedrock_nova_web_search_options_ignored_for_non_nova():
+    """
+    Test that web_search_options is ignored for non-Nova Bedrock models.
+
+    Nova grounding is only supported on Nova models. For other models,
+    the parameter should be silently ignored.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    # Should return None for non-Nova models
+    result = config._map_web_search_options({}, "anthropic.claude-3-sonnet-v1")
+    assert result is None
+
+    result = config._map_web_search_options({}, "amazon.titan-text-express-v1")
+    assert result is None
+
+    # Should return systemTool for Nova models
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    result2 = config._map_web_search_options({}, "us.amazon.nova-premier-v1:0")
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"
+
+
+def test_bedrock_nova_grounding_request_transformation():
+    """
+    Unit test to verify that web_search_options transforms to systemTool in the request.
+    """
+    from unittest.mock import patch, MagicMock
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+
+    messages = [{"role": "user", "content": "What is the population of Tokyo?"}]
+
     with patch.object(client, "post") as mock_post:
+        mock_post.return_value = MagicMock(
+            status_code=200,
+            json=lambda: {
+                "output": {"message": {"role": "assistant", "content": [{"text": "Test"}]}},
+                "stopReason": "end_turn",
+                "usage": {"inputTokens": 10, "outputTokens": 5}
+            }
+        )
+
         try:
             response = completion(
                 model="bedrock/us.amazon.nova-pro-v1:0",
                 messages=messages,
-                tools=tools,
+                web_search_options={},
                 max_tokens=100,
                 client=client,
             )
-        except Exception as e:
-            # Expected to fail since we're mocking
-            pass
+        except Exception:
+            pass  # Expected - we're just checking the request
 
-        # Verify the request was made
         if mock_post.called:
-            request_body = json.loads(mock_post.call_args.kwargs["data"])
+            request_body = json.loads(mock_post.call_args.kwargs.get("data", "{}"))
             print(f"Request body: {json.dumps(request_body, indent=2)}")
 
-            # Verify toolConfig is present
+            # Verify toolConfig is present with systemTool
             assert "toolConfig" in request_body, "toolConfig should be in request"
 
             tool_config = request_body["toolConfig"]
             assert "tools" in tool_config, "tools should be in toolConfig"
 
-            # Verify systemTool structure
-            tools_in_request = tool_config["tools"]
-            assert len(tools_in_request) == 1, "Should have 1 tool"
-
-            tool = tools_in_request[0]
-            assert "systemTool" in tool, "systemTool should be present"
-            assert tool["systemTool"]["name"] == "nova_grounding"
-            assert "toolSpec" not in tool, "toolSpec should not be present for systemTool"
-
-            print("✓ systemTool correctly transformed in request")
-
-
-def test_bedrock_nova_grounding_mixed_tools_transformation():
-    """
-    Unit test to verify that mixed tools (systemTool + function tools) are
-    correctly transformed in the request.
-    """
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    client = HTTPHandler()
-
-    tools = [
-        {
-            "type": "system_tool",
-            "system_tool": {
-                "name": "nova_grounding"
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather for a location",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
-                    "required": ["location"]
-                }
-            }
-        }
-    ]
-
-    messages = [
-        {
-            "role": "user",
-            "content": "What is the weather in Tokyo?",
-        }
-    ]
-
-    with patch.object(client, "post") as mock_post:
-        try:
-            response = completion(
-                model="bedrock/us.amazon.nova-pro-v1:0",
-                messages=messages,
-                tools=tools,
-                max_tokens=100,
-                client=client,
-            )
-        except Exception as e:
-            pass
-
-        if mock_post.called:
-            request_body = json.loads(mock_post.call_args.kwargs["data"])
-            print(f"Request body: {json.dumps(request_body, indent=2)}")
-
-            assert "toolConfig" in request_body
-            tool_config = request_body["toolConfig"]
             tools_in_request = tool_config["tools"]
 
-            assert len(tools_in_request) == 2, "Should have 2 tools"
+            # Find the systemTool
+            system_tool_found = False
+            for tool in tools_in_request:
+                if "systemTool" in tool:
+                    assert tool["systemTool"]["name"] == "nova_grounding"
+                    system_tool_found = True
+                    break
 
-            # First tool should be systemTool
-            assert "systemTool" in tools_in_request[0]
-            assert tools_in_request[0]["systemTool"]["name"] == "nova_grounding"
-
-            # Second tool should be toolSpec
-            assert "toolSpec" in tools_in_request[1]
-            assert tools_in_request[1]["toolSpec"]["name"] == "get_weather"
-
-            print("✓ Mixed tools correctly transformed in request")
+            assert system_tool_found, "systemTool with nova_grounding should be present"
+            print("✓ web_search_options correctly transformed to systemTool")

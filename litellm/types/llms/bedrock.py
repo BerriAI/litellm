@@ -959,3 +959,8 @@ class BedrockGetBatchResponse(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
+
+class BedrockToolBlock(TypedDict, total=False):
+    toolSpec: Optional[ToolSpecBlock]
+    systemTool: Optional[SystemToolBlock]  # For Nova grounding
+    cachePoint: Optional[CachePointBlock]

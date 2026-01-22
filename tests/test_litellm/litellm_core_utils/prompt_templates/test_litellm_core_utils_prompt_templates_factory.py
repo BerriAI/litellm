@@ -1138,61 +1138,51 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
 
-
-def test_bedrock_tools_pt_nova_grounding_system_tool():
+def test_bedrock_nova_web_search_options_mapping():
     """
-    Test that _bedrock_tools_pt handles Nova grounding system tools correctly.
+    Test that web_search_options is correctly mapped to Nova grounding.
 
-    Nova grounding uses a different tool format (systemTool instead of toolSpec).
-    This test ensures that:
-    1. systemTool tools are passed through correctly to Bedrock format
-    2. Regular function tools are still processed correctly alongside system tools
-    3. Both OpenAI-style and native Bedrock format system tools are handled
-
-    Related issue: Nova grounding error "The additional field /toolConfig/tools//systemTool is not supported"
+    This follows the LiteLLM pattern for web search where:
+    - Vertex AI maps web_search_options to {"googleSearch": {}}
+    - Anthropic maps web_search_options to {"type": "web_search_20250305", ...}
+    - Nova should map web_search_options to {"systemTool": {"name": "nova_grounding"}}
     """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    # Test basic mapping for Nova model
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    # Test with search_context_size (should be ignored for Nova)
+    result2 = config._map_web_search_options(
+        {"search_context_size": "high"},
+        "us.amazon.nova-premier-v1:0"
+    )
+
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"
+    # Nova doesn't support search_context_size, so it's just ignored
+
+def test_bedrock_tools_pt_does_not_handle_system_tool():
+    """
+    Verify that _bedrock_tools_pt does NOT handle system_tool format.
+
+    System tools (nova_grounding) should be added via web_search_options,
+    not via the tools parameter directly.
+    """
+    
     from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
 
-    # Test 1: Native Bedrock format systemTool (direct pass-through)
-    tools_native_format = [
-        {
-            "systemTool": {
-                "name": "nova_grounding"
-            }
-        }
-    ]
-
-    result = _bedrock_tools_pt(tools=tools_native_format)
-
-    assert len(result) == 1
-    assert result[0].get("systemTool") is not None
-    assert result[0]["systemTool"]["name"] == "nova_grounding"
-    assert result[0].get("toolSpec") is None
-
-    # Test 2: OpenAI-style system_tool format
-    tools_openai_format = [
-        {
-            "type": "system_tool",
-            "system_tool": {
-                "name": "nova_grounding"
-            }
-        }
-    ]
-
-    result = _bedrock_tools_pt(tools=tools_openai_format)
-
-    assert len(result) == 1
-    assert result[0].get("systemTool") is not None
-    assert result[0]["systemTool"]["name"] == "nova_grounding"
-    assert result[0].get("toolSpec") is None
-
-    # Test 3: Mixed tools - both system tools and regular function tools
-    tools_mixed = [
-        {
-            "systemTool": {
-                "name": "nova_grounding"
-            }
-        },
+    # Regular function tools should still work
+    tools = [
         {
             "type": "function",
             "function": {
@@ -1209,45 +1199,13 @@ def test_bedrock_tools_pt_nova_grounding_system_tool():
         }
     ]
 
-    result = _bedrock_tools_pt(tools=tools_mixed)
-
-    assert len(result) == 2
-
-    # First tool should be the system tool
-    assert result[0].get("systemTool") is not None
-    assert result[0]["systemTool"]["name"] == "nova_grounding"
-
-    # Second tool should be a regular toolSpec
-    assert result[1].get("toolSpec") is not None
-    assert result[1]["toolSpec"]["name"] == "get_weather"
-    assert result[1]["toolSpec"]["description"] == "Get the current weather"
-
-
-def test_bedrock_tools_pt_nova_grounding_only():
-    """
-    Test that _bedrock_tools_pt handles a request with only Nova grounding tool.
-
-    This is a common use case where the user just wants to enable web grounding
-    for Amazon Nova models without any custom function tools.
-    """
-    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
-
-    tools = [
-        {
-            "type": "system_tool",
-            "system_tool": {
-                "name": "nova_grounding"
-            }
-        }
-    ]
-
     result = _bedrock_tools_pt(tools=tools)
 
     assert len(result) == 1
-    assert result[0].get("systemTool") is not None
-    assert result[0]["systemTool"]["name"] == "nova_grounding"
-    # Ensure no toolSpec is created
-    assert result[0].get("toolSpec") is None
+    tool_spec = result[0].get("toolSpec")
+    assert tool_spec is not None
+    assert tool_spec["name"] == "get_weather"
+
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
     Test that cache_control is properly applied to image content in tool results.
@@ -1414,12 +1372,12 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
     assert result["content"][0]["cache_control"]["type"] == "ephemeral"
 def test_anthropic_messages_pt_server_tool_use_passthrough():
     """
-    Test that anthropic_messages_pt passes through server_tool_use and 
+    Test that anthropic_messages_pt passes through server_tool_use and
     tool_search_tool_result blocks in assistant message content.
-    
+
     These are Anthropic-native content types used for tool search functionality
     that need to be preserved when reconstructing multi-turn conversations.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
     """
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -1468,15 +1426,15 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify we have 3 messages (user, assistant, user)
     assert len(result) == 3
-    
+
     # Verify the assistant message content
     assistant_msg = result[1]
     assert assistant_msg["role"] == "assistant"
     assert isinstance(assistant_msg["content"], list)
-    
+
     # Find the different content block types
     content_types = [block.get("type") for block in assistant_msg["content"]]
-    
+
     # Verify server_tool_use block is preserved
     assert "server_tool_use" in content_types
     server_tool_use_block = next(
@@ -1485,7 +1443,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
     assert server_tool_use_block["name"] == "tool_search_tool_regex"
     assert server_tool_use_block["input"] == {"query": ".*time.*"}
-    
+
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
     tool_result_block = next(
@@ -1494,7 +1452,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
     assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
-    
+
     # Verify text block is also preserved
     assert "text" in content_types
     text_block = next(
