@@ -54,7 +54,7 @@ def test_scenario(max_parallel_requests, tpm, rpm, default_max_parallel_requests
     elif rpm is not None:
         assert rpm == calculated_max_parallel_requests
     elif tpm is not None:
-        calculated_rpm = int(tpm / 1000 / 6)
+        calculated_rpm = int(tpm / 1000 * 6)
         if calculated_rpm == 0:
             calculated_rpm = 1
         print(
@@ -107,7 +107,7 @@ def test_setting_mpr_limits_per_model(
     elif rpm is not None:
         assert rpm == mpr_client._value
     elif tpm is not None:
-        calculated_rpm = int(tpm / 1000 / 6)
+        calculated_rpm = int(tpm / 1000 * 6)
         if calculated_rpm == 0:
             calculated_rpm = 1
         print(
