@@ -203,12 +203,12 @@ from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_ro
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
+    claude_code_marketplace_router,
+)
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
     router as anthropic_skills_router,
-)
-from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
-    claude_code_marketplace_router,
 )
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
@@ -334,6 +334,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -2771,6 +2772,13 @@ class ProxyConfig:
                 llm_router=router,
             )
 
+        # Policy Engine settings
+        await self._init_policy_engine(
+            config=config,
+            prisma_client=prisma_client,
+            llm_router=router,
+        )
+
         ## Prompt settings
         prompts: Optional[List[Dict]] = None
         if config is not None:
@@ -2830,6 +2838,44 @@ class ProxyConfig:
                 vector_store_registry_config
             )
         pass
+
+    async def _init_policy_engine(
+        self,
+        config: Optional[dict],
+        prisma_client: Optional["PrismaClient"],
+        llm_router: Optional["Router"],
+    ):
+        """
+        Initialize the policy engine from config.
+
+        Args:
+            config: The proxy configuration dictionary
+            prisma_client: Optional Prisma client for DB validation
+            llm_router: Optional LLM router for model validation
+        """
+        if config is None:
+            return
+
+        policies_config = config.get("policies", None)
+        if not policies_config:
+            return
+
+        from litellm.proxy.policy_engine.init_policies import init_policies
+        from litellm.proxy.policy_engine.policy_validator import PolicyValidator
+
+        # Create validator with router for model validation
+        validator = PolicyValidator(
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+        )
+
+        # Initialize policies
+        await init_policies(
+            policies_config=policies_config,
+            prisma_client=prisma_client,
+            validate_db=prisma_client is not None,
+            fail_on_error=True,
+        )
 
     def _load_alerting_settings(self, general_settings: dict):
         """
@@ -10655,6 +10701,7 @@ app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
+app.include_router(policy_router)
 app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)
