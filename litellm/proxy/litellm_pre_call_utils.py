@@ -1082,10 +1082,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if disabled_callbacks and isinstance(disabled_callbacks, list):
             data["litellm_disabled_callbacks"] = disabled_callbacks
 
-    # Guardrails
+    # Guardrails from key/team metadata
     move_guardrails_to_metadata(
         data=data,
         _metadata_variable_name=_metadata_variable_name,
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Guardrails from policy engine
+    add_guardrails_from_policy_engine(
+        data=data,
+        metadata_variable_name=_metadata_variable_name,
         user_api_key_dict=user_api_key_dict,
     )
 
@@ -1349,6 +1356,81 @@ def move_guardrails_to_metadata(
             data[_metadata_variable_name][
                 "guardrail_config"
             ] = request_body_guardrail_config
+
+
+def add_guardrails_from_policy_engine(
+    data: dict,
+    metadata_variable_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Add guardrails from the policy engine based on request context.
+
+    This function:
+    1. Gets matching policies based on team_alias, key_alias, and model
+    2. Resolves guardrails from matching policies (including inheritance)
+    3. Adds guardrails to request metadata
+    4. Tracks applied policies in metadata for response headers
+
+    Args:
+        data: The request data to update
+        metadata_variable_name: The name of the metadata field in data
+        user_api_key_dict: The user's API key authentication info
+    """
+    from litellm.proxy.common_utils.callback_utils import (
+        add_policy_to_applied_policies_header,
+    )
+    from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
+    from litellm.types.proxy.policy_engine import PolicyMatchContext
+
+    registry = get_policy_registry()
+    if not registry.is_initialized():
+        return
+
+    # Build context from request
+    context = PolicyMatchContext(
+        team_alias=user_api_key_dict.team_alias,
+        key_alias=user_api_key_dict.key_alias,
+        model=data.get("model"),
+    )
+
+    # Get matching policies
+    policies = registry.get_all_policies()
+    matching_policy_names = PolicyMatcher.get_matching_policies(
+        policies=policies, context=context
+    )
+
+    if not matching_policy_names:
+        return
+
+    # Track applied policies in metadata
+    for policy_name in matching_policy_names:
+        add_policy_to_applied_policies_header(
+            request_data=data, policy_name=policy_name
+        )
+
+    # Resolve guardrails from matching policies
+    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(
+        context=context, policies=policies
+    )
+
+    if not resolved_guardrails:
+        return
+
+    # Add resolved guardrails to request metadata
+    if metadata_variable_name not in data:
+        data[metadata_variable_name] = {}
+
+    existing_guardrails = data[metadata_variable_name].get("guardrails", [])
+    if not isinstance(existing_guardrails, list):
+        existing_guardrails = []
+
+    # Combine existing guardrails with policy-resolved guardrails (no duplicates)
+    combined = set(existing_guardrails)
+    combined.update(resolved_guardrails)
+    data[metadata_variable_name]["guardrails"] = list(combined)
 
 
 def add_provider_specific_headers_to_request(
