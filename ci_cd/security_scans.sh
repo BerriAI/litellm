@@ -137,6 +137,7 @@ run_grype_scans() {
         "CVE-2019-1010025" # glibc pthread heap address leak - awaiting patched Wolfi glibc build
         "CVE-2026-22184" # zlib untgz buffer overflow - untgz unused + no fixed Wolfi build yet
         "GHSA-58pv-8j8x-9vj2" # jaraco.context path traversal - setuptools vendored only (v5.3.0), not used in application code (using v6.1.0+)
+        "GHSA-r6q2-hw4h-h46w" # node-tar not used by application runtime, Linux-only container, not affect by macOS APFS-specific exploit
     )
 
     # Build JSON array of allowlisted CVE IDs for jq
