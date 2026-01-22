@@ -314,3 +314,84 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
         # Verify that headers_passed_through is False (since we have credentials)
         assert headers_passed_through is False
 
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
+    """
+    Test that the LiteLLM authorization header is NOT forwarded to Vertex AI.
+
+    This test validates the fix for the issue where both the LiteLLM auth token
+    (lowercase 'authorization') and the Vertex AI token (uppercase 'Authorization')
+    were being sent, causing 401 errors on the vendor side.
+
+    The incoming request has:
+      - authorization: Bearer <litellm_token>  (should NOT be forwarded)
+
+    The outgoing request should only have:
+      - Authorization: Bearer <vertex_token>  (vendor credentials)
+    """
+    from starlette.datastructures import Headers
+
+    from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _prepare_vertex_auth_headers,
+    )
+
+    # Create a mock request with ONLY the litellm auth token (no other headers)
+    mock_request = MagicMock()
+    mock_request.headers = Headers({
+        "authorization": "Bearer sk-litellm-secret-key",  # LiteLLM token - should NOT be forwarded
+        "Authorization": "Bearer sk-litellm-secret-key-uppercase",  # Also try uppercase
+    })
+
+    # Create mock vertex credentials
+    mock_vertex_credentials = MagicMock()
+    mock_vertex_credentials.vertex_project = "test-project"
+    mock_vertex_credentials.vertex_location = "us-central1"
+    mock_vertex_credentials.vertex_credentials = "test-credentials"
+
+    # Create mock handler
+    mock_handler = MagicMock()
+    mock_handler.update_base_target_url_with_credential_location.return_value = (
+        "https://us-central1-aiplatform.googleapis.com"
+    )
+
+    with patch.object(
+        VertexBase,
+        "_ensure_access_token_async",
+        new_callable=AsyncMock,
+        return_value=("test-auth-header", "test-project"),
+    ), patch.object(
+        VertexBase,
+        "_get_token_and_url",
+        return_value=("vertex-access-token", None),
+    ):
+
+        (
+            headers,
+            _base_target_url,
+            _headers_passed_through,
+            _vertex_project,
+            _vertex_location,
+        ) = await _prepare_vertex_auth_headers(
+            request=mock_request,
+            vertex_credentials=mock_vertex_credentials,
+            router_credentials=None,
+            vertex_project="test-project",
+            vertex_location="us-central1",
+            base_target_url="https://us-central1-aiplatform.googleapis.com",
+            get_vertex_pass_through_handler=mock_handler,
+        )
+
+        # The ONLY Authorization header should be the Vertex token
+        assert headers["Authorization"] == "Bearer vertex-access-token"
+
+        # The LiteLLM token should NOT be present (neither lowercase nor as a duplicate)
+        assert "authorization" not in headers
+        assert headers.get("Authorization") != "Bearer sk-litellm-secret-key"
+        assert headers.get("Authorization") != "Bearer sk-litellm-secret-key-uppercase"
+
+        # Verify we only have the expected headers (Authorization + any allowlisted ones present)
+        # Since the request only had auth headers, only Authorization should be in output
+        assert set(headers.keys()) == {"Authorization"}
+
