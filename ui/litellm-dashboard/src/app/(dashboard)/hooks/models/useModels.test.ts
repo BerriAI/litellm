@@ -379,7 +379,11 @@ describe("useAllProxyModels", () => {
       "test-access-token",
       "test-user-id",
       "Admin",
-      true
+      true,
+      null,
+      true,
+      false,
+      "expand"
     );
     expect(modelAvailableCall).toHaveBeenCalledTimes(1);
   });

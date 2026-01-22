@@ -1122,6 +1122,20 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "generateQuery/",
     "optimize-prompt/",
 ]
+
+
+# Headers that are safe to forward from incoming requests to Vertex AI
+# Using an allowlist approach for security - only forward headers we explicitly trust
+ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS = {
+    "anthropic-beta",  # Required for Anthropic features like extended context windows
+    "content-type",  # Required for request body parsing
+}
+
+# Prefix for headers that should be forwarded to the provider with the prefix stripped
+# e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
+# Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
+PASS_THROUGH_HEADER_PREFIX = "x-pass-"
+
 BASE_MCP_ROUTE = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS = int(
