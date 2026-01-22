@@ -555,11 +555,15 @@ async def acompletion(
         "safety_identifier": safety_identifier,
         "service_tier": service_tier,
         "extra_headers": extra_headers,
-        "acompletion": True,  # assuming this is a required parameter
         "thinking": thinking,
         "web_search_options": web_search_options,
         "shared_session": shared_session,
     }
+    # Only add acompletion if not already in kwargs (avoids duplicate keyword argument error)
+    # acompletion is an internal flag to distinguish async from sync calls
+    if "acompletion" not in kwargs:
+        completion_kwargs["acompletion"] = True
+    
     if custom_llm_provider is None:
         _, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
