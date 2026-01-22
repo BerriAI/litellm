@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    should_redact_message_logging,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -2483,10 +2484,10 @@ class Logging(LiteLLMLoggingBaseClass):
             global_callbacks=litellm._async_success_callback,
         )
 
+        _model_call_details = self.model_call_details if hasattr(self, "model_call_details") else {}
+        global_redaction_applied = should_redact_message_logging(_model_call_details)
         result = redact_message_input_output_from_logging(
-            model_call_details=(
-                self.model_call_details if hasattr(self, "model_call_details") else {}
-            ),
+            model_call_details=_model_call_details,
             result=result,
         )
 
@@ -2512,7 +2513,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             elif isinstance(callback, CustomLogger):
                 result = redact_message_input_output_from_custom_logger(
-                    result=result, litellm_logging_obj=self, custom_logger=callback
+                    result=result,
+                    litellm_logging_obj=self,
+                    custom_logger=callback,
+                    global_redaction_applied=global_redaction_applied,
                 )
                 self.model_call_details, result = await callback.async_logging_hook(
                     kwargs=self.model_call_details,
@@ -2567,7 +2571,8 @@ class Logging(LiteLLMLoggingBaseClass):
                     ##################################
                     # call redaction hook for custom logger
                     model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
-                        model_call_details=model_call_details
+                        model_call_details=model_call_details,
+                        global_redaction_applied=global_redaction_applied,
                     )
                     ##################################
                     if self.stream is True:

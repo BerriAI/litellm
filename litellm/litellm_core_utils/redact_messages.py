@@ -30,8 +30,15 @@ else:
 
 
 def redact_message_input_output_from_custom_logger(
-    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+    litellm_logging_obj: LiteLLMLoggingObject,
+    result,
+    custom_logger: CustomLogger,
+    global_redaction_applied: bool = False,
 ):
+    # skip redundant redaction if global redaction was already applied
+    if global_redaction_applied:
+        return result
+
     if (
         hasattr(custom_logger, "message_logging")
         and custom_logger.message_logging is not True
