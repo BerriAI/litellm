@@ -395,3 +395,55 @@ async def test_vertex_passthrough_does_not_forward_litellm_auth_token():
         # Since the request only had auth headers, only Authorization should be in output
         assert set(headers.keys()) == {"Authorization"}
 
+
+def test_forward_headers_from_request_x_pass_prefix():
+    """
+    Test that headers with 'x-pass-' prefix are forwarded with the prefix stripped.
+
+    This allows users to force-forward arbitrary headers to the vendor API:
+    - 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
+    - 'x-pass-custom-header: value' becomes 'custom-header: value'
+
+    This is tested on BasePassthroughUtils.forward_headers_from_request which is used
+    by all pass-through endpoints (not just Vertex AI).
+    """
+    from litellm.passthrough.utils import BasePassthroughUtils
+
+    # Simulate incoming request headers
+    request_headers = {
+        "x-pass-anthropic-beta": "context-1m-2025-08-07",
+        "x-pass-custom-header": "custom-value",
+        "x-pass-another-header": "another-value",
+        "authorization": "Bearer sk-litellm-key",
+        "x-litellm-api-key": "sk-1234",
+        "content-type": "application/json",
+    }
+
+    # Start with empty headers dict (simulating custom headers from endpoint config)
+    headers = {}
+
+    # Call the method with forward_headers=False (default behavior)
+    # x-pass- headers should still be forwarded
+    result = BasePassthroughUtils.forward_headers_from_request(
+        request_headers=request_headers,
+        headers=headers,
+        forward_headers=False,
+    )
+
+    # Verify x-pass- prefixed headers are forwarded with prefix stripped
+    assert "anthropic-beta" in result
+    assert result["anthropic-beta"] == "context-1m-2025-08-07"
+    assert "custom-header" in result
+    assert result["custom-header"] == "custom-value"
+    assert "another-header" in result
+    assert result["another-header"] == "another-value"
+
+    # Verify other headers are NOT forwarded (since forward_headers=False)
+    assert "authorization" not in result
+    assert "x-litellm-api-key" not in result
+    assert "content-type" not in result
+
+    # Verify original x-pass- prefixed headers are NOT in output (only stripped versions)
+    assert "x-pass-anthropic-beta" not in result
+    assert "x-pass-custom-header" not in result
+
