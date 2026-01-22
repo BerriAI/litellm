@@ -8,8 +8,6 @@ All /policy management endpoints
 /policy/info - Get information about a specific policy
 """
 
-from typing import Any, Dict, List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from litellm._logging import verbose_proxy_logger
@@ -17,10 +15,15 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.types.proxy.policy_engine import (
+    PolicyGuardrailsResponse,
+    PolicyInfoResponse,
+    PolicyListResponse,
     PolicyMatchContext,
+    PolicyScopeResponse,
+    PolicySummaryItem,
+    PolicyTestResponse,
     PolicyValidateRequest,
     PolicyValidationResponse,
-    ResolvedPolicy,
 )
 
 router = APIRouter()
@@ -101,12 +104,13 @@ async def validate_policy(
     "/policy/list",
     tags=["policy management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyListResponse,
 )
 @management_endpoint_wrapper
 async def list_policies(
     request: Request,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Dict[str, Any]:
+) -> PolicyListResponse:
     """
     List all loaded policies with their resolved guardrails.
 
@@ -119,20 +123,34 @@ async def list_policies(
     """
     from litellm.proxy.policy_engine.init_policies import get_policies_summary
 
-    return get_policies_summary()
+    summary = get_policies_summary()
+    return PolicyListResponse(
+        policies={
+            name: PolicySummaryItem(
+                inherit=data.get("inherit"),
+                scope=PolicyScopeResponse(**data.get("scope", {})),
+                guardrails=PolicyGuardrailsResponse(**data.get("guardrails", {})),
+                resolved_guardrails=data.get("resolved_guardrails", []),
+                inheritance_chain=data.get("inheritance_chain", []),
+            )
+            for name, data in summary.get("policies", {}).items()
+        },
+        total_count=summary.get("total_count", 0),
+    )
 
 
 @router.get(
     "/policy/info/{policy_name}",
     tags=["policy management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyInfoResponse,
 )
 @management_endpoint_wrapper
 async def get_policy_info(
     request: Request,
     policy_name: str,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Dict[str, Any]:
+) -> PolicyInfoResponse:
     """
     Get detailed information about a specific policy.
 
@@ -160,37 +178,38 @@ async def get_policy_info(
         )
 
     resolved = PolicyResolver.resolve_policy_guardrails(
-        policy_name, registry.get_all_policies()
+        policy_name=policy_name, policies=registry.get_all_policies()
     )
 
-    return {
-        "policy_name": policy_name,
-        "inherit": policy.inherit,
-        "scope": {
-            "teams": policy.scope.get_teams(),
-            "keys": policy.scope.get_keys(),
-            "models": policy.scope.get_models(),
-        },
-        "guardrails": {
-            "add": policy.guardrails.get_add(),
-            "remove": policy.guardrails.get_remove(),
-        },
-        "resolved_guardrails": resolved.guardrails,
-        "inheritance_chain": resolved.inheritance_chain,
-    }
+    return PolicyInfoResponse(
+        policy_name=policy_name,
+        inherit=policy.inherit,
+        scope=PolicyScopeResponse(
+            teams=policy.scope.get_teams(),
+            keys=policy.scope.get_keys(),
+            models=policy.scope.get_models(),
+        ),
+        guardrails=PolicyGuardrailsResponse(
+            add=policy.guardrails.get_add(),
+            remove=policy.guardrails.get_remove(),
+        ),
+        resolved_guardrails=resolved.guardrails,
+        inheritance_chain=resolved.inheritance_chain,
+    )
 
 
 @router.post(
     "/policy/test",
     tags=["policy management"],
     dependencies=[Depends(user_api_key_auth)],
+    response_model=PolicyTestResponse,
 )
 @management_endpoint_wrapper
 async def test_policy_matching(
     request: Request,
     context: PolicyMatchContext,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Dict[str, Any]:
+) -> PolicyTestResponse:
     """
     Test which policies would match a given request context.
 
@@ -216,28 +235,27 @@ async def test_policy_matching(
     registry = get_policy_registry()
 
     if not registry.is_initialized():
-        return {
-            "matching_policies": [],
-            "resolved_guardrails": [],
-            "message": "Policy engine not initialized. No policies loaded.",
-        }
+        return PolicyTestResponse(
+            context=context,
+            matching_policies=[],
+            resolved_guardrails=[],
+            message="Policy engine not initialized. No policies loaded.",
+        )
 
     policies = registry.get_all_policies()
 
     # Get matching policies
-    matching_policy_names = PolicyMatcher.get_matching_policies(policies, context)
+    matching_policy_names = PolicyMatcher.get_matching_policies(
+        policies=policies, context=context
+    )
 
     # Resolve guardrails
     resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(
-        context, policies
+        context=context, policies=policies
     )
 
-    return {
-        "context": {
-            "team_alias": context.team_alias,
-            "key_alias": context.key_alias,
-            "model": context.model,
-        },
-        "matching_policies": matching_policy_names,
-        "resolved_guardrails": resolved_guardrails,
-    }
+    return PolicyTestResponse(
+        context=context,
+        matching_policies=matching_policy_names,
+        resolved_guardrails=resolved_guardrails,
+    )
