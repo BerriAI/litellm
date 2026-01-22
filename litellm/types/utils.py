@@ -46,6 +46,7 @@ from .llms.openai import (
     FineTuningJob,
     ImageURLListItem,
     OpenAIChatCompletionChunk,
+    OpenAIChatCompletionFinishReason,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
@@ -1254,7 +1255,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
 
 
 class Choices(SafeAttributeModel, OpenAIObject):
-    finish_reason: str
+    finish_reason: OpenAIChatCompletionFinishReason
     index: int
     message: Message
     logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
