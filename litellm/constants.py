@@ -1131,6 +1131,11 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS = {
     "content-type",  # Required for request body parsing
 }
 
+# Prefix for headers that should be forwarded to the provider with the prefix stripped
+# e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
+# Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
+PASS_THROUGH_HEADER_PREFIX = "x-pass-"
+
 BASE_MCP_ROUTE = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS = int(
