@@ -467,6 +467,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         provider_specific_fields: Optional[dict] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.ContentPolicyViolationError: {}".format(message)
@@ -480,6 +481,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
             response=response,
             litellm_debug_info=self.litellm_debug_info,
+            body=body,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):

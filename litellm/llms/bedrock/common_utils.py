@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Common utilities used across bedrock chat/embedding/image generation
 """
@@ -34,7 +36,7 @@ _get_model_info = None
 def get_cached_model_info():
     """
     Lazy import and cache get_model_info to avoid circular imports.
-    
+
     This function is used by bedrock transformation classes that need get_model_info
     but cannot import it at module level due to circular import issues.
     The function is cached after first use to avoid performance impact.
@@ -42,6 +44,7 @@ def get_cached_model_info():
     global _get_model_info
     if _get_model_info is None:
         from litellm import get_model_info
+
         _get_model_info = get_model_info
     return _get_model_info
 
@@ -135,33 +138,15 @@ def add_custom_header(headers):
 def _get_bedrock_client_ssl_verify() -> Union[bool, str]:
     """
     Get SSL verification setting for Bedrock client.
-    
+
     Returns the SSL verification setting which can be:
     - True: Use default SSL verification
     - False: Disable SSL verification
     - str: Path to a custom CA bundle file
     """
-    from litellm.secret_managers.main import str_to_bool
-    
-    ssl_verify: Union[bool, str, None] = os.getenv("SSL_VERIFY", litellm.ssl_verify)
-    
-    # Convert string "False"/"True" to boolean
-    if isinstance(ssl_verify, str):
-        # Check if it's a file path
-        if os.path.exists(ssl_verify):
-            return ssl_verify  # Keep the file path
-        # Otherwise try to convert to boolean
-        ssl_verify_bool = str_to_bool(ssl_verify)
-        if ssl_verify_bool is not None:
-            ssl_verify = ssl_verify_bool
-    
-    # Check SSL_CERT_FILE environment variable for custom CA bundle
-    if ssl_verify is True or ssl_verify == "True":
-        ssl_cert_file = os.getenv("SSL_CERT_FILE")
-        if ssl_cert_file and os.path.exists(ssl_cert_file):
-            return ssl_cert_file
-    
-    return ssl_verify if ssl_verify is not None else True
+    from litellm.llms.custom_httpx.http_handler import get_ssl_verify
+
+    return get_ssl_verify()
 
 
 def init_bedrock_client(
@@ -287,7 +272,7 @@ def init_bedrock_client(
             "sts",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
-            verify=ssl_verify
+            verify=ssl_verify,
         )
 
         sts_response = sts_client.assume_role(
@@ -426,7 +411,7 @@ def strip_bedrock_routing_prefix(model: str) -> str:
 
 
 def strip_bedrock_throughput_suffix(model: str) -> str:
-    """ Strip throughput tier suffixes from Bedrock model names. """
+    """Strip throughput tier suffixes from Bedrock model names."""
     import re
 
     # Pattern matches model:version:throughput where throughput is like 51k, 18k, etc.
@@ -500,6 +485,22 @@ class BedrockModelInfo(BaseLLMModelInfo):
     ) -> List[str]:
         return []
 
+    # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
+    #     """
+    #     Handles Bedrock throughput suffixes like ":28k", ":51k".
+    #     """
+    #     import re
+
+    #     overrides: ProviderSpecificModelInfo = {}
+
+    #     # Parse context window suffix (e.g., :28k, :51k)
+    #     match = re.search(r":(\d+)k$", model)
+    #     if match:
+    #         throughput_value = int(match.group(1)) * 1000
+    #         overrides["max_input_tokens"] = throughput_value
+
+    #     return overrides if overrides else None
+
     def get_token_counter(self) -> Optional[BaseTokenCounter]:
         """
         Factory method to create a Bedrock token counter.
@@ -532,12 +533,29 @@ class BedrockModelInfo(BaseLLMModelInfo):
     @staticmethod
     def get_bedrock_route(
         model: str,
-    ) -> Literal["converse", "invoke", "converse_like", "agent", "agentcore", "async_invoke", "openai"]:
+    ) -> Literal[
+        "converse",
+        "invoke",
+        "converse_like",
+        "agent",
+        "agentcore",
+        "async_invoke",
+        "openai",
+    ]:
         """
         Get the bedrock route for the given model.
         """
         route_mappings: Dict[
-            str, Literal["invoke", "converse_like", "converse", "agent", "agentcore", "async_invoke", "openai"]
+            str,
+            Literal[
+                "invoke",
+                "converse_like",
+                "converse",
+                "agent",
+                "agentcore",
+                "async_invoke",
+                "openai",
+            ],
         ] = {
             "invoke/": "invoke",
             "converse_like/": "converse_like",
@@ -645,10 +663,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
 def get_bedrock_chat_config(model: str):
     """
     Helper function to get the appropriate Bedrock chat config based on model and route.
-    
+
     Args:
         model: The model name/identifier
-        
+
     Returns:
         The appropriate Bedrock config class instance
     """
@@ -667,11 +685,13 @@ def get_bedrock_chat_config(model: str):
         from litellm.llms.bedrock.chat.invoke_agent.transformation import (
             AmazonInvokeAgentConfig,
         )
+
         return AmazonInvokeAgentConfig()
     elif bedrock_route == "agentcore":
         from litellm.llms.bedrock.chat.agentcore.transformation import (
             AmazonAgentCoreConfig,
         )
+
         return AmazonAgentCoreConfig()
 
     # Handle provider-specific configs

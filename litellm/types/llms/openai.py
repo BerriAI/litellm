@@ -71,7 +71,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_validator
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -1198,6 +1198,16 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def validate_usage(cls, value):
+        """Convert usage dict to ResponseAPIUsage object if needed"""
+        if value is None:
+            return value
+        if isinstance(value, dict):
+            return ResponseAPIUsage(**value)
+        return value
 
     @property
     def output_text(self) -> str:
