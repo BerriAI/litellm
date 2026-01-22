@@ -599,9 +599,8 @@ async def acompletion( # noqa: PLR0915
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        # Wrap with timeout if specified
-        if timeout is not None:
-            timeout_value = float(timeout) if not isinstance(timeout, (int, float)) else timeout
+        if timeout is not None and isinstance(timeout, (int, float)):
+            timeout_value = float(timeout)
             init_response = await asyncio.wait_for(
                 loop.run_in_executor(None, func_with_context),
                 timeout=timeout_value
@@ -616,8 +615,8 @@ async def acompletion( # noqa: PLR0915
                 response = ModelResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            if timeout is not None:
-                timeout_value = float(timeout) if not isinstance(timeout, (int, float)) else timeout
+            if timeout is not None and isinstance(timeout, (int, float)):
+                timeout_value = float(timeout)
                 response = await asyncio.wait_for(init_response, timeout=timeout_value)
             else:
                 response = await init_response
