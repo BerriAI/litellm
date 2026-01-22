@@ -142,6 +142,8 @@ async def acompletion_with_mcp(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        litellm_call_id=kwargs.get("litellm_call_id"),
+        litellm_trace_id=kwargs.get("litellm_trace_id"),
     )
 
     if not tool_results:
