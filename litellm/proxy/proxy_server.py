@@ -1116,8 +1116,13 @@ try:
     # In development, we restructure directly in _experimental/out.
     # In non-root Docker, we restructure in /var/lib/litellm/ui.
     try:
-        _restructure_ui_html_files(ui_path)
-        verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
+        if is_non_root and ui_path == "/var/lib/litellm/ui":
+            verbose_proxy_logger.info(
+                f"Skipping runtime UI restructuring for non-root Docker. UI at {ui_path} is pre-restructured."
+            )
+        else:
+            _restructure_ui_html_files(ui_path)
+            verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"
@@ -2733,6 +2738,14 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
+                elif k == "health_check_interval":
+                    raise ValueError(
+                        f"'{k}' is NOT a valid router_settings parameter. Please move it to 'general_settings'."
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Key '{k}' is not a valid argument for Router.__init__(). Ignoring this key."
+                    )
         router = litellm.Router(
             **router_params,
             assistants_config=assistants_config,

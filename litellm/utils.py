@@ -4649,7 +4649,9 @@ def add_provider_specific_params_to_optional_params(
     else:
         for k in passed_params.keys():
             if k not in openai_params and passed_params[k] is not None:
-                if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
+                if _should_drop_param(
+                    k=k, additional_drop_params=additional_drop_params
+                ):
                     continue
                 optional_params[k] = passed_params[k]
     return optional_params
@@ -5776,6 +5778,14 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
         model=model,
         custom_llm_provider=custom_llm_provider,
     )
+
+    provider_info = get_provider_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    if provider_info:
+        for key, value in provider_info.items():
+            if value is not None:
+                _model_info[key] = value  # type: ignore
 
     verbose_logger.debug(f"model_info: {_model_info}")
 
@@ -8153,7 +8163,10 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
+            is_o_series = model and (
+                "o_series" in model.lower()
+                or (supports_reasoning(model) and not is_gpt_model)
+            )
 
             is_o_series = model and (
                 "o_series" in model.lower()
@@ -8654,6 +8667,7 @@ class ProviderConfigManager:
         """
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
@@ -8669,6 +8683,7 @@ class ProviderConfigManager:
             SearchProviders.TAVILY: TavilySearchConfig,
             SearchProviders.PARALLEL_AI: ParallelAISearchConfig,
             SearchProviders.EXA_AI: ExaAISearchConfig,
+            SearchProviders.BRAVE: BraveSearchConfig,
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
