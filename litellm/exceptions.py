@@ -142,11 +142,13 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
+        # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
         if (
             response is not None
             and isinstance(response, httpx.Response)
-            and hasattr(response, "request")
-            and response.request is not None
+            and hasattr(response, "_request")
+            and getattr(response, "_request", None) is not None
         ):
             self.response = response
         else:
