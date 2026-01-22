@@ -4,6 +4,7 @@ import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { VectorStoreSearchResponse } from "../chat_ui/types";
 import { getProxyBaseUrl } from "@/components/networking";
 import { MCPServer } from "../../mcp_tools/types";
+import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
 
 export async function makeOpenAIChatCompletionRequest(
   chatHistory: { role: string; content: string | any[] }[],
@@ -27,6 +28,7 @@ export async function makeOpenAIChatCompletionRequest(
   customBaseUrl?: string,
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
+  onMCPEvent?: (event: MCPEvent) => void,
 ) {
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
@@ -56,6 +58,13 @@ export async function makeOpenAIChatCompletionRequest(
     // For collecting complete response text
     let fullResponseContent = "";
     let fullReasoningContent = "";
+    
+    // Track MCP metadata from final chunk
+    let mcpMetadata: {
+      mcp_list_tools?: any[];
+      mcp_tool_calls?: any[];
+      mcp_call_results?: any[];
+    } | null = null;
 
     // Build tools array
     const tools: any[] = [];
@@ -158,6 +167,19 @@ export async function makeOpenAIChatCompletionRequest(
         onSearchResults(delta.provider_specific_fields.search_results);
       }
 
+      // Check for MCP metadata in provider_specific_fields (typically in final chunk)
+      if (delta && delta.provider_specific_fields) {
+        const providerFields = delta.provider_specific_fields;
+        if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
+          mcpMetadata = {
+            mcp_list_tools: providerFields.mcp_list_tools,
+            mcp_tool_calls: providerFields.mcp_tool_calls,
+            mcp_call_results: providerFields.mcp_call_results,
+          };
+          console.log("MCP metadata found in chunk:", mcpMetadata);
+        }
+      }
+
       // Check for usage data using type assertion
       const chunkWithUsage = chunk as any;
       if (chunkWithUsage.usage && onUsageData) {
@@ -179,6 +201,52 @@ export async function makeOpenAIChatCompletionRequest(
         }
 
         onUsageData(usageData);
+      }
+    }
+
+    // Process MCP metadata from final chunk and convert to MCPEvent format
+    if (mcpMetadata && onMCPEvent) {
+      // Convert mcp_list_tools to MCPEvent
+      if (mcpMetadata.mcp_list_tools && mcpMetadata.mcp_list_tools.length > 0) {
+        const toolsEvent: MCPEvent = {
+          type: "response.output_item.done",
+          item: {
+            type: "mcp_list_tools",
+            tools: mcpMetadata.mcp_list_tools.map((tool: any) => ({
+              name: tool.function?.name || tool.name || "",
+              description: tool.function?.description || tool.description || "",
+              input_schema: tool.function?.parameters || tool.input_schema || {},
+            })),
+          },
+          timestamp: Date.now(),
+        };
+        onMCPEvent(toolsEvent);
+      }
+
+      // Convert mcp_tool_calls and mcp_call_results to MCPEvent[]
+      if (mcpMetadata.mcp_tool_calls && mcpMetadata.mcp_tool_calls.length > 0) {
+        mcpMetadata.mcp_tool_calls.forEach((toolCall: any, index: number) => {
+          const functionName = toolCall.function?.name || toolCall.name || "";
+          const functionArgs = toolCall.function?.arguments || toolCall.arguments || "{}";
+          
+          // Find corresponding result
+          const result = mcpMetadata.mcp_call_results?.find(
+            (r: any) => r.tool_call_id === toolCall.id || r.tool_call_id === toolCall.call_id
+          ) || mcpMetadata.mcp_call_results?.[index];
+
+          const callEvent: MCPEvent = {
+            type: "response.output_item.done",
+            item: {
+              type: "mcp_call",
+              name: functionName,
+              arguments: typeof functionArgs === "string" ? functionArgs : JSON.stringify(functionArgs),
+              output: result?.result ? (typeof result.result === "string" ? result.result : JSON.stringify(result.result)) : undefined,
+            },
+            item_id: toolCall.id || toolCall.call_id,
+            timestamp: Date.now(),
+          };
+          onMCPEvent(callEvent);
+        });
       }
     }
 

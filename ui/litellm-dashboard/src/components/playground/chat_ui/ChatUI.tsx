@@ -902,6 +902,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             customProxyBaseUrl || undefined,
             mcpServers,
             mcpServerToolRestrictions,
+            handleMCPEvent,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -1664,7 +1665,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {message.role === "assistant" &&
                         index === chatHistory.length - 1 &&
                         mcpEvents.length > 0 &&
-                        endpointType === EndpointType.RESPONSES && (
+                        (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) && (
                           <div className="mb-3">
                             <MCPEventsDisplay events={mcpEvents} />
                           </div>
@@ -1797,7 +1798,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               {/* Show MCP events during loading if no assistant message exists yet */}
               {isLoading &&
                 mcpEvents.length > 0 &&
-                endpointType === EndpointType.RESPONSES &&
+                (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
                 chatHistory.length > 0 &&
                 chatHistory[chatHistory.length - 1].role === "user" && (
                   <div className="text-left mb-4">
