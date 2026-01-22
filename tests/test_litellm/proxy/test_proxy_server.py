@@ -3625,3 +3625,442 @@ def test_enrich_model_info_with_litellm_data():
         assert call_args["model_info"]["id"] == "existing-id"
         assert call_args["model_info"]["custom_key"] == "custom_value"
         assert call_args["model_info"]["input_cost_per_token"] == 0.001
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_parameter_validation(monkeypatch):
+    """Test that invalid scope parameter raises HTTPException"""
+    from fastapi import HTTPException
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy.proxy_server import model_list
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="test-key",
+    )
+
+    # Test invalid scope parameter
+    with pytest.raises(HTTPException) as exc_info:
+        await model_list(
+            user_api_key_dict=mock_user_api_key_dict,
+            scope="invalid_scope",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid scope parameter" in exc_info.value.detail
+    assert "Only 'expand' is currently supported" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_proxy_admin(monkeypatch):
+    """Test that proxy admin with scope=expand returns all proxy models"""
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, LiteLLM_UserTable
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for proxy admin
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="proxy-admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="test-key",
+    )
+
+    # Mock llm_router with proxy models
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+    mock_router.get_model_access_groups.return_value = {}
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_complete_model_list
+    mock_all_models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.model_checks.get_complete_model_list",
+        lambda **kwargs: mock_all_models,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains all proxy models
+    assert result["object"] == "list"
+    assert len(result["data"]) == 3
+    assert all(model["id"] in mock_all_models for model in result["data"])
+
+    # Verify router methods were called
+    mock_router.get_model_names.assert_called_once()
+    mock_router.get_model_access_groups.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_org_admin(monkeypatch):
+    """Test that org admin with scope=expand returns all proxy models"""
+    from litellm.proxy._types import (
+        UserAPIKeyAuth,
+        LitellmUserRoles,
+        LiteLLM_UserTable,
+    )
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for org admin
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="org-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,  # Not proxy admin, but org admin
+        api_key="test-key",
+    )
+
+    # Mock user object with org admin membership
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
+    from datetime import datetime
+    
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="org-admin-user",
+        user_email="org-admin@example.com",
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="org-admin-user",
+                organization_id="org-123",
+                user_role=LitellmUserRoles.ORG_ADMIN.value,
+                spend=0.0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        ],
+        teams=[],
+    )
+
+    # Mock llm_router with proxy models
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+    mock_router.get_model_access_groups.return_value = {}
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_user_object to return user with org admin role
+    async def mock_get_user_object(*args, **kwargs):
+        return mock_user_obj
+
+    # Mock get_complete_model_list
+    mock_all_models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        mock_get_user_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.model_checks.get_complete_model_list",
+        lambda **kwargs: mock_all_models,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains all proxy models
+    assert result["object"] == "list"
+    assert len(result["data"]) == 3
+    assert all(model["id"] in mock_all_models for model in result["data"])
+
+    # Verify router methods were called
+    mock_router.get_model_names.assert_called_once()
+    mock_router.get_model_access_groups.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_team_admin(monkeypatch):
+    """Test that team admin with scope=expand returns all proxy models"""
+    from litellm.proxy._types import (
+        UserAPIKeyAuth,
+        LitellmUserRoles,
+        LiteLLM_UserTable,
+        LiteLLM_TeamTable,
+    )
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for team admin
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,  # Not proxy admin, but team admin
+        api_key="test-key",
+    )
+
+    # Mock team with user as admin - use dict structure that matches Prisma return
+    mock_team = MagicMock()
+    mock_team.model_dump.return_value = {
+        "team_id": "team-123",
+        "members_with_roles": [
+            {"user_id": "team-admin-user", "role": "admin"}
+        ],
+    }
+    # Create team object from the dict (validator will convert members_with_roles to Member objects)
+    mock_team_obj = LiteLLM_TeamTable(**mock_team.model_dump())
+
+    # Mock user object with team membership
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="team-admin-user",
+        user_email="team-admin@example.com",
+        organization_memberships=[],
+        teams=["team-123"],
+    )
+
+    # Mock llm_router with proxy models
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+    mock_router.get_model_access_groups.return_value = {}
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[mock_team]
+    )
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_user_object to return user with team membership
+    async def mock_get_user_object(*args, **kwargs):
+        return mock_user_obj
+
+    # Mock get_complete_model_list
+    mock_all_models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        mock_get_user_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.model_checks.get_complete_model_list",
+        lambda **kwargs: mock_all_models,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains all proxy models
+    assert result["object"] == "list"
+    assert len(result["data"]) == 3
+    assert all(model["id"] in mock_all_models for model in result["data"])
+
+    # Verify router methods were called
+    mock_router.get_model_names.assert_called_once()
+    mock_router.get_model_access_groups.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_normal_user(monkeypatch):
+    """Test that normal internal user with scope=expand returns only their models (not expanded)"""
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, LiteLLM_UserTable
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for normal internal user
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="normal-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="test-key",
+        models=["gpt-3.5-turbo"],  # User only has access to this model
+    )
+
+    # Mock user object without admin privileges
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="normal-user",
+        user_email="normal@example.com",
+        organization_memberships=[],  # No org admin
+        teams=[],  # No teams
+    )
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_user_object to return user without admin privileges
+    async def mock_get_user_object(*args, **kwargs):
+        return mock_user_obj
+
+    # Mock get_available_models_for_user to return only user's models
+    async def mock_get_available_models_for_user(*args, **kwargs):
+        return ["gpt-3.5-turbo"]  # Only user's accessible models
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        mock_get_user_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.get_available_models_for_user",
+        mock_get_available_models_for_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains only user's models (not all proxy models)
+    assert result["object"] == "list"
+    assert len(result["data"]) == 1
+    assert result["data"][0]["id"] == "gpt-3.5-turbo"
+
+    # Verify router methods were NOT called (normal path, not expanded)
+    mock_router.get_model_names.assert_not_called()
+    mock_router.get_model_access_groups.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_list_no_scope_parameter(monkeypatch):
+    """Test that model_list without scope parameter uses normal behavior"""
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="test-key",
+        models=["gpt-3.5-turbo"],
+    )
+
+    # Mock llm_router
+    mock_router = MagicMock()
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_available_models_for_user
+    async def mock_get_available_models_for_user(*args, **kwargs):
+        return ["gpt-3.5-turbo"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.utils.get_available_models_for_user",
+        mock_get_available_models_for_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list without scope parameter
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope=None,
+    )
+
+    # Verify result uses normal behavior
+    assert result["object"] == "list"
+    assert len(result["data"]) == 1
+    assert result["data"][0]["id"] == "gpt-3.5-turbo"
+
+    # Verify router methods were NOT called (normal path)
+    mock_router.get_model_names.assert_not_called()
+    mock_router.get_model_access_groups.assert_not_called()
