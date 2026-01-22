@@ -2356,6 +2356,7 @@ class PrometheusLogger(CustomLogger):
         verbose_logger.debug("Emitting key, team, user budget metrics....")
         await self._initialize_team_budget_metrics()
         await self._initialize_api_key_budget_metrics()
+        await self._initialize_user_budget_metrics()
         await self._initialize_user_and_team_count_metrics()
 
     async def _initialize_user_and_team_count_metrics(self):
