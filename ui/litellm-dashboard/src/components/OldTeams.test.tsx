@@ -60,8 +60,8 @@ vi.mock("@/components/team/team_info", () => ({
   },
 }));
 
-vi.mock("./ModelSelect/ModelSelect", () => ({
-  ModelSelect: React.forwardRef(({ value, onChange, dataTestId, id }: any, ref: any) => {
+vi.mock("./ModelSelect/ModelSelect", () => {
+  const ModelSelect = React.forwardRef(({ value, onChange, dataTestId, id }: any, ref: any) => {
     return (
       <input
         ref={ref}
@@ -78,8 +78,12 @@ vi.mock("./ModelSelect/ModelSelect", () => ({
         readOnly
       />
     );
-  }),
-}));
+  });
+  ModelSelect.displayName = "ModelSelect";
+  return {
+    ModelSelect,
+  };
+});
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => mockUseOrganizations(),
@@ -334,6 +338,7 @@ describe("OldTeams - handleCreate organization handling", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -408,6 +413,7 @@ describe("OldTeams - empty state", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -576,6 +582,7 @@ describe("OldTeams - premium props", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -624,6 +631,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -654,6 +662,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -684,6 +693,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -714,6 +724,7 @@ describe("OldTeams - Default Team Settings tab visibility", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -812,6 +823,7 @@ describe("OldTeams - organization alias display", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -845,6 +857,7 @@ describe("OldTeams - organization alias display", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
@@ -877,6 +890,7 @@ describe("OldTeams - organization alias display", () => {
             created_at: new Date().toISOString(),
             keys: [],
             members_with_roles: [],
+            spend: 0,
           },
         ]}
         searchParams={{}}
