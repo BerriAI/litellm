@@ -517,7 +517,14 @@ const sidebars = {
             "mcp_troubleshoot",
           ]
         },
-        "anthropic_unified",
+        {
+          type: "category",
+          label: "/v1/messages",
+          items: [
+            "anthropic_unified/index",
+            "anthropic_unified/structured_output",
+          ]
+        },
         "anthropic_count_tokens",
         "moderation",
         "ocr",

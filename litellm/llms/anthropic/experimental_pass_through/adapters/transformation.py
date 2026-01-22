@@ -172,7 +172,7 @@ class LiteLLMAnthropicMessagesAdapter:
         """
         Which anthropic params, we need to translate to the openai format.
         """
-        return ["messages", "metadata", "system", "tool_choice", "tools", "thinking"]
+        return ["messages", "metadata", "system", "tool_choice", "tools", "thinking", "output_format"]
 
     def translate_anthropic_messages_to_openai(  # noqa: PLR0915
         self,
@@ -554,6 +554,42 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_tools
 
+    def translate_anthropic_output_format_to_openai(
+        self, output_format: Any
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Translate Anthropic's output_format to OpenAI's response_format.
+
+        Anthropic output_format: {"type": "json_schema", "schema": {...}}
+        OpenAI response_format: {"type": "json_schema", "json_schema": {"name": "...", "schema": {...}}}
+
+        Args:
+            output_format: Anthropic output_format dict with 'type' and 'schema'
+
+        Returns:
+            OpenAI-compatible response_format dict, or None if invalid
+        """
+        if not isinstance(output_format, dict):
+            return None
+
+        output_type = output_format.get("type")
+        if output_type != "json_schema":
+            return None
+
+        schema = output_format.get("schema")
+        if not schema:
+            return None
+
+        # Convert to OpenAI response_format structure
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "structured_output",
+                "schema": schema,
+                "strict": True,
+            },
+        }
+
     def translate_anthropic_to_openai(
         self, anthropic_message_request: AnthropicMessagesRequest
     ) -> ChatCompletionRequest:
@@ -635,6 +671,16 @@ class LiteLLMAnthropicMessagesAdapter:
                     )
                     if reasoning_effort:
                         new_kwargs["reasoning_effort"] = reasoning_effort
+
+        ## CONVERT OUTPUT_FORMAT to RESPONSE_FORMAT
+        if "output_format" in anthropic_message_request:
+            output_format = anthropic_message_request["output_format"]
+            if output_format:
+                response_format = self.translate_anthropic_output_format_to_openai(
+                    output_format=output_format
+                )
+                if response_format:
+                    new_kwargs["response_format"] = response_format
 
         translatable_params = self.translatable_anthropic_params()
         for k, v in anthropic_message_request.items():

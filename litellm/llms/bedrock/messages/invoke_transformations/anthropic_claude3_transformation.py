@@ -271,8 +271,12 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it)
         self._remove_ttl_from_cache_control(anthropic_messages_request)
+
+        # 5. `output_format` is not supported on Bedrock invoke
+        if "output_format" in anthropic_messages_request:
+            anthropic_messages_request.pop("output_format", None)
             
-        # 5. AUTO-INJECT beta headers based on features used
+        # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)
