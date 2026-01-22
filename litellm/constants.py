@@ -1122,6 +1122,15 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "generateQuery/",
     "optimize-prompt/",
 ]
+
+
+# Headers that are safe to forward from incoming requests to Vertex AI
+# Using an allowlist approach for security - only forward headers we explicitly trust
+ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS = {
+    "anthropic-beta",  # Required for Anthropic features like extended context windows
+    "content-type",  # Required for request body parsing
+}
+
 BASE_MCP_ROUTE = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS = int(
