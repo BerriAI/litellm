@@ -410,7 +410,6 @@ def test_multiple_function_call():
                 },
                 {"role": "user", "parts": [{"text": "tell me the results."}]},
             ],
-            "generationConfig": {},
         }
 
 
