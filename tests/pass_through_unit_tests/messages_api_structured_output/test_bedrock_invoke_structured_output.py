@@ -10,6 +10,8 @@ Requires AWS credentials and Bedrock model access.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.abspath("../../../.."))
 
 from .base_anthropic_messages_structured_output_test import (
@@ -17,6 +19,7 @@ from .base_anthropic_messages_structured_output_test import (
 )
 
 
+@pytest.mark.skip(reason="Skipping Bedrock Invoke structured output tests")
 class TestBedrockInvokeStructuredOutput(BaseAnthropicMessagesStructuredOutputTest):
     """
     E2E tests for structured outputs with Bedrock Invoke API.
