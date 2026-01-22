@@ -5,7 +5,7 @@ These types are used for matching requests to policies and resolving
 the final guardrails list.
 """
 
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,3 +51,60 @@ class ResolvedPolicy(BaseModel):
     )
 
     model_config = ConfigDict(extra="forbid")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# API Response Types
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class PolicyScopeResponse(BaseModel):
+    """Scope configuration for a policy."""
+
+    teams: List[str] = Field(default_factory=list)
+    keys: List[str] = Field(default_factory=list)
+    models: List[str] = Field(default_factory=list)
+
+
+class PolicyGuardrailsResponse(BaseModel):
+    """Guardrails configuration for a policy."""
+
+    add: List[str] = Field(default_factory=list)
+    remove: List[str] = Field(default_factory=list)
+
+
+class PolicyInfoResponse(BaseModel):
+    """Response for /policy/info/{policy_name} endpoint."""
+
+    policy_name: str
+    inherit: Optional[str] = None
+    scope: PolicyScopeResponse
+    guardrails: PolicyGuardrailsResponse
+    resolved_guardrails: List[str]
+    inheritance_chain: List[str]
+
+
+class PolicySummaryItem(BaseModel):
+    """Summary of a single policy for list endpoint."""
+
+    inherit: Optional[str] = None
+    scope: PolicyScopeResponse
+    guardrails: PolicyGuardrailsResponse
+    resolved_guardrails: List[str]
+    inheritance_chain: List[str]
+
+
+class PolicyListResponse(BaseModel):
+    """Response for /policy/list endpoint."""
+
+    policies: Dict[str, PolicySummaryItem]
+    total_count: int
+
+
+class PolicyTestResponse(BaseModel):
+    """Response for /policy/test endpoint."""
+
+    context: PolicyMatchContext
+    matching_policies: List[str]
+    resolved_guardrails: List[str]
+    message: Optional[str] = None

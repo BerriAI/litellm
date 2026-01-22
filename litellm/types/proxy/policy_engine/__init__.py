@@ -13,7 +13,13 @@ from litellm.types.proxy.policy_engine.policy_types import (
     PolicyScope,
 )
 from litellm.types.proxy.policy_engine.resolver_types import (
+    PolicyGuardrailsResponse,
+    PolicyInfoResponse,
+    PolicyListResponse,
     PolicyMatchContext,
+    PolicyScopeResponse,
+    PolicySummaryItem,
+    PolicyTestResponse,
     ResolvedPolicy,
 )
 from litellm.types.proxy.policy_engine.validation_types import (
@@ -37,4 +43,11 @@ __all__ = [
     # Resolver types
     "PolicyMatchContext",
     "ResolvedPolicy",
+    # API Response types
+    "PolicyGuardrailsResponse",
+    "PolicyInfoResponse",
+    "PolicyListResponse",
+    "PolicyScopeResponse",
+    "PolicySummaryItem",
+    "PolicyTestResponse",
 ]
