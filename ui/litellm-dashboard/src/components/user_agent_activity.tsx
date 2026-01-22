@@ -104,6 +104,9 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
   const [leaderboardPage, setLeaderboardPage] = useState(1);
   const LEADERBOARD_PAGE_SIZE = 20;
 
+  // Today's leaderboard data (separate from date-range leaderboard)
+  const [todayLeaderboardData, setTodayLeaderboardData] = useState<LeaderboardResponse>({ results: [], total_count: 0 });
+
   // Email search state for leaderboard
   const [leaderboardEmailSearch, setLeaderboardEmailSearch] = useState("");
 
@@ -244,6 +247,24 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
     }
   };
 
+  const fetchTodayLeaderboardData = async () => {
+    if (!accessToken) return;
+
+    try {
+      const today = new Date();
+      const todayStr = formatDate(today);
+      const data = await leaderboardCall(
+        accessToken,
+        todayStr,
+        todayStr,
+        showHostedVllmOnly ? CUSTOM_LLM_PROVIDER : undefined,
+      );
+      setTodayLeaderboardData(data);
+    } catch (error) {
+      console.error("Failed to fetch today's leaderboard data:", error);
+    }
+  };
+
   // Effect to fetch available tags on mount
   useEffect(() => {
     fetchAvailableTags();
@@ -283,6 +304,17 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
 
     return () => clearTimeout(timeoutId);
   }, [accessToken, showHostedVllmOnly, dateValue]);
+
+  // Effect for today's leaderboard data (always fetches for today only)
+  useEffect(() => {
+    if (!accessToken) return;
+
+    const timeoutId = setTimeout(() => {
+      fetchTodayLeaderboardData();
+    }, 50);
+
+    return () => clearTimeout(timeoutId);
+  }, [accessToken, showHostedVllmOnly]);
 
   // Reset to first page when search changes
   useEffect(() => {
@@ -570,13 +602,10 @@ const UserAgentActivity: React.FC<UserAgentActivityProps> = ({ accessToken, user
                                 );
                               }
 
-                              const todayData = dauData.results.find(
-                                (item) => item.date === todayStr
-                              );
                               return (
                                 <>
                                   <Metric className="text-4xl mt-2">
-                                    {formatAbbreviatedNumber(Number(todayData?.active_users) || 0)}
+                                    {formatAbbreviatedNumber(todayLeaderboardData.total_count || 0)}
                                   </Metric>
                                   <Text className="mt-1">users today</Text>
                                 </>
