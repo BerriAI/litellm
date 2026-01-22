@@ -499,6 +499,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
+    parallelism: 4
 
     steps:
       - checkout
@@ -520,9 +521,22 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
+            mkdir -p test-results
+
+            # Find test files only in local_testing
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=timings \
+              --timings-type=filename \
+              --verbose \
+              --command="xargs python -m pytest \
+                -k 'router' \
+                --cov=litellm \
+                --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -vv"
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
