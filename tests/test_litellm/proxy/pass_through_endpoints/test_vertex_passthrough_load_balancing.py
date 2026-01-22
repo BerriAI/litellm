@@ -294,22 +294,22 @@ async def test_vertex_passthrough_forwards_anthropic_beta_header():
             get_vertex_pass_through_handler=mock_handler,
         )
 
-        # Verify that the anthropic-beta header is preserved
+        # Verify that allowlisted headers are preserved
         assert "anthropic-beta" in headers
         assert headers["anthropic-beta"] == "context-1m-2025-08-07"
-
-        # Verify that other headers are preserved
         assert "content-type" in headers
         assert headers["content-type"] == "application/json"
-        assert "user-agent" in headers
 
-        # Verify that the Authorization header was updated
-        assert "authorization" in headers
-        assert headers["authorization"] == "Bearer new-access-token"
+        # Verify that the Authorization header is set with vendor credentials
+        assert "Authorization" in headers
+        assert headers["Authorization"] == "Bearer new-access-token"
 
-        # Verify that content-length and host headers were removed
-        assert "content-length" not in headers
-        assert "host" not in headers
+        # Verify that non-allowlisted headers are NOT forwarded (security)
+        # Only anthropic-beta, content-type, and Authorization should be present
+        assert "authorization" not in headers  # lowercase auth token not forwarded
+        assert "user-agent" not in headers     # not in allowlist
+        assert "content-length" not in headers  # not in allowlist
+        assert "host" not in headers            # not in allowlist
 
         # Verify that headers_passed_through is False (since we have credentials)
         assert headers_passed_through is False
