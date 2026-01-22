@@ -1058,3 +1058,77 @@ def test_append_system_prompt_messages():
         kwargs=None, messages=messages
     )
     assert result == messages
+
+
+def test_global_redaction_skips_per_callback_redaction():
+    """
+    When global_redaction_applied=True, per-callback redaction functions should
+    return early without processing to avoid redundant work.
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_custom_logger,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+
+    # Test redact_message_input_output_from_custom_logger skips when global redaction applied
+    custom_logger = CustomLogger()
+    custom_logger.message_logging = False  # Would normally trigger redaction
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {"messages": [{"content": "secret"}]}
+
+    original_result = {"response": "already-redacted"}
+
+    result = redact_message_input_output_from_custom_logger(
+        litellm_logging_obj=mock_logging_obj,
+        result=original_result,
+        custom_logger=custom_logger,
+        global_redaction_applied=True,
+    )
+
+    assert result is original_result  # Should return unchanged (early return)
+
+    # Test CustomLogger.redact_standard_logging_payload_from_model_call_details skips
+    custom_logger.turn_off_message_logging = True
+
+    model_call_details = {
+        "messages": [{"content": "secret"}],
+        "standard_logging_object": {"response": "sensitive"},
+    }
+
+    result = custom_logger.redact_standard_logging_payload_from_model_call_details(
+        model_call_details=model_call_details,
+        global_redaction_applied=True,
+    )
+
+    assert result is model_call_details  # Should return unchanged (early return)
+
+
+def test_per_callback_redaction_proceeds_when_global_redaction_not_applied():
+    """
+    When global_redaction_applied=False, per-callback redaction should still
+    proceed normally if the callback has redaction enabled.
+    """
+    from litellm.litellm_core_utils.redact_messages import (
+        redact_message_input_output_from_custom_logger,
+    )
+    from litellm.integrations.custom_logger import CustomLogger
+
+    # Test redact_message_input_output_from_custom_logger proceeds when global redaction NOT applied
+    custom_logger = CustomLogger()
+    custom_logger.message_logging = False  # Triggers redaction
+
+    mock_logging_obj = MagicMock()
+    mock_logging_obj.model_call_details = {"messages": [{"content": "secret"}]}
+
+    original_result = {"response": "sensitive-data"}
+
+    result = redact_message_input_output_from_custom_logger(
+        litellm_logging_obj=mock_logging_obj,
+        result=original_result,
+        custom_logger=custom_logger,
+        global_redaction_applied=False,
+    )
+
+    # Result should be different (redacted), not the same object
+    assert result is not original_result
