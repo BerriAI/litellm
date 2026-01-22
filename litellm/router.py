@@ -1240,8 +1240,13 @@ class Router:
                 request_kwargs=kwargs,
             )
             # Check for silent model experiment
-            silent_model = deployment.get("litellm_params", {}).get("silent_model")
-            if silent_model:
+            # Make a local copy of litellm_params to avoid mutating the Router's state
+            litellm_params = deployment["litellm_params"].copy()
+            silent_model = litellm_params.pop("silent_model", None)
+
+            if silent_model is not None:
+                # Mirroring traffic to a secondary model
+                # Use shared thread pool for background calls
                 executor.submit(
                     self._silent_experiment_completion,
                     silent_model,
@@ -1252,8 +1257,7 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
             # No copy needed - data is only read and spread into new dict below
-            data = deployment["litellm_params"].copy()
-            data.pop("silent_model", None)  # Ensure it's not in data base
+            data = litellm_params.copy()  # Use the local copy of litellm_params
             model_name = data["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
@@ -1281,7 +1285,6 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
-            input_kwargs.pop("silent_model", None)
             response = litellm.completion(**input_kwargs)
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
@@ -1309,8 +1312,30 @@ class Router:
                 self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
 
+    def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
+        """
+        Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
+        """
+        # Copy kwargs to ensure isolation
+        silent_kwargs = kwargs.copy()
+        if "metadata" in silent_kwargs:
+            silent_kwargs["metadata"] = silent_kwargs["metadata"].copy()
+        else:
+            silent_kwargs["metadata"] = {}
+
+        silent_kwargs["metadata"]["is_silent_experiment"] = True
+
+        # Pop logging objects and call IDs to ensure a fresh logging context
+        # This prevents collisions in the Proxy's database (spend_logs)
+        silent_kwargs.pop("litellm_call_id", None)
+        silent_kwargs.pop("litellm_logging_obj", None)
+        silent_kwargs.pop("standard_logging_object", None)
+        silent_kwargs.pop("proxy_server_request", None)
+
+        return silent_kwargs
+
     def _silent_experiment_completion(
-        self, silent_model: str, messages: List[Dict[str, str]], **kwargs
+        self, silent_model: str, messages: List[Any], **kwargs
     ):
         """
         Run a silent experiment in the background (thread).
@@ -1324,19 +1349,12 @@ class Router:
                 f"Starting silent experiment for model {silent_model}"
             )
 
-            # Copy kwargs to ensure isolation
-            silent_kwargs = kwargs.copy()
-            if "metadata" in silent_kwargs:
-                silent_kwargs["metadata"] = silent_kwargs["metadata"].copy()
-            else:
-                silent_kwargs["metadata"] = {}
-
-            silent_kwargs["metadata"]["is_silent_experiment"] = True
+            silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
 
             # Trigger the silent request
             self.completion(
                 model=silent_model,
-                messages=messages,
+                messages=cast(List[Dict[str, str]], messages),
                 **silent_kwargs,
             )
         except Exception as e:
@@ -1553,7 +1571,7 @@ class Router:
         return FallbackStreamWrapper(stream_with_fallbacks())
 
     async def _silent_experiment_acompletion(
-        self, silent_model: str, messages: List[Dict[str, str]], **kwargs
+        self, silent_model: str, messages: List[Any], **kwargs
     ):
         """
         Run a silent experiment in the background.
@@ -1567,19 +1585,12 @@ class Router:
                 f"Starting silent experiment for model {silent_model}"
             )
 
-            # Copy kwargs to ensure isolation
-            silent_kwargs = kwargs.copy()
-            if "metadata" in silent_kwargs:
-                silent_kwargs["metadata"] = silent_kwargs["metadata"].copy()
-            else:
-                silent_kwargs["metadata"] = {}
-
-            silent_kwargs["metadata"]["is_silent_experiment"] = True
+            silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
 
             # Trigger the silent request
             await self.acompletion(
                 model=silent_model,
-                messages=messages,
+                messages=cast(List[AllMessageValues], messages),
                 **silent_kwargs,
             )
         except Exception as e:
@@ -1635,20 +1646,25 @@ class Router:
             )
 
             # Check for silent model experiment
-            silent_model = deployment.get("litellm_params", {}).get("silent_model")
-            if silent_model:
+            # Make a local copy of litellm_params to avoid mutating the Router's state
+            litellm_params = deployment["litellm_params"].copy()
+            silent_model = litellm_params.pop("silent_model", None)
+
+            if silent_model is not None:
+                # Mirroring traffic to a secondary model
+                # This is a silent experiment, so we don't want to block the primary request
                 asyncio.create_task(
                     self._silent_experiment_acompletion(
                         silent_model=silent_model,
-                        messages=messages,
+                        messages=messages,  # Use messages instead of *args
                         **kwargs,
                     )
                 )
+
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
             # No copy needed - data is only read and spread into new dict below
-            data = deployment["litellm_params"].copy()
-            data.pop("silent_model", None)  # Ensure it's not in data base
+            data = litellm_params.copy()  # Use the local copy of litellm_params
 
             model_name = data["model"]
 
