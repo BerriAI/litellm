@@ -5070,6 +5070,7 @@ async def model_list(
     only_model_access_groups: Optional[bool] = False,
     include_metadata: Optional[bool] = False,
     fallback_type: Optional[str] = None,
+    scope: Optional[str] = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -5080,14 +5081,85 @@ async def model_list(
     - include_metadata: Include additional metadata in the response with fallback information
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
+    - scope: Optional scope parameter. Currently only accepts "expand".
+             When scope=expand is passed, proxy admins, team admins, and org admins
+             will receive all proxy models as if they are a proxy admin.
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_admin_privileges,
+    )
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
     )
 
+    # Validate scope parameter if provided
+    if scope is not None and scope != "expand":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid scope parameter. Only 'expand' is currently supported. Received: {scope}",
+        )
+
+    # Check if scope=expand is requested and user has admin privileges
+    should_expand_scope = False
+    if scope == "expand":
+        should_expand_scope = await _user_has_admin_privileges(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    # If scope=expand and user has admin privileges, return all proxy models
+    if should_expand_scope:
+        # Get all proxy models as if user is a proxy admin
+        if llm_router is None:
+            proxy_model_list = []
+            model_access_groups = {}
+        else:
+            proxy_model_list = llm_router.get_model_names()
+            model_access_groups = llm_router.get_model_access_groups()
+
+        # Include model access groups if requested
+        if include_model_access_groups:
+            proxy_model_list = list(set(proxy_model_list + list(model_access_groups.keys())))
+
+        # Get complete model list including wildcard routes if requested
+        from litellm.proxy.auth.model_checks import get_complete_model_list
+
+        all_models = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=proxy_model_list,
+            user_model=None,
+            infer_model_from_keys=False,
+            return_wildcard_routes=return_wildcard_routes or False,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups or False,
+            only_model_access_groups=only_model_access_groups or False,
+        )
+
+        # Build response data with all proxy models
+        model_data = []
+        for model in all_models:
+            model_info = create_model_info_response(
+                model_id=model,
+                provider="openai",
+                include_metadata=include_metadata or False,
+                fallback_type=fallback_type,
+                llm_router=llm_router,
+            )
+            model_data.append(model_info)
+
+        return dict(
+            data=model_data,
+            object="list",
+        )
+
+    # Otherwise, use the normal behavior (current implementation)
     # Get available models for the user
     all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,

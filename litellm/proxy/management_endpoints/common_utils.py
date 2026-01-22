@@ -1,5 +1,7 @@
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional, Union, TYPE_CHECKING
 
+from litellm._logging import verbose_proxy_logger
+from litellm.caching import DualCache
 from litellm.proxy._types import (
     KeyRequestBase,
     LiteLLM_ManagementEndpoint_MetadataFields,
@@ -10,6 +12,9 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.utils import _premium_user_check
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient, ProxyLogging
 
 
 def _user_has_admin_view(user_api_key_dict: UserAPIKeyAuth) -> bool:
@@ -27,6 +32,78 @@ def _is_user_team_admin(
             member.user_id is not None and member.user_id == user_api_key_dict.user_id
         ) and member.role == "admin":
             return True
+
+    return False
+
+
+async def _user_has_admin_privileges(
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: Optional["PrismaClient"] = None,
+    user_api_key_cache: Optional["DualCache"] = None,
+    proxy_logging_obj: Optional["ProxyLogging"] = None,
+) -> bool:
+    """
+    Check if user has admin privileges (proxy admin, team admin, or org admin).
+
+    Args:
+        user_api_key_dict: User API key authentication object
+        prisma_client: Prisma client for database operations
+        user_api_key_cache: Cache for user API keys
+        proxy_logging_obj: Proxy logging object
+
+    Returns:
+        True if user is proxy admin, team admin for any team, or org admin for any organization
+    """
+    # Check if user is proxy admin
+    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
+        return True
+
+    # If no database connection, can't check team/org admin status
+    if prisma_client is None or user_api_key_dict.user_id is None:
+        return False
+
+    # Get user object to check team and org admin status
+    from litellm.caching import DualCache as DualCacheImport
+    from litellm.proxy.auth.auth_checks import get_user_object
+
+    try:
+        user_obj = await get_user_object(
+            user_id=user_api_key_dict.user_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache or DualCacheImport(),
+            user_id_upsert=False,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+        if user_obj is None:
+            return False
+
+        # Check if user is org admin for any organization
+        if user_obj.organization_memberships is not None:
+            for membership in user_obj.organization_memberships:
+                if membership.user_role == LitellmUserRoles.ORG_ADMIN.value:
+                    return True
+
+        # Check if user is team admin for any team
+        if user_obj.teams is not None and len(user_obj.teams) > 0:
+            # Get all teams user is in
+            teams = await prisma_client.db.litellm_teamtable.find_many(
+                where={"team_id": {"in": user_obj.teams}}
+            )
+
+            for team in teams:
+                team_obj = LiteLLM_TeamTable(**team.model_dump())
+                if _is_user_team_admin(
+                    user_api_key_dict=user_api_key_dict, team_obj=team_obj
+                ):
+                    return True
+
+    except Exception as e:
+        # If there's an error checking, default to False for security
+        verbose_proxy_logger.debug(
+            f"Error checking admin privileges for user {user_api_key_dict.user_id}: {e}"
+        )
+        return False
 
     return False
 
