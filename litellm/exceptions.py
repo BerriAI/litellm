@@ -145,12 +145,15 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         if (
             response is not None
             and isinstance(response, httpx.Response)
-            and hasattr(response, "request")
-            and response.request is not None
         ):
-            self.response = response
-        else:
-            self.response = _get_minimal_error_response()
+            # Check if response has a request attribute safely
+            # httpx.Response.request is a property that raises RuntimeError if _request is None
+            # We check the private _request attribute to avoid triggering the property getter
+            if hasattr(response, "_request") and getattr(response, "_request", None) is not None:
+                self.response = response
+            else:
+                # Response doesn't have a valid request, use minimal error response
+                self.response = _get_minimal_error_response()
         super().__init__(
             self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
