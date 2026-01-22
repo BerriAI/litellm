@@ -2007,15 +2007,17 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
+    params.append("page", page.toString());
+    params.append("size", size.toString());
     if (params.toString()) {
       url += `?${params.toString()}`;
     }
@@ -2455,6 +2457,7 @@ export const modelAvailableCall = async (
   teamID: string | null = null,
   include_model_access_groups: boolean = false,
   only_model_access_groups: boolean = false,
+  scope?: string
 ) => {
   /**
    * Get all the models user has access to
@@ -2472,6 +2475,9 @@ export const modelAvailableCall = async (
     }
     if (teamID) {
       params.append("team_id", teamID.toString());
+    }
+    if (scope) {
+      params.append("scope", scope);
     }
     if (params.toString()) {
       url += `?${params.toString()}`;

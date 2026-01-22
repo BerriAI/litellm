@@ -735,13 +735,13 @@ def test_file_data_field_order():
     Related issue: Gemini API returns 400 INVALID_ARGUMENT when fields are in wrong order.
     """
     import json
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     
     # Test with HTTPS URL and explicit format (audio file)
     file_url = "https://generativelanguage.googleapis.com/v1beta/files/test123"
     format = "audio/mpeg"
     
-    result = _process_gemini_image(image_url=file_url, format=format)
+    result = _process_gemini_media(image_url=file_url, format=format)
     
     # Verify the result has file_data
     assert "file_data" in result
@@ -770,12 +770,12 @@ def test_file_data_field_order():
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
     import json
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     
     # Test with GCS URL
     gcs_url = "gs://bucket/audio.mp3"
     
-    result = _process_gemini_image(image_url=gcs_url)
+    result = _process_gemini_media(image_url=gcs_url)
     
     # Verify the result has file_data
     assert "file_data" in result

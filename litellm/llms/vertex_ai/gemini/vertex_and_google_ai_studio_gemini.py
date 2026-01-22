@@ -1018,25 +1018,34 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                     optional_params["parallel_tool_calls"] = value
             elif param == "seed":
                 optional_params["seed"] = value
-            elif param == "reasoning_effort" and isinstance(value, str):
-                # Validate no conflict with thinking_level
-                VertexGeminiConfig._validate_thinking_config_conflicts(
-                    optional_params=optional_params,
-                    param_name="reasoning_effort",
-                    param_description="thinking_budget",
-                )
-                if VertexGeminiConfig._is_gemini_3_or_newer(model):
-                    optional_params["thinkingConfig"] = (
-                        VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
-                            value, model
-                        )
+            elif param == "reasoning_effort":
+                # Extract effort value - handle both string and dict formats
+                # Dict format comes from OpenAI Agents SDK: {"effort": "high", "summary": "auto"}
+                effort_value: Optional[str] = None
+                if isinstance(value, str):
+                    effort_value = value
+                elif isinstance(value, dict):
+                    effort_value = value.get("effort")
+
+                if effort_value is not None:
+                    # Validate no conflict with thinking_level
+                    VertexGeminiConfig._validate_thinking_config_conflicts(
+                        optional_params=optional_params,
+                        param_name="reasoning_effort",
+                        param_description="thinking_budget",
                     )
-                else:
-                    optional_params["thinkingConfig"] = (
-                        VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
-                            value, model
+                    if VertexGeminiConfig._is_gemini_3_or_newer(model):
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+                                effort_value, model
+                            )
                         )
-                    )
+                    else:
+                        optional_params["thinkingConfig"] = (
+                            VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+                                effort_value, model
+                            )
+                        )
             elif param == "thinking":
                 # Validate no conflict with thinking_level
                 VertexGeminiConfig._validate_thinking_config_conflicts(

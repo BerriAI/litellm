@@ -15,6 +15,69 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 
+def _add_mcp_metadata_to_response(
+    response: Union[ModelResponse, CustomStreamWrapper],
+    openai_tools: Optional[List],
+    tool_calls: Optional[List] = None,
+    tool_results: Optional[List] = None,
+) -> None:
+    """
+    Add MCP metadata to response's provider_specific_fields.
+    
+    This function adds MCP-related information to the response so that
+    clients can access which tools were available, which were called, and
+    what results were returned.
+    
+    For ModelResponse: adds to choices[].message.provider_specific_fields
+    For CustomStreamWrapper: stores in _hidden_params and automatically adds to 
+    final chunk's delta.provider_specific_fields via CustomStreamWrapper._add_mcp_metadata_to_final_chunk()
+    """
+    if isinstance(response, CustomStreamWrapper):
+        # For streaming, store MCP metadata in _hidden_params
+        # CustomStreamWrapper._add_mcp_metadata_to_final_chunk() will automatically
+        # add it to the final chunk's delta.provider_specific_fields
+        if not hasattr(response, "_hidden_params"):
+            response._hidden_params = {}
+        
+        mcp_metadata = {}
+        if openai_tools:
+            mcp_metadata["mcp_list_tools"] = openai_tools
+        if tool_calls:
+            mcp_metadata["mcp_tool_calls"] = tool_calls
+        if tool_results:
+            mcp_metadata["mcp_call_results"] = tool_results
+        
+        if mcp_metadata:
+            response._hidden_params["mcp_metadata"] = mcp_metadata
+        return
+    
+    if not isinstance(response, ModelResponse):
+        return
+    
+    if not hasattr(response, "choices") or not response.choices:
+        return
+    
+    # Add MCP metadata to all choices' messages
+    for choice in response.choices:
+        message = getattr(choice, "message", None)
+        if message is not None:
+            # Get existing provider_specific_fields or create new dict
+            provider_fields = (
+                getattr(message, "provider_specific_fields", None) or {}
+            )
+            
+            # Add MCP metadata
+            if openai_tools:
+                provider_fields["mcp_list_tools"] = openai_tools
+            if tool_calls:
+                provider_fields["mcp_tool_calls"] = tool_calls
+            if tool_results:
+                provider_fields["mcp_call_results"] = tool_results
+            
+            # Set the provider_specific_fields
+            setattr(message, "provider_specific_fields", provider_fields)
+
+
 async def acompletion_with_mcp(
     model: str,
     messages: List,
@@ -103,7 +166,13 @@ async def acompletion_with_mcp(
 
     # If not auto-executing, just make the call with transformed tools
     if not should_auto_execute:
-        return await litellm_acompletion(**base_call_args)
+        response = await litellm_acompletion(**base_call_args)
+        if isinstance(response, (ModelResponse, CustomStreamWrapper)):
+            _add_mcp_metadata_to_response(
+                response=response,
+                openai_tools=openai_tools,
+            )
+        return response
 
     # For auto-execute: disable streaming for initial call
     stream = kwargs.get("stream", False)
@@ -130,7 +199,17 @@ async def acompletion_with_mcp(
         if stream:
             retry_args = dict(base_call_args)
             retry_args["stream"] = stream
-            return await litellm_acompletion(**retry_args)
+            response = await litellm_acompletion(**retry_args)
+            if isinstance(response, (ModelResponse, CustomStreamWrapper)):
+                _add_mcp_metadata_to_response(
+                    response=response,
+                    openai_tools=openai_tools,
+                )
+            return response
+        _add_mcp_metadata_to_response(
+            response=initial_response,
+            openai_tools=openai_tools,
+        )
         return initial_response
 
     # Execute tool calls
@@ -142,9 +221,16 @@ async def acompletion_with_mcp(
         mcp_server_auth_headers=mcp_server_auth_headers,
         oauth2_headers=oauth2_headers,
         raw_headers=raw_headers,
+        litellm_call_id=kwargs.get("litellm_call_id"),
+        litellm_trace_id=kwargs.get("litellm_trace_id"),
     )
 
     if not tool_results:
+        _add_mcp_metadata_to_response(
+            response=initial_response,
+            openai_tools=openai_tools,
+            tool_calls=tool_calls,
+        )
         return initial_response
 
     # Create follow-up messages with tool results
@@ -159,4 +245,12 @@ async def acompletion_with_mcp(
     follow_up_call_args["messages"] = follow_up_messages
     follow_up_call_args["stream"] = stream
 
-    return await litellm_acompletion(**follow_up_call_args)
+    response = await litellm_acompletion(**follow_up_call_args)
+    if isinstance(response, (ModelResponse, CustomStreamWrapper)):
+        _add_mcp_metadata_to_response(
+            response=response,
+            openai_tools=openai_tools,
+            tool_calls=tool_calls,
+            tool_results=tool_results,
+        )
+    return response
