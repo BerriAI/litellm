@@ -114,7 +114,6 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: Optional[bool]
     supports_reasoning: Optional[bool]
     supports_url_context: Optional[bool]
-    max_input_tokens: Optional[int]
 
 
 class SearchContextCostPerQuery(TypedDict, total=False):
@@ -142,7 +141,6 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[Optional[int]]
-    max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
