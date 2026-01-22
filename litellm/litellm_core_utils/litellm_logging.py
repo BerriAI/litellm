@@ -2489,6 +2489,7 @@ class Logging(LiteLLMLoggingBaseClass):
         result = redact_message_input_output_from_logging(
             model_call_details=_model_call_details,
             result=result,
+            should_redact=global_redaction_applied,
         )
 
         ## LOGGING HOOK ##
