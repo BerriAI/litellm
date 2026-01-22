@@ -60,6 +60,27 @@ vi.mock("@/components/team/team_info", () => ({
   },
 }));
 
+vi.mock("./ModelSelect/ModelSelect", () => ({
+  ModelSelect: React.forwardRef(({ value, onChange, dataTestId, id }: any, ref: any) => {
+    return (
+      <input
+        ref={ref}
+        id={id}
+        type="text"
+        data-testid={dataTestId || "model-select"}
+        value={Array.isArray(value) ? value.join(", ") : ""}
+        onChange={(e) => {
+          // Mock onChange - in real usage this would be handled by Ant Design Select
+          if (onChange) {
+            onChange(value || []);
+          }
+        }}
+        readOnly
+      />
+    );
+  }),
+}));
+
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => mockUseOrganizations(),
 }));
