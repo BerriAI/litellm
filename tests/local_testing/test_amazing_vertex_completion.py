@@ -2352,8 +2352,7 @@ async def test_completion_fine_tuned_model():
     expected_payload = {
         "contents": [
             {"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}
-        ],
-        "generationConfig": {},
+        ]
     }
 
     with patch(
@@ -2833,7 +2832,6 @@ def test_gemini_function_call_parameter_in_messages():
                 }
             ],
             "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
-            "generationConfig": {},
         } == mock_client.call_args.kwargs["json"]
 
 
