@@ -33,7 +33,7 @@ export async function makeOpenAIChatCompletionRequest(
   // base url should be the current base_url
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal !== true) {
-    console.log = function () {};
+    console.log = function () { };
   }
   console.log("isLocal:", isLocal);
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
@@ -58,7 +58,7 @@ export async function makeOpenAIChatCompletionRequest(
     // For collecting complete response text
     let fullResponseContent = "";
     let fullReasoningContent = "";
-    
+
     // Track MCP metadata from final chunk
     let mcpMetadata: {
       mcp_list_tools?: any[];
@@ -224,15 +224,15 @@ export async function makeOpenAIChatCompletionRequest(
       }
 
       // Convert mcp_tool_calls and mcp_call_results to MCPEvent[]
-      if (mcpMetadata.mcp_tool_calls && mcpMetadata.mcp_tool_calls.length > 0) {
-        mcpMetadata.mcp_tool_calls.forEach((toolCall: any, index: number) => {
+      if (mcpMetadata?.mcp_tool_calls && mcpMetadata?.mcp_tool_calls.length > 0) {
+        mcpMetadata?.mcp_tool_calls.forEach((toolCall: any, index: number) => {
           const functionName = toolCall.function?.name || toolCall.name || "";
           const functionArgs = toolCall.function?.arguments || toolCall.arguments || "{}";
-          
+
           // Find corresponding result
-          const result = mcpMetadata.mcp_call_results?.find(
+          const result = mcpMetadata?.mcp_call_results?.find(
             (r: any) => r.tool_call_id === toolCall.id || r.tool_call_id === toolCall.call_id
-          ) || mcpMetadata.mcp_call_results?.[index];
+          ) || mcpMetadata?.mcp_call_results?.[index];
 
           const callEvent: MCPEvent = {
             type: "response.output_item.done",

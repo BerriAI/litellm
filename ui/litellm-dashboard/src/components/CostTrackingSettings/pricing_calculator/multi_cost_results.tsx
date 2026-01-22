@@ -181,7 +181,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       title: "Model",
       dataIndex: "model",
       key: "model",
-      render: (text: string, record: { id: string; provider?: string | null; error?: string | null; loading?: boolean; hasZeroCost?: boolean }) => (
+      render: (text: string, record: { id: string; provider?: string | null; error?: string | null; loading?: boolean; hasZeroCost?: boolean | null }) => (
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{text}</span>
