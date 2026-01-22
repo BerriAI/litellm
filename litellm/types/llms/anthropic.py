@@ -359,6 +359,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
     container: Optional[Dict[str, Any]]  # Container config with skills for code execution
+    output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -641,5 +642,9 @@ ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+
+# OAuth constants
+ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
+ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
 
 

@@ -3216,3 +3216,851 @@ async def test_get_hierarchical_router_settings():
         prisma_client=mock_prisma_client,
     )
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_pagination_basic(monkeypatch):
+    """
+    Test basic pagination functionality for /v2/model/info endpoint.
+    Tests multiple pages with different page sizes.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Create 75 mock models for testing pagination
+    mock_models = [
+        {
+            "model_name": f"model-{i}",
+            "litellm_params": {"model": f"gpt-{i}"},
+            "model_info": {"id": f"model-{i}"},
+        }
+        for i in range(1, 76)  # 75 models total
+    ]
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.model_list = mock_models
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test page 1 with size 25 (should return models 1-25)
+        response = client.get("/v2/model/info", params={"page": 1, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 1
+        assert data["size"] == 25
+        assert data["total_pages"] == 3  # ceil(75/25) = 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-1"
+        assert data["data"][24]["model_name"] == "model-25"
+
+        # Test page 2 with size 25 (should return models 26-50)
+        response = client.get("/v2/model/info", params={"page": 2, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 2
+        assert data["size"] == 25
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-26"
+        assert data["data"][24]["model_name"] == "model-50"
+
+        # Test page 3 with size 25 (should return models 51-75)
+        response = client.get("/v2/model/info", params={"page": 3, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 3
+        assert data["size"] == 25
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 25
+        assert data["data"][0]["model_name"] == "model-51"
+        assert data["data"][24]["model_name"] == "model-75"
+
+        # Test different page size (size 10)
+        response = client.get("/v2/model/info", params={"page": 1, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 75
+        assert data["current_page"] == 1
+        assert data["size"] == 10
+        assert data["total_pages"] == 8  # ceil(75/10) = 8
+        assert len(data["data"]) == 10
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_pagination_edge_cases(monkeypatch):
+    """
+    Test edge cases for pagination in /v2/model/info endpoint.
+    Tests empty results, last page with partial results, and boundary conditions.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test Case 1: Empty model list (no models configured)
+        mock_router_empty = MagicMock()
+        mock_router_empty.model_list = []
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_empty)
+
+        response = client.get("/v2/model/info", params={"page": 1, "size": 25})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert data["current_page"] == 1
+        assert data["size"] == 25
+        assert data["total_pages"] == 0
+        assert len(data["data"]) == 0
+
+        # Test Case 2: Last page with partial results (23 models, page size 10)
+        mock_models_partial = [
+            {
+                "model_name": f"model-{i}",
+                "litellm_params": {"model": f"gpt-{i}"},
+                "model_info": {"id": f"model-{i}"},
+            }
+            for i in range(1, 24)  # 23 models total
+        ]
+        mock_router_partial = MagicMock()
+        mock_router_partial.model_list = mock_models_partial
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_partial)
+
+        # Page 1 should have 10 models
+        response = client.get("/v2/model/info", params={"page": 1, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 3  # ceil(23/10) = 3
+        assert len(data["data"]) == 10
+
+        # Page 2 should have 10 models
+        response = client.get("/v2/model/info", params={"page": 2, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 2
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 10
+
+        # Page 3 (last page) should have only 3 models
+        response = client.get("/v2/model/info", params={"page": 3, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 3
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 3
+        assert data["data"][0]["model_name"] == "model-21"
+        assert data["data"][2]["model_name"] == "model-23"
+
+        # Test Case 3: Page beyond available pages (should return empty data)
+        response = client.get("/v2/model/info", params={"page": 4, "size": 10})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 23
+        assert data["current_page"] == 4
+        assert data["total_pages"] == 3
+        assert len(data["data"]) == 0  # No data for page beyond total_pages
+
+        # Test Case 4: Single model with page size 1
+        mock_models_single = [
+            {
+                "model_name": "single-model",
+                "litellm_params": {"model": "gpt-4"},
+                "model_info": {"id": "single-model"},
+            }
+        ]
+        mock_router_single = MagicMock()
+        mock_router_single.model_list = mock_models_single
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router_single)
+
+        response = client.get("/v2/model/info", params={"page": 1, "size": 1})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_name"] == "single-model"
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+def test_enrich_model_info_with_litellm_data():
+    """
+    Test the _enrich_model_info_with_litellm_data helper function.
+    Tests model info enrichment, debug mode, and sensitive info removal.
+    """
+    from unittest.mock import MagicMock, patch
+
+    from litellm.proxy.proxy_server import _enrich_model_info_with_litellm_data
+
+    # Test Case 1: Basic model enrichment without debug
+    model = {
+        "model_name": "test-model",
+        "litellm_params": {"model": "gpt-3.5-turbo"},
+        "model_info": {"id": "test-model"},
+        "api_key": "sk-secret-key",  # Should be removed
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "max_tokens": 4096,
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+            "model_info": {
+                "id": "test-model",
+                "input_cost_per_token": 0.001,
+                "output_cost_per_token": 0.002,
+                "max_tokens": 4096,
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model, debug=False)
+
+        # Verify get_litellm_model_info was called
+        mock_get_info.assert_called_once_with(model=model)
+        # Verify remove_sensitive_info_from_deployment was called
+        mock_remove_sensitive.assert_called_once()
+        # Verify result doesn't have api_key
+        assert "api_key" not in result
+        # Verify model_info was enriched
+        assert "input_cost_per_token" in result["model_info"]
+
+    # Test Case 2: Model enrichment with debug mode
+    model_with_debug = {
+        "model_name": "test-model-debug",
+        "litellm_params": {"model": "gpt-4"},
+        "model_info": {},
+    }
+
+    mock_router = MagicMock()
+    mock_client = MagicMock()
+    mock_router._get_client.return_value = mock_client
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {}
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-debug",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {},
+            "openai_client": str(mock_client),
+        }
+
+        result = _enrich_model_info_with_litellm_data(
+            model=model_with_debug, debug=True, llm_router=mock_router
+        )
+
+        # Verify debug info was added
+        mock_remove_sensitive.assert_called_once()
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert "openai_client" in call_args
+        # Verify router._get_client was called for debug
+        mock_router._get_client.assert_called_once()
+
+    # Test Case 3: Model with fallback to litellm.get_model_info
+    model_fallback = {
+        "model_name": "test-model-fallback",
+        "litellm_params": {"model": "claude-3-opus"},
+        "model_info": {},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.get_model_info"
+    ) as mock_litellm_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        # First call returns empty, triggering fallback
+        mock_get_info.return_value = {}
+        mock_litellm_info.return_value = {
+            "input_cost_per_token": 0.015,
+            "output_cost_per_token": 0.075,
+            "max_tokens": 200000,
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-fallback",
+            "litellm_params": {"model": "claude-3-opus"},
+            "model_info": {
+                "input_cost_per_token": 0.015,
+                "output_cost_per_token": 0.075,
+                "max_tokens": 200000,
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_fallback, debug=False)
+
+        # Verify fallback was attempted
+        mock_litellm_info.assert_called_once_with(model="claude-3-opus")
+        # Verify model_info was enriched with fallback data
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert call_args["model_info"]["input_cost_per_token"] == 0.015
+
+    # Test Case 4: Model with split model name fallback
+    model_split = {
+        "model_name": "test-model-split",
+        "litellm_params": {"model": "azure/gpt-4"},
+        "model_info": {},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.get_model_info"
+    ) as mock_litellm_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        # Both first and second pass return empty, triggering third pass
+        mock_get_info.return_value = {}
+        # Second pass (no split)
+        mock_litellm_info.side_effect = [
+            {},  # First call returns empty
+            {"max_tokens": 8192},  # Third pass with split succeeds
+        ]
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-split",
+            "litellm_params": {"model": "azure/gpt-4"},
+            "model_info": {"max_tokens": 8192},
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_split, debug=False)
+
+        # Verify third pass was attempted with split model name
+        assert mock_litellm_info.call_count == 2
+        # Check that second call used split model name
+        second_call = mock_litellm_info.call_args_list[1]
+        assert second_call[1]["model"] == "gpt-4"
+        assert second_call[1]["custom_llm_provider"] == "azure"
+
+    # Test Case 5: Model with existing model_info (should preserve existing keys)
+    model_existing = {
+        "model_name": "test-model-existing",
+        "litellm_params": {"model": "gpt-3.5-turbo"},
+        "model_info": {"id": "existing-id", "custom_key": "custom_value"},
+    }
+
+    with patch("litellm.proxy.proxy_server.get_litellm_model_info") as mock_get_info, patch(
+        "litellm.proxy.proxy_server.remove_sensitive_info_from_deployment"
+    ) as mock_remove_sensitive:
+        mock_get_info.return_value = {
+            "input_cost_per_token": 0.001,
+            "id": "new-id",  # Should not override existing "id"
+        }
+        mock_remove_sensitive.return_value = {
+            "model_name": "test-model-existing",
+            "litellm_params": {"model": "gpt-3.5-turbo"},
+            "model_info": {
+                "id": "existing-id",  # Existing key preserved
+                "custom_key": "custom_value",  # Existing key preserved
+                "input_cost_per_token": 0.001,  # New key added
+            },
+        }
+
+        result = _enrich_model_info_with_litellm_data(model=model_existing, debug=False)
+
+        # Verify existing keys are preserved
+        call_args = mock_remove_sensitive.call_args[0][0]
+        assert call_args["model_info"]["id"] == "existing-id"
+        assert call_args["model_info"]["custom_key"] == "custom_value"
+        assert call_args["model_info"]["input_cost_per_token"] == 0.001
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_parameter_validation(monkeypatch):
+    """Test that invalid scope parameter raises HTTPException"""
+    from fastapi import HTTPException
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy.proxy_server import model_list
+
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="test-key",
+    )
+
+    # Test invalid scope parameter
+    with pytest.raises(HTTPException) as exc_info:
+        await model_list(
+            user_api_key_dict=mock_user_api_key_dict,
+            scope="invalid_scope",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "Invalid scope parameter" in exc_info.value.detail
+    assert "Only 'expand' is currently supported" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_proxy_admin(monkeypatch):
+    """Test that proxy admin with scope=expand returns all proxy models"""
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, LiteLLM_UserTable
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for proxy admin
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="proxy-admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="test-key",
+    )
+
+    # Mock llm_router with proxy models
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+    mock_router.get_model_access_groups.return_value = {}
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_complete_model_list
+    mock_all_models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.model_checks.get_complete_model_list",
+        lambda **kwargs: mock_all_models,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains all proxy models
+    assert result["object"] == "list"
+    assert len(result["data"]) == 3
+    assert all(model["id"] in mock_all_models for model in result["data"])
+
+    # Verify router methods were called
+    mock_router.get_model_names.assert_called_once()
+    mock_router.get_model_access_groups.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_org_admin(monkeypatch):
+    """Test that org admin with scope=expand returns all proxy models"""
+    from litellm.proxy._types import (
+        UserAPIKeyAuth,
+        LitellmUserRoles,
+        LiteLLM_UserTable,
+    )
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for org admin
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="org-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,  # Not proxy admin, but org admin
+        api_key="test-key",
+    )
+
+    # Mock user object with org admin membership
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
+    from datetime import datetime
+    
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="org-admin-user",
+        user_email="org-admin@example.com",
+        organization_memberships=[
+            LiteLLM_OrganizationMembershipTable(
+                user_id="org-admin-user",
+                organization_id="org-123",
+                user_role=LitellmUserRoles.ORG_ADMIN.value,
+                spend=0.0,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
+            )
+        ],
+        teams=[],
+    )
+
+    # Mock llm_router with proxy models
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+    mock_router.get_model_access_groups.return_value = {}
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_user_object to return user with org admin role
+    async def mock_get_user_object(*args, **kwargs):
+        return mock_user_obj
+
+    # Mock get_complete_model_list
+    mock_all_models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        mock_get_user_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.model_checks.get_complete_model_list",
+        lambda **kwargs: mock_all_models,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains all proxy models
+    assert result["object"] == "list"
+    assert len(result["data"]) == 3
+    assert all(model["id"] in mock_all_models for model in result["data"])
+
+    # Verify router methods were called
+    mock_router.get_model_names.assert_called_once()
+    mock_router.get_model_access_groups.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_team_admin(monkeypatch):
+    """Test that team admin with scope=expand returns all proxy models"""
+    from litellm.proxy._types import (
+        UserAPIKeyAuth,
+        LitellmUserRoles,
+        LiteLLM_UserTable,
+        LiteLLM_TeamTable,
+    )
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for team admin
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="team-admin-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,  # Not proxy admin, but team admin
+        api_key="test-key",
+    )
+
+    # Mock team with user as admin - use dict structure that matches Prisma return
+    mock_team = MagicMock()
+    mock_team.model_dump.return_value = {
+        "team_id": "team-123",
+        "members_with_roles": [
+            {"user_id": "team-admin-user", "role": "admin"}
+        ],
+    }
+    # Create team object from the dict (validator will convert members_with_roles to Member objects)
+    mock_team_obj = LiteLLM_TeamTable(**mock_team.model_dump())
+
+    # Mock user object with team membership
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="team-admin-user",
+        user_email="team-admin@example.com",
+        organization_memberships=[],
+        teams=["team-123"],
+    )
+
+    # Mock llm_router with proxy models
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+    mock_router.get_model_access_groups.return_value = {}
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_many = AsyncMock(
+        return_value=[mock_team]
+    )
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_user_object to return user with team membership
+    async def mock_get_user_object(*args, **kwargs):
+        return mock_user_obj
+
+    # Mock get_complete_model_list
+    mock_all_models = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        mock_get_user_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.auth.model_checks.get_complete_model_list",
+        lambda **kwargs: mock_all_models,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains all proxy models
+    assert result["object"] == "list"
+    assert len(result["data"]) == 3
+    assert all(model["id"] in mock_all_models for model in result["data"])
+
+    # Verify router methods were called
+    mock_router.get_model_names.assert_called_once()
+    mock_router.get_model_access_groups.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_model_list_scope_expand_normal_user(monkeypatch):
+    """Test that normal internal user with scope=expand returns only their models (not expanded)"""
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, LiteLLM_UserTable
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict for normal internal user
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="normal-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="test-key",
+        models=["gpt-3.5-turbo"],  # User only has access to this model
+    )
+
+    # Mock user object without admin privileges
+    mock_user_obj = LiteLLM_UserTable(
+        user_id="normal-user",
+        user_email="normal@example.com",
+        organization_memberships=[],  # No org admin
+        teams=[],  # No teams
+    )
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.get_model_names.return_value = ["gpt-4", "gpt-3.5-turbo", "claude-3-opus"]
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_user_object to return user without admin privileges
+    async def mock_get_user_object(*args, **kwargs):
+        return mock_user_obj
+
+    # Mock get_available_models_for_user to return only user's models
+    async def mock_get_available_models_for_user(*args, **kwargs):
+        return ["gpt-3.5-turbo"]  # Only user's accessible models
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.auth_checks.get_user_object",
+        mock_get_user_object,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.get_available_models_for_user",
+        mock_get_available_models_for_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list with scope=expand
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope="expand",
+    )
+
+    # Verify result contains only user's models (not all proxy models)
+    assert result["object"] == "list"
+    assert len(result["data"]) == 1
+    assert result["data"][0]["id"] == "gpt-3.5-turbo"
+
+    # Verify router methods were NOT called (normal path, not expanded)
+    mock_router.get_model_names.assert_not_called()
+    mock_router.get_model_access_groups.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_model_list_no_scope_parameter(monkeypatch):
+    """Test that model_list without scope parameter uses normal behavior"""
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy.proxy_server import model_list
+
+    # Mock user API key dict
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_id="test-user",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        api_key="test-key",
+        models=["gpt-3.5-turbo"],
+    )
+
+    # Mock llm_router
+    mock_router = MagicMock()
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock user_api_key_cache
+    mock_user_api_key_cache = MagicMock()
+
+    # Mock proxy_logging_obj
+    mock_proxy_logging_obj = MagicMock()
+
+    # Mock get_available_models_for_user
+    async def mock_get_available_models_for_user(*args, **kwargs):
+        return ["gpt-3.5-turbo"]
+
+    # Mock create_model_info_response
+    def mock_create_model_info_response(model_id, provider, include_metadata=False, fallback_type=None, llm_router=None):
+        return {"id": model_id, "object": "model"}
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", mock_user_api_key_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(
+        "litellm.proxy.utils.get_available_models_for_user",
+        mock_get_available_models_for_user,
+    )
+    monkeypatch.setattr(
+        "litellm.proxy.utils.create_model_info_response",
+        mock_create_model_info_response,
+    )
+
+    # Call model_list without scope parameter
+    result = await model_list(
+        user_api_key_dict=mock_user_api_key_dict,
+        scope=None,
+    )
+
+    # Verify result uses normal behavior
+    assert result["object"] == "list"
+    assert len(result["data"]) == 1
+    assert result["data"][0]["id"] == "gpt-3.5-turbo"
+
+    # Verify router methods were NOT called (normal path)
+    mock_router.get_model_names.assert_not_called()
+    mock_router.get_model_access_groups.assert_not_called()

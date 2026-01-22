@@ -121,6 +121,7 @@ const sidebars = {
           label: "Claude Code",
           items: [
             "tutorials/claude_responses_api",
+            "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
@@ -516,7 +517,14 @@ const sidebars = {
             "mcp_troubleshoot",
           ]
         },
-        "anthropic_unified",
+        {
+          type: "category",
+          label: "/v1/messages",
+          items: [
+            "anthropic_unified/index",
+            "anthropic_unified/structured_output",
+          ]
+        },
         "anthropic_count_tokens",
         "moderation",
         "ocr",

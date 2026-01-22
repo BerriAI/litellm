@@ -1,7 +1,5 @@
 from typing import Optional, Tuple
 
-import httpx
-
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -453,11 +451,7 @@ def get_llm_provider(  # noqa: PLR0915
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=error_str,
                 model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
+                response=None,
                 llm_provider="",
             )
         if api_base is not None and not isinstance(api_base, str):
@@ -481,11 +475,7 @@ def get_llm_provider(  # noqa: PLR0915
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
                 model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
+                response=None,
                 llm_provider="",
             )
 

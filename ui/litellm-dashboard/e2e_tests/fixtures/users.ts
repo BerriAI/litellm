@@ -7,4 +7,8 @@ export const users = {
     email: "admin",
     password: isCI ? "gm" : "sk-1234",
   },
+  [Role.InternalUserViewer]: {
+    email: "internalViewer@test.com",
+    password: "test",
+  },
 };
