@@ -396,6 +396,8 @@ class Candidates(TypedDict, total=False):
         "BLOCKLIST",
         "PROHIBITED_CONTENT",
         "SPII",
+        "MALFORMED_FUNCTION_CALL",
+        "IMAGE_SAFETY",
     ]
     safetyRatings: List[SafetyRatings]
     citationMetadata: CitationMetadata
