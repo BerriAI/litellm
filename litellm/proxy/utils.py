@@ -3720,6 +3720,16 @@ class ProxyUpdateSpend:
             return True
         return False
 
+    @staticmethod
+    def should_store_proxy_response_in_spend_logs() -> Optional[bool]:
+        """
+        Returns True if spend logs should store the proxy-modified response (after guardrails/post-processing).
+        False means log the upstream LLM response.
+        """
+        from litellm.proxy.proxy_server import general_settings
+
+        return general_settings.get("spend_logs_store_proxy_response", None)
+
 
 async def update_spend(  # noqa: PLR0915
     prisma_client: PrismaClient,
