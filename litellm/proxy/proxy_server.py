@@ -2738,14 +2738,6 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
-                elif k == "health_check_interval":
-                    raise ValueError(
-                        f"'{k}' is NOT a valid router_settings parameter. Please move it to 'general_settings'."
-                    )
-                else:
-                    verbose_proxy_logger.warning(
-                        f"Key '{k}' is not a valid argument for Router.__init__(). Ignoring this key."
-                    )
         router = litellm.Router(
             **router_params,
             assistants_config=assistants_config,
