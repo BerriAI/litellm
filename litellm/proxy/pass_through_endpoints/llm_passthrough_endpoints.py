@@ -17,7 +17,10 @@ from starlette.websockets import WebSocketState
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
+from litellm.constants import (
+    ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
+    BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -1369,24 +1372,24 @@ def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
 
-def add_incoming_headers(request: Request, auth_header: str) -> dict:
+def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
     """
-    Build headers from incoming request, preserving headers like anthropic-beta,
-    while removing headers that should not be forwarded and adding authorization.
+    Extract only the allowed headers from incoming request for Vertex AI pass-through.
+
+    Uses an allowlist approach for security - only forwards headers we explicitly trust.
+    This prevents accidentally forwarding sensitive headers like the LiteLLM auth token.
 
     Args:
         request: The FastAPI request object
-        auth_header: The authorization token to add
 
     Returns:
-        dict: Headers dictionary with authorization added
+        dict: Headers dictionary with only allowed headers
     """
-    headers = dict(request.headers) or {}
-    # Remove headers that should not be forwarded
-    headers.pop("content-length", None)
-    headers.pop("host", None)
-    # Add/override the Authorization header
-    headers["Authorization"] = f"Bearer {auth_header}"
+    incoming_headers = dict(request.headers) or {}
+    headers = {}
+    for header_name in ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS:
+        if header_name in incoming_headers:
+            headers[header_name] = incoming_headers[header_name]
     return headers
 
 
@@ -1533,12 +1536,9 @@ async def _prepare_vertex_auth_headers(
             api_base="",
         )
 
-        # Start with incoming request headers to preserve headers like anthropic-beta
-        headers = dict(request.headers) or {}
-        # Remove headers that should not be forwarded
-        headers.pop("content-length", None)
-        headers.pop("host", None)
-        # Add/override the Authorization header
+        # Use allowlist approach - only forward specific safe headers
+        headers = get_vertex_ai_allowed_incoming_headers(request)
+        # Add the Authorization header with vendor credentials
         headers["Authorization"] = f"Bearer {auth_header}"
 
         if base_target_url is not None:
