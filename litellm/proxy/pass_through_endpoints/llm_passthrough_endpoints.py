@@ -1004,6 +1004,10 @@ async def bedrock_proxy_route(
     if not encoded_endpoint.startswith("/"):
         encoded_endpoint = "/" + encoded_endpoint
 
+    # Construct the full target URL using httpx
+    base_url = httpx.URL(base_target_url)
+    updated_url = base_url.copy_with(path=encoded_endpoint)
+
     # Add or update query parameters
     from litellm.llms.bedrock.chat import BedrockConverseLLM
 
@@ -1015,9 +1019,6 @@ async def bedrock_proxy_route(
         data = await request.json()
     except Exception as e:
         raise HTTPException(status_code=400, detail={"error": e})
-
-    # Construct the full target URL using httpx
-    updated_url = httpx.URL(base_target_url).copy_with(path=encoded_endpoint)
 
     if _is_bedrock_kb_retrieve_route(endpoint=endpoint):
         return await _bedrock_kb_retrieve_passthrough(
@@ -1047,7 +1048,7 @@ async def bedrock_proxy_route(
         target=str(prepped.url),
         custom_headers=prepped.headers,  # type: ignore
         is_streaming_request=is_streaming_request,
-        _forward_headers=True,
+        _forward_headers=True
     )  # dynamically construct pass-through endpoint based on incoming path
     received_value = await endpoint_func(
         request,
