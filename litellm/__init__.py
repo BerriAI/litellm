@@ -392,6 +392,9 @@ force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
 
+####### STOP SEQUENCE LIMIT #######
+disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
+
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
 max_fallbacks: Optional[int] = None

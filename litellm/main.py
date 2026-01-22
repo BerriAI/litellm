@@ -148,6 +148,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     validate_chat_completion_tool_choice,
+    validate_openai_optional_params
 )
 
 from ._logging import verbose_logger
@@ -1115,6 +1116,9 @@ def completion(  # type: ignore # noqa: PLR0915
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    # validate optional params
+    stop = validate_openai_optional_params(stop=stop)
+
 
     ######### unpacking kwargs #####################
     args = locals()
