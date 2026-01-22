@@ -141,6 +141,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
     max_tokens: Required[Optional[int]]
+    max_input_tokens: Required[Optional[int]]
     max_output_tokens: Required[Optional[int]]
     input_cost_per_token: Required[float]
     input_cost_per_token_flex: Optional[float]  # OpenAI flex service tier pricing
