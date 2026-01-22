@@ -177,3 +177,155 @@ async def test_acompletion_with_mcp_auto_exec_performs_follow_up(monkeypatch):
     assert first_call["stream"] is False
     assert second_call["messages"] == ["follow-up"]
     assert second_call["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
+    """
+    Test that acompletion_with_mcp adds MCP metadata to CustomStreamWrapper
+    and it appears in the final chunk's delta.provider_specific_fields.
+    """
+    from litellm.utils import CustomStreamWrapper
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
+    openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
+    tool_calls = [{"id": "call-1", "type": "function", "function": {"name": "local_search"}}]
+    tool_results = [{"tool_call_id": "call-1", "result": "executed"}]
+
+    # Create mock streaming chunks
+    def create_chunk(content, finish_reason=None):
+        return ModelResponseStream(
+            id="test-stream",
+            model="test-model",
+            created=1234567890,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=content,
+                        role="assistant",
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    chunks = [
+        create_chunk("Hello"),
+        create_chunk(" world", finish_reason="stop"),  # Final chunk
+    ]
+
+    # Create a proper CustomStreamWrapper
+    from unittest.mock import MagicMock
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    class MockStreamingResponse(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="test-model",
+                logging_obj=logging_obj,
+            )
+            self.chunks = chunks
+            self._index = 0
+            self.sent_last_chunk = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._index < len(self.chunks):
+                chunk = self.chunks[self._index]
+                self._index += 1
+                if self._index == len(self.chunks):
+                    self.sent_last_chunk = True
+                    # Call the method that adds MCP metadata to final chunk
+                    chunk = self._add_mcp_metadata_to_final_chunk(chunk)
+                return chunk
+            raise StopIteration
+
+    mock_acompletion = AsyncMock(return_value=MockStreamingResponse())
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_use_litellm_mcp_gateway",
+        staticmethod(lambda tools: True),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_parse_mcp_tools",
+        staticmethod(lambda tools: (tools, [])),
+    )
+    async def mock_process(**_):
+        return (tools, {"local_search": "local"})
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        mock_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_transform_mcp_tools_to_openai",
+        staticmethod(lambda *_, **__: openai_tools),
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_should_auto_execute_tools",
+        staticmethod(lambda **_: False),
+    )
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils,
+        "extract_mcp_headers_from_request",
+        staticmethod(lambda **_: (None, None, None, None)),
+    )
+
+    with patch("litellm.acompletion", mock_acompletion):
+        result = await acompletion_with_mcp(
+            model="test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=tools,
+            stream=True,
+        )
+
+    # Verify result is CustomStreamWrapper
+    assert isinstance(result, CustomStreamWrapper)
+
+    # Verify _hidden_params contains mcp_metadata
+    assert hasattr(result, "_hidden_params")
+    assert "mcp_metadata" in result._hidden_params
+    mcp_metadata = result._hidden_params["mcp_metadata"]
+    assert "mcp_list_tools" in mcp_metadata
+    assert mcp_metadata["mcp_list_tools"] == openai_tools
+
+    # Consume the stream and check final chunk
+    all_chunks = list(result)
+    assert len(all_chunks) > 0
+
+    # Find the final chunk (with finish_reason)
+    final_chunk = None
+    for chunk in all_chunks:
+        if hasattr(chunk, "choices") and chunk.choices:
+            choice = chunk.choices[0]
+            if hasattr(choice, "finish_reason") and choice.finish_reason:
+                final_chunk = chunk
+                break
+
+    # If no chunk with finish_reason, use the last chunk
+    if final_chunk is None and all_chunks:
+        final_chunk = all_chunks[-1]
+
+    assert final_chunk is not None, "Should have a final chunk"
+
+    # Verify MCP metadata is in the final chunk's delta.provider_specific_fields
+    if hasattr(final_chunk, "choices") and final_chunk.choices:
+        choice = final_chunk.choices[0]
+        if hasattr(choice, "delta") and choice.delta:
+            provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+            assert provider_fields is not None, "Final chunk should have provider_specific_fields"
+            assert "mcp_list_tools" in provider_fields, "Should have mcp_list_tools"
+            assert provider_fields["mcp_list_tools"] == openai_tools
