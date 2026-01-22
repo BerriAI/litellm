@@ -36,12 +36,16 @@ def _is_master_key(api_key: str, _master_key: Optional[str]) -> bool:
         return False
 
     ## string comparison
-    is_master_key = secrets.compare_digest(api_key, _master_key)
+    is_master_key = secrets.compare_digest(
+        api_key.encode("utf-8"), _master_key.encode("utf-8")
+    )
     if is_master_key:
         return True
 
     ## hash comparison
-    is_master_key = secrets.compare_digest(api_key, hash_token(_master_key))
+    is_master_key = secrets.compare_digest(
+        api_key.encode("utf-8"), hash_token(_master_key).encode("utf-8")
+    )
     if is_master_key:
         return True
 
@@ -649,7 +653,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
 ) -> str:
     """
     Only store if _should_store_prompts_and_responses_in_spend_logs() is True
-    
+
     If turn_off_message_logging is enabled, redact messages in the request body.
     """
     if _should_store_prompts_and_responses_in_spend_logs():
@@ -658,7 +662,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
         )
         if _proxy_server_request is not None:
             _request_body = _proxy_server_request.get("body", {}) or {}
-            
+
             # Apply message redaction if turn_off_message_logging is enabled
             if kwargs is not None:
                 from litellm.litellm_core_utils.redact_messages import (
@@ -673,12 +677,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
                         "standard_callback_dynamic_params"
                     ),
                 }
-                
+
                 # If redaction is enabled, deep copy request body before redacting
                 if should_redact_message_logging(model_call_details=model_call_details):
                     _request_body = copy.deepcopy(_request_body)
                     perform_redaction(model_call_details=_request_body, result=None)
-            
+
             _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             _request_body_json_str = json.dumps(_request_body, default=str)
             return _request_body_json_str
@@ -720,14 +724,14 @@ def _get_response_for_spend_logs_payload(
         response_obj: Any = payload.get("response")
         if response_obj is None:
             return "{}"
-        
+
         # Apply message redaction if turn_off_message_logging is enabled
         if kwargs is not None:
             from litellm.litellm_core_utils.redact_messages import (
                 perform_redaction,
                 should_redact_message_logging,
             )
-            
+
             litellm_params = kwargs.get("litellm_params", {})
             model_call_details = {
                 "litellm_params": litellm_params,
@@ -735,11 +739,13 @@ def _get_response_for_spend_logs_payload(
                     "standard_callback_dynamic_params"
                 ),
             }
-            
+
             # If redaction is enabled, deep copy response before redacting
             if should_redact_message_logging(model_call_details=model_call_details):
                 response_obj = copy.deepcopy(response_obj)
-                response_obj = perform_redaction(model_call_details={}, result=response_obj)
+                response_obj = perform_redaction(
+                    model_call_details={}, result=response_obj
+                )
 
         sanitized_wrapper = _sanitize_request_body_for_spend_logs_payload(
             {"response": response_obj}

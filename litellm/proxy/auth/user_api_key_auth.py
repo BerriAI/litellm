@@ -794,7 +794,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 )  # moving from .warning to .debug as it spams logs when team missing from cache.
 
         try:
-            is_master_key_valid = secrets.compare_digest(api_key, master_key)  # type: ignore
+            is_master_key_valid = secrets.compare_digest(
+                api_key.encode("utf-8"), master_key.encode("utf-8")
+            )  # type: ignore
         except Exception:
             is_master_key_valid = False
 
