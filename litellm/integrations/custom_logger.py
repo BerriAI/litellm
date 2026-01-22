@@ -718,7 +718,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         return OLD_LITELLM_METADATA_FIELD
 
     def redact_standard_logging_payload_from_model_call_details(
-        self, model_call_details: Dict
+        self,
+        model_call_details: Dict,
+        global_redaction_applied: bool = False,
     ) -> Dict:
         """
         Only redacts messages and responses when self.turn_off_message_logging is True
@@ -730,6 +732,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This is useful for logging payloads that contain sensitive information.
         """
+        # skip redundant redaction if global redaction was already applied
+        if global_redaction_applied:
+            return model_call_details
+
         from copy import copy
 
         from litellm import Choices, Message, ModelResponse
