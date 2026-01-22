@@ -16094,6 +16094,181 @@
         "output_cost_per_token": 0.0,
         "output_vector_size": 2560
     },
+    "gmi/anthropic/claude-opus-4.5": {
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 2.5e-05,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/anthropic/claude-sonnet-4.5": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/anthropic/claude-sonnet-4": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/anthropic/claude-opus-4": {
+        "input_cost_per_token": 1.5e-05,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 7.5e-05,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/openai/gpt-5.2": {
+        "input_cost_per_token": 1.75e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-05,
+        "supports_function_calling": true
+    },
+    "gmi/openai/gpt-5.1": {
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "supports_function_calling": true
+    },
+    "gmi/openai/gpt-5": {
+        "input_cost_per_token": 1.25e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 409600,
+        "max_output_tokens": 32000,
+        "max_tokens": 32000,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "supports_function_calling": true
+    },
+    "gmi/openai/gpt-4o": {
+        "input_cost_per_token": 2.5e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1e-05,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/openai/gpt-4o-mini": {
+        "input_cost_per_token": 1.5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 131072,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 6e-07,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/deepseek-ai/DeepSeek-V3.2": {
+        "input_cost_per_token": 2.8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 4e-07,
+        "supports_function_calling": true
+    },
+    "gmi/deepseek-ai/DeepSeek-V3-0324": {
+        "input_cost_per_token": 2.8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 163840,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 8.8e-07,
+        "supports_function_calling": true
+    },
+    "gmi/google/gemini-3-pro-preview": {
+        "input_cost_per_token": 2e-06,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-05,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/google/gemini-3-flash-preview": {
+        "input_cost_per_token": 5e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 65536,
+        "max_tokens": 65536,
+        "mode": "chat",
+        "output_cost_per_token": 3e-06,
+        "supports_function_calling": true,
+        "supports_vision": true
+    },
+    "gmi/moonshotai/Kimi-K2-Thinking": {
+        "input_cost_per_token": 8e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06
+    },
+    "gmi/MiniMaxAI/MiniMax-M2.1": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 196608,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.2e-06
+    },
+    "gmi/Qwen/Qwen3-VL-235B-A22B-Instruct-FP8": {
+        "input_cost_per_token": 3e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 1.4e-06,
+        "supports_vision": true
+    },
+    "gmi/zai-org/GLM-4.7-FP8": {
+        "input_cost_per_token": 4e-07,
+        "litellm_provider": "gmi",
+        "max_input_tokens": 202752,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "output_cost_per_token": 2e-06
+    },
     "google.gemma-3-12b-it": {
         "input_cost_per_token": 9e-08,
         "litellm_provider": "bedrock_converse",

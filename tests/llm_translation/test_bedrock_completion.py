@@ -3954,3 +3954,32 @@ def test_bedrock_openai_error_handling():
 
     assert exc_info.value.status_code == 422
     print("✓ Error handling works correctly")
+
+
+def test_aaabedrock_completion_pdf():
+    import litellm
+
+    import base64
+
+    # Read a PDF file
+    with open("./fixtures/dummy.pdf", "rb") as f:
+        pdf_base64 = base64.b64encode(f.read()).decode("utf-8")
+
+    response = litellm.completion(
+        model="bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is in this document?"},
+                    {
+                        "type": "file",
+                        "file": {
+                            "file_data": pdf_base64,
+                            "filename": "document.pdf",
+                        },
+                    },
+                ],
+            }
+        ],
+    )
