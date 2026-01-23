@@ -46,7 +46,7 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
     Supported languages:
     hi-IN, bn-IN, kn-IN, ml-IN, mr-IN, od-IN, pa-IN, ta-IN, te-IN, en-IN, gu-IN
 
-    Pricing: ₹15 per 10K characters (~$0.18 per 10K characters)
+    Pricing: ₹15 per 10K characters ($0.165 per 10K characters)
     """
 
     TTS_ENDPOINT_PATH = "/text-to-speech"
