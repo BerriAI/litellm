@@ -3,6 +3,10 @@
 Imaging the case where services are running frameworks that does not support multithreading (for example, your company runs ruby service on single thread framework), you want to stream responses, but don't want to block I/O for others since it is a single thread. Native SSE streaming won't work in this case. LiteLLM supports background mode where user can use litellm to poll partial responses periodically to simulate streaming.
 
 
+Requirements:
+- Redis cache must be enabled
+- /responses API endpoint must be used 
+
 ## How it works
 
 Think of this as a producer–consumer pattern:
@@ -77,7 +81,7 @@ curl http://0.0.0.0:4000/v1/responses/litellm_poll_adff0089-f9d3-4135-b49e-f5825
 
 Response: 
 
-Keep polling until the response is completed.
+**Keep polling until the response is completed.**
 
 ```bash
 {
