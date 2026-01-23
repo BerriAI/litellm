@@ -347,3 +347,149 @@ class TestGigaChatSupportedParams:
         assert "tools" in supported
         assert "response_format" in supported
         assert "stream" in supported
+
+
+class TestGigaChatToolChoiceMapping:
+    """Tests for tool_choice -> function_call mapping"""
+
+    @pytest.fixture
+    def config(self):
+        from litellm.llms.gigachat.chat.transformation import GigaChatConfig
+        return GigaChatConfig()
+
+    def test_tool_choice_none(self, config):
+        """tool_choice='none' should map to function_call='none'"""
+        result = config._map_tool_choice("none")
+        assert result == "none"
+
+    def test_tool_choice_auto(self, config):
+        """tool_choice='auto' should map to function_call='auto'"""
+        result = config._map_tool_choice("auto")
+        assert result == "auto"
+
+    def test_tool_choice_required(self, config):
+        """tool_choice='required' should map to function_call='auto' (closest equivalent)"""
+        result = config._map_tool_choice("required")
+        assert result == "auto"
+
+    def test_tool_choice_forced_function(self, config):
+        """tool_choice with forced function should map to function_call with name"""
+        tool_choice = {
+            "type": "function",
+            "function": {"name": "get_weather"}
+        }
+        result = config._map_tool_choice(tool_choice)
+        assert result == {"name": "get_weather"}
+
+    def test_tool_choice_forced_function_full(self, config):
+        """tool_choice with full function details should extract only name"""
+        tool_choice = {
+            "type": "function",
+            "function": {
+                "name": "weather_forecast",
+                "description": "Get weather forecast"
+            }
+        }
+        result = config._map_tool_choice(tool_choice)
+        assert result == {"name": "weather_forecast"}
+
+    def test_tool_choice_invalid_dict(self, config):
+        """tool_choice with invalid dict should return None"""
+        tool_choice = {"type": "tool"}  # Missing function
+        result = config._map_tool_choice(tool_choice)
+        assert result is None
+
+    def test_tool_choice_in_map_openai_params_auto(self, config):
+        """tool_choice='auto' should be mapped in map_openai_params"""
+        params = {"tool_choice": "auto"}
+        result = config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert result["function_call"] == "auto"
+
+    def test_tool_choice_in_map_openai_params_none(self, config):
+        """tool_choice='none' should be mapped in map_openai_params"""
+        params = {"tool_choice": "none"}
+        result = config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert result["function_call"] == "none"
+
+    def test_tool_choice_in_map_openai_params_required(self, config):
+        """tool_choice='required' should be mapped to 'auto' in map_openai_params"""
+        params = {"tool_choice": "required"}
+        result = config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert result["function_call"] == "auto"
+
+    def test_tool_choice_in_map_openai_params_forced(self, config):
+        """tool_choice with forced function should be mapped in map_openai_params"""
+        params = {
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "weather_forecast"}
+            }
+        }
+        result = config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert result["function_call"] == {"name": "weather_forecast"}
+
+    def test_tool_choice_with_tools(self, config):
+        """tool_choice should work together with tools parameter"""
+        params = {
+            "tools": [{
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}}
+                }
+            }],
+            "tool_choice": {
+                "type": "function",
+                "function": {"name": "get_weather"}
+            }
+        }
+        result = config.map_openai_params(
+            non_default_params=params,
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert "functions" in result
+        assert result["function_call"] == {"name": "get_weather"}
+
+    def test_transform_request_with_tool_choice(self, config):
+        """Full transform_request should include function_call from tool_choice"""
+        messages = [{"role": "user", "content": "What's the weather?"}]
+        optional_params = {
+            "functions": [{
+                "name": "get_weather",
+                "description": "Get weather",
+                "parameters": {"type": "object", "properties": {}}
+            }],
+            "function_call": {"name": "get_weather"}
+        }
+        result = config.transform_request(
+            model="gigachat/GigaChat",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert "function_call" in result
+        assert result["function_call"] == {"name": "get_weather"}
