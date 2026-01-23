@@ -123,3 +123,46 @@ class PolicyMatcher:
             List of policy names that match the context
         """
         return PolicyMatcher.get_matching_policies(context=context)
+
+    @staticmethod
+    def get_policies_with_matching_conditions(
+        policy_names: List[str],
+        context: PolicyMatchContext,
+        policies: Optional[Dict[str, Policy]] = None,
+    ) -> List[str]:
+        """
+        Filter policies to only those whose conditions match the context.
+
+        A policy's condition matches if:
+        - The policy has no condition (condition is None), OR
+        - The policy's condition evaluates to True for the given context
+
+        Args:
+            policy_names: List of policy names to filter
+            context: The request context to evaluate conditions against
+            policies: Dictionary of all policies (if None, uses global registry)
+
+        Returns:
+            List of policy names whose conditions match the context
+        """
+        from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        if policies is None:
+            registry = get_policy_registry()
+            if not registry.is_initialized():
+                return []
+            policies = registry.get_all_policies()
+
+        matching_policies = []
+        for policy_name in policy_names:
+            policy = policies.get(policy_name)
+            if policy is None:
+                continue
+            # Policy matches if it has no condition OR condition evaluates to True
+            if policy.condition is None or ConditionEvaluator.evaluate(
+                policy.condition, context
+            ):
+                matching_policies.append(policy_name)
+
+        return matching_policies

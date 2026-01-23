@@ -2853,6 +2853,9 @@ class ProxyConfig:
             prisma_client: Optional Prisma client for DB validation
             llm_router: Optional LLM router for model validation
         """
+
+        from litellm.proxy.policy_engine.init_policies import init_policies
+        from litellm.proxy.policy_engine.policy_validator import PolicyValidator
         if config is None:
             verbose_proxy_logger.debug("Policy engine: config is None, skipping")
             return
@@ -2862,10 +2865,9 @@ class ProxyConfig:
             verbose_proxy_logger.debug("Policy engine: no policies in config, skipping")
             return
 
-        verbose_proxy_logger.info(f"Policy engine: found {len(policies_config)} policies in config")
+        policy_attachments_config = config.get("policy_attachments", None)
 
-        from litellm.proxy.policy_engine.init_policies import init_policies
-        from litellm.proxy.policy_engine.policy_validator import PolicyValidator
+        verbose_proxy_logger.info(f"Policy engine: found {len(policies_config)} policies in config")
 
         # Create validator with router for model validation
         validator = PolicyValidator(
@@ -2876,6 +2878,7 @@ class ProxyConfig:
         # Initialize policies
         await init_policies(
             policies_config=policies_config,
+            policy_attachments_config=policy_attachments_config,
             prisma_client=prisma_client,
             validate_db=prisma_client is not None,
             fail_on_error=True,

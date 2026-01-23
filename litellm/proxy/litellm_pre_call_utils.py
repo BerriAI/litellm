@@ -1321,6 +1321,7 @@ def move_guardrails_to_metadata(
 
     - If guardrails set on API Key metadata then sets guardrails on request metadata
     - If guardrails not set on API key, then checks request metadata
+    - Adds guardrails from policy engine based on team/key/model context
     """
     # Check key-level guardrails
     _add_guardrails_from_key_or_team_metadata(
@@ -1328,6 +1329,15 @@ def move_guardrails_to_metadata(
         team_metadata=user_api_key_dict.team_metadata,
         data=data,
         metadata_variable_name=_metadata_variable_name,
+    )
+
+    #########################################################################################
+    # Add guardrails from policy engine based on team/key/model context
+    #########################################################################################
+    add_guardrails_from_policy_engine(
+        data=data,
+        metadata_variable_name=_metadata_variable_name,
+        user_api_key_dict=user_api_key_dict,
     )
 
     #########################################################################################
@@ -1407,19 +1417,33 @@ def add_guardrails_from_policy_engine(
         f"key_alias={context.key_alias}, model={context.model}"
     )
 
+    from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
+
     # Get matching policies via attachments
     matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
 
-    verbose_proxy_logger.debug(f"Policy engine: matched policies: {matching_policy_names}")
+    verbose_proxy_logger.debug(f"Policy engine: matched policies via attachments: {matching_policy_names}")
 
     if not matching_policy_names:
         return
 
-    # Track applied policies in metadata
+    # Get all policies to check conditions
+    all_policies = registry.get_all_policies()
+
+    # Track applied policies - only include policies whose conditions actually match
+    applied_policy_names = []
     for policy_name in matching_policy_names:
-        add_policy_to_applied_policies_header(
-            request_data=data, policy_name=policy_name
-        )
+        policy = all_policies.get(policy_name)
+        if policy is None:
+            continue
+        # Check if policy condition matches (or has no condition)
+        if policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context):
+            applied_policy_names.append(policy_name)
+            add_policy_to_applied_policies_header(
+                request_data=data, policy_name=policy_name
+            )
+
+    verbose_proxy_logger.debug(f"Policy engine: applied policies (conditions matched): {applied_policy_names}")
 
     # Resolve guardrails from matching policies
     resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context)

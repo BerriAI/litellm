@@ -2,7 +2,7 @@
 Policy Initialization - Loads policies from config and validates on startup.
 
 Configuration structure:
-- policies: Define WHAT guardrails to apply (with inheritance and statements)
+- policies: Define WHAT guardrails to apply (with inheritance and conditions)
 - policy_attachments: Define WHERE policies apply (teams, keys, models)
 """
 
@@ -41,7 +41,7 @@ def _print_policies_on_startup(
     for policy_name, policy_data in policies_config.items():
         guardrails = policy_data.get("guardrails", {})
         inherit = policy_data.get("inherit")
-        statements = policy_data.get("statements", [])
+        condition = policy_data.get("condition")
         description = policy_data.get("description")
 
         guardrails_add = guardrails.get("add", []) if isinstance(guardrails, dict) else []
@@ -57,8 +57,10 @@ def _print_policies_on_startup(
             print(f"      guardrails.add: {guardrails_add}")  # noqa: T201
         if guardrails_remove:
             print(f"      guardrails.remove: {guardrails_remove}")  # noqa: T201
-        if statements:
-            print(f"      statements: {len(statements)} conditional statement(s)")  # noqa: T201
+        if condition:
+            model_condition = condition.get("model") if isinstance(condition, dict) else None
+            if model_condition:
+                print(f"      condition.model: {model_condition}")  # noqa: T201
 
     # Print attachments
     if policy_attachments_config:
@@ -256,7 +258,7 @@ def get_policies_summary() -> Dict[str, Any]:
             "description": policy.description if policy else None,
             "guardrails_add": policy.guardrails.get_add() if policy else [],
             "guardrails_remove": policy.guardrails.get_remove() if policy else [],
-            "statements_count": len(policy.statements) if policy and policy.statements else 0,
+            "condition": policy.condition.model_dump() if policy and policy.condition else None,
             "resolved_guardrails": resolved_policy.guardrails,
             "inheritance_chain": resolved_policy.inheritance_chain,
         }
