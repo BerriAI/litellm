@@ -3,6 +3,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
   AppstoreOutlined,
+  AuditOutlined,
   BankOutlined,
   BarChartOutlined,
   BgColorsOutlined,
@@ -121,6 +122,13 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
           page: "guardrails",
           label: "Guardrails",
           icon: <SafetyOutlined />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "policies",
+          page: "policies",
+          label: "Policies",
+          icon: <AuditOutlined />,
           roles: all_admin_roles,
         },
         {

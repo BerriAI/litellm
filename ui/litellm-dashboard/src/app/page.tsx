@@ -14,6 +14,7 @@ import LoadingScreen from "@/components/common_components/LoadingScreen";
 import { CostTrackingSettings } from "@/components/CostTrackingSettings";
 import GeneralSettings from "@/components/general_settings";
 import GuardrailsPanel from "@/components/guardrails";
+import PoliciesPanel from "@/components/policies";
 import { Team } from "@/components/key_team_helpers/key_list";
 import { MCPServers } from "@/components/mcp_tools";
 import ModelHubTable from "@/components/AIHub/ModelHubTable";
@@ -472,6 +473,8 @@ export default function CreateKeyPage() {
                   <BudgetPanel accessToken={accessToken} />
                 ) : page == "guardrails" ? (
                   <GuardrailsPanel accessToken={accessToken} userRole={userRole} />
+                ) : page == "policies" ? (
+                  <PoliciesPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "agents" ? (
                   <AgentsPanel accessToken={accessToken} userRole={userRole} />
                 ) : page == "prompts" ? (
