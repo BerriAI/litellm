@@ -545,6 +545,20 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         parent_otel_span=parent_otel_span,
                     )
 
+                # Determine models for JWT token:
+                # 1. If team exists, use team's models
+                # 2. If no team but user exists with models, use user's models
+                # 3. Otherwise, empty list (allows all models unless other restrictions apply)
+                jwt_models: list = []
+                if team_object is not None and team_object.models:
+                    jwt_models = team_object.models
+                elif (
+                    user_object is not None
+                    and hasattr(user_object, "models")
+                    and user_object.models
+                ):
+                    jwt_models = user_object.models
+
                 valid_token = UserAPIKeyAuth(
                     api_key=None,
                     team_id=team_id,
@@ -558,6 +572,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         team_object.rpm_limit if team_object is not None else None
                     ),
                     team_models=team_object.models if team_object is not None else [],
+                    models=jwt_models,  # Set models for JWT to enable key-level model checks
                     user_role=(
                         LitellmUserRoles(user_object.user_role)
                         if user_object is not None and user_object.user_role is not None
@@ -587,6 +602,19 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     if team_object is not None
                     else None,
                 )
+
+                # Perform key-level model access check for JWT tokens
+                # This ensures consistent model access validation with API key auth
+                if jwt_models:  # Only check if models are restricted
+                    model = get_model_from_request(request_data, route)
+                    if model is not None:
+                        await can_key_call_model(
+                            model=model,
+                            llm_model_list=llm_model_list,
+                            valid_token=valid_token,
+                            llm_router=llm_router,
+                        )
+
                 # run through common checks
                 _ = await common_checks(
                     request=request,
