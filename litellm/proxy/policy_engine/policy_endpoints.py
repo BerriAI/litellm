@@ -4,8 +4,6 @@ CRUD ENDPOINTS FOR POLICIES
 Provides REST API endpoints for managing policies and policy attachments.
 """
 
-from typing import List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException
 
 from litellm._logging import verbose_proxy_logger

@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.proxy.policy_engine import (
     Policy,
     PolicyCondition,

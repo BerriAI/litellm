@@ -10,21 +10,14 @@ import AttachmentTable from "./attachment_table";
 import AddAttachmentForm from "./add_attachment_form";
 import {
   getPoliciesList,
-  createPolicyCall,
-  updatePolicyCall,
   deletePolicyCall,
-  getPolicyInfo,
   getPolicyAttachmentsList,
-  createPolicyAttachmentCall,
   deletePolicyAttachmentCall,
   getGuardrailsList,
 } from "../networking";
 import {
   Policy,
   PolicyAttachment,
-  PolicyCreateRequest,
-  PolicyUpdateRequest,
-  PolicyAttachmentCreateRequest,
 } from "./types";
 import { Guardrail } from "../guardrails/types";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
