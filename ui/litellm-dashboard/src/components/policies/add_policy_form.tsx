@@ -61,12 +61,14 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       setResolvedGuardrails([]);
       setModelConditionType("model");
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, editingPolicy, form]);
 
   useEffect(() => {
     if (visible && accessToken) {
       loadAvailableModels();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, accessToken]);
 
   const loadAvailableModels = async () => {

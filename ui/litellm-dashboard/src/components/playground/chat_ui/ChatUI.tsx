@@ -351,6 +351,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
     selectedTags,
     selectedVectorStores,
     selectedGuardrails,
+    selectedPolicies,
     messageTraceId,
     responsesSessionId,
     useApiSessionManagement,

@@ -34,6 +34,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     if (visible && accessToken) {
       loadTeamsAndKeys();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [visible, accessToken]);
 
   const loadTeamsAndKeys = async () => {
