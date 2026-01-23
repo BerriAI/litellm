@@ -203,8 +203,12 @@ Your response headers will include `x-litellm-applied-guardrails` with the guard
 x-litellm-applied-guardrails: aporia-pre-guard
 ```
 
+### Guardrail Policies
 
-
+Need more control? Use [Guardrail Policies](./guardrail_policies.md) to:
+- Group guardrails into reusable policies
+- Enable/disable guardrails for specific teams, keys, or models
+- Inherit from existing policies and override specific guardrails
 
 ## **Using Guardrails Client Side**
 

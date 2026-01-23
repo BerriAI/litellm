@@ -42,6 +42,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/guardrail_policies",
         "proxy/guardrails/guardrail_load_balancing",
         {
           type: "category",
@@ -129,6 +130,7 @@ const sidebars = {
             "tutorials/claude_code_plugin_marketplace",
           ]
         },
+        "tutorials/opencode_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",

@@ -1079,15 +1079,7 @@ known_tokenizer_config = {
 }
 
 
-OPENAI_FINISH_REASONS = [
-    "stop",
-    "length",
-    "function_call",
-    "content_filter",
-    "null",
-    "finish_reason_unspecified",
-    "malformed_function_call",
-]
+OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null", "finish_reason_unspecified", "malformed_function_call", "guardrail_intervened", "eos"]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
 )  # 1 minute

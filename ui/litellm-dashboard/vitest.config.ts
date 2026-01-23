@@ -7,7 +7,6 @@ export default defineConfig({
     setupFiles: ["tests/setupTests.ts"],
     globals: true,
     css: true, // lets you import CSS/modules without extra mocks
-    testTimeout: 10000,
     coverage: {
       provider: "v8",
       reporter: ["text", "lcov"],
