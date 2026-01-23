@@ -260,6 +260,8 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 
 ## OSS Adopters 
 <img width="250" height="104" alt="Stripe wordmark - Blurple - Small" src="https://github.com/user-attachments/assets/f7296d4f-9fbd-460d-9d05-e4df31697c4b" />
+<img width="250" height="69" alt="download (1)" src="https://github.com/user-attachments/assets/45511824-edd9-4ab0-b31c-03d86508f69c" />
+
 
 
 ## Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
