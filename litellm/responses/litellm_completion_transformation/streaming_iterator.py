@@ -805,7 +805,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             "id": reasoning_item_id,
                             "type": "reasoning",
                             "status": "in_progress",
-                            "summary": None,
+                            "summary": [],
                         }
                     ),
                 )

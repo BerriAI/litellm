@@ -455,6 +455,8 @@ class TestReasoningContentStreaming:
         ][0]
 
         assert reasoning_added.output_index == 0
+        assert isinstance(getattr(reasoning_added.item, "summary", None), list)
+        assert reasoning_added.item.summary == []
         assert message_added.output_index == 1
 
         reasoning_done = [
