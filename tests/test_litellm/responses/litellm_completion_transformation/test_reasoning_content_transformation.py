@@ -2,7 +2,9 @@
 Test reasoning content preservation in Responses API transformation
 """
 
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
+
+import pytest
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -136,6 +138,132 @@ class TestReasoningContentStreaming:
         # Assert
         assert transformed_chunk.delta == "Regular content only"
         assert transformed_chunk.type == "response.output_text.delta"
+
+    def test_reasoning_delta_item_id_is_stable(self):
+        """Test reasoning deltas share a stable item_id across the stream"""
+        chunk1 = ModelResponseStream(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="",
+                        role="assistant",
+                        reasoning_content="First thought",
+                    ),
+                )
+            ],
+        )
+
+        chunk2 = ModelResponseStream(
+            id="test-id-2",
+            created=1234567891,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="",
+                        role="assistant",
+                        reasoning_content="Second thought",
+                    ),
+                )
+            ],
+        )
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
+            litellm_custom_stream_wrapper=AsyncMock(),
+            request_input="Test input",
+            responses_api_request={},
+        )
+
+        evt1 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk1)
+        evt2 = iterator._transform_chat_completion_chunk_to_response_api_chunk(chunk2)
+
+        assert evt1 is not None
+        assert evt2 is not None
+        assert evt1.item_id == evt2.item_id
+
+    @pytest.mark.asyncio
+    async def test_reasoning_done_emitted_before_output_text_delta(self):
+        """Ensure reasoning_summary_text.done is emitted before output_text.delta"""
+        chunk_reasoning = ModelResponseStream(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="",
+                        role="assistant",
+                        reasoning_content="Thinking...",
+                    ),
+                )
+            ],
+        )
+
+        chunk_text = ModelResponseStream(
+            id="test-id",
+            created=1234567891,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="Final answer",
+                        role=None,
+                    ),
+                )
+            ],
+        )
+
+        mock_stream = AsyncMock()
+        mock_stream.logging_obj = Mock()
+        mock_stream.__anext__.side_effect = [
+            chunk_reasoning,
+            chunk_text,
+            StopAsyncIteration,
+        ]
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
+            litellm_custom_stream_wrapper=mock_stream,
+            request_input="Test input",
+            responses_api_request={},
+        )
+
+        events = []
+        try:
+            while True:
+                events.append(await iterator.__anext__())
+                if len(events) > 20:
+                    break
+        except StopAsyncIteration:
+            pass
+
+        event_types = [evt.type for evt in events]
+        assert (
+            "response.reasoning_summary_text.done" in event_types
+        ), "Expected reasoning_summary_text.done event"
+        assert (
+            "response.output_text.delta" in event_types
+        ), "Expected output_text.delta event"
+
+        done_index = event_types.index("response.reasoning_summary_text.done")
+        text_index = event_types.index("response.output_text.delta")
+        assert done_index < text_index
 
 
 class TestReasoningContentFinalResponse:

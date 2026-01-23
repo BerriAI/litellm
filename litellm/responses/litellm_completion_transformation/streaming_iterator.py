@@ -37,6 +37,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import Delta as ChatCompletionDelta
 from litellm.types.utils import (
+    Choices,
     ModelResponse,
     ModelResponseStream,
     StreamingChoices,
@@ -90,7 +91,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._tool_args_by_call_id: dict[str, str] = {}
         self._next_tool_output_index: int = 1  # output_index=0 reserved for the message item
         self._final_tool_events_queued: bool = False
-        self._sequence_number: int = 0  
+        self._sequence_number: int = 0
         self._cached_reasoning_item_id: Optional[str] = None
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
@@ -101,7 +102,6 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._reasoning_done_emitted = False
         self._reasoning_item_id: Optional[str] = None
 
-
     def _get_or_assign_tool_output_index(self, call_id: str) -> int:
         existing = self._tool_output_index_by_call_id.get(call_id)
         if existing is not None:
@@ -110,6 +110,68 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._next_tool_output_index += 1
         self._tool_output_index_by_call_id[call_id] = idx
         return idx
+
+    def _get_or_create_reasoning_item_id(self) -> str:
+        if self._reasoning_item_id is not None:
+            return self._reasoning_item_id
+        if self._cached_reasoning_item_id is None:
+            self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+        self._reasoning_item_id = self._cached_reasoning_item_id
+        return self._reasoning_item_id
+
+    def _record_reasoning_delta(self, reasoning_content: str) -> str:
+        self._reasoning_active = True
+        if reasoning_content:
+            self._reasoning_summary_text += reasoning_content
+        return self._get_or_create_reasoning_item_id()
+
+    def _maybe_emit_reasoning_done_events(self, chunk: ModelResponseStream) -> None:
+        if self._reasoning_active is False or self._reasoning_done_emitted is True:
+            return
+        if self._is_reasoning_end(chunk) is False:
+            return
+
+        reasoning_content = self._reasoning_summary_text
+        if not reasoning_content:
+            text_reasoning = self.create_litellm_model_response()
+            if text_reasoning and text_reasoning.choices:
+                choice = text_reasoning.choices[0]
+                if isinstance(choice, Choices):
+                    reasoning_content = (
+                        getattr(choice.message, "reasoning_content", "") or ""
+                    )
+
+        reasoning_item_id = self._get_or_create_reasoning_item_id()
+
+        self._sequence_number += 1
+        text_done_event = self.create_reasoning_summary_text_done_event(
+            reasoning_item_id=reasoning_item_id,
+            reasoning_content=reasoning_content,
+            sequence_number=self._sequence_number,
+        )
+
+        self._sequence_number += 1
+        part_done_event = self.create_reasoning_summary_part_done_event(
+            reasoning_item_id=reasoning_item_id,
+            reasoning_content=reasoning_content,
+            sequence_number=self._sequence_number,
+        )
+
+        self._sequence_number += 1
+        reasoning_output_item_done_event = self.create_reasoning_output_item_done_event(
+            reasoning_item_id=reasoning_item_id,
+            reasoning_content=reasoning_content,
+            sequence_number=self._sequence_number,
+        )
+
+        self._pending_response_events.extend(
+            [text_done_event, part_done_event, reasoning_output_item_done_event]
+        )
+        self._reasoning_done_emitted = True
+        self._reasoning_active = False
+        self._sent_reasoning_summary_text_done_event = True
+        self._sent_reasoning_summary_part_done_event = True
+        self._reasoning_summary_text = ""
 
 
     def _is_reasoning_end(self, chunk):
@@ -778,51 +840,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         self._ensure_output_item_for_chunk(chunk)
                         # Proceed to transformation
                         self.collected_chat_completion_chunks.append(chunk)
-                        if self._reasoning_active and not self._reasoning_done_emitted:
-                            # get raw ModelResponse
-                            text_reasoning = self.create_litellm_model_response()
-                            # reasoning_content only
-                            if self._is_reasoning_end(chunk):
-                                reasoning_content = ""
-                                # best effort to obtain reasoning_content from chat model response
-                                if text_reasoning and text_reasoning.choices:
-                                    choice = text_reasoning.choices[0]
-                                    # Check if it's a Choices object (has message) or StreamingChoices (has delta)
-                                    if hasattr(choice, "message"):
-                                        reasoning_content = getattr(choice.message, "reasoning_content", "") or ""
-                                
-                                # Ensure we have a valid reasoning_item_id
-                                reasoning_item_id = self._reasoning_item_id or self._cached_reasoning_item_id or f"rs_{uuid.uuid4()}"
-                                
-                                # Create text.done event first with its own sequence number
-                                self._sequence_number += 1
-                                text_done_event = self.create_reasoning_summary_text_done_event(
-                                    reasoning_item_id=reasoning_item_id,
-                                    reasoning_content=reasoning_content,
-                                    sequence_number=self._sequence_number
-                                )
-                                
-                                # Create part.done event second with its own sequence number
-                                self._sequence_number += 1
-                                part_done_event = self.create_reasoning_summary_part_done_event(
-                                    reasoning_item_id=reasoning_item_id,
-                                    reasoning_content=reasoning_content,
-                                    sequence_number=self._sequence_number
-                                )
-                                
-                                self._sequence_number += 1
-                                reasoning_output_item_done_event = self.create_reasoning_output_item_done_event(
-                                    reasoning_item_id=reasoning_item_id,
-                                    reasoning_content=reasoning_content,
-                                    sequence_number=self._sequence_number
-                                )
-                                self._pending_response_events.extend([
-                                    text_done_event,
-                                    part_done_event,
-                                    reasoning_output_item_done_event,
-                                ])
-                                self._reasoning_done_emitted = True
-                                self._reasoning_active = False
+                        self._maybe_emit_reasoning_done_events(chunk)
 
                         response_api_chunk = (
                             self._transform_chat_completion_chunk_to_response_api_chunk(
@@ -873,6 +891,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     if self._pending_response_events:
                         return self._pending_response_events.pop(0)
                     self.collected_chat_completion_chunks.append(chunk)
+                    self._maybe_emit_reasoning_done_events(chunk)
                     response_api_chunk = (
                         self._transform_chat_completion_chunk_to_response_api_chunk(
                             chunk
@@ -933,10 +952,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             and chunk.choices[0].delta.reasoning_content
         ):
             reasoning_content = chunk.choices[0].delta.reasoning_content
-
+            reasoning_item_id = self._record_reasoning_delta(reasoning_content)
             return ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
-                item_id=f"rs_{hash(str(reasoning_content))}",
+                item_id=reasoning_item_id,
                 output_index=0,
                 delta=reasoning_content,
             )
