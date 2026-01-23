@@ -8,7 +8,7 @@ import {
   SelectItem,
   TextInput,
 } from "@tremor/react";
-import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Tooltip, Typography } from "antd";
+import { Alert, Button, Form, Input, Modal, Select, Select as Select2, Space, Switch, Tooltip, Typography } from "antd";
 import React, { useEffect, useState } from "react";
 import BulkCreateUsers from "./bulk_create_users_button";
 import TeamDropdown from "./common_components/team_dropdown";
@@ -98,7 +98,7 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string }) => {
+  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string; send_invite_email?: boolean }) => {
     try {
       NotificationsManager.info("Making API Call");
       if (!isEmbedded) {
@@ -243,6 +243,21 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           <Form.Item label="User Email" name="user_email">
             <Input />
+          </Form.Item>
+          <Form.Item
+            label={
+              <span>
+                Send Invite Email{" "}
+                <Tooltip title="Send an invitation email to the user with login instructions.">
+                  <InfoCircleOutlined />
+                </Tooltip>
+              </span>
+            }
+            name="send_invite_email"
+            valuePropName="checked"
+            initialValue={true}
+          >
+            <Switch defaultChecked />
           </Form.Item>
           <Form.Item
             label={
