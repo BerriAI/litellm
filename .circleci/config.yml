@@ -216,7 +216,7 @@ jobs:
 
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
-              --timings-type=filename \
+              --timings-type=file \
               --verbose \
               --command="xargs python -m pytest \
                 -vv \
@@ -1835,7 +1835,7 @@ jobs:
 
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
-              --timings-type=filename \
+              --timings-type=file \
               --verbose \
               --command="xargs python -m pytest \
                 -vv \
