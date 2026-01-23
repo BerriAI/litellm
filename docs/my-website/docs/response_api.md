@@ -1221,15 +1221,148 @@ Response:
 }
 ```
 
+## Background Mode (non-OpenAI models)
+
+LiteLLM supports background mode for non-OpenAI models. This allows you to make a request and get a response ID immediately, and then poll for the response later.
+
+Requirements:
+- Redis cache must be enabled
+
+### Usage 
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: claude-sonnet-4-5-20250929
+    litellm_params:
+      model: anthropic/claude-sonnet-4-5-20250929
 
 
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    ttl: 3600
+    host: "127.0.0.1"
+    port: "6379"
+  responses:
+    background_mode:
+      # polling_via_cache can be:
+      # - "all" (enable for all providers)
+      # - ["openai", "bedrock"] (list of specific providers)
+      polling_via_cache: "all"
+      ttl: 3600
+```
 
+polling_via_cache can be:
+- "all" (enable for all providers)
+- ["openai", "bedrock"] (list of specific providers)
 
+2. Start LiteLLM Proxy
 
+```bash
+litellm --config /path/to/config.yaml
+```
 
+3. Make request
 
+```bash
+curl http://0.0.0.0:4000/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -d '{
+    "model": "claude-sonnet-4-5-20250929",
+    "input": "Tell me a three sentence bedtime story about a unicorn.",
+    "background": true
+  }'
+```
 
+Expected Response:
 
+```bash
+{
+  "id": "litellm_poll_adff0089-f9d3-4135-b49e-f582597deedd",
+  "object": "response",
+  "status": "queued",
+  "output": [],
+  "usage": null,
+  "metadata": {},
+  "created_at": 1764913614
+}
+```
 
+Get response curl cmd:
 
+```bash
+curl http://0.0.0.0:4000/v1/responses/litellm_poll_adff0089-f9d3-4135-b49e-f582597deedd \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234"
+```
 
+Response: 
+
+```bash
+{
+  "id": "litellm_poll_adff0089-f9d3-4135-b49e-f582597deedd",
+  "created_at": 1764913614,
+  "error": null,
+  "incomplete_details": null,
+  "instructions": null,
+  "metadata": {},
+  "model": "claude-sonnet-4-5-20250929",
+  "object": "response",
+  "output": [
+    {
+      "id": "rs_0b467fde531ff8fb00693271cf4ec88196aee3b64030ecc23d",
+      "summary": [],
+      "type": "reasoning"
+    },
+    {
+      "id": "msg_0b467fde531ff8fb00693271d2885c8196b2ccf625b4560125",
+      "content": [
+        {
+          "annotations": [],
+          "text": "Under a moonlit sky, a gentle unicorn named Lumen wandered through a whispering forest, leaving silver hoofprints that glowed softly in the moss. She paused beside a sleepy brook and lowered her horn, and the ripples turned into twinkling stars that drifted up to join the night. With the forest tucked beneath a quilt of starlight, Lumen closed her eyes and dreamed of new paths to light when morning came.",
+          "type": "output_text",
+          "logprobs": []
+        }
+      ],
+      "role": "assistant",
+      "status": "completed",
+      "type": "message"
+    }
+  ],
+  "parallel_tool_calls": true,
+  "temperature": 1,
+  "tool_choice": "auto",
+  "tools": [],
+  "top_p": 1,
+  "max_output_tokens": null,
+  "previous_response_id": null,
+  "reasoning": {
+    "effort": "medium"
+  },
+  "status": "completed",
+  "text": {
+    "format": {
+      "type": "text"
+    },
+    "verbosity": "medium"
+  },
+  "truncation": "disabled",
+  "usage": {
+    "input_tokens": 17,
+    "input_tokens_details": {
+      "cached_tokens": 0
+    },
+    "output_tokens": 287,
+    "output_tokens_details": {
+      "reasoning_tokens": 192
+    },
+    "total_tokens": 304
+  },
+  "user": null,
+  "store": true
+}
+```
