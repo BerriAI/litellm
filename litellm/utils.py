@@ -8592,6 +8592,10 @@ class ProviderConfigManager:
             from litellm.llms.gemini.realtime.transformation import GeminiRealtimeConfig
 
             return GeminiRealtimeConfig()
+        elif LlmProviders.BEDROCK == provider:
+            from litellm.llms.bedrock.realtime.transformation import BedrockRealtimeConfig
+
+            return BedrockRealtimeConfig()
         return None
 
     @staticmethod
@@ -8737,6 +8741,13 @@ class ProviderConfigManager:
                 )
 
                 return AzureAVATextToSpeechConfig()
+        elif litellm.LlmProviders.BEDROCK == provider:
+            # Bedrock Nova Sonic speech-to-speech models
+            if "sonic" in model.lower():
+                from litellm.llms.bedrock.text_to_speech.transformation import (
+                    BedrockNovaSonicConfig,
+                )
+                return BedrockNovaSonicConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
             from litellm.llms.elevenlabs.text_to_speech.transformation import (
                 ElevenLabsTextToSpeechConfig,

@@ -16,11 +16,13 @@ from litellm.utils import ProviderConfigManager
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
+from ..llms.bedrock.realtime.handler import BedrockRealtime
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..utils import client as wrapper_client
 from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 azure_realtime = AzureOpenAIRealtime()
+bedrock_realtime = BedrockRealtime()
 openai_realtime = OpenAIRealtime()
 base_llm_http_handler = BaseLLMHTTPHandler()
 
@@ -79,7 +81,43 @@ async def _arealtime(
             model=model,
             provider=LlmProviders(_custom_llm_provider),
         )
-    if provider_config is not None:
+    
+    # Special handling for Bedrock - uses AWS SDK, not WebSocket
+    if _custom_llm_provider == "bedrock":
+        # Get AWS credentials
+        aws_access_key_id = (
+            dynamic_api_key
+            or kwargs.get("aws_access_key_id")
+            or get_secret_str("AWS_ACCESS_KEY_ID")
+        )
+        aws_secret_access_key = (
+            kwargs.get("aws_secret_access_key")
+            or get_secret_str("AWS_SECRET_ACCESS_KEY")
+        )
+        aws_session_token = (
+            kwargs.get("aws_session_token")
+            or get_secret_str("AWS_SESSION_TOKEN")
+        )
+        aws_region_name = (
+            kwargs.get("aws_region_name")
+            or get_secret_str("AWS_REGION_NAME")
+            or "us-west-1"
+        )
+        
+        await bedrock_realtime.async_realtime(
+            model=model,
+            websocket=websocket,
+            logging_obj=litellm_logging_obj,
+            api_base=api_base,
+            api_key=aws_access_key_id,
+            aws_access_key_id=aws_access_key_id,
+            aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
+            aws_region_name=aws_region_name,
+            client=None,
+            timeout=timeout,
+        )
+    elif provider_config is not None:
         await base_llm_http_handler.async_realtime(
             model=model,
             websocket=websocket,
