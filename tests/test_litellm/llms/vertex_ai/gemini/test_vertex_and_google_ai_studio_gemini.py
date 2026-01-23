@@ -10,11 +10,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.types.llms.vertex_ai import UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
@@ -604,6 +604,38 @@ def test_check_finish_reason():
             )
             == v
         )
+
+
+def test_finish_reason_unspecified_and_malformed_function_call():
+    """
+    Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL 
+    return their lowercase values instead of being mapped to 'stop'
+    since we don't have good mappings for these.
+    """
+    finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
+    
+    # Test FINISH_REASON_UNSPECIFIED returns lowercase version
+    assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "finish_reason_unspecified"
+    assert (
+        VertexGeminiConfig._check_finish_reason(
+            chat_completion_message=None, finish_reason="FINISH_REASON_UNSPECIFIED"
+        )
+        == "finish_reason_unspecified"
+    )
+    
+    # Test MALFORMED_FUNCTION_CALL returns lowercase version
+    assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "malformed_function_call"
+    assert (
+        VertexGeminiConfig._check_finish_reason(
+            chat_completion_message=None, finish_reason="MALFORMED_FUNCTION_CALL"
+        )
+        == "malformed_function_call"
+    )
+    
+    # Ensure these values are in the OpenAI finish reasons constant
+    from litellm import OPENAI_FINISH_REASONS
+    assert "finish_reason_unspecified" in OPENAI_FINISH_REASONS
+    assert "malformed_function_call" in OPENAI_FINISH_REASONS
 
 
 def test_vertex_ai_usage_metadata_response_token_count():
@@ -1980,6 +2012,71 @@ def test_reasoning_effort_maps_to_thinking_level_gemini_3():
     assert result["thinkingConfig"]["includeThoughts"] is False
 
 
+def test_reasoning_effort_dict_format_gemini_3():
+    """
+    Test that reasoning_effort works when passed as dict format from OpenAI Agents SDK.
+
+    The OpenAI Agents SDK passes reasoning_effort as {"effort": "high", "summary": "auto"}
+    instead of just a string. This test verifies that we correctly extract the effort value.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/19411
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+    model = "gemini-3-pro-preview"
+
+    # Test dict format with effort="high" (OpenAI Agents SDK format)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "high", "summary": "auto"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format with effort="low"
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "low"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format with effort="medium"
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"effort": "medium"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    assert result["thinkingConfig"]["thinkingLevel"] == "high"
+    assert result["thinkingConfig"]["includeThoughts"] is True
+
+    # Test dict format without effort key - should fall back to Gemini 3 default (low)
+    optional_params = {}
+    non_default_params = {"reasoning_effort": {"summary": "auto"}}
+    result = v.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model=model,
+        drop_params=False,
+    )
+    # Gemini 3 defaults to thinkingLevel="low" when no explicit effort is set
+    assert result["thinkingConfig"]["thinkingLevel"] == "low"
+
+
 def test_temperature_default_for_gemini_3():
     """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
@@ -2746,3 +2843,273 @@ def test_gemini_image_gen_usage_metadata_prompt_vs_completion_separation():
     # candidatesTokenCount (1290) - image_tokens (1290) = 0
     assert result.completion_tokens_details.text_tokens == 0, \
         "Completion text tokens should be 0 (image-only response)"
+
+
+def test_file_object_detail_parameter():
+    """Test that detail parameter works for type: file objects (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this video?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "low"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Verify media_resolution is set for file objects
+    assert len(contents) == 1
+    assert len(contents[0]["parts"]) == 2  # text + file
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None, "File part should exist"
+    assert "media_resolution" in file_part, "media_resolution should be set for file objects"
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_LOW"}
+
+
+def test_video_metadata_fps():
+    """Test fps parameter in video_metadata (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {"fps": 5}
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "video_metadata" in file_part, "video_metadata should be present"
+    assert file_part["video_metadata"]["fps"] == 5
+
+
+def test_video_metadata_complete():
+    """Test all video_metadata fields: fps, start_offset, end_offset (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "start_offset": "10s",
+                            "end_offset": "60s",
+                            "fps": 5
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "video_metadata" in file_part
+
+    # Verify field name conversion: snake_case -> camelCase
+    vm = file_part["video_metadata"]
+    assert vm["startOffset"] == "10s", "start_offset should be converted to startOffset"
+    assert vm["endOffset"] == "60s", "end_offset should be converted to endOffset"
+    assert vm["fps"] == 5, "fps should remain unchanged"
+
+
+def test_detail_and_video_metadata_combined():
+    """Test using both detail and video_metadata together (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze video"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",
+                        "video_metadata": {"fps": 10}
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    # Find the file part
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert "media_resolution" in file_part
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert "video_metadata" in file_part
+    assert file_part["video_metadata"]["fps"] == 10
+
+
+def test_new_detail_levels():
+    """Test new detail levels: medium and ultra_high (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _convert_detail_to_media_resolution_enum,
+        _gemini_convert_messages_with_history,
+    )
+
+    # Test mapping function
+    assert _convert_detail_to_media_resolution_enum("low") == {"level": "MEDIA_RESOLUTION_LOW"}
+    assert _convert_detail_to_media_resolution_enum("medium") == {"level": "MEDIA_RESOLUTION_MEDIUM"}
+    assert _convert_detail_to_media_resolution_enum("high") == {"level": "MEDIA_RESOLUTION_HIGH"}
+    assert _convert_detail_to_media_resolution_enum("ultra_high") == {"level": "MEDIA_RESOLUTION_ULTRA_HIGH"}
+
+    # Test with actual message transformation
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "medium"
+                    }
+                }
+            ]
+        }
+    ]
+
+    contents = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    file_part = None
+    for part in contents[0]["parts"]:
+        if "file_data" in part:
+            file_part = part
+            break
+
+    assert file_part is not None
+    assert file_part["media_resolution"] == {"level": "MEDIA_RESOLUTION_MEDIUM"}
+
+
+def test_video_metadata_only_for_gemini_3():
+    """Test that video_metadata is only applied for Gemini 3+ models (Issue #19026)"""
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        _gemini_convert_messages_with_history,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/video.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",
+                        "video_metadata": {"fps": 5}
+                    }
+                }
+            ]
+        }
+    ]
+
+    # Test with Gemini 1.5 (should not have video_metadata or media_resolution)
+    contents_1_5 = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-1.5-pro"
+    )
+
+    file_part_1_5 = None
+    for part in contents_1_5[0]["parts"]:
+        if "file_data" in part:
+            file_part_1_5 = part
+            break
+
+    assert file_part_1_5 is not None
+    assert "media_resolution" not in file_part_1_5, "Gemini 1.5 should not have media_resolution"
+    assert "video_metadata" not in file_part_1_5, "Gemini 1.5 should not have video_metadata"
+
+    # Test with Gemini 3 (should have both)
+    contents_3 = _gemini_convert_messages_with_history(
+        messages=messages, model="gemini-3-pro-preview"
+    )
+
+    file_part_3 = None
+    for part in contents_3[0]["parts"]:
+        if "file_data" in part:
+            file_part_3 = part
+            break
+
+    assert file_part_3 is not None
+    assert "media_resolution" in file_part_3, "Gemini 3 should have media_resolution"
+    assert "video_metadata" in file_part_3, "Gemini 3 should have video_metadata"

@@ -129,6 +129,7 @@ const sidebars = {
             "tutorials/claude_code_plugin_marketplace",
           ]
         },
+        "tutorials/opencode_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
@@ -517,7 +518,14 @@ const sidebars = {
             "mcp_troubleshoot",
           ]
         },
-        "anthropic_unified",
+        {
+          type: "category",
+          label: "/v1/messages",
+          items: [
+            "anthropic_unified/index",
+            "anthropic_unified/structured_output",
+          ]
+        },
         "anthropic_count_tokens",
         "moderation",
         "ocr",
@@ -563,6 +571,7 @@ const sidebars = {
             "search/perplexity",
             "search/tavily",
             "search/exa_ai",
+            "search/brave",
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
@@ -719,6 +728,7 @@ const sidebars = {
         "providers/galadriel",
         "providers/github",
         "providers/github_copilot",
+        "providers/gmi",
         "providers/chatgpt",
         "providers/gradient_ai",
         "providers/groq",

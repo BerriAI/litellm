@@ -14,21 +14,31 @@ export interface AllProxyModelsResponse {
   data: ProxyModel[];
 }
 
+export interface PaginatedModelInfoResponse {
+  data: any[];
+  total_count: number;
+  current_page: number;
+  total_pages: number;
+  size: number;
+}
+
 const modelKeys = createQueryKeys("models");
 const modelHubKeys = createQueryKeys("modelHub");
 const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 
-export const useModelsInfo = () => {
+export const useModelsInfo = (page: number = 1, size: number = 50) => {
   const { accessToken, userId, userRole } = useAuthorized();
-  return useQuery({
+  return useQuery<PaginatedModelInfoResponse>({
     queryKey: modelKeys.list({
       filters: {
         ...(userId && { userId }),
         ...(userRole && { userRole }),
+        page,
+        size,
       },
     }),
-    queryFn: async () => await modelInfoCall(accessToken!, userId!, userRole!),
+    queryFn: async () => await modelInfoCall(accessToken!, userId!, userRole!, page, size),
     enabled: Boolean(accessToken && userId && userRole),
   });
 };
@@ -46,7 +56,7 @@ export const useAllProxyModels = () => {
   const { accessToken, userId, userRole } = useAuthorized();
   return useQuery<AllProxyModelsResponse>({
     queryKey: allProxyModelsKeys.list({}),
-    queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true),
+    queryFn: async () => await modelAvailableCall(accessToken!, userId!, userRole!, true, null, true, false, "expand"),
     enabled: Boolean(accessToken && userId && userRole),
   });
 };

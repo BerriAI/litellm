@@ -1560,22 +1560,30 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
         mock_usertable = MagicMock()
         mock_usertable.find_many = MagicMock(side_effect=Exception("User database error"))
         mock_usertable.count = MagicMock(side_effect=Exception("User count error"))
+        
+        # Mock litellm_teamtable to raise an exception for team count metrics
+        mock_teamtable = MagicMock()
+        mock_teamtable.count = MagicMock(side_effect=Exception("Team count error"))
+        
         mock_db = MagicMock()
         mock_db.litellm_usertable = mock_usertable
+        mock_db.litellm_teamtable = mock_teamtable
         mock_prisma.db = mock_db
 
         # Mock the Prometheus metrics
         prometheus_logger.litellm_remaining_team_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_api_key_budget_metric = MagicMock()
         prometheus_logger.litellm_remaining_user_budget_metric = MagicMock()
+        prometheus_logger.litellm_total_users_metric = MagicMock()
+        prometheus_logger.litellm_teams_count_metric = MagicMock()
 
         # Mock the logger to capture the error
         with patch("litellm._logging.verbose_logger.exception") as mock_logger:
             # Call the function
             await prometheus_logger._initialize_remaining_budget_metrics()
 
-            # Verify all three errors were logged (teams, keys, and users)
-            assert mock_logger.call_count == 3
+            # Verify all four errors were logged (teams, keys, users, and user/team count)
+            assert mock_logger.call_count == 4
             assert (
                 "Error initializing teams budget metrics"
                 in mock_logger.call_args_list[0][0][0]
@@ -1588,11 +1596,17 @@ async def test_initialize_remaining_budget_metrics_exception_handling(
                 "Error initializing users budget metrics"
                 in mock_logger.call_args_list[2][0][0]
             )
+            assert (
+                "Error initializing user/team count metrics"
+                in mock_logger.call_args_list[3][0][0]
+            )
 
         # Verify the metrics were never called
         prometheus_logger.litellm_remaining_team_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_api_key_budget_metric.assert_not_called()
         prometheus_logger.litellm_remaining_user_budget_metric.assert_not_called()
+        prometheus_logger.litellm_total_users_metric.assert_not_called()
+        prometheus_logger.litellm_teams_count_metric.assert_not_called()
 
 
 @pytest.mark.asyncio(scope="session")
