@@ -732,9 +732,16 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         This is useful for logging payloads that contain sensitive information.
         """
-        # skip redundant redaction if global redaction was already applied
+        # Only skip if global redaction applied AND method is not overridden
         if global_redaction_applied:
-            return model_call_details
+            # Check if this method was overridden in a subclass
+            method_name = "redact_standard_logging_payload_from_model_call_details"
+            is_overridden = method_name in type(self).__dict__
+
+            if not is_overridden:
+                # Safe to skip - using default implementation
+                return model_call_details
+            # Method was overridden - might do additional redaction, so proceed
 
         from copy import copy
 
