@@ -12,6 +12,7 @@ from litellm.responses.litellm_completion_transformation.streaming_iterator impo
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import (
     Choices,
     Delta,
@@ -264,6 +265,130 @@ class TestReasoningContentStreaming:
         done_index = event_types.index("response.reasoning_summary_text.done")
         text_index = event_types.index("response.output_text.delta")
         assert done_index < text_index
+
+    @pytest.mark.asyncio
+    async def test_reasoning_lifecycle_events_order_and_indexes(self):
+        """Validate reasoning lifecycle events and output_index alignment"""
+        chunk_reasoning = ModelResponseStream(
+            id="test-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="",
+                        role="assistant",
+                        reasoning_content="Thinking...",
+                    ),
+                )
+            ],
+        )
+
+        chunk_text = ModelResponseStream(
+            id="test-id",
+            created=1234567891,
+            model="test-model",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(
+                        content="Final answer",
+                        role=None,
+                    ),
+                )
+            ],
+        )
+
+        mock_stream = AsyncMock()
+        mock_stream.logging_obj = Mock()
+        mock_stream.__anext__.side_effect = [
+            chunk_reasoning,
+            chunk_text,
+            StopAsyncIteration,
+        ]
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="test-model",
+            litellm_custom_stream_wrapper=mock_stream,
+            request_input="Test input",
+            responses_api_request={},
+        )
+
+        events = []
+        try:
+            while True:
+                events.append(await iterator.__anext__())
+                if len(events) > 30:
+                    break
+        except StopAsyncIteration:
+            pass
+
+        event_types = [evt.type for evt in events]
+        assert ResponsesAPIStreamEvents.RESPONSE_CREATED in event_types
+        assert ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS in event_types
+        assert ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA in event_types
+        assert ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE in event_types
+        assert ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE in event_types
+        assert ResponsesAPIStreamEvents.RESPONSE_PART_ADDED in event_types
+        assert ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE in event_types
+        assert ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA in event_types
+
+        reasoning_added = [
+            e for e in events
+            if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+            and getattr(e.item, "type", None) == "reasoning"
+        ][0]
+        message_added = [
+            e for e in events
+            if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+            and getattr(e.item, "type", None) == "message"
+        ][0]
+
+        assert reasoning_added.output_index == 0
+        assert message_added.output_index == 1
+
+        reasoning_done = [
+            e for e in events
+            if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE
+            and getattr(e.item, "type", None) == "reasoning"
+        ][0]
+        assert events.index(reasoning_done) < events.index(message_added)
+
+        part_added = [
+            e for e in events
+            if e.type == ResponsesAPIStreamEvents.RESPONSE_PART_ADDED
+        ][0]
+        assert part_added.output_index == 0
+        assert part_added.part.get("type") == "summary_text"
+        assert getattr(part_added, "summary_index", None) == 0
+
+        reasoning_delta = [
+            e for e in events
+            if e.type == ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA
+        ][0]
+        assert reasoning_delta.output_index == 0
+        assert getattr(reasoning_delta, "summary_index", None) == 0
+        assert events.index(part_added) < events.index(reasoning_delta)
+
+        output_text_delta = [
+            e for e in events
+            if e.type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA
+        ][0]
+        assert output_text_delta.output_index == 1
+        assert output_text_delta.item_id == message_added.item.id
+        assert events.index(message_added) < events.index(output_text_delta)
+
+        sequence_numbers = [
+            getattr(e, "sequence_number", None)
+            for e in events
+            if getattr(e, "sequence_number", None) is not None
+        ]
+        assert sequence_numbers == sorted(sequence_numbers)
 
 
 class TestReasoningContentFinalResponse:

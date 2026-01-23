@@ -1547,7 +1547,10 @@ class TestStreamingIDConsistency:
         # Create done events
         text_done_event = iterator.create_output_text_done_event(complete_response)
         content_done_event = iterator.create_output_content_part_done_event(complete_response)
-        item_done_event = iterator.create_output_item_done_event(complete_response)
+        item_done_event = iterator.create_output_item_done_event(
+            litellm_complete_object=complete_response,
+            sequence_number=1,
+        )
 
         # Extract IDs
         text_done_id = getattr(text_done_event, "item_id", None)
