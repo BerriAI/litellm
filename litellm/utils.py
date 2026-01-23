@@ -1745,6 +1745,8 @@ def client(original_function):  # noqa: PLR0915
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
+        from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
+
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
