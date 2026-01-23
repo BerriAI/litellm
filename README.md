@@ -261,6 +261,8 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 ## OSS Adopters 
 <img width="250" height="104" alt="Stripe wordmark - Blurple - Small" src="https://github.com/user-attachments/assets/f7296d4f-9fbd-460d-9d05-e4df31697c4b" />
 
+<img width="250" height="69" alt="download__1_-removebg-preview" src="https://github.com/user-attachments/assets/0be4bd8a-7cfa-48d3-9090-f415fe948280" />
+
 
 
 
