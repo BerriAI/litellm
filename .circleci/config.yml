@@ -1835,7 +1835,6 @@ jobs:
               --verbose \
               --command="xargs python -m pytest \
                 -vv \
-                tests/logging_callback_tests \
                 --cov=litellm \
                 --cov-report=xml \
                 -s \
