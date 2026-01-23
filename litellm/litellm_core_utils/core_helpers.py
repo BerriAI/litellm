@@ -1,11 +1,11 @@
 # What is this?
 ## Helper utilities
-from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, List, Literal, Optional, Union, cast
 
 import httpx
 
 from litellm._logging import verbose_logger
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
@@ -60,6 +60,8 @@ def safe_divide(
 
 def map_finish_reason(
     finish_reason: str,
+) -> (
+    OpenAIChatCompletionFinishReason
 ):  # openai supports 5 stop sequences - 'stop', 'length', 'function_call', 'content_filter', 'null'
     # anthropic mapping
     if finish_reason == "stop_sequence":
@@ -96,7 +98,7 @@ def map_finish_reason(
         return "tool_calls"
     elif finish_reason == "content_filtered":
         return "content_filter"
-    return finish_reason
+    return cast(OpenAIChatCompletionFinishReason, finish_reason)
 
 
 def remove_index_from_tool_calls(
