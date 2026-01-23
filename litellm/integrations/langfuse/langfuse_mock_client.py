@@ -54,7 +54,7 @@ class MockLangfuseResponse:
 def _mock_httpx_post(self, url, **kwargs):
     """Monkey-patched httpx.Client.post that intercepts Langfuse calls."""
     if isinstance(url, str) and ("langfuse.com" in url or "langfuse" in url.lower()):
-        print(f"[LANGFUSE MOCK] POST to {url}")
+        verbose_logger.debug(f"[LANGFUSE MOCK] POST to {url}")
         return MockLangfuseResponse(status_code=200, json_data={"status": "success"}, url=url)
     if _original_httpx_post is not None:
         return _original_httpx_post(self, url, **kwargs)
@@ -74,7 +74,7 @@ def create_mock_langfuse_client():
     if _original_httpx_post is None:
         _original_httpx_post = httpx.Client.post
         httpx.Client.post = _mock_httpx_post  # type: ignore
-        print("[LANGFUSE MOCK] Patched httpx.Client.post")
+        verbose_logger.debug("[LANGFUSE MOCK] Patched httpx.Client.post")
     
     return httpx.Client()
 
