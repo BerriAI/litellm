@@ -40,7 +40,9 @@ RUN ls -1 dist/*.whl | head -1
 RUN pip install dist/*.whl
 
 # install dependencies as wheels
-RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt
+# Note: a2a-sdk is explicitly included to ensure it's wheeled even with environment markers
+RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
+  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "a2a-sdk>=0.3.22"
 
 # Runtime stage
 FROM $LITELLM_RUNTIME_IMAGE AS runtime

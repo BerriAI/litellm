@@ -32,7 +32,7 @@ RUN for i in 1 2 3; do \
 # Cache Python dependencies
 COPY requirements.txt .
 RUN pip wheel --no-cache-dir --wheel-dir=/wheels/ -r requirements.txt \
-  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.9.0"
+  && pip wheel --no-cache-dir --wheel-dir=/wheels/ "semantic_router==0.1.11" "aurelio-sdk==0.0.19" "PyJWT==2.9.0" "a2a-sdk>=0.3.22"
 
 # Copy source after dependency layers
 COPY . .
