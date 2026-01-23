@@ -79,7 +79,7 @@ def _add_mcp_metadata_to_response(
             setattr(message, "provider_specific_fields", provider_fields)
 
 
-async def acompletion_with_mcp(
+async def acompletion_with_mcp(  # noqa: PLR0915
     model: str,
     messages: List,
     tools: Optional[List] = None,
