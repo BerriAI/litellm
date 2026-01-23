@@ -144,6 +144,7 @@ run_grype_scans() {
         "CVE-2025-59466" # We do not use Node in application runtime, only used for building Admin UI
         "CVE-2025-55130" # We do not use Node in application runtime, only used for building Admin UI
         "CVE-2025-59467" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2026-21637" # We do not use Node in application runtime, only used for building Admin UI
         "CVE-2025-15281" # No fix available yet
         "CVE-2026-0865" # No fix available yet
         "CVE-2025-15282" # No fix available yet
