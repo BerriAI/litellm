@@ -1011,6 +1011,7 @@ async def generate_key_fn(
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
     - model_max_budget: Optional[Dict[str, BudgetConfig]] - Model-specific budgets {"gpt-4": {"budget_limit": 0.0005, "time_period": "30d"}}}. IF null or {} then no model specific budget.
@@ -1481,6 +1482,7 @@ async def update_key_fn(
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
+    - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
     - blocked: Optional[bool] - Whether the key is blocked
