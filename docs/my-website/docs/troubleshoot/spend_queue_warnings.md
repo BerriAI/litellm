@@ -28,37 +28,15 @@ Set the `MAX_SIZE_IN_MEMORY_QUEUE` environment variable to a higher value:
 MAX_SIZE_IN_MEMORY_QUEUE=50000
 ```
 
-**Considerations:**
-- Higher values use more memory
-- Monitor system memory usage when increasing
+**Tradeoffs:**
+Higher queue sizes store more items in memory - provision at least 8GB RAM for large queues
 - Recommended for deployments with consistent high traffic
 
-### 2. Database Performance Optimization
-
-Optimize your database configuration and connection handling for better write performance.
-
-**Database-specific optimizations:**
-- **PostgreSQL**: Increase `max_connections`, tune `shared_buffers`
-- **MySQL**: Optimize `innodb_buffer_pool_size`
-- **SQLite**: Consider switching to PostgreSQL/MySQL for high volume
-
-### 3. Horizontal Scaling
+### 2. Horizontal Scaling
 
 Deploy multiple proxy instances with load balancing. This distributes the spend tracking load across multiple queues, reducing the pressure on any single instance's spend update queue.
 
-## Best Practices
 
-1. **Set appropriate queue size** based on your traffic patterns
-2. **Monitor database performance** regularly
-3. **Use connection pooling** for database connections
-4. **Consider read replicas** for spend analytics queries
-5. **Implement alerting** on queue utilization > 80%
-
-## Impact Assessment
-
-- **No CPU impact**: If CPU usage remains normal during warnings, the current queue size is likely adequate
-- **CPU spikes with warnings**: Increase `MAX_SIZE_IN_MEMORY_QUEUE` to reduce aggregation overhead
-- **Frequent warnings**: Consider database optimization or horizontal scaling
 
 ## Related Configuration
 
