@@ -244,14 +244,14 @@ async def acompletion_with_mcp(
                     for choice in chunk.choices:
                         if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
                             # Get existing provider_specific_fields or create new dict
-                            provider_fields = (
-                                getattr(choice.delta, "provider_specific_fields", None) or {}
-                            )
+                            existing_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
+                            provider_fields = dict(existing_fields)  # Create a copy to avoid mutating the original
                             
                             # Add only mcp_list_tools to first chunk
                             provider_fields["mcp_list_tools"] = self.openai_tools
                             
-                            # Set the provider_specific_fields
+                            # Set provider_specific_fields directly using setattr
+                            # This ensures the modification is preserved
                             setattr(choice.delta, "provider_specific_fields", provider_fields)
                 
                 return chunk
@@ -264,9 +264,8 @@ async def acompletion_with_mcp(
                     for choice in chunk.choices:
                         if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
                             # Get existing provider_specific_fields or create new dict
-                            provider_fields = (
-                                getattr(choice.delta, "provider_specific_fields", None) or {}
-                            )
+                            existing_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
+                            provider_fields = dict(existing_fields)  # Create a copy to avoid mutating the original
                             
                             # Add tool_calls and tool_results if available
                             if self.tool_calls:
@@ -274,7 +273,8 @@ async def acompletion_with_mcp(
                             if self.tool_results:
                                 provider_fields["mcp_call_results"] = self.tool_results
                             
-                            # Set the provider_specific_fields
+                            # Set provider_specific_fields directly using setattr
+                            # This ensures the modification is preserved
                             setattr(choice.delta, "provider_specific_fields", provider_fields)
                 
                 return chunk
@@ -405,8 +405,6 @@ async def acompletion_with_mcp(
                 if not self.tool_results or not self.complete_response:
                     return
                 
-                from litellm import acompletion as litellm_acompletion
-                
                 # Create follow-up messages with tool results
                 follow_up_messages = LiteLLM_Proxy_MCP_Handler._create_follow_up_messages_for_chat(
                     original_messages=self.messages,
@@ -421,7 +419,10 @@ async def acompletion_with_mcp(
                 # Ensure follow-up call doesn't trigger MCP handler again
                 follow_up_call_args["_skip_mcp_handler"] = True
 
-                follow_up_response = await litellm_acompletion(**follow_up_call_args)
+                # Import litellm here to ensure we get the patched version
+                # This ensures the patch works correctly in tests
+                import litellm
+                follow_up_response = await litellm.acompletion(**follow_up_call_args)
                 
                 # Ensure follow-up response is a CustomStreamWrapper
                 if isinstance(follow_up_response, CustomStreamWrapper):
@@ -471,13 +472,59 @@ async def acompletion_with_mcp(
                 # Copy important attributes from original wrapper
                 if hasattr(original_wrapper, "_hidden_params"):
                     self._hidden_params = original_wrapper._hidden_params
+                # For synchronous iteration, we need to run the async iterator
+                self._sync_iterator = None
+                self._sync_loop = None
 
             def __aiter__(self):
                 return self._custom_iterator
 
+            def __iter__(self):
+                # For synchronous iteration, create a sync wrapper
+                if self._sync_iterator is None:
+                    import asyncio
+                    try:
+                        self._sync_loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        self._sync_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(self._sync_loop)
+                    self._sync_iterator = _SyncIteratorWrapper(self._custom_iterator, self._sync_loop)
+                return self._sync_iterator
+
+            def __next__(self):
+                # Delegate to sync iterator
+                if self._sync_iterator is None:
+                    self.__iter__()
+                return next(self._sync_iterator)
+
             def __getattr__(self, name):
                 # Delegate all other attributes to original wrapper
                 return getattr(self._original_wrapper, name)
+
+        # Helper class to wrap async iterator for sync iteration
+        class _SyncIteratorWrapper:
+            def __init__(self, async_iterator, loop):
+                self._async_iterator = async_iterator
+                self._loop = loop
+                self._iterator = None
+
+            def __iter__(self):
+                return self
+
+            def __next__(self):
+                if self._iterator is None:
+                    # __aiter__ might be async, so we need to await it
+                    aiter_result = self._async_iterator.__aiter__()
+                    if hasattr(aiter_result, '__await__'):
+                        # It's a coroutine, await it
+                        self._iterator = self._loop.run_until_complete(aiter_result)
+                    else:
+                        # It's already an iterator
+                        self._iterator = aiter_result
+                try:
+                    return self._loop.run_until_complete(self._iterator.__anext__())
+                except StopAsyncIteration:
+                    raise StopIteration
 
         return cast(CustomStreamWrapper, MCPStreamWrapper(initial_stream, iterator))
 
