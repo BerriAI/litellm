@@ -46,7 +46,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         Sets OpenTelemetry span attributes for Langfuse observability.
         Uses the same attribute setting logic as Arize Phoenix for consistency.
         """
-        raise Exception("Error raised by LangfuseOtelLogger.set_langfuse_otel_attributes")
+
         _utils.set_attributes(span, kwargs, response_obj, LangfuseLLMObsOTELAttributes)
 
         #########################################################
