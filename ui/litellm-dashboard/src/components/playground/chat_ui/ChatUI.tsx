@@ -607,12 +607,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
     console.log("ChatUI: Received MCP event:", event);
     setMCPEvents((prev) => {
       // Check if this is a duplicate event (same item_id and type)
-      const isDuplicate = prev.some(
-        (existingEvent) =>
-          existingEvent.item_id === event.item_id &&
-          existingEvent.type === event.type &&
-          existingEvent.sequence_number === event.sequence_number,
-      );
+      // Only check for duplicates if item_id is defined (for mcp_list_tools, item_id is "mcp_list_tools")
+      const isDuplicate = event.item_id
+        ? prev.some(
+            (existingEvent) =>
+              existingEvent.item_id === event.item_id &&
+              existingEvent.type === event.type &&
+              (existingEvent.sequence_number === event.sequence_number ||
+                (existingEvent.sequence_number === undefined && event.sequence_number === undefined)),
+          )
+        : false;
 
       if (isDuplicate) {
         console.log("ChatUI: Duplicate MCP event, skipping");
