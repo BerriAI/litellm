@@ -320,31 +320,25 @@ def _poll_for_ready_data(
     return None
 
 
-def _normalize_teams(teams: Any, team_details: Any) -> List[Dict[str, Any]]:
-    # Build a normalized list of team objects that always have
-    # "team_id" and optionally "team_alias".
-    normalized_teams: List[Dict[str, Any]] = []
+def _normalize_teams(teams, team_details):
+    """If team_details are a
+
+    Args:
+        teams (_type_): _description_
+        team_details (_type_): _description_
+
+    Returns:
+        _type_: _description_
+    """
     if isinstance(team_details, list) and team_details:
-        for item in team_details:
-            if isinstance(item, dict):
-                team_id = item.get("team_id") or item.get("id")
-                if team_id is None:
-                    continue
-                normalized_teams.append(
-                    {
-                        "team_id": team_id,
-                        "team_alias": item.get("team_alias"),
-                    }
-                )
-    elif isinstance(teams, list):
-        for t in teams:
-            normalized_teams.append(
-                {
-                    "team_id": str(t),
-                    "team_alias": None,
-                }
-            )
-    return normalized_teams
+        return [
+            {"team_id": i.get("team_id") or i.get("id"), "team_alias": i.get("team_alias")}
+            for i in team_details
+            if isinstance(i, dict) and (i.get("team_id") or i.get("id"))
+        ]
+    if isinstance(teams, list):
+        return [{"team_id": str(t), "team_alias": None} for t in teams]
+    return []
 
 
 def _poll_for_authentication(base_url: str, key_id: str) -> Optional[dict]:
