@@ -1417,8 +1417,6 @@ def add_guardrails_from_policy_engine(
         f"key_alias={context.key_alias}, model={context.model}"
     )
 
-    from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
-
     # Get matching policies via attachments
     matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
 
@@ -1427,23 +1425,19 @@ def add_guardrails_from_policy_engine(
     if not matching_policy_names:
         return
 
-    # Get all policies to check conditions
-    all_policies = registry.get_all_policies()
-
-    # Track applied policies - only include policies whose conditions actually match
-    applied_policy_names = []
-    for policy_name in matching_policy_names:
-        policy = all_policies.get(policy_name)
-        if policy is None:
-            continue
-        # Check if policy condition matches (or has no condition)
-        if policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context):
-            applied_policy_names.append(policy_name)
-            add_policy_to_applied_policies_header(
-                request_data=data, policy_name=policy_name
-            )
+    # Filter to only policies whose conditions match the context
+    applied_policy_names = PolicyMatcher.get_policies_with_matching_conditions(
+        policy_names=matching_policy_names,
+        context=context,
+    )
 
     verbose_proxy_logger.debug(f"Policy engine: applied policies (conditions matched): {applied_policy_names}")
+
+    # Track applied policies in metadata for response headers
+    for policy_name in applied_policy_names:
+        add_policy_to_applied_policies_header(
+            request_data=data, policy_name=policy_name
+        )
 
     # Resolve guardrails from matching policies
     resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context)
