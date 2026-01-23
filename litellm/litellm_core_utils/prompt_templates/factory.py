@@ -4408,7 +4408,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     ]
     """
     """
-    Bedrock toolConfig looks like: 
+    Bedrock toolConfig looks like:
     "tools": [
         {
             "toolSpec": {
@@ -4436,6 +4436,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
+        # Handle regular function tools
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )

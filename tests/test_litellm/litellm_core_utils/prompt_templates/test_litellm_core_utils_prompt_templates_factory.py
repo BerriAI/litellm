@@ -1138,6 +1138,73 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
 
+def test_bedrock_nova_web_search_options_mapping():
+    """
+    Test that web_search_options is correctly mapped to Nova grounding.
+
+    This follows the LiteLLM pattern for web search where:
+    - Vertex AI maps web_search_options to {"googleSearch": {}}
+    - Anthropic maps web_search_options to {"type": "web_search_20250305", ...}
+    - Nova should map web_search_options to {"systemTool": {"name": "nova_grounding"}}
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    # Test basic mapping for Nova model
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    # Test with search_context_size (should be ignored for Nova)
+    result2 = config._map_web_search_options(
+        {"search_context_size": "high"},
+        "us.amazon.nova-premier-v1:0"
+    )
+
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"
+    # Nova doesn't support search_context_size, so it's just ignored
+
+def test_bedrock_tools_pt_does_not_handle_system_tool():
+    """
+    Verify that _bedrock_tools_pt does NOT handle system_tool format.
+
+    System tools (nova_grounding) should be added via web_search_options,
+    not via the tools parameter directly.
+    """
+    
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    # Regular function tools should still work
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools=tools)
+
+    assert len(result) == 1
+    tool_spec = result[0].get("toolSpec")
+    assert tool_spec is not None
+    assert tool_spec["name"] == "get_weather"
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
@@ -1305,12 +1372,12 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
     assert result["content"][0]["cache_control"]["type"] == "ephemeral"
 def test_anthropic_messages_pt_server_tool_use_passthrough():
     """
-    Test that anthropic_messages_pt passes through server_tool_use and 
+    Test that anthropic_messages_pt passes through server_tool_use and
     tool_search_tool_result blocks in assistant message content.
-    
+
     These are Anthropic-native content types used for tool search functionality
     that need to be preserved when reconstructing multi-turn conversations.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
     """
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -1359,15 +1426,15 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify we have 3 messages (user, assistant, user)
     assert len(result) == 3
-    
+
     # Verify the assistant message content
     assistant_msg = result[1]
     assert assistant_msg["role"] == "assistant"
     assert isinstance(assistant_msg["content"], list)
-    
+
     # Find the different content block types
     content_types = [block.get("type") for block in assistant_msg["content"]]
-    
+
     # Verify server_tool_use block is preserved
     assert "server_tool_use" in content_types
     server_tool_use_block = next(
@@ -1376,7 +1443,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
     assert server_tool_use_block["name"] == "tool_search_tool_regex"
     assert server_tool_use_block["input"] == {"query": ".*time.*"}
-    
+
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
     tool_result_block = next(
@@ -1385,7 +1452,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
     assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
-    
+
     # Verify text block is also preserved
     assert "text" in content_types
     text_block = next(
