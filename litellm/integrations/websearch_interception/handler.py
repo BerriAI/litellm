@@ -413,6 +413,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if k != 'max_tokens'
             }
 
+            # Remove internal websearch interception flags from kwargs before follow-up request
+            # These flags are used internally and should not be passed to the LLM provider
+            kwargs_for_followup = {
+                k: v for k, v in kwargs.items()
+                if not k.startswith('_websearch_interception')
+            }
+
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
             full_model_name = model
@@ -428,7 +435,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 messages=follow_up_messages,
                 model=full_model_name,
                 **optional_params_without_max_tokens,
-                **kwargs,
+                **kwargs_for_followup,
             )
             verbose_logger.debug(
                 f"WebSearchInterception: Follow-up request completed, response type: {type(final_response)}"

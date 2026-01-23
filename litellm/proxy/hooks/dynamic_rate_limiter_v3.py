@@ -4,7 +4,7 @@ Dynamic rate limiter v3 - Saturation-aware priority-based rate limiting
 
 import os
 from datetime import datetime
-from typing import Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from fastapi import HTTPException
 
@@ -23,6 +23,25 @@ from litellm.proxy.hooks.rate_limiter_utils import convert_priority_to_percent
 from litellm.proxy.utils import InternalUsageCache
 from litellm.types.router import ModelGroupInfo
 from litellm.types.utils import CallTypesLiteral
+
+if TYPE_CHECKING:
+    from litellm.types.utils import PriorityReservationSettings
+
+
+def _get_priority_settings() -> "PriorityReservationSettings":
+    """
+    Get the priority reservation settings, guaranteed to be non-None.
+
+    The settings are lazy-loaded in litellm.__init__ and always return an instance.
+    This helper provides proper type narrowing for mypy.
+    """
+    settings = litellm.priority_reservation_settings
+    if settings is None:
+        # This should never happen due to lazy loading, but satisfy mypy
+        from litellm.types.utils import PriorityReservationSettings
+
+        return PriorityReservationSettings()
+    return settings
 
 
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
@@ -60,7 +79,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
 
     def _get_saturation_check_cache_ttl(self) -> int:
         """Get the configurable TTL for local cache when reading saturation values."""
-        return litellm.priority_reservation_settings.saturation_check_cache_ttl
+        return _get_priority_settings().saturation_check_cache_ttl
 
     async def _get_saturation_value_from_cache(
         self,
@@ -91,7 +110,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         self, priority: Optional[str], model_info: Optional[ModelGroupInfo] = None
     ) -> float:
         """Get the weight for a given priority from litellm.priority_reservation"""
-        weight: float = litellm.priority_reservation_settings.default_priority
+        weight: float = _get_priority_settings().default_priority
         if (
             litellm.priority_reservation is None
             or priority not in litellm.priority_reservation
@@ -201,7 +220,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             priority_key = f"{model}:{priority}"
         else:
             # No explicit priority: share the default_priority pool with ALL other default keys
-            priority_weight = litellm.priority_reservation_settings.default_priority
+            priority_weight = _get_priority_settings().default_priority
             # Use shared key for all default-priority requests
             priority_key = f"{model}:default_pool"
 
@@ -418,9 +437,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         """
         import json
 
-        saturation_threshold = (
-            litellm.priority_reservation_settings.saturation_threshold
-        )
+        saturation_threshold = _get_priority_settings().saturation_threshold
         should_enforce_priority = saturation >= saturation_threshold
 
         # Build ALL descriptors upfront
@@ -593,9 +610,7 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             # STEP 1: Check current saturation level
             saturation = await self._check_model_saturation(model, model_group_info)
 
-            saturation_threshold = (
-                litellm.priority_reservation_settings.saturation_threshold
-            )
+            saturation_threshold = _get_priority_settings().saturation_threshold
 
             verbose_proxy_logger.debug(
                 f"[Dynamic Rate Limiter] Model={model}, Saturation={saturation:.1%}, "

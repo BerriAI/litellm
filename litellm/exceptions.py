@@ -142,11 +142,13 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
+        # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
         if (
             response is not None
             and isinstance(response, httpx.Response)
-            and hasattr(response, "request")
-            and response.request is not None
+            and hasattr(response, "_request")
+            and getattr(response, "_request", None) is not None
         ):
             self.response = response
         else:
@@ -467,6 +469,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         provider_specific_fields: Optional[dict] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.ContentPolicyViolationError: {}".format(message)
@@ -480,6 +483,7 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
             response=response,
             litellm_debug_info=self.litellm_debug_info,
+            body=body,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):

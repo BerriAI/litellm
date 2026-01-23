@@ -235,6 +235,63 @@ class AmazonAnthropicClaudeMessagesConfig(
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
+    def _convert_output_format_to_inline_schema(
+        self,
+        output_format: Dict,
+        anthropic_messages_request: Dict,
+    ) -> None:
+        """
+        Convert Anthropic output_format to inline schema in message content.
+        
+        Bedrock Invoke doesn't support the output_format parameter, so we embed
+        the schema directly into the user message content as text instructions.
+        
+        This approach adds the schema to the last user message, instructing the model
+        to respond in the specified JSON format.
+        
+        Args:
+            output_format: The output_format dict with 'type' and 'schema'
+            anthropic_messages_request: The request dict to modify in-place
+
+        Ref: https://aws.amazon.com/blogs/machine-learning/structured-data-response-with-amazon-bedrock-prompt-engineering-and-tool-use/
+        """
+        import json
+        
+        # Extract schema from output_format
+        schema = output_format.get("schema")
+        if not schema:
+            return
+        
+        # Get messages from the request
+        messages = anthropic_messages_request.get("messages", [])
+        if not messages:
+            return
+        
+        # Find the last user message
+        last_user_message_idx = None
+        for idx in range(len(messages) - 1, -1, -1):
+            if messages[idx].get("role") == "user":
+                last_user_message_idx = idx
+                break
+        
+        if last_user_message_idx is None:
+            return
+        
+        last_user_message = messages[last_user_message_idx]
+        content = last_user_message.get("content", [])
+        
+        # Ensure content is a list
+        if isinstance(content, str):
+            content = [{"type": "text", "text": content}]
+            last_user_message["content"] = content
+        
+        # Add schema as text content to the message
+        schema_text = {
+            "type": "text",
+            "text": json.dumps(schema)
+        }
+        content.append(schema_text)
+
     def transform_anthropic_messages_request(
         self,
         model: str,
@@ -271,8 +328,16 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # 4. Remove `ttl` field from cache_control in messages (Bedrock doesn't support it)
         self._remove_ttl_from_cache_control(anthropic_messages_request)
+
+        # 5. Convert `output_format` to inline schema (Bedrock invoke doesn't support output_format)
+        output_format = anthropic_messages_request.pop("output_format", None)
+        if output_format:
+            self._convert_output_format_to_inline_schema(
+                output_format=output_format,
+                anthropic_messages_request=anthropic_messages_request,
+            )
             
-        # 5. AUTO-INJECT beta headers based on features used
+        # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)

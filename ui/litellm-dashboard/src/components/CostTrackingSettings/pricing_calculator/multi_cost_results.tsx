@@ -113,10 +113,13 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
 
   const validEntries = multiResult.entries.filter((e) => e.result !== null);
   const loadingEntries = multiResult.entries.filter((e) => e.loading);
+  const errorEntries = multiResult.entries.filter((e) => e.error !== null);
   const hasAnyResult = validEntries.length > 0;
   const isAnyLoading = loadingEntries.length > 0;
+  const hasAnyError = errorEntries.length > 0;
 
-  if (!hasAnyResult && !isAnyLoading) {
+  // Show empty state only if no results, not loading, and no errors
+  if (!hasAnyResult && !isAnyLoading && !hasAnyError) {
     return (
       <div className="py-6 text-center border border-dashed border-gray-300 rounded-lg bg-gray-50">
         <Text className="text-gray-500">
@@ -126,11 +129,32 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
     );
   }
 
-  if (!hasAnyResult && isAnyLoading) {
+  // Show loading state only if loading and no results/errors yet
+  if (!hasAnyResult && isAnyLoading && !hasAnyError) {
     return (
       <div className="py-6 text-center">
         <Spin indicator={<LoadingOutlined spin />} />
         <Text className="text-gray-500 block mt-2">Calculating costs...</Text>
+      </div>
+    );
+  }
+
+  // Show errors-only view when there are errors but no valid results
+  if (!hasAnyResult && hasAnyError) {
+    return (
+      <div className="space-y-4">
+        <Divider className="my-4" />
+        <div className="flex items-center justify-between">
+          <Text className="text-base font-semibold text-gray-900">Cost Estimates</Text>
+          {isAnyLoading && <Spin indicator={<LoadingOutlined spin />} size="small" />}
+        </div>
+        {/* Error Messages */}
+        {errorEntries.map((e) => (
+          <div key={e.entry.id} className="text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
+            <span className="font-medium">{e.entry.model || "Unknown model"}: </span>
+            {e.error}
+          </div>
+        ))}
       </div>
     );
   }
@@ -157,13 +181,28 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       title: "Model",
       dataIndex: "model",
       key: "model",
-      render: (text: string, record: { id: string; provider?: string | null }) => (
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-sm">{text}</span>
-          {record.provider && (
-            <Tag color="blue" className="text-xs">
-              {record.provider}
-            </Tag>
+      render: (text: string, record: { id: string; provider?: string | null; error?: string | null; loading?: boolean; hasZeroCost?: boolean | null }) => (
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-sm">{text}</span>
+            {record.provider && (
+              <Tag color="blue" className="text-xs">
+                {record.provider}
+              </Tag>
+            )}
+            {record.loading && (
+              <Spin indicator={<LoadingOutlined spin />} size="small" />
+            )}
+          </div>
+          {record.error && (
+            <div className="text-xs text-red-600 bg-red-50 px-2 py-1 rounded">
+              ⚠️ {record.error}
+            </div>
+          )}
+          {record.hasZeroCost && !record.error && (
+            <div className="text-xs text-amber-600 bg-amber-50 px-2 py-1 rounded">
+              ⚠️ No pricing data found for this model. Set base_model in config.
+            </div>
           )}
         </div>
       ),
@@ -173,17 +212,21 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       dataIndex: "cost_per_request",
       key: "cost_per_request",
       align: "right" as const,
-      render: (value: number) => <span className="font-mono text-sm">{formatCost(value)}</span>,
+      render: (value: number | null, record: { error?: string | null }) => (
+        record.error ? <span className="text-gray-400">-</span> : <span className="font-mono text-sm">{formatCost(value)}</span>
+      ),
     },
     {
       title: "Margin Fee",
       dataIndex: "margin_cost_per_request",
       key: "margin_cost_per_request",
       align: "right" as const,
-      render: (value: number) => (
-        <span className={`font-mono text-sm ${value > 0 ? "text-amber-600" : "text-gray-400"}`}>
-          {formatCost(value)}
-        </span>
+      render: (value: number | null, record: { error?: string | null }) => (
+        record.error ? <span className="text-gray-400">-</span> : (
+          <span className={`font-mono text-sm ${(value ?? 0) > 0 ? "text-amber-600" : "text-gray-400"}`}>
+            {formatCost(value)}
+          </span>
+        )
       ),
     },
     {
@@ -191,34 +234,43 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       dataIndex: periodCostKey,
       key: "period_cost",
       align: "right" as const,
-      render: (value: number | null) => <span className="font-mono text-sm">{formatCost(value)}</span>,
+      render: (value: number | null, record: { error?: string | null }) => (
+        record.error ? <span className="text-gray-400">-</span> : <span className="font-mono text-sm">{formatCost(value)}</span>
+      ),
     },
     {
       title: "",
       key: "expand",
       width: 40,
-      render: (_: unknown, record: { id: string }) => (
-        <Button
-          size="xs"
-          variant="light"
-          onClick={() => toggleExpanded(record.id)}
-          className="text-gray-400 hover:text-gray-600"
-        >
-          {expandedModels.has(record.id) ? <DownOutlined /> : <RightOutlined />}
-        </Button>
+      render: (_: unknown, record: { id: string; error?: string | null }) => (
+        record.error ? null : (
+          <Button
+            size="xs"
+            variant="light"
+            onClick={() => toggleExpanded(record.id)}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            {expandedModels.has(record.id) ? <DownOutlined /> : <RightOutlined />}
+          </Button>
+        )
       ),
     },
   ];
 
-  const summaryData = validEntries.map((e) => ({
+  // Include both valid results and errors in the table data
+  const allEntriesWithModels = multiResult.entries.filter((e) => e.entry.model);
+  const summaryData = allEntriesWithModels.map((e) => ({
     key: e.entry.id,
     id: e.entry.id,
-    model: e.result!.model,
-    provider: e.result!.provider,
-    cost_per_request: e.result!.cost_per_request,
-    margin_cost_per_request: e.result!.margin_cost_per_request,
-    daily_cost: e.result!.daily_cost,
-    monthly_cost: e.result!.monthly_cost,
+    model: e.result?.model || e.entry.model,
+    provider: e.result?.provider,
+    cost_per_request: e.result?.cost_per_request ?? null,
+    margin_cost_per_request: e.result?.margin_cost_per_request ?? null,
+    daily_cost: e.result?.daily_cost ?? null,
+    monthly_cost: e.result?.monthly_cost ?? null,
+    error: e.error,
+    loading: e.loading,
+    hasZeroCost: e.result && e.result.cost_per_request === 0,
   }));
 
   return (
@@ -268,7 +320,7 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
       </Card>
 
       {/* Per-Model Table */}
-      {validEntries.length > 0 && (
+      {summaryData.length > 0 && (
         <Table
           columns={summaryColumns}
           dataSource={summaryData}
@@ -290,16 +342,6 @@ const MultiCostResults: React.FC<MultiCostResultsProps> = ({ multiResult, timePe
           }}
         />
       )}
-
-      {/* Error Messages */}
-      {multiResult.entries
-        .filter((e) => e.error)
-        .map((e) => (
-          <div key={e.entry.id} className="text-sm text-red-600 bg-red-50 p-3 rounded-lg border border-red-200">
-            <span className="font-medium">{e.entry.model || "Unknown model"}: </span>
-            {e.error}
-          </div>
-        ))}
     </div>
   );
 };

@@ -148,6 +148,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     validate_chat_completion_tool_choice,
+    validate_openai_optional_params
 )
 
 from ._logging import verbose_logger
@@ -599,9 +600,8 @@ async def acompletion( # noqa: PLR0915
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        # Wrap with timeout if specified
-        if timeout is not None:
-            timeout_value = float(timeout) if not isinstance(timeout, (int, float)) else timeout
+        if timeout is not None and isinstance(timeout, (int, float)):
+            timeout_value = float(timeout)
             init_response = await asyncio.wait_for(
                 loop.run_in_executor(None, func_with_context),
                 timeout=timeout_value
@@ -616,8 +616,8 @@ async def acompletion( # noqa: PLR0915
                 response = ModelResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            if timeout is not None:
-                timeout_value = float(timeout) if not isinstance(timeout, (int, float)) else timeout
+            if timeout is not None and isinstance(timeout, (int, float)):
+                timeout_value = float(timeout)
                 response = await asyncio.wait_for(init_response, timeout=timeout_value)
             else:
                 response = await init_response
@@ -1115,6 +1115,9 @@ def completion(  # type: ignore # noqa: PLR0915
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    # validate optional params
+    stop = validate_openai_optional_params(stop=stop)
+
 
     ######### unpacking kwargs #####################
     args = locals()

@@ -409,6 +409,19 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_cached_tokens_metric"),
             )
 
+            # User and Team count metrics
+            self.litellm_total_users_metric = self._gauge_factory(
+                "litellm_total_users",
+                "Total number of users in LiteLLM",
+                labelnames=[],
+            )
+
+            self.litellm_teams_count_metric = self._gauge_factory(
+                "litellm_teams_count",
+                "Total number of teams in LiteLLM",
+                labelnames=[],
+            )
+
         except Exception as e:
             print_verbose(f"Got exception on init prometheus client {str(e)}")
             raise e
@@ -2344,6 +2357,38 @@ class PrometheusLogger(CustomLogger):
         await self._initialize_team_budget_metrics()
         await self._initialize_api_key_budget_metrics()
         await self._initialize_user_budget_metrics()
+        await self._initialize_user_and_team_count_metrics()
+
+    async def _initialize_user_and_team_count_metrics(self):
+        """
+        Initialize user and team count metrics by querying the database.
+
+        Updates:
+        - litellm_total_users: Total count of users in the database
+        - litellm_teams_count: Total count of teams in the database
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.debug(
+                "Prometheus: skipping user/team count metrics initialization, DB not initialized"
+            )
+            return
+
+        try:
+            # Get total user count
+            total_users = await prisma_client.db.litellm_usertable.count()
+            self.litellm_total_users_metric.set(total_users)
+            verbose_logger.debug(f"Prometheus: set litellm_total_users to {total_users}")
+
+            # Get total team count
+            total_teams = await prisma_client.db.litellm_teamtable.count()
+            self.litellm_teams_count_metric.set(total_teams)
+            verbose_logger.debug(f"Prometheus: set litellm_teams_count to {total_teams}")
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error initializing user/team count metrics: {str(e)}"
+            )
 
     async def _set_key_list_budget_metrics(
         self, keys: List[Union[str, UserAPIKeyAuth]]

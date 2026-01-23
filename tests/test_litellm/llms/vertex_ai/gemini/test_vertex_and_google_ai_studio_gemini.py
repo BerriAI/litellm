@@ -10,11 +10,11 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
+from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
-from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.types.llms.vertex_ai import UsageMetadata
 from litellm.types.utils import ChoiceLogprobs, Usage
 from litellm.utils import CustomStreamWrapper
@@ -604,6 +604,38 @@ def test_check_finish_reason():
             )
             == v
         )
+
+
+def test_finish_reason_unspecified_and_malformed_function_call():
+    """
+    Test that FINISH_REASON_UNSPECIFIED and MALFORMED_FUNCTION_CALL 
+    return their lowercase values instead of being mapped to 'stop'
+    since we don't have good mappings for these.
+    """
+    finish_reason_mappings = VertexGeminiConfig.get_finish_reason_mapping()
+    
+    # Test FINISH_REASON_UNSPECIFIED returns lowercase version
+    assert finish_reason_mappings["FINISH_REASON_UNSPECIFIED"] == "finish_reason_unspecified"
+    assert (
+        VertexGeminiConfig._check_finish_reason(
+            chat_completion_message=None, finish_reason="FINISH_REASON_UNSPECIFIED"
+        )
+        == "finish_reason_unspecified"
+    )
+    
+    # Test MALFORMED_FUNCTION_CALL returns lowercase version
+    assert finish_reason_mappings["MALFORMED_FUNCTION_CALL"] == "malformed_function_call"
+    assert (
+        VertexGeminiConfig._check_finish_reason(
+            chat_completion_message=None, finish_reason="MALFORMED_FUNCTION_CALL"
+        )
+        == "malformed_function_call"
+    )
+    
+    # Ensure these values are in the OpenAI finish reasons constant
+    from litellm import OPENAI_FINISH_REASONS
+    assert "finish_reason_unspecified" in OPENAI_FINISH_REASONS
+    assert "malformed_function_call" in OPENAI_FINISH_REASONS
 
 
 def test_vertex_ai_usage_metadata_response_token_count():

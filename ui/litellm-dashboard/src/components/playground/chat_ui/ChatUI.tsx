@@ -607,12 +607,16 @@ const ChatUI: React.FC<ChatUIProps> = ({
     console.log("ChatUI: Received MCP event:", event);
     setMCPEvents((prev) => {
       // Check if this is a duplicate event (same item_id and type)
-      const isDuplicate = prev.some(
-        (existingEvent) =>
-          existingEvent.item_id === event.item_id &&
-          existingEvent.type === event.type &&
-          existingEvent.sequence_number === event.sequence_number,
-      );
+      // Only check for duplicates if item_id is defined (for mcp_list_tools, item_id is "mcp_list_tools")
+      const isDuplicate = event.item_id
+        ? prev.some(
+            (existingEvent) =>
+              existingEvent.item_id === event.item_id &&
+              existingEvent.type === event.type &&
+              (existingEvent.sequence_number === event.sequence_number ||
+                (existingEvent.sequence_number === undefined && event.sequence_number === undefined)),
+          )
+        : false;
 
       if (isDuplicate) {
         console.log("ChatUI: Duplicate MCP event, skipping");
@@ -902,6 +906,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
             customProxyBaseUrl || undefined,
             mcpServers,
             mcpServerToolRestrictions,
+            handleMCPEvent,
           );
         } else if (endpointType === EndpointType.IMAGE) {
           // For image generation
@@ -1664,7 +1669,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
                       {message.role === "assistant" &&
                         index === chatHistory.length - 1 &&
                         mcpEvents.length > 0 &&
-                        endpointType === EndpointType.RESPONSES && (
+                        (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) && (
                           <div className="mb-3">
                             <MCPEventsDisplay events={mcpEvents} />
                           </div>
@@ -1797,7 +1802,7 @@ const ChatUI: React.FC<ChatUIProps> = ({
               {/* Show MCP events during loading if no assistant message exists yet */}
               {isLoading &&
                 mcpEvents.length > 0 &&
-                endpointType === EndpointType.RESPONSES &&
+                (endpointType === EndpointType.RESPONSES || endpointType === EndpointType.CHAT) &&
                 chatHistory.length > 0 &&
                 chatHistory[chatHistory.length - 1].role === "user" && (
                   <div className="text-left mb-4">

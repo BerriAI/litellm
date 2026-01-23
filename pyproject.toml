@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.81.1"
+version = "1.81.2"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -74,8 +74,8 @@ soundfile = {version = "^0.12.1", optional = true}
 # - 1.68.0-1.68.1 has reconnect bug (https://github.com/grpc/grpc/issues/38290)
 # - 1.75.0+ has Python 3.14 wheels and bug fix
 grpcio = [
-    {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14"},
-    {version = ">=1.75.0", python = ">=3.14"},
+    {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14", optional = true},
+    {version = ">=1.75.0", python = ">=3.14", optional = true},
 ]
 
 [tool.poetry.extras]
@@ -127,6 +127,8 @@ semantic-router = ["semantic-router"]
 
 mlflow = ["mlflow"]
 
+grpc = ["grpcio"]
+
 google = ["google-cloud-aiplatform"]
 
 [tool.isort]
@@ -171,7 +173,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.81.1"
+version = "1.81.2"
 version_files = [
     "pyproject.toml:^version"
 ]

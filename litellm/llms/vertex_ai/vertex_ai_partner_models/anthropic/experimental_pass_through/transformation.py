@@ -117,4 +117,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         anthropic_messages_request.pop(
             "model", None
         )  # do not pass model in request body to vertex ai
+
+        anthropic_messages_request.pop(
+            "output_format", None
+        )  # do not pass output_format in request body to vertex ai - vertex ai does not support output_format as yet
+
         return anthropic_messages_request

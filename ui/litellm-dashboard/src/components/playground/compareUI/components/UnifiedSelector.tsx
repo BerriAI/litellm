@@ -32,7 +32,7 @@ export function UnifiedSelector({
         (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
       }
       options={options}
-      className="w-48"
+      className="w-48 md:w-64 lg:w-72"
       notFoundContent={
         loading ? (
           <div className="flex items-center justify-center py-2">
