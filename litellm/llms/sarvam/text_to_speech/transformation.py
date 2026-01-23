@@ -207,11 +207,9 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
             "audios": ["base64_encoded_audio_data"]
         }
 
-        We need to decode it and wrap it in a response object.
+        We need to decode it and wrap it in HttpxBinaryResponseContent.
         """
-        from litellm.llms.sarvam.text_to_speech.sarvam_audio_response import (
-            SarvamAudioResponse,
-        )
+        from litellm.types.llms.openai import HttpxBinaryResponseContent
 
         response_json = raw_response.json()
         audios = response_json.get("audios", [])
@@ -223,7 +221,22 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
         audio_base64 = audios[0]
         audio_bytes = base64.b64decode(audio_base64)
 
-        return SarvamAudioResponse(content=audio_bytes)
+        # Create synthetic httpx.Response with decoded audio bytes
+        # (same pattern as MiniMax TTS)
+        clean_headers = dict(raw_response.headers)
+        clean_headers.pop("content-encoding", None)
+        clean_headers.pop("transfer-encoding", None)
+        clean_headers["content-length"] = str(len(audio_bytes))
+        clean_headers["content-type"] = "audio/wav"
+
+        binary_response = httpx.Response(
+            status_code=200,
+            headers=clean_headers,
+            content=audio_bytes,
+            request=raw_response.request,
+        )
+
+        return HttpxBinaryResponseContent(binary_response)
 
     def get_complete_url(
         self,
