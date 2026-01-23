@@ -185,9 +185,9 @@ async def get_policy_info(
         policy_name=policy_name,
         inherit=policy.inherit,
         scope=PolicyScopeResponse(
-            teams=policy.scope.get_teams(),
-            keys=policy.scope.get_keys(),
-            models=policy.scope.get_models(),
+            teams=[],
+            keys=[],
+            models=[],
         ),
         guardrails=PolicyGuardrailsResponse(
             add=policy.guardrails.get_add(),
@@ -245,9 +245,7 @@ async def test_policy_matching(
     policies = registry.get_all_policies()
 
     # Get matching policies
-    matching_policy_names = PolicyMatcher.get_matching_policies(
-        policies=policies, context=context
-    )
+    matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
 
     # Resolve guardrails
     resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(

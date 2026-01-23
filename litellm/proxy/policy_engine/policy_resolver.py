@@ -8,7 +8,7 @@ Handles:
 - Combining guardrails from multiple matching policies
 """
 
-from typing import Any, Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (

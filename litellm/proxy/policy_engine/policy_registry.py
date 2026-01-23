@@ -13,7 +13,6 @@ from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
     Policy,
     PolicyCondition,
-    PolicyConfig,
     PolicyGuardrails,
 )
 

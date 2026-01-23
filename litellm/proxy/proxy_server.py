@@ -2869,12 +2869,6 @@ class ProxyConfig:
 
         verbose_proxy_logger.info(f"Policy engine: found {len(policies_config)} policies in config")
 
-        # Create validator with router for model validation
-        validator = PolicyValidator(
-            prisma_client=prisma_client,
-            llm_router=llm_router,
-        )
-
         # Initialize policies
         await init_policies(
             policies_config=policies_config,

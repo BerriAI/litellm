@@ -12,7 +12,6 @@ Validates:
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.types.proxy.policy_engine import (
     Policy,
     PolicyValidationError,
@@ -267,53 +266,8 @@ class PolicyValidator:
                         )
                     )
 
-            # Validate team aliases (non-wildcard only, query per alias)
-            if validate_db and self.prisma_client:
-                for team_pattern in policy.scope.get_teams():
-                    if not self.is_wildcard_pattern(team_pattern):
-                        exists = await self.check_team_alias_exists(team_alias=team_pattern)
-                        if not exists:
-                            warnings.append(
-                                PolicyValidationError(
-                                    policy_name=policy_name,
-                                    error_type=PolicyValidationErrorType.INVALID_TEAM,
-                                    message=f"Team alias '{team_pattern}' not found in database",
-                                    field="scope.teams",
-                                    value=team_pattern,
-                                )
-                            )
-
-            # Validate key aliases (non-wildcard only, query per alias)
-            if validate_db and self.prisma_client:
-                for key_pattern in policy.scope.get_keys():
-                    if not self.is_wildcard_pattern(key_pattern):
-                        exists = await self.check_key_alias_exists(key_alias=key_pattern)
-                        if not exists:
-                            warnings.append(
-                                PolicyValidationError(
-                                    policy_name=policy_name,
-                                    error_type=PolicyValidationErrorType.INVALID_KEY,
-                                    message=f"Key alias '{key_pattern}' not found in database",
-                                    field="scope.keys",
-                                    value=key_pattern,
-                                )
-                            )
-
-            # Validate models (non-wildcard only, check against router)
-            if self.llm_router:
-                for model_pattern in policy.scope.get_models():
-                    if not self.is_wildcard_pattern(model_pattern):
-                        exists = self.check_model_exists(model=model_pattern)
-                        if not exists:
-                            warnings.append(
-                                PolicyValidationError(
-                                    policy_name=policy_name,
-                                    error_type=PolicyValidationErrorType.INVALID_MODEL,
-                                    message=f"Model '{model_pattern}' not found in router",
-                                    field="scope.models",
-                                    value=model_pattern,
-                                )
-                            )
+            # Note: Team, key, and model validation is done via policy_attachments
+            # Policies no longer have scope - attachments define where policies apply
 
             # Validate inheritance
             inheritance_errors = self._validate_inheritance_chain(
