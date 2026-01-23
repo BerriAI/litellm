@@ -163,6 +163,7 @@ class PolicyValidator:
         policy_name: str,
         policies: Dict[str, Policy],
         visited: Optional[Set[str]] = None,
+        max_depth: int = 100,
     ) -> List[PolicyValidationError]:
         """
         Validate the inheritance chain for a policy.
@@ -170,16 +171,30 @@ class PolicyValidator:
         Checks for:
         - Parent policy exists
         - No circular inheritance
+        - Max depth not exceeded
 
         Args:
             policy_name: Name of the policy to validate
             policies: All policies
             visited: Set of already visited policy names (for cycle detection)
+            max_depth: Maximum recursion depth to prevent infinite loops
 
         Returns:
             List of validation errors
         """
         errors: List[PolicyValidationError] = []
+
+        # Prevent infinite recursion
+        if max_depth <= 0:
+            errors.append(
+                PolicyValidationError(
+                    policy_name=policy_name,
+                    error_type=PolicyValidationErrorType.CIRCULAR_INHERITANCE,
+                    message=f"Inheritance chain too deep (exceeded max depth of 100)",
+                    field="inherit",
+                )
+            )
+            return errors
 
         if visited is None:
             visited = set()
@@ -211,10 +226,12 @@ class PolicyValidator:
                     )
                 )
             else:
-                # Recursively check parent
+                # Recursively check parent with decremented depth
                 visited.add(policy_name)
                 errors.extend(
-                    self._validate_inheritance_chain(policy.inherit, policies, visited)
+                    self._validate_inheritance_chain(
+                        policy.inherit, policies, visited, max_depth - 1
+                    )
                 )
 
         return errors
