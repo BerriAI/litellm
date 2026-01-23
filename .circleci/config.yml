@@ -217,7 +217,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=filesize \
               --verbose \
-              --command="xargs python -m pytest \
+              --command="xargs python -m pytest -o junit_family=legacy \
                 -vv \
                 --cov=litellm \
                 --cov-report=xml \
@@ -555,7 +555,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=filesize \
               --verbose \
-              --command="xargs python -m pytest \
+              --command="xargs python -m pytest -o junit_family=legacy \
                 -k 'router' \
                 --cov=litellm \
                 --cov-report=xml \
@@ -1881,20 +1881,8 @@ jobs:
             pwd
             ls
             mkdir test-results
-
-            # Discover logging callback test files
             TEST_FILES=$(circleci tests glob "tests/logging_callback_tests/**/test_*.py")
-
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=filesize \
-              --verbose \
-              --command="xargs python -m pytest \
-                -vv \
-                --cov=litellm \
-                --cov-report=xml \
-                -s \
-                --junitxml=test-results/junit.xml \
-                --durations=5"
+            echo "$TEST_FILES" | circleci tests run --command="xargs python -m pytest -o junit_family=legacy -vv --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5" --verbose
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
