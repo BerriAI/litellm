@@ -336,11 +336,6 @@ def set_attributes(
     """
     Populates span with OpenInference-compliant LLM attributes for Arize and Phoenix tracing.
     """
-    from litellm.integrations._types.open_inference import (
-        OpenInferenceSpanKindValues,
-        SpanAttributes,
-    )
-
     try:
         optional_params = _sanitize_optional_params(kwargs.get("optional_params"))
         litellm_params = kwargs.get("litellm_params", {}) or {}
