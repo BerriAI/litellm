@@ -5,13 +5,19 @@ Attachments define WHERE policies apply, separate from the policy definitions.
 This allows the same policy to be attached to multiple scopes.
 """
 
-from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
     PolicyAttachment,
+    PolicyAttachmentCreateRequest,
+    PolicyAttachmentDBResponse,
     PolicyMatchContext,
 )
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import PrismaClient
 
 
 class AttachmentRegistry:
@@ -187,6 +193,238 @@ class AttachmentRegistry:
                 f"Removed {removed_count} attachment(s) for policy: {policy_name}"
             )
         return removed_count
+
+    def remove_attachment_by_id(self, attachment_id: str) -> bool:
+        """
+        Remove an attachment by its ID (for DB-synced attachments).
+
+        Args:
+            attachment_id: The ID of the attachment to remove
+
+        Returns:
+            True if removed, False if not found
+        """
+        # Note: In-memory attachments don't have IDs, so this is primarily
+        # for consistency after DB operations
+        return False
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Database CRUD Methods
+    # ─────────────────────────────────────────────────────────────────────────
+
+    async def add_attachment_to_db(
+        self,
+        attachment_request: PolicyAttachmentCreateRequest,
+        prisma_client: "PrismaClient",
+        created_by: Optional[str] = None,
+    ) -> PolicyAttachmentDBResponse:
+        """
+        Add a policy attachment to the database.
+
+        Args:
+            attachment_request: The attachment creation request
+            prisma_client: The Prisma client instance
+            created_by: User who created the attachment
+
+        Returns:
+            PolicyAttachmentDBResponse with the created attachment
+        """
+        try:
+            created_attachment = (
+                await prisma_client.db.litellm_policyattachmenttable.create(
+                    data={
+                        "policy_name": attachment_request.policy_name,
+                        "scope": attachment_request.scope,
+                        "teams": attachment_request.teams or [],
+                        "keys": attachment_request.keys or [],
+                        "models": attachment_request.models or [],
+                        "created_at": datetime.now(timezone.utc),
+                        "updated_at": datetime.now(timezone.utc),
+                        "created_by": created_by,
+                        "updated_by": created_by,
+                    }
+                )
+            )
+
+            # Also add to in-memory registry
+            attachment = PolicyAttachment(
+                policy=attachment_request.policy_name,
+                scope=attachment_request.scope,
+                teams=attachment_request.teams,
+                keys=attachment_request.keys,
+                models=attachment_request.models,
+            )
+            self.add_attachment(attachment)
+
+            return PolicyAttachmentDBResponse(
+                attachment_id=created_attachment.attachment_id,
+                policy_name=created_attachment.policy_name,
+                scope=created_attachment.scope,
+                teams=created_attachment.teams or [],
+                keys=created_attachment.keys or [],
+                models=created_attachment.models or [],
+                created_at=created_attachment.created_at,
+                updated_at=created_attachment.updated_at,
+                created_by=created_attachment.created_by,
+                updated_by=created_attachment.updated_by,
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error adding attachment to DB: {e}")
+            raise Exception(f"Error adding attachment to DB: {str(e)}")
+
+    async def delete_attachment_from_db(
+        self,
+        attachment_id: str,
+        prisma_client: "PrismaClient",
+    ) -> Dict[str, str]:
+        """
+        Delete a policy attachment from the database.
+
+        Args:
+            attachment_id: The ID of the attachment to delete
+            prisma_client: The Prisma client instance
+
+        Returns:
+            Dict with success message
+        """
+        try:
+            # Get attachment before deleting
+            attachment = (
+                await prisma_client.db.litellm_policyattachmenttable.find_unique(
+                    where={"attachment_id": attachment_id}
+                )
+            )
+
+            if attachment is None:
+                raise Exception(f"Attachment with ID {attachment_id} not found")
+
+            # Delete from DB
+            await prisma_client.db.litellm_policyattachmenttable.delete(
+                where={"attachment_id": attachment_id}
+            )
+
+            # Note: In-memory attachments don't have IDs, so we need to sync from DB
+            # to properly update in-memory state
+            await self.sync_attachments_from_db(prisma_client)
+
+            return {"message": f"Attachment {attachment_id} deleted successfully"}
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error deleting attachment from DB: {e}")
+            raise Exception(f"Error deleting attachment from DB: {str(e)}")
+
+    async def get_attachment_by_id_from_db(
+        self,
+        attachment_id: str,
+        prisma_client: "PrismaClient",
+    ) -> Optional[PolicyAttachmentDBResponse]:
+        """
+        Get a policy attachment by ID from the database.
+
+        Args:
+            attachment_id: The ID of the attachment to retrieve
+            prisma_client: The Prisma client instance
+
+        Returns:
+            PolicyAttachmentDBResponse if found, None otherwise
+        """
+        try:
+            attachment = (
+                await prisma_client.db.litellm_policyattachmenttable.find_unique(
+                    where={"attachment_id": attachment_id}
+                )
+            )
+
+            if attachment is None:
+                return None
+
+            return PolicyAttachmentDBResponse(
+                attachment_id=attachment.attachment_id,
+                policy_name=attachment.policy_name,
+                scope=attachment.scope,
+                teams=attachment.teams or [],
+                keys=attachment.keys or [],
+                models=attachment.models or [],
+                created_at=attachment.created_at,
+                updated_at=attachment.updated_at,
+                created_by=attachment.created_by,
+                updated_by=attachment.updated_by,
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error getting attachment from DB: {e}")
+            raise Exception(f"Error getting attachment from DB: {str(e)}")
+
+    async def get_all_attachments_from_db(
+        self,
+        prisma_client: "PrismaClient",
+    ) -> List[PolicyAttachmentDBResponse]:
+        """
+        Get all policy attachments from the database.
+
+        Args:
+            prisma_client: The Prisma client instance
+
+        Returns:
+            List of PolicyAttachmentDBResponse objects
+        """
+        try:
+            attachments = (
+                await prisma_client.db.litellm_policyattachmenttable.find_many(
+                    order={"created_at": "desc"},
+                )
+            )
+
+            return [
+                PolicyAttachmentDBResponse(
+                    attachment_id=a.attachment_id,
+                    policy_name=a.policy_name,
+                    scope=a.scope,
+                    teams=a.teams or [],
+                    keys=a.keys or [],
+                    models=a.models or [],
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                    created_by=a.created_by,
+                    updated_by=a.updated_by,
+                )
+                for a in attachments
+            ]
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error getting attachments from DB: {e}")
+            raise Exception(f"Error getting attachments from DB: {str(e)}")
+
+    async def sync_attachments_from_db(
+        self,
+        prisma_client: "PrismaClient",
+    ) -> None:
+        """
+        Sync policy attachments from the database to in-memory registry.
+
+        Args:
+            prisma_client: The Prisma client instance
+        """
+        try:
+            attachments = await self.get_all_attachments_from_db(prisma_client)
+
+            # Clear existing attachments and reload from DB
+            self._attachments = []
+
+            for attachment_response in attachments:
+                attachment = PolicyAttachment(
+                    policy=attachment_response.policy_name,
+                    scope=attachment_response.scope,
+                    teams=attachment_response.teams if attachment_response.teams else None,
+                    keys=attachment_response.keys if attachment_response.keys else None,
+                    models=attachment_response.models if attachment_response.models else None,
+                )
+                self._attachments.append(attachment)
+
+            self._initialized = True
+            verbose_proxy_logger.info(
+                f"Synced {len(attachments)} attachments from DB to in-memory registry"
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(f"Error syncing attachments from DB: {e}")
+            raise Exception(f"Error syncing attachments from DB: {str(e)}")
 
 
 # Global singleton instance

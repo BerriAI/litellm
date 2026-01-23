@@ -1,5 +1,6 @@
 .python-version
 .venv
+.venv_policy_test
 .env
 .newenv
 newenv/*
