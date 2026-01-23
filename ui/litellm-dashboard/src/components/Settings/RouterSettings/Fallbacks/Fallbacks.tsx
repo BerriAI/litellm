@@ -3,10 +3,10 @@ import { Icon, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow
 import { Tooltip } from "antd";
 import openai from "openai";
 import React, { useEffect, useState } from "react";
-import AddFallbacks from "./add_fallbacks";
-import DeleteResourceModal from "./common_components/DeleteResourceModal";
-import NotificationsManager from "./molecules/notifications_manager";
-import { getCallbacksCall, setCallbacksCall } from "./networking";
+import DeleteResourceModal from "../../../common_components/DeleteResourceModal";
+import NotificationsManager from "../../../molecules/notifications_manager";
+import { getCallbacksCall, setCallbacksCall } from "../../../networking";
+import AddFallbacks from "./AddFallbacks";
 
 type FallbackEntry = { [modelName: string]: string[] };
 type Fallbacks = FallbackEntry[];
@@ -21,7 +21,7 @@ interface FallbacksProps {
 async function testFallbackModelResponse(selectedModel: string, accessToken: string) {
   const isLocal = process.env.NODE_ENV === "development";
   if (isLocal != true) {
-    console.log = function () {};
+    console.log = function () { };
   }
   const proxyBaseUrl = isLocal ? "http://localhost:4000" : window.location.origin;
   const client = new openai.OpenAI({
@@ -142,13 +142,48 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID, mo
     return null;
   }
 
+  const handleFallbacksChange = async (fallbacks: Fallbacks): Promise<void> => {
+    if (!accessToken) {
+      return;
+    }
+
+    const updatedSettings = {
+      ...routerSettings,
+      fallbacks: fallbacks,
+    };
+
+    const payload = {
+      router_settings: updatedSettings,
+    };
+
+    try {
+      await setCallbacksCall(accessToken, payload);
+      // Update UI only after successful API call
+      setRouterSettings(updatedSettings);
+    } catch (error) {
+      // Revert on error by refetching from server
+      NotificationsManager.fromBackend("Failed to update router settings: " + error);
+      if (accessToken && userRole && userID) {
+        getCallbacksCall(accessToken, userID, userRole).then((data) => {
+          let router_settings = data.router_settings;
+          if ("model_group_retry_policy" in router_settings) {
+            delete router_settings["model_group_retry_policy"];
+          }
+          setRouterSettings(router_settings);
+        });
+      }
+      // Re-throw error so caller can handle it
+      throw error;
+    }
+  };
+
   return (
     <>
       <AddFallbacks
         models={modelData?.data ? modelData.data.map((data: any) => data.model_name) : []}
-        accessToken={accessToken}
-        routerSettings={routerSettings}
-        setRouterSettings={setRouterSettings}
+        accessToken={accessToken || ""}
+        value={routerSettings.fallbacks || []}
+        onChange={handleFallbacksChange}
       />
       <Table>
         <TableHead>

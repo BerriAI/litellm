@@ -150,13 +150,14 @@ class KeyManagementEventHooks:
                     existing_key_row.key_alias
                     or f"virtual-key-{existing_key_row.token}"
                 )
+                team_id = getattr(existing_key_row, "team_id", None)
                 await KeyManagementEventHooks._rotate_virtual_key_in_secret_manager(
                     current_secret_name=initial_secret_name,
                     new_secret_name=response.key_alias
                     or data.key_alias
                     or f"virtual-key-{response.token_id}",
                     new_secret_value=response.key,
-                    team_id=existing_key_row.team_id,
+                    team_id=team_id,
                 )
             except Exception as e:
                 verbose_proxy_logger.warning(
@@ -296,10 +297,10 @@ class KeyManagementEventHooks:
         Update a virtual key in the secret manager
 
         Args:
-            current_secret_name: Name of the virtual key
-            new_secret_name: Name of the virtual key
+            current_secret_name: Current name of the virtual key
+            new_secret_name: New name of the virtual key
             new_secret_value: New value of the virtual key (example: sk-1234)
-            team_id: Team ID for team-specific secret manager settings
+            team_id: Optional team ID to get team-specific secret manager settings
         """
         if litellm._key_management_settings is not None:
             if litellm._key_management_settings.store_virtual_keys is True:
