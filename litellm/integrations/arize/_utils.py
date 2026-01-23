@@ -184,16 +184,18 @@ def _set_response_attributes(span: "Span", response_obj):
 
     usage = response_obj and response_obj.get("usage")
     if usage:
-        safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, usage.get("total_tokens"))
-        completion_tokens = usage.get("completion_tokens") or usage.get("output_tokens")
+        safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_TOTAL, getattr(usage, "total_tokens", None))
+        completion_tokens = getattr(usage, "completion_tokens", None) or getattr(usage, "output_tokens", None)
         if completion_tokens:
             safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION, completion_tokens)
-        prompt_tokens = usage.get("prompt_tokens") or usage.get("input_tokens")
+        prompt_tokens = getattr(usage, "prompt_tokens", None) or getattr(usage, "input_tokens", None)
         if prompt_tokens:
             safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_PROMPT, prompt_tokens)
-        reasoning_tokens = usage.get("output_tokens_details", {}).get("reasoning_tokens")
-        if reasoning_tokens:
-            safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
+        output_tokens_details = getattr(usage, "output_tokens_details", None)
+        if output_tokens_details:
+            reasoning_tokens = getattr(usage, "reasoning_tokens", None)
+            if reasoning_tokens:
+                safe_set_attribute(span, SpanAttributes.LLM_TOKEN_COUNT_COMPLETION_DETAILS_REASONING, reasoning_tokens)
 
 
 def set_attributes(
