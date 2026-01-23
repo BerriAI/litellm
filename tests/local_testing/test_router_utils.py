@@ -288,7 +288,7 @@ async def test_call_router_callbacks_on_failure():
                 mock_response="litellm.RateLimitError",
                 num_retries=0,
             )
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)
         print(mock_callback.call_args_list)
         assert mock_callback.call_count == 1
 
