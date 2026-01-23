@@ -158,13 +158,10 @@ class GigaChatConfig(BaseConfig):
                 # Convert tools to functions format
                 optional_params["functions"] = self._convert_tools_to_functions(value)
             elif param == "tool_choice":
-                if isinstance(value, dict) and value.get("function"):
-                    optional_params["function_call"] = {"name": value["function"]["name"]}
-                elif value == "auto":
-                    pass  # Default behavior
-                elif value == "required":
-                    # GigaChat doesn't have 'required', handled differently
-                    pass
+                # Map OpenAI tool_choice to GigaChat function_call
+                mapped_choice = self._map_tool_choice(value)
+                if mapped_choice is not None:
+                    optional_params["function_call"] = mapped_choice
             elif param == "functions":
                 optional_params["functions"] = value
             elif param == "function_call":
@@ -202,6 +199,48 @@ class GigaChatConfig(BaseConfig):
                     "parameters": func.get("parameters", {}),
                 })
         return functions
+
+    def _map_tool_choice(
+        self, tool_choice: Union[str, dict]
+    ) -> Optional[Union[str, dict]]:
+        """
+        Map OpenAI tool_choice to GigaChat function_call format.
+
+        OpenAI format:
+        - "auto": Call zero, one, or multiple functions (default)
+        - "required": Call one or more functions
+        - "none": Don't call any functions
+        - {"type": "function", "function": {"name": "get_weather"}}: Force specific function
+
+        GigaChat format:
+        - "none": Disable function calls
+        - "auto": Automatic mode (default)
+        - {"name": "get_weather"}: Force specific function
+
+        Args:
+            tool_choice: OpenAI tool_choice value
+
+        Returns:
+            GigaChat function_call value or None
+        """
+        if tool_choice == "none":
+            return "none"
+        elif tool_choice == "auto":
+            return "auto"
+        elif tool_choice == "required":
+            # GigaChat doesn't have a direct "required" equivalent
+            # Use "auto" as the closest behavior
+            return "auto"
+        elif isinstance(tool_choice, dict):
+            # OpenAI format: {"type": "function", "function": {"name": "func_name"}}
+            # GigaChat format: {"name": "func_name"}
+            if tool_choice.get("type") == "function":
+                func_name = tool_choice.get("function", {}).get("name")
+                if func_name:
+                    return {"name": func_name}
+        
+        # Default to None (don't set function_call)
+        return None
 
     def _upload_image(self, image_url: str) -> Optional[str]:
         """
