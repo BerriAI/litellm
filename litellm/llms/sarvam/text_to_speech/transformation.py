@@ -175,7 +175,7 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
         request_body: Dict[str, Any] = {
             "inputs": [input],
             "model": model,
-            "speaker": voice or self.DEFAULT_SPEAKER,
+            "speaker": (voice or self.DEFAULT_SPEAKER).lower(),
             "target_language_code": params.pop("target_language_code", self.DEFAULT_LANGUAGE),
         }
 
@@ -233,8 +233,16 @@ class SarvamTextToSpeechConfig(BaseTextToSpeechConfig):
     ) -> str:
         """
         Construct the Sarvam TTS endpoint URL.
+
+        Note: The TTS endpoint is at https://api.sarvam.ai/text-to-speech
+        (without /v1), unlike the chat completions endpoint which uses /v1.
+        We ignore the api_base from providers.json if it contains /v1.
         """
-        base_url = api_base or get_secret_str("SARVAM_API_BASE") or SARVAM_API_BASE
+        # Use explicit api_base only if it doesn't end with /v1
+        if api_base and not api_base.rstrip("/").endswith("/v1"):
+            base_url = api_base
+        else:
+            base_url = get_secret_str("SARVAM_API_BASE") or SARVAM_API_BASE
         base_url = base_url.rstrip("/")
 
         return f"{base_url}{self.TTS_ENDPOINT_PATH}"
