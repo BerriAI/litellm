@@ -33,7 +33,7 @@ def get_supported_openai_params(  # noqa: PLR0915
                 model_info = litellm.model_cost[model]
                 if isinstance(model_info, dict):
                     supported_params = model_info.get("supported_openai_params")
-                    if supported_params is not None:
+                    if supported_params is not None and isinstance(supported_params, list):
                         return supported_params
             return None
 
@@ -313,7 +313,7 @@ def get_supported_openai_params(  # noqa: PLR0915
         model_info = litellm.model_cost[model]
         if isinstance(model_info, dict):
             supported_params = model_info.get("supported_openai_params")
-            if supported_params is not None:
+            if supported_params is not None and isinstance(supported_params, list):
                 return supported_params
 
     return None
