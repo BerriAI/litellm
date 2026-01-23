@@ -1879,6 +1879,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=None,
         description="Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).",
     )
+    forward_metadata: bool = Field(
+        default=False,
+        description="Whether to forward client metadata to the target endpoint. If False (default), metadata is stripped from the request body and only used for LiteLLM-specific logic like cost tracking tags. Set to True for providers like Anthropic that need metadata for features like prompt caching.",
+    )
 
 
 class PassThroughEndpointResponse(LiteLLMPydanticObjectBase):
