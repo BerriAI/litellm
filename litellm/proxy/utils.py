@@ -1793,9 +1793,11 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                await callback.async_post_call_success_hook(
+                callback_response = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
+                if callback_response is not None:
+                    response = callback_response
         except Exception as e:
             raise e
         return response
