@@ -235,7 +235,7 @@ async def acompletion_with_mcp(
 
             def _add_mcp_list_tools_to_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_list_tools to the first chunk."""
-                from litellm.types.utils import StreamingChoices
+                from litellm.types.utils import StreamingChoices, add_provider_specific_fields
                 
                 if not self.openai_tools:
                     return chunk
@@ -250,22 +250,29 @@ async def acompletion_with_mcp(
                             # Add only mcp_list_tools to first chunk
                             provider_fields["mcp_list_tools"] = self.openai_tools
                             
-                            # Set provider_specific_fields directly using setattr
-                            # This ensures the modification is preserved
-                            setattr(choice.delta, "provider_specific_fields", provider_fields)
+                            # Use add_provider_specific_fields to ensure proper setting
+                            # This function handles Pydantic model attribute setting correctly
+                            add_provider_specific_fields(choice.delta, provider_fields)
                 
                 return chunk
 
             def _add_mcp_tool_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
                 """Add mcp_tool_calls and mcp_call_results to the final chunk."""
-                from litellm.types.utils import StreamingChoices
+                from litellm.types.utils import StreamingChoices, add_provider_specific_fields
                 
                 if hasattr(chunk, "choices") and chunk.choices:
                     for choice in chunk.choices:
                         if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
                             # Get existing provider_specific_fields or create new dict
-                            existing_fields = getattr(choice.delta, "provider_specific_fields", None) or {}
-                            provider_fields = dict(existing_fields)  # Create a copy to avoid mutating the original
+                            # Access the attribute directly to handle Pydantic model attributes correctly
+                            existing_fields = {}
+                            if hasattr(choice.delta, "provider_specific_fields"):
+                                attr_value = getattr(choice.delta, "provider_specific_fields", None)
+                                if attr_value is not None:
+                                    # Create a copy to avoid mutating the original
+                                    existing_fields = dict(attr_value) if isinstance(attr_value, dict) else {}
+                            
+                            provider_fields = existing_fields
                             
                             # Add tool_calls and tool_results if available
                             if self.tool_calls:
@@ -273,9 +280,9 @@ async def acompletion_with_mcp(
                             if self.tool_results:
                                 provider_fields["mcp_call_results"] = self.tool_results
                             
-                            # Set provider_specific_fields directly using setattr
-                            # This ensures the modification is preserved
-                            setattr(choice.delta, "provider_specific_fields", provider_fields)
+                            # Use add_provider_specific_fields to ensure proper setting
+                            # This function handles Pydantic model attribute setting correctly
+                            add_provider_specific_fields(choice.delta, provider_fields)
                 
                 return chunk
 
