@@ -127,23 +127,25 @@ async def asend_message(
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
     **kwargs: Any,
 ) -> LiteLLMSendMessageResponse:
     """
-    Async: Send a message to an A2A agent.
+        Async: Send a message to an A2A agent.
 
-    Uses the @client decorator for LiteLLM logging and tracking.
-    If litellm_params contains custom_llm_provider, routes through the completion bridge.
+        Uses the @client decorator for LiteLLM logging and tracking.
+        If litellm_params contains custom_llm_provider, routes through the completion bridge.
 
-    Args:
-        a2a_client: An initialized a2a.client.A2AClient instance (optional if using completion bridge)
-        request: SendMessageRequest from a2a.types (optional if using completion bridge with api_base)
-        api_base: API base URL (required for completion bridge, optional for standard A2A)
-        litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
-        agent_id: Optional agent ID for tracking in SpendLogs
-        **kwargs: Additional arguments passed to the client decorator
+        Args:
+            a2a_client: An initialized a2a.client.A2AClient instance (optional if using completion bridge)
+            request: SendMessageRequest from a2a.types (optional if using completion bridge with api_base)
+            api_base: API base URL (required for completion bridge, optional for standard A2A)
+            litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
+            agent_id: Optional agent ID for tracking in SpendLogs
+            extra_headers: Optional additional headers to include in requests (if creating client)
+            **kwargs: Additional arguments passed to the client decorator
 
-    Returns:
+        Returns:
         LiteLLMSendMessageResponse (wraps a2a SendMessageResponse with _hidden_params)
 
     Example (standard A2A):
@@ -225,7 +227,9 @@ async def asend_message(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        a2a_client = await create_a2a_client(base_url=api_base)
+        a2a_client = await create_a2a_client(
+            base_url=api_base, extra_headers=extra_headers
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -303,6 +307,7 @@ async def asend_message_streaming(
     api_base: Optional[str] = None,
     litellm_params: Optional[Dict[str, Any]] = None,
     agent_id: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
     metadata: Optional[Dict[str, Any]] = None,
     proxy_server_request: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[Any]:
@@ -317,6 +322,7 @@ async def asend_message_streaming(
         api_base: API base URL (required for completion bridge)
         litellm_params: Optional dict with custom_llm_provider, model, etc. for completion bridge
         agent_id: Optional agent ID for tracking in SpendLogs
+        extra_headers: Optional additional headers to include in requests
         metadata: Optional metadata dict (contains user_api_key, user_id, team_id, etc.)
         proxy_server_request: Optional proxy server request data
 
@@ -386,7 +392,9 @@ async def asend_message_streaming(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        a2a_client = await create_a2a_client(base_url=api_base)
+        a2a_client = await create_a2a_client(
+            base_url=api_base, extra_headers=extra_headers
+        )
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -478,15 +486,31 @@ async def create_a2a_client(
     if not A2A_SDK_AVAILABLE:
         raise ImportError(
             "The 'a2a' package is required for A2A agent invocation. "
-            "Install it with: pip install a2a-sdk"
+            "Install it with: pip install a2a"
         )
+
+    # Type validation for extra_headers
+    if extra_headers is not None:
+        if not isinstance(extra_headers, dict):
+            raise ValueError(
+                f"extra_headers must be a dictionary, got {type(extra_headers)}"
+            )
+        for k, v in extra_headers.items():
+            if not isinstance(k, str) or not isinstance(v, str):
+                raise ValueError(
+                    f"extra_headers must be a dictionary of strings, got key={type(k)}, value={type(v)}"
+                )
 
     verbose_logger.info(f"Creating A2A client for {base_url}")
 
     # Use LiteLLM's cached httpx client
+    params = {"timeout": timeout}
+    if extra_headers:
+        params["extra_headers"] = extra_headers
+
     http_handler = get_async_httpx_client(
         llm_provider=httpxSpecialProvider.A2A,
-        params={"timeout": timeout},
+        params=params,
     )
     httpx_client = http_handler.client
 
@@ -539,12 +563,18 @@ async def aget_agent_card(
 
     verbose_logger.info(f"Fetching agent card from {base_url}")
 
-    # Use LiteLLM's cached httpx client
-    http_handler = get_async_httpx_client(
-        llm_provider=httpxSpecialProvider.A2A,
-        params={"timeout": timeout},
-    )
-    httpx_client = http_handler.client
+    if extra_headers:
+        import httpx
+
+        # Create a dedicated client with headers for this agent
+        httpx_client = httpx.AsyncClient(timeout=timeout, headers=extra_headers)
+    else:
+        # Use LiteLLM's cached httpx client
+        http_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.A2A,
+            params={"timeout": timeout},
+        )
+        httpx_client = http_handler.client
 
     resolver = A2ACardResolver(
         httpx_client=httpx_client,

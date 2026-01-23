@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Optional
+from typing import Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -51,6 +51,7 @@ async def _handle_stream_message(
     params: dict,
     litellm_params: Optional[dict] = None,
     agent_id: Optional[str] = None,
+    extra_headers: Optional[Dict[str, str]] = None,
     metadata: Optional[dict] = None,
     proxy_server_request: Optional[dict] = None,
 ) -> StreamingResponse:
@@ -91,6 +92,7 @@ async def _handle_stream_message(
                 api_base=api_base,
                 litellm_params=litellm_params,
                 agent_id=agent_id,
+                extra_headers=extra_headers,
                 metadata=metadata,
                 proxy_server_request=proxy_server_request,
             ):
@@ -253,6 +255,7 @@ async def invoke_agent_a2a(
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params = agent.litellm_params or {}
         custom_llm_provider = litellm_params.get("custom_llm_provider")
+        extra_headers = litellm_params.get("extra_headers")
 
         # URL is required unless using completion bridge with a provider that derives endpoint from model
         # (e.g., bedrock/agentcore derives endpoint from ARN in model string)
@@ -296,6 +299,7 @@ async def invoke_agent_a2a(
                 api_base=agent_url,
                 litellm_params=litellm_params,
                 agent_id=agent.agent_id,
+                extra_headers=extra_headers,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
@@ -310,6 +314,7 @@ async def invoke_agent_a2a(
                 params=params,
                 litellm_params=litellm_params,
                 agent_id=agent.agent_id,
+                extra_headers=extra_headers,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
