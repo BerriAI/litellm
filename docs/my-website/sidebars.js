@@ -1017,6 +1017,7 @@ const sidebars = {
       items: [
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
+        "troubleshoot/spend_queue_warnings",
       ],
     },
   ],
