@@ -8,6 +8,7 @@ def test_restructure_ui_html_files_skipped_in_non_root(monkeypatch):
     - ui_path is "/var/lib/litellm/ui"
     """
     # 1. Setup environment variables and variables
+    import litellm.proxy.proxy_server
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
 
     # We need to simulate the execution of the module-level code or
