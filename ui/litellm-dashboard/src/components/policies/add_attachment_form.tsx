@@ -1,15 +1,11 @@
 import React, { useState } from "react";
-import {
-  Modal,
-  Form,
-  Input,
-  Select,
-  Button,
-  Space,
-  Radio,
-  Divider,
-} from "antd";
+import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
+import { Button } from "@tremor/react";
 import { Policy, PolicyAttachmentCreateRequest } from "./types";
+import { createPolicyAttachmentCall } from "../networking";
+import NotificationsManager from "../molecules/notifications_manager";
+
+const { Text } = Typography;
 
 interface AddAttachmentFormProps {
   visible: boolean;
@@ -17,7 +13,6 @@ interface AddAttachmentFormProps {
   onSuccess: () => void;
   accessToken: string | null;
   policies: Policy[];
-  onCreateAttachment: (data: PolicyAttachmentCreateRequest) => Promise<void>;
 }
 
 const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
@@ -26,17 +21,31 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   onSuccess,
   accessToken,
   policies,
-  onCreateAttachment,
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [scopeType, setScopeType] = useState<"global" | "specific">("global");
 
-  const handleSubmit = async (values: any) => {
-    if (!accessToken) return;
+  const resetForm = () => {
+    form.resetFields();
+    setScopeType("global");
+  };
 
-    setIsSubmitting(true);
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  const handleSubmit = async () => {
     try {
+      setIsSubmitting(true);
+      await form.validateFields();
+      const values = form.getFieldsValue(true);
+
+      if (!accessToken) {
+        throw new Error("No access token available");
+      }
+
       const data: PolicyAttachmentCreateRequest = {
         policy_name: values.policy_name,
       };
@@ -55,13 +64,17 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
         }
       }
 
-      await onCreateAttachment(data);
+      await createPolicyAttachmentCall(accessToken, data);
+      NotificationsManager.success("Attachment created successfully");
+
+      resetForm();
       onSuccess();
       onClose();
-      form.resetFields();
-      setScopeType("global");
     } catch (error) {
-      console.error("Error creating attachment:", error);
+      console.error("Failed to create attachment:", error);
+      NotificationsManager.fromBackend(
+        "Failed to create attachment: " + (error instanceof Error ? error.message : String(error))
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -76,14 +89,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     <Modal
       title="Create Policy Attachment"
       open={visible}
-      onCancel={onClose}
+      onCancel={handleClose}
       footer={null}
       width={600}
     >
       <Form
         form={form}
         layout="vertical"
-        onFinish={handleSubmit}
         initialValues={{
           scope_type: "global",
         }}
@@ -100,10 +112,13 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
             filterOption={(input, option) =>
               (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
             }
+            style={{ width: "100%" }}
           />
         </Form.Item>
 
-        <Divider orientation="left">Scope</Divider>
+        <Divider orientation="left">
+          <Text strong>Scope</Text>
+        </Divider>
 
         <Form.Item label="Scope Type">
           <Radio.Group
@@ -126,6 +141,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
                 mode="tags"
                 placeholder="Enter team aliases (e.g., healthcare-team)"
                 tokenSeparators={[","]}
+                style={{ width: "100%" }}
               />
             </Form.Item>
 
@@ -138,6 +154,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
                 mode="tags"
                 placeholder="Enter key aliases (e.g., dev-key-*)"
                 tokenSeparators={[","]}
+                style={{ width: "100%" }}
               />
             </Form.Item>
 
@@ -150,19 +167,20 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
                 mode="tags"
                 placeholder="Enter model names (e.g., gpt-4, bedrock/*)"
                 tokenSeparators={[","]}
+                style={{ width: "100%" }}
               />
             </Form.Item>
           </>
         )}
 
-        <Form.Item>
-          <Space>
-            <Button onClick={onClose}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={isSubmitting}>
-              Create Attachment
-            </Button>
-          </Space>
-        </Form.Item>
+        <div className="flex justify-end space-x-2 mt-4">
+          <Button variant="secondary" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} loading={isSubmitting}>
+            Create Attachment
+          </Button>
+        </div>
       </Form>
     </Modal>
   );

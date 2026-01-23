@@ -1,16 +1,9 @@
-import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Descriptions,
-  Tag,
-  Button,
-  Space,
-  Typography,
-  Spin,
-  Divider,
-} from "antd";
-import { ArrowLeftOutlined, EditOutlined } from "@ant-design/icons";
+import React, { useState, useEffect, useCallback } from "react";
+import { Card, Badge, Button } from "@tremor/react";
+import { ArrowLeftIcon, PencilIcon } from "@heroicons/react/outline";
+import { Descriptions, Tag, Spin, Divider, Typography } from "antd";
 import { Policy } from "./types";
+import { getPolicyInfo } from "../networking";
 
 const { Title, Text } = Typography;
 
@@ -20,7 +13,6 @@ interface PolicyInfoViewProps {
   onEdit: (policy: Policy) => void;
   accessToken: string | null;
   isAdmin: boolean;
-  fetchPolicy: (policyId: string) => Promise<Policy | null>;
 }
 
 const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
@@ -29,32 +21,31 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   onEdit,
   accessToken,
   isAdmin,
-  fetchPolicy,
 }) => {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  const fetchPolicy = useCallback(async () => {
+    if (!accessToken || !policyId) return;
+
+    setIsLoading(true);
+    try {
+      const data = await getPolicyInfo(accessToken, policyId);
+      setPolicy(data);
+    } catch (error) {
+      console.error("Error fetching policy:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [policyId, accessToken]);
+
   useEffect(() => {
-    const loadPolicy = async () => {
-      if (!accessToken || !policyId) return;
-
-      setIsLoading(true);
-      try {
-        const data = await fetchPolicy(policyId);
-        setPolicy(data);
-      } catch (error) {
-        console.error("Error fetching policy:", error);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-
-    loadPolicy();
-  }, [policyId, accessToken, fetchPolicy]);
+    fetchPolicy();
+  }, [fetchPolicy]);
 
   if (isLoading) {
     return (
-      <div style={{ textAlign: "center", padding: "50px" }}>
+      <div className="flex justify-center items-center p-12">
         <Spin size="large" />
       </div>
     );
@@ -65,7 +56,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
       <Card>
         <Text type="danger">Policy not found</Text>
         <br />
-        <Button onClick={onClose} style={{ marginTop: 16 }}>
+        <Button onClick={onClose} className="mt-4">
           Go Back
         </Button>
       </Card>
@@ -74,34 +65,37 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
 
   return (
     <Card>
-      <Space direction="vertical" style={{ width: "100%" }} size="large">
-        <Space style={{ justifyContent: "space-between", width: "100%" }}>
-          <Button icon={<ArrowLeftOutlined />} onClick={onClose}>
+      <div className="space-y-6">
+        <div className="flex justify-between items-center">
+          <Button
+            variant="secondary"
+            icon={ArrowLeftIcon}
+            onClick={onClose}
+          >
             Back to Policies
           </Button>
           {isAdmin && (
             <Button
-              type="primary"
-              icon={<EditOutlined />}
+              icon={PencilIcon}
               onClick={() => onEdit(policy)}
             >
               Edit Policy
             </Button>
           )}
-        </Space>
+        </div>
 
         <Title level={4}>{policy.policy_name}</Title>
 
         <Descriptions bordered column={1}>
           <Descriptions.Item label="Policy ID">
-            <Text code>{policy.policy_id}</Text>
+            <code className="text-xs bg-gray-100 px-2 py-1 rounded">{policy.policy_id}</code>
           </Descriptions.Item>
           <Descriptions.Item label="Description">
             {policy.description || <Text type="secondary">No description</Text>}
           </Descriptions.Item>
           <Descriptions.Item label="Inherits From">
             {policy.inherit ? (
-              <Tag color="blue">{policy.inherit}</Tag>
+              <Badge color="blue" size="sm">{policy.inherit}</Badge>
             ) : (
               <Text type="secondary">None</Text>
             )}
@@ -118,11 +112,13 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
           </Descriptions.Item>
         </Descriptions>
 
-        <Divider orientation="left">Guardrails Configuration</Divider>
+        <Divider orientation="left">
+          <Text strong>Guardrails Configuration</Text>
+        </Divider>
 
         <Descriptions bordered column={1}>
           <Descriptions.Item label="Guardrails to Add">
-            <Space wrap>
+            <div className="flex flex-wrap gap-1">
               {policy.guardrails_add && policy.guardrails_add.length > 0 ? (
                 policy.guardrails_add.map((g) => (
                   <Tag key={g} color="green">
@@ -132,10 +128,10 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
               ) : (
                 <Text type="secondary">None</Text>
               )}
-            </Space>
+            </div>
           </Descriptions.Item>
           <Descriptions.Item label="Guardrails to Remove">
-            <Space wrap>
+            <div className="flex flex-wrap gap-1">
               {policy.guardrails_remove && policy.guardrails_remove.length > 0 ? (
                 policy.guardrails_remove.map((g) => (
                   <Tag key={g} color="red">
@@ -145,22 +141,28 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
               ) : (
                 <Text type="secondary">None</Text>
               )}
-            </Space>
+            </div>
           </Descriptions.Item>
         </Descriptions>
 
-        <Divider orientation="left">Conditions</Divider>
+        <Divider orientation="left">
+          <Text strong>Conditions</Text>
+        </Divider>
 
         <Descriptions bordered column={1}>
           <Descriptions.Item label="Model Condition">
             {policy.condition?.model ? (
-              <Tag color="purple">{policy.condition.model}</Tag>
+              <Tag color="purple">
+                {typeof policy.condition.model === "string"
+                  ? policy.condition.model
+                  : JSON.stringify(policy.condition.model)}
+              </Tag>
             ) : (
               <Text type="secondary">No model condition (applies to all models)</Text>
             )}
           </Descriptions.Item>
         </Descriptions>
-      </Space>
+      </div>
     </Card>
   );
 };

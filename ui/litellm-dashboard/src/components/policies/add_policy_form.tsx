@@ -1,20 +1,13 @@
 import React, { useState, useEffect } from "react";
-import {
-  Modal,
-  Form,
-  Input,
-  Select,
-  Button,
-  Space,
-  Typography,
-  Divider,
-} from "antd";
-import { PlusOutlined, MinusCircleOutlined } from "@ant-design/icons";
+import { Form, Select, Modal, Divider, Typography } from "antd";
+import { Button, TextInput, Textarea } from "@tremor/react";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
 import { Guardrail } from "../guardrails/types";
+import { createPolicyCall, updatePolicyCall } from "../networking";
+import NotificationsManager from "../molecules/notifications_manager";
 
-const { TextArea } = Input;
 const { Text } = Typography;
+const { Option } = Select;
 
 interface AddPolicyFormProps {
   visible: boolean;
@@ -24,8 +17,6 @@ interface AddPolicyFormProps {
   editingPolicy?: Policy | null;
   existingPolicies: Policy[];
   availableGuardrails: Guardrail[];
-  onCreatePolicy: (data: PolicyCreateRequest) => Promise<void>;
-  onUpdatePolicy: (policyId: string, data: PolicyUpdateRequest) => Promise<void>;
 }
 
 const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
@@ -36,8 +27,6 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   editingPolicy,
   existingPolicies,
   availableGuardrails,
-  onCreatePolicy,
-  onUpdatePolicy,
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -59,11 +48,25 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
     }
   }, [visible, editingPolicy, form]);
 
-  const handleSubmit = async (values: any) => {
-    if (!accessToken) return;
+  const resetForm = () => {
+    form.resetFields();
+  };
 
-    setIsSubmitting(true);
+  const handleClose = () => {
+    resetForm();
+    onClose();
+  };
+
+  const handleSubmit = async () => {
     try {
+      setIsSubmitting(true);
+      await form.validateFields();
+      const values = form.getFieldsValue(true);
+
+      if (!accessToken) {
+        throw new Error("No access token available");
+      }
+
       const data: PolicyCreateRequest | PolicyUpdateRequest = {
         policy_name: values.policy_name,
         description: values.description || undefined,
@@ -76,16 +79,21 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       };
 
       if (isEditing && editingPolicy) {
-        await onUpdatePolicy(editingPolicy.policy_id, data as PolicyUpdateRequest);
+        await updatePolicyCall(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
+        NotificationsManager.success("Policy updated successfully");
       } else {
-        await onCreatePolicy(data as PolicyCreateRequest);
+        await createPolicyCall(accessToken, data as PolicyCreateRequest);
+        NotificationsManager.success("Policy created successfully");
       }
 
+      resetForm();
       onSuccess();
       onClose();
-      form.resetFields();
     } catch (error) {
-      console.error("Error saving policy:", error);
+      console.error("Failed to save policy:", error);
+      NotificationsManager.fromBackend(
+        "Failed to save policy: " + (error instanceof Error ? error.message : String(error))
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -107,14 +115,13 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
     <Modal
       title={isEditing ? "Edit Policy" : "Create New Policy"}
       open={visible}
-      onCancel={onClose}
+      onCancel={handleClose}
       footer={null}
       width={700}
     >
       <Form
         form={form}
         layout="vertical"
-        onFinish={handleSubmit}
         initialValues={{
           guardrails_add: [],
           guardrails_remove: [],
@@ -132,20 +139,22 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             },
           ]}
         >
-          <Input
+          <TextInput
             placeholder="e.g., global-baseline, healthcare-compliance"
             disabled={isEditing}
           />
         </Form.Item>
 
         <Form.Item name="description" label="Description">
-          <TextArea
+          <Textarea
             rows={2}
             placeholder="Describe what this policy does..."
           />
         </Form.Item>
 
-        <Divider orientation="left">Inheritance</Divider>
+        <Divider orientation="left">
+          <Text strong>Inheritance</Text>
+        </Divider>
 
         <Form.Item
           name="inherit"
@@ -156,10 +165,13 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             allowClear
             placeholder="Select a parent policy (optional)"
             options={policyOptions}
+            style={{ width: "100%" }}
           />
         </Form.Item>
 
-        <Divider orientation="left">Guardrails</Divider>
+        <Divider orientation="left">
+          <Text strong>Guardrails</Text>
+        </Divider>
 
         <Form.Item
           name="guardrails_add"
@@ -171,6 +183,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             allowClear
             placeholder="Select guardrails to add"
             options={guardrailOptions}
+            style={{ width: "100%" }}
           />
         </Form.Item>
 
@@ -184,27 +197,30 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
             allowClear
             placeholder="Select guardrails to remove (from inherited)"
             options={guardrailOptions}
+            style={{ width: "100%" }}
           />
         </Form.Item>
 
-        <Divider orientation="left">Conditions (Optional)</Divider>
+        <Divider orientation="left">
+          <Text strong>Conditions (Optional)</Text>
+        </Divider>
 
         <Form.Item
           name="model_condition"
           label="Model Condition"
           tooltip="Only apply this policy when the model matches this pattern (supports regex)"
         >
-          <Input placeholder="e.g., gpt-4.* or bedrock/claude-3" />
+          <TextInput placeholder="e.g., gpt-4.* or bedrock/claude-3" />
         </Form.Item>
 
-        <Form.Item>
-          <Space>
-            <Button onClick={onClose}>Cancel</Button>
-            <Button type="primary" htmlType="submit" loading={isSubmitting}>
-              {isEditing ? "Update Policy" : "Create Policy"}
-            </Button>
-          </Space>
-        </Form.Item>
+        <div className="flex justify-end space-x-2 mt-4">
+          <Button variant="secondary" onClick={handleClose}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} loading={isSubmitting}>
+            {isEditing ? "Update Policy" : "Create Policy"}
+          </Button>
+        </div>
       </Form>
     </Modal>
   );
