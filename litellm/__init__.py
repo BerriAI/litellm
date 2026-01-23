@@ -377,6 +377,9 @@ priority_reservation: Optional[
     Dict[str, Union[float, "PriorityReservationDict"]]
 ] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
+# Only declare for type checking - at runtime __getattr__ handles it
+if TYPE_CHECKING:
+    priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
 ######## Networking Settings ########
@@ -1273,6 +1276,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
+    from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
 
