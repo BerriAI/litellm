@@ -312,3 +312,209 @@ async def test_completion_mcp_with_streaming_no_timeout_error(monkeypatch):
         
         # Verify acompletion was called (should be called by acompletion_with_mcp)
         assert len(acompletion_calls) >= 1, "acompletion should be called"
+
+
+@pytest.mark.asyncio
+async def test_mcp_metadata_in_streaming_final_chunk(monkeypatch):
+    """
+    Test that MCP metadata is added to the final streaming chunk's 
+    delta.provider_specific_fields when using MCP tools with streaming.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import patch
+
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+        LiteLLM_Proxy_MCP_Handler,
+    )
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+    from litellm.utils import CustomStreamWrapper
+    from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    dummy_tool = SimpleNamespace(
+        name="local_search",
+        description="search",
+        inputSchema={"type": "object", "properties": {}},
+    )
+
+    async def fake_process(user_api_key_auth, mcp_tools_with_litellm_proxy):
+        return [dummy_tool], {"local_search": "local"}
+
+    async def fake_execute(**kwargs):
+        tool_calls = kwargs.get("tool_calls") or []
+        call_entry = tool_calls[0]
+        call_id = call_entry.get("id") or call_entry.get("call_id") or "call"
+        return [
+            {
+                "tool_call_id": call_id,
+                "result": "executed",
+                "name": call_entry.get("name", "local_search"),
+            }
+        ]
+
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_process_mcp_tools_without_openai_transform",
+        fake_process,
+    )
+    monkeypatch.setattr(
+        LiteLLM_Proxy_MCP_Handler,
+        "_execute_tool_calls",
+        fake_execute,
+    )
+    monkeypatch.setattr(
+        ResponsesAPIRequestUtils,
+        "extract_mcp_headers_from_request",
+        staticmethod(lambda secret_fields, tools: (None, None, None, None)),
+    )
+
+    # Create mock streaming chunks
+    def create_chunk(content, finish_reason=None):
+        return ModelResponseStream(
+            id="test-stream",
+            model="gpt-4o-mini",
+            created=1234567890,
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(
+                        content=content,
+                        role="assistant",
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    chunks = [
+        create_chunk("Hello"),
+        create_chunk(" world"),
+        create_chunk("!", finish_reason="stop"),  # Final chunk
+    ]
+
+    # Create a proper CustomStreamWrapper with logging_obj
+    from unittest.mock import MagicMock
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {}
+
+    class MockStreamingResponse(CustomStreamWrapper):
+        def __init__(self):
+            super().__init__(
+                completion_stream=None,
+                model="gpt-4o-mini",
+                logging_obj=logging_obj,
+            )
+            self.chunks = chunks
+            self._index = 0
+            self.sent_last_chunk = False
+
+        def __iter__(self):
+            return self
+
+        def __next__(self):
+            if self._index < len(self.chunks):
+                chunk = self.chunks[self._index]
+                self._index += 1
+                if self._index == len(self.chunks):
+                    self.sent_last_chunk = True
+                    # Call the method that adds MCP metadata to final chunk
+                    chunk = self._add_mcp_metadata_to_final_chunk(chunk)
+                return chunk
+            raise StopIteration
+
+    # Track calls to acompletion
+    acompletion_calls = []
+
+    async def mock_acompletion(**kwargs):
+        acompletion_calls.append(kwargs)
+        # First call (non-streaming for tool extraction)
+        if not kwargs.get("stream", False):
+            return ModelResponse(
+                id="test-1",
+                model="gpt-4o-mini",
+                choices=[{
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [{
+                            "id": "call-1",
+                            "type": "function",
+                            "function": {
+                                "name": "local_search",
+                                "arguments": "{}"
+                            }
+                        }]
+                    },
+                    "finish_reason": "tool_calls"
+                }],
+                created=0,
+                object="chat.completion",
+            )
+        # Second call (streaming follow-up)
+        return MockStreamingResponse()
+
+    with patch("litellm.acompletion", side_effect=mock_acompletion):
+        response = litellm.completion(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[
+                {
+                    "type": "mcp",
+                    "server_url": "litellm_proxy/mcp/local",
+                    "server_label": "local",
+                    "require_approval": "never",
+                }
+            ],
+            stream=True,
+            mock_response="Final answer",
+            mock_tool_calls=[
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {"name": "local_search", "arguments": "{}"},
+                }
+            ],
+        )
+
+        import asyncio
+        assert asyncio.iscoroutine(response)
+        result = await response
+
+        assert isinstance(result, CustomStreamWrapper)
+
+        # Verify _hidden_params contains mcp_metadata
+        assert hasattr(result, "_hidden_params")
+        assert "mcp_metadata" in result._hidden_params
+        mcp_metadata = result._hidden_params["mcp_metadata"]
+        assert "mcp_list_tools" in mcp_metadata
+        assert "mcp_tool_calls" in mcp_metadata
+        assert "mcp_call_results" in mcp_metadata
+
+        # Consume the stream and check final chunk
+        all_chunks = list(result)
+        assert len(all_chunks) > 0
+
+        # Find the final chunk (with finish_reason)
+        final_chunk = None
+        for chunk in all_chunks:
+            if hasattr(chunk, "choices") and chunk.choices:
+                choice = chunk.choices[0]
+                if hasattr(choice, "finish_reason") and choice.finish_reason:
+                    final_chunk = chunk
+                    break
+
+        # If no chunk with finish_reason, use the last chunk
+        if final_chunk is None and all_chunks:
+            final_chunk = all_chunks[-1]
+
+        assert final_chunk is not None, "Should have a final chunk"
+
+        # Verify MCP metadata is in the final chunk's delta.provider_specific_fields
+        if hasattr(final_chunk, "choices") and final_chunk.choices:
+            choice = final_chunk.choices[0]
+            if hasattr(choice, "delta") and choice.delta:
+                provider_fields = getattr(choice.delta, "provider_specific_fields", None)
+                assert provider_fields is not None, "Final chunk should have provider_specific_fields"
+                assert "mcp_list_tools" in provider_fields, "Should have mcp_list_tools"
+                assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
+                assert "mcp_call_results" in provider_fields, "Should have mcp_call_results"

@@ -131,7 +131,6 @@ else:
 
 unified_guardrail = UnifiedLLMGuardrails()
 
-_anthropic_async_clients = {}
 
 def print_verbose(print_statement):
     """
@@ -961,8 +960,8 @@ class ProxyLogging:
         Returns:
             Updated data dictionary if guardrail passes, None if guardrail should be skipped
         """
-        from litellm.types.guardrails import GuardrailEventHooks
         from litellm.integrations.prometheus import PrometheusLogger
+        from litellm.types.guardrails import GuardrailEventHooks
 
         # Determine the event type based on call type
         event_type = GuardrailEventHooks.pre_call
@@ -2214,6 +2213,45 @@ class PrismaClient:
 
             raise e
 
+    async def _query_first_with_cached_plan_fallback(
+        self, sql_query: str
+    ) -> Optional[dict]:
+        """
+        Execute a query with automatic fallback for PostgreSQL cached plan errors.
+        
+        This handles the "cached plan must not change result type" error that occurs
+        during rolling deployments when schema changes are applied while old pods
+        still have cached query plans expecting the old schema.
+        
+        Args:
+            sql_query: SQL query string to execute
+            
+        Returns:
+            Query result or None
+            
+        Raises:
+            Original exception if not a cached plan error
+        """
+        try:
+            return await self.db.query_first(query=sql_query)
+        except Exception as e:
+            error_str = str(e)
+            if "cached plan must not change result type" in error_str:
+                # Force PostgreSQL to re-plan by invalidating the cache
+                # Add a unique comment to make the query different
+                sql_query_retry = sql_query.replace(
+                    "SELECT",
+                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */"
+                )
+                verbose_proxy_logger.warning(
+                    "PostgreSQL cached plan error detected for token lookup, "
+                    "retrying with fresh plan. This may occur during rolling deployments "
+                    "when schema changes are applied."
+                )
+                return await self.db.query_first(query=sql_query_retry)
+            else:
+                raise
+
     @backoff.on_exception(
         backoff.expo,
         Exception,  # base exception to catch for the backoff
@@ -2545,7 +2583,7 @@ class PrismaClient:
                         WHERE v.token = '{token}'
                     """
 
-                    response = await self.db.query_first(query=sql_query)
+                    response = await self._query_first_with_cached_plan_fallback(sql_query)
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -4250,74 +4288,6 @@ def construct_database_url_from_env_vars() -> Optional[str]:
 
         return database_url
 
-    return None
-
-
-async def count_tokens_with_anthropic_api(
-    model_to_use: str,
-    messages: Optional[List[Dict[str, Any]]],
-    deployment: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    """
-    Helper function to count tokens using Anthropic API directly.
-
-    Args:
-        model_to_use: The model name to use for token counting
-        messages: The messages to count tokens for
-        deployment: Optional deployment configuration containing API key
-
-    Returns:
-        Optional dict with token count and tokenizer info, or None if failed
-    """
-    if not messages:
-        return None
-
-    try:
-        import os
-
-        import anthropic
-
-        # Get Anthropic API key from deployment config
-        anthropic_api_key = None
-        if deployment is not None:
-            anthropic_api_key = deployment.get("litellm_params", {}).get("api_key")
-
-        # Fallback to environment variable
-        if not anthropic_api_key:
-            anthropic_api_key = os.getenv("ANTHROPIC_API_KEY")
-
-        if anthropic_api_key and messages:
-            # Call Anthropic API directly for more accurate token counting
-            
-            # Use cached client if available to avoid socket exhaustion
-            if anthropic_api_key not in _anthropic_async_clients:
-                _anthropic_async_clients[anthropic_api_key] = anthropic.AsyncAnthropic(api_key=anthropic_api_key)
-            
-            client = _anthropic_async_clients[anthropic_api_key]
-
-            # Call with explicit parameters to satisfy type checking
-            # Type ignore for now since messages come from generic dict input
-            response = await client.beta.messages.count_tokens(
-                model=model_to_use,
-                messages=messages,  # type: ignore
-                betas=["token-counting-2024-11-01"],
-            )
-            total_tokens = response.input_tokens
-            tokenizer_used = "anthropic_api"
-
-            return {
-                "total_tokens": total_tokens,
-                "tokenizer_used": tokenizer_used,
-            }
-
-    except ImportError:
-        verbose_proxy_logger.warning(
-            "Anthropic library not available, falling back to LiteLLM tokenizer"
-        )
-    except Exception as e:
-        verbose_proxy_logger.warning(
-            f"Error calling Anthropic API: {e}, falling back to LiteLLM tokenizer"
-        )
     return None
 
 

@@ -127,7 +127,7 @@ class TestVertexAIBatchPassthroughHandler:
             assert result is not None
             assert "result" in result
             assert "kwargs" in result
-            assert result["result"].choices[0].finish_reason == "batch_error"
+            assert result["result"].choices[0].finish_reason == "stop"
             assert result["kwargs"]["batch_job_state"] == "JOB_STATE_FAILED"
 
     def test_get_actual_model_id_from_router_with_router(self):

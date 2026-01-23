@@ -85,6 +85,7 @@ import { updateExistingKeys } from "@/utils/dataUtils";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import TableIconActionButton from "./common_components/IconActionButton/TableIconActionButtons/TableIconActionButton";
 import { Member, teamCreateCall, v2TeamListCall } from "./networking";
+import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 interface TeamInfo {
   members_with_roles: Member[];
@@ -1064,11 +1065,11 @@ const Teams: React.FC<TeamProps> = ({
                           rules={
                             isOrgAdmin
                               ? [
-                                  {
-                                    required: true,
-                                    message: "Please select an organization",
-                                  },
-                                ]
+                                {
+                                  required: true,
+                                  message: "Please select an organization",
+                                },
+                              ]
                               : []
                           }
                           help={
@@ -1135,16 +1136,17 @@ const Teams: React.FC<TeamProps> = ({
                     ]}
                     name="models"
                   >
-                    <Select2 mode="multiple" placeholder="Select models" style={{ width: "100%" }}>
-                      <Select2.Option key="no-default-models" value="no-default-models">
-                        No Default Models
-                      </Select2.Option>
-                      {modelsToPick.map((model) => (
-                        <Select2.Option key={model} value={model}>
-                          {getModelDisplayName(model)}
-                        </Select2.Option>
-                      ))}
-                    </Select2>
+                    <ModelSelect
+                      value={form.getFieldValue("models") || []}
+                      onChange={(values) => form.setFieldValue("models", values)}
+                      organizationID={form.getFieldValue("organization_id")}
+                      options={{
+                        includeSpecialOptions: true,
+                        showAllProxyModelsOverride: !form.getFieldValue("organization_id"),
+                      }}
+                      context="team"
+                      dataTestId="create-team-models-select"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
