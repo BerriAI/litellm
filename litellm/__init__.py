@@ -376,8 +376,10 @@ public_model_groups_links: Dict[str, Union[str, Dict[str, Any]]] = {}
 priority_reservation: Optional[
     Dict[str, Union[float, "PriorityReservationDict"]]
 ] = None
-# priority_reservation_settings is lazy-loaded via __getattr__, but declared here for type checking
-priority_reservation_settings: Optional["PriorityReservationSettings"] = None
+# priority_reservation_settings is lazy-loaded via __getattr__
+# Only declare for type checking - at runtime __getattr__ handles it
+if TYPE_CHECKING:
+    priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
 ######## Networking Settings ########

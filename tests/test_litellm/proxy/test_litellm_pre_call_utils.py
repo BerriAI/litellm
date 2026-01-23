@@ -1485,8 +1485,13 @@ def test_add_guardrails_from_policy_engine():
     Test that add_guardrails_from_policy_engine adds guardrails from matching policies
     and tracks applied policies in metadata.
     """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-    from litellm.types.proxy.policy_engine import Policy, PolicyGuardrails, PolicyScope
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyGuardrails,
+    )
 
     # Setup test data
     data = {
@@ -1501,19 +1506,25 @@ def test_add_guardrails_from_policy_engine():
         key_alias="my-key",
     )
 
-    # Setup mock policies in the registry (directly set parsed Policy objects)
-    registry = get_policy_registry()
-    registry._policies = {
+    # Setup mock policies in the registry (policies define WHAT guardrails to apply)
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
         "global-baseline": Policy(
             guardrails=PolicyGuardrails(add=["pii_blocker"]),
-            scope=PolicyScope(teams=["*"]),
         ),
         "healthcare": Policy(
             guardrails=PolicyGuardrails(add=["hipaa_audit"]),
-            scope=PolicyScope(teams=["healthcare-team"]),
         ),
     }
-    registry._initialized = True
+    policy_registry._initialized = True
+
+    # Setup attachments in the attachment registry (attachments define WHERE policies apply)
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [
+        PolicyAttachment(policy="global-baseline", scope="*"),  # applies to all
+        PolicyAttachment(policy="healthcare", teams=["healthcare-team"]),  # applies to healthcare team
+    ]
+    attachment_registry._initialized = True
 
     # Call the function
     add_guardrails_from_policy_engine(
@@ -1532,6 +1543,8 @@ def test_add_guardrails_from_policy_engine():
     assert "global-baseline" in data["metadata"]["applied_policies"]
     assert "healthcare" in data["metadata"]["applied_policies"]
 
-    # Clean up registry
-    registry._policies = {}
-    registry._initialized = False
+    # Clean up registries
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+    attachment_registry._attachments = []
+    attachment_registry._initialized = False
