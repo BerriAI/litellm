@@ -51,16 +51,29 @@ class MockLangfuseResponse:
             raise Exception(f"HTTP {self.status_code}")
 
 
+def _is_langfuse_url(url) -> bool:
+    """Check if URL is a Langfuse domain."""
+    try:
+        parsed_url = httpx.URL(url) if isinstance(url, str) else url
+        hostname = parsed_url.host or ""
+        
+        return (
+            hostname.endswith(".langfuse.com") or
+            hostname == "langfuse.com" or
+            (hostname in ("localhost", "127.0.0.1") and "langfuse" in str(parsed_url).lower())
+        )
+    except Exception:
+        return False
+
+
 def _mock_httpx_post(self, url, **kwargs):
     """Monkey-patched httpx.Client.post that intercepts Langfuse calls."""
-    if isinstance(url, str) and ("langfuse.com" in url or "langfuse" in url.lower()):
-        verbose_logger.debug(f"[LANGFUSE MOCK] POST to {url}")
+    if _is_langfuse_url(url):
+        verbose_logger.info(f"[LANGFUSE MOCK] POST to {url}")
         return MockLangfuseResponse(status_code=200, json_data={"status": "success"}, url=url)
+    
     if _original_httpx_post is not None:
         return _original_httpx_post(self, url, **kwargs)
-    import httpx
-    with httpx.Client() as client:
-        return client.post(url, **kwargs)
 
 
 def create_mock_langfuse_client():
