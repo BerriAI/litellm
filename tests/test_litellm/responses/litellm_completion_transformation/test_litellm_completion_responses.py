@@ -272,16 +272,14 @@ class TestLiteLLMCompletionResponsesConfig:
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
 
         reasoning_item = reasoning_items[0]
-        # Note: ID auto-generation was disabled, so reasoning items may not have IDs
-        # Only assert ID format if an ID is present
-        if hasattr(reasoning_item, 'id') and reasoning_item.id:
-            assert reasoning_item.id.startswith("rs_"), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
+        assert reasoning_item.id.startswith(
+            "rs_"
+        ), f"Expected ID to start with 'rs_', got: {reasoning_item.id}"
         assert reasoning_item.status == "completed"
-        assert reasoning_item.role == "assistant"
-        assert len(reasoning_item.content) == 1
-        assert reasoning_item.content[0].type == "output_text"
-        assert "step by step" in reasoning_item.content[0].text
-        assert "42" in reasoning_item.content[0].text
+        assert len(reasoning_item.summary) == 1
+        assert reasoning_item.summary[0].type == "summary_text"
+        assert "step by step" in reasoning_item.summary[0].text
+        assert "42" in reasoning_item.summary[0].text
 
         message_items = [
             item for item in responses_api_response.output if item.type == "message"
@@ -330,6 +328,33 @@ class TestLiteLLMCompletionResponsesConfig:
         assert len(message_items) == 1, "Should have exactly one message item"
         assert message_items[0].content[0].text == "Just a regular answer."
 
+    def test_transform_chat_completion_response_sets_response_object(self):
+        """Test that response.object is normalized to 'response'"""
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Simple answer",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test input",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        assert responses_api_response.object == "response"
+
     def test_transform_chat_completion_response_multiple_choices_with_reasoning(self):
         """Test that only reasoning from first choice is included when multiple choices exist"""
         # Setup
@@ -372,7 +397,7 @@ class TestLiteLLMCompletionResponsesConfig:
             item for item in responses_api_response.output if item.type == "reasoning"
         ]
         assert len(reasoning_items) == 1, "Should have exactly one reasoning item"
-        assert reasoning_items[0].content[0].text == "First reasoning process."
+        assert reasoning_items[0].summary[0].text == "First reasoning process."
 
         message_items = [
             item for item in responses_api_response.output if item.type == "message"

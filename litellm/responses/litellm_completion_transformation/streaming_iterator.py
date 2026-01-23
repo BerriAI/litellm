@@ -15,7 +15,6 @@ from litellm.types.llms.openai import (
     ContentPartAddedEvent,
     ContentPartDoneEvent,
     ContentPartDonePartOutputText,
-    ContentPartDonePartReasoningText,
     FunctionCallArgumentsDeltaEvent,
     FunctionCallArgumentsDoneEvent,
     OutputItemAddedEvent,
@@ -95,7 +94,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # output_index=0 reserved for reasoning/message; message shifts to 1 when reasoning exists
         self._next_tool_output_index: int = 1
         self._final_tool_events_queued: bool = False
-        self._sequence_number: int = 0
+        self._sequence_number: int = -1
         self._cached_reasoning_item_id: Optional[str] = None
         self._sent_reasoning_summary_text_done_event: bool = False
         self._sent_reasoning_summary_part_done_event: bool = False
@@ -119,22 +118,33 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._sequence_number += 1
         return self._sequence_number
 
+    def _set_event_attr(
+        self, event: BaseLiteLLMOpenAIResponseObject, key: str, value: object
+    ) -> None:
+        # Use setattr so pydantic v2 stores extra fields properly.
+        setattr(event, key, value)
+
     def _get_message_output_index(self) -> int:
         return 1 if self._sent_reasoning_output_item_added else 0
 
-    def _get_or_create_reasoning_item_id(self) -> str:
+    def _get_or_create_reasoning_item_id(self, source_id: Optional[str] = None) -> str:
         if self._reasoning_item_id is not None:
             return self._reasoning_item_id
         if self._cached_reasoning_item_id is None:
-            self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
+            if source_id:
+                self._cached_reasoning_item_id = f"rs_{source_id}"
+            else:
+                self._cached_reasoning_item_id = f"rs_{uuid.uuid4()}"
         self._reasoning_item_id = self._cached_reasoning_item_id
         return self._reasoning_item_id
 
-    def _record_reasoning_delta(self, reasoning_content: str) -> str:
+    def _record_reasoning_delta(
+        self, reasoning_content: str, source_id: Optional[str] = None
+    ) -> str:
         self._reasoning_active = True
         if reasoning_content:
             self._reasoning_summary_text += reasoning_content
-        return self._get_or_create_reasoning_item_id()
+        return self._get_or_create_reasoning_item_id(source_id=source_id)
 
     def _maybe_emit_reasoning_done_events(self, chunk: ModelResponseStream) -> None:
         if self._reasoning_active is False or self._reasoning_done_emitted is True:
@@ -152,7 +162,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         getattr(choice.message, "reasoning_content", "") or ""
                     )
 
-        reasoning_item_id = self._get_or_create_reasoning_item_id()
+        reasoning_item_id = self._get_or_create_reasoning_item_id(source_id=chunk.id)
 
         seq = self._next_sequence_number()
         text_done_event = self.create_reasoning_summary_text_done_event(
@@ -250,7 +260,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         }
                     ),
                 )
-                event.__dict__['sequence_number'] = seq
+                self._set_event_attr(event, "sequence_number", seq)
                 self._pending_tool_events.append(event)
 
             if fn_args_delta:
@@ -269,7 +279,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         delta=delta_chunk,
                     )
                     # Add sequence_number as extra field (BaseLiteLLMOpenAIResponseObject allows extra fields)
-                    delta_event.__dict__['sequence_number'] = seq
+                    self._set_event_attr(delta_event, "sequence_number", seq)
                     self._pending_tool_events.append(delta_event)
 
     def _queue_final_tool_call_done_events(self, litellm_complete_object: ModelResponse) -> None:
@@ -327,7 +337,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         }
                     ),
                 )
-                event.__dict__['sequence_number'] = seq
+                self._set_event_attr(event, "sequence_number", seq)
                 self._pending_tool_events.append(event)
 
             final_args = fn_args or self._tool_args_by_call_id.get(call_id, "")
@@ -349,7 +359,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         output_index=output_index,
                         delta=delta_chunk,
                     )
-                    delta_event.__dict__['sequence_number'] = seq
+                    self._set_event_attr(delta_event, "sequence_number", seq)
                     self._pending_tool_events.append(delta_event)
             
             seq = self._next_sequence_number()
@@ -359,7 +369,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 output_index=output_index,
                 arguments=final_args,
             )
-            done_event.__dict__['sequence_number'] = seq
+            self._set_event_attr(done_event, "sequence_number", seq)
             self._pending_tool_events.append(done_event)
 
             seq = self._next_sequence_number()
@@ -441,7 +451,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             type=ResponsesAPIStreamEvents.RESPONSE_CREATED,
             response=ResponsesAPIResponse(**response_created_event_data),
         )
-        event.__dict__['sequence_number'] = seq
+        self._set_event_attr(event, "sequence_number", seq)
         return event
 
     def create_response_in_progress_event(self) -> ResponseInProgressEvent:
@@ -452,7 +462,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             type=ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
             response=ResponsesAPIResponse(**response_in_progress_event_data),
         )
-        event.__dict__['sequence_number'] = seq
+        self._set_event_attr(event, "sequence_number", seq)
         return event
 
     def create_output_item_added_event(self) -> OutputItemAddedEvent:
@@ -473,7 +483,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             ),
         )
-        event.__dict__['sequence_number'] = seq
+        self._set_event_attr(event, "sequence_number", seq)
         return event
 
     def create_content_part_added_event(self) -> ContentPartAddedEvent:
@@ -487,10 +497,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             output_index=self._get_message_output_index(),
             content_index=0,
             part=BaseLiteLLMOpenAIResponseObject(
-                **{"type": "output_text", "text": "", "annotations": []}
+                **{
+                    "type": "output_text",
+                    "text": "",
+                    "annotations": [],
+                    "logprobs": [],
+                }
             ),
         )
-        event.__dict__['sequence_number'] = seq
+        self._set_event_attr(event, "sequence_number", seq)
         return event
 
     def create_litellm_model_response(
@@ -590,26 +605,17 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             self._cached_item_id = f"msg_{str(uuid.uuid4())}"
 
         text = getattr(litellm_complete_object.choices[0].message, "content", "") or ""  # type: ignore
-        reasoning_content = getattr(litellm_complete_object.choices[0].message, "reasoning_content", "") or ""  # type: ignore
         annotations = getattr(litellm_complete_object.choices[0].message, "annotations", None)  # type: ignore
 
-        part: Optional[PART_UNION_TYPES] = None
-        if reasoning_content:
-            part = ContentPartDonePartReasoningText(
-                type="reasoning_text",
-                reasoning=reasoning_content,
-            )
-
-        else:
-            response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
-                annotations=annotations
-            )
-            part = ContentPartDonePartOutputText(
-                type="output_text",
-                text=text,
-                annotations=response_annotations,  # type: ignore
-                logprobs=None,
-            )
+        response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
+            annotations=annotations
+        )
+        part: Optional[PART_UNION_TYPES] = ContentPartDonePartOutputText(
+            type="output_text",
+            text=text,
+            annotations=response_annotations,  # type: ignore
+            logprobs=[],
+        )
 
         return ContentPartDoneEvent(
             type=ResponsesAPIStreamEvents.CONTENT_PART_DONE,
@@ -702,12 +708,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         if self.sent_output_text_done_event is False:
             self.sent_output_text_done_event = True
             event = self.create_output_text_done_event(litellm_complete_object)
-            event.__dict__["sequence_number"] = self._next_sequence_number()
+            self._set_event_attr(event, "sequence_number", self._next_sequence_number())
+            if getattr(event, "logprobs", None) is None:
+                self._set_event_attr(event, "logprobs", [])
             return event
         if self.sent_output_content_part_done_event is False:
             self.sent_output_content_part_done_event = True
             event = self.create_output_content_part_done_event(litellm_complete_object)
-            event.__dict__["sequence_number"] = self._next_sequence_number()
+            self._set_event_attr(event, "sequence_number", self._next_sequence_number())
             return event
         if self.sent_output_item_done_event is False:
             self.sent_output_item_done_event = True
@@ -780,7 +788,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # Reasoning-first
         if hasattr(delta, "reasoning_content") and delta.reasoning_content:
             self._reasoning_active = True
-            reasoning_item_id = self._get_or_create_reasoning_item_id()
+            reasoning_item_id = self._get_or_create_reasoning_item_id(
+                source_id=chunk.id
+            )
 
             if not self._sent_reasoning_output_item_added:
                 self._sent_reasoning_output_item_added = True
@@ -799,7 +809,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         }
                     ),
                 )
-                event.__dict__["sequence_number"] = seq
+                self._set_event_attr(event, "sequence_number", seq)
                 self._pending_response_events.append(event)
 
             if not self._sent_reasoning_summary_part_added:
@@ -811,10 +821,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     output_index=0,
                     part={"type": "summary_text", "text": ""},
                 )
-                part_event.__dict__["sequence_number"] = seq
-                part_event.__dict__["summary_index"] = 0
+                self._set_event_attr(part_event, "sequence_number", seq)
+                self._set_event_attr(part_event, "summary_index", 0)
                 self._pending_response_events.append(part_event)
             return
+
+        if self._reasoning_active and not self._reasoning_done_emitted:
+            # Avoid emitting message items until reasoning is fully closed.
+            if not self._is_reasoning_end(chunk):
+                return
 
         # Tool-first
         if hasattr(delta, "tool_calls") and delta.tool_calls:
@@ -840,9 +855,13 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 }
             ),
         )
-        event.__dict__["sequence_number"] = seq
+        self._set_event_attr(event, "sequence_number", seq)
         self._pending_response_events.append(event)
         self._sent_message_output_item_added = True
+        if self.sent_content_part_added_event is False:
+            content_part_event = self.create_content_part_added_event()
+            self._pending_response_events.append(content_part_event)
+            self.sent_content_part_added_event = True
         return
 
     async def __anext__(
@@ -987,7 +1006,10 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             and chunk.choices[0].delta.reasoning_content
         ):
             reasoning_content = chunk.choices[0].delta.reasoning_content
-            reasoning_item_id = self._record_reasoning_delta(reasoning_content)
+            reasoning_item_id = self._record_reasoning_delta(
+                reasoning_content=reasoning_content,
+                source_id=chunk.id,
+            )
             seq = self._next_sequence_number()
             event = ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
@@ -995,8 +1017,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 output_index=0,
                 delta=reasoning_content,
             )
-            event.__dict__["sequence_number"] = seq
-            event.__dict__["summary_index"] = 0
+            self._set_event_attr(event, "sequence_number", seq)
+            self._set_event_attr(event, "summary_index", 0)
             return event
         
         # Priority 2: Handle text deltas
@@ -1010,7 +1032,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 content_index=0,
                 delta=delta_content,
             )
-            text_delta_event.__dict__['sequence_number'] = seq
+            self._set_event_attr(text_delta_event, "sequence_number", seq)
+            if getattr(text_delta_event, "logprobs", None) is None:
+                self._set_event_attr(text_delta_event, "logprobs", [])
             return text_delta_event
 
         # Priority 3: Handle tool call deltas (if any) -> queue events and emit them
@@ -1029,8 +1053,8 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         # This happens when the current chunk has no text/reasoning content
         if hasattr(self, '_pending_annotation_events') and self._pending_annotation_events:
             event = self._pending_annotation_events.pop(0)
-            if "sequence_number" not in event.__dict__:
-                event.__dict__["sequence_number"] = self._next_sequence_number()
+            if getattr(event, "sequence_number", None) is None:
+                self._set_event_attr(event, "sequence_number", self._next_sequence_number())
             return event
 
         # Priority 5: If we have pending tool events (from earlier chunk), emit the next one
@@ -1091,7 +1115,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                 response=encoded_response,
             )
-            event.__dict__["sequence_number"] = self._next_sequence_number()
+            self._set_event_attr(event, "sequence_number", self._next_sequence_number())
             return event
         else:
             return None

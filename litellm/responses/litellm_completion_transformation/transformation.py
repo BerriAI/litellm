@@ -5,7 +5,13 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 from collections.abc import Sequence
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 
-from openai.types.responses import ResponseFunctionToolCall
+from openai.types.responses import (
+    ResponseFunctionToolCall,
+    ResponseOutputMessage,
+    ResponseOutputText,
+    ResponseReasoningItem,
+)
+from openai.types.responses.response_output_item import ImageGenerationCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
 
@@ -41,11 +47,7 @@ from litellm.types.llms.openai import (
     ValidChatCompletionMessageContentTypesLiteral,
 )
 from litellm.types.responses.main import (
-    GenericResponseOutputItem,
     GenericResponseOutputItemContentAnnotation,
-    OutputFunctionToolCall,
-    OutputImageGenerationCall,
-    OutputText,
 )
 from litellm.types.utils import (
     ChatCompletionAnnotation,
@@ -1378,7 +1380,7 @@ class LiteLLMCompletionResponsesConfig:
             id=chat_completion_response.id,
             created_at=chat_completion_response.created,
             model=chat_completion_response.model,
-            object=chat_completion_response.object,
+            object="response",
             error=getattr(chat_completion_response, "error", None),
             incomplete_details=getattr(
                 chat_completion_response, "incomplete_details", None
@@ -1419,20 +1421,13 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[
-        Union[
-            GenericResponseOutputItem,
-            OutputFunctionToolCall,
-            OutputImageGenerationCall,
-            ResponseFunctionToolCall,
-        ]
-    ]:
+    ) -> List[Union[ResponseOutputMessage, ResponseFunctionToolCall, ResponseReasoningItem, ImageGenerationCall]]:
         responses_output: List[
             Union[
-                GenericResponseOutputItem,
-                OutputFunctionToolCall,
-                OutputImageGenerationCall,
+                ResponseOutputMessage,
                 ResponseFunctionToolCall,
+                ResponseReasoningItem,
+                ImageGenerationCall,
             ]
         ] = []
 
@@ -1457,26 +1452,28 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[GenericResponseOutputItem]:
+    ) -> List[ResponseReasoningItem]:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
                 if hasattr(message, "reasoning_content") and message.reasoning_content:
                     # Only check the first choice for reasoning content
+                    response_id = getattr(chat_completion_response, "id", None)
+                    reasoning_item_id = (
+                        f"rs_{response_id}" if response_id else None
+                    ) or f"rs_{hash(str(message.reasoning_content))}"
                     return [
-                        GenericResponseOutputItem(
+                        ResponseReasoningItem(
                             type="reasoning",
-                            id=f"rs_{hash(str(message.reasoning_content))}",
+                            id=reasoning_item_id,
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
-                            role="assistant",
-                            content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=message.reasoning_content,
-                                    annotations=[],
-                                )
+                            summary=[
+                                {
+                                    "type": "summary_text",
+                                    "text": message.reasoning_content,
+                                }
                             ],
                         )
                     ]
@@ -1486,7 +1483,7 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_image_generation_output_items(
         chat_completion_response: ModelResponse,
         choice: Choices,
-    ) -> List[OutputImageGenerationCall]:
+    ) -> List[ImageGenerationCall]:
         """
         Extract image generation outputs from a choice that contains images.
 
@@ -1505,7 +1502,7 @@ class LiteLLMCompletionResponsesConfig:
             'result': 'iVBORw0...'  # Pure base64 without data: prefix
         }
         """
-        image_generation_items: List[OutputImageGenerationCall] = []
+        image_generation_items: List[ImageGenerationCall] = []
 
         images = getattr(choice.message, "images", [])
         if not images:
@@ -1522,7 +1519,7 @@ class LiteLLMCompletionResponsesConfig:
 
             if base64_data:
                 image_generation_items.append(
-                    OutputImageGenerationCall(
+                    ImageGenerationCall(
                         type="image_generation_call",
                         id=f"{chat_completion_response.id}_img_{idx}",
                         status=LiteLLMCompletionResponsesConfig._map_finish_reason_to_image_generation_status(
@@ -1537,7 +1534,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _map_finish_reason_to_image_generation_status(
         finish_reason: Optional[str],
-    ) -> Literal["in_progress", "completed", "incomplete", "failed"]:
+    ) -> Literal["in_progress", "completed", "generating", "failed"]:
         """
         Map finish_reason to image generation status.
 
@@ -1547,7 +1544,7 @@ class LiteLLMCompletionResponsesConfig:
         if finish_reason == "stop":
             return "completed"
         elif finish_reason == "length":
-            return "incomplete"
+            return "failed"
         elif finish_reason in ["content_filter", "error"]:
             return "failed"
         else:
@@ -1582,9 +1579,9 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_message_output_items(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[Union[GenericResponseOutputItem, OutputImageGenerationCall]]:
+    ) -> List[Union[ResponseOutputMessage, ImageGenerationCall]]:
         message_output_items: List[
-            Union[GenericResponseOutputItem, OutputImageGenerationCall]
+            Union[ResponseOutputMessage, ImageGenerationCall]
         ] = []
         for choice in choices:
             # Check if message has images (image generation)
@@ -1598,13 +1595,13 @@ class LiteLLMCompletionResponsesConfig:
             else:
                 # Regular message output
                 message_output_items.append(
-                    GenericResponseOutputItem(
+                    ResponseOutputMessage(
                         type="message",
                         id=chat_completion_response.id,
                         status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                             choice.finish_reason
                         ),
-                        role=choice.message.role,
+                        role="assistant",
                         content=[
                             LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
                                 choice.message
@@ -1672,16 +1669,20 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_chat_message_to_response_output_text(
         message: Message,
-    ) -> OutputText:
+    ) -> ResponseOutputText:
         annotations = getattr(message, "annotations", None)
         transformed_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
             annotations=annotations
         )
+        annotation_dicts = [
+            annotation.model_dump() if hasattr(annotation, "model_dump") else dict(annotation)
+            for annotation in transformed_annotations
+        ]
 
-        return OutputText(
+        return ResponseOutputText(
             type="output_text",
-            text=message.content,
-            annotations=transformed_annotations,
+            text=message.content or "",
+            annotations=annotation_dicts,
         )
 
     @staticmethod
