@@ -775,6 +775,12 @@ class LiteLLM_Proxy_MCP_Handler:
                 first_choice, "message", None
             ):
                 message_to_append = first_choice.message.model_dump(exclude_none=True)
+                # Ensure tool_calls have arguments field (required by OpenAI API)
+                if message_to_append.get("tool_calls"):
+                    for tool_call in message_to_append["tool_calls"]:
+                        if isinstance(tool_call, dict) and "function" in tool_call:
+                            if "arguments" not in tool_call["function"]:
+                                tool_call["function"]["arguments"] = "{}"
         except Exception:
             verbose_logger.exception("Failed to convert assistant message for MCP flow")
 

@@ -71,7 +71,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_validator
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -1199,6 +1199,16 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @field_validator("usage", mode="before")
+    @classmethod
+    def validate_usage(cls, value):
+        """Convert usage dict to ResponseAPIUsage object if needed"""
+        if value is None:
+            return value
+        if isinstance(value, dict):
+            return ResponseAPIUsage(**value)
+        return value
+
     @property
     def output_text(self) -> str:
         """
@@ -2002,7 +2012,7 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length"
+    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
 ]
 
 

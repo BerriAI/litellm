@@ -526,7 +526,7 @@ const CreateTeamModal = ({
                 valuePropName="checked"
                 help="Bypass global guardrails for this team"
               >
-                <Switch 
+                <Switch
                   checkedChildren="Yes"
                   unCheckedChildren="No"
                 />

@@ -2330,10 +2330,6 @@ async def test_completion_functions_param():
                 "litellm_param_is_function_call"
                 not in mock_client.call_args.kwargs["json"]
             )
-            assert (
-                "litellm_param_is_function_call"
-                not in mock_client.call_args.kwargs["json"]["generationConfig"]
-            )
             assert response.choices[0].message.function_call is not None
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")

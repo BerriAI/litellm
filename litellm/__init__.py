@@ -377,6 +377,9 @@ priority_reservation: Optional[
     Dict[str, Union[float, "PriorityReservationDict"]]
 ] = None
 # priority_reservation_settings is lazy-loaded via __getattr__
+# Only declare for type checking - at runtime __getattr__ handles it
+if TYPE_CHECKING:
+    priority_reservation_settings: Optional["PriorityReservationSettings"] = None
 
 
 ######## Networking Settings ########
@@ -391,6 +394,9 @@ disable_aiohttp_trust_env: bool = (
 force_ipv4: bool = (
     False  # when True, litellm will force ipv4 for all LLM requests. Some users have seen httpx ConnectionError when using ipv6.
 )
+
+####### STOP SEQUENCE LIMIT #######
+disable_stop_sequence_limit: bool = False  # when True, stop sequence limit is disabled
 
 #### RETRIES ####
 num_retries: Optional[int] = None  # per model endpoint
@@ -1270,6 +1276,7 @@ def set_global_gitlab_config(config: Dict[str, Any]) -> None:
 
 if TYPE_CHECKING:
     from litellm.types.utils import ModelInfo as _ModelInfoType
+    from litellm.types.utils import PriorityReservationSettings
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.caching.caching import Cache
 

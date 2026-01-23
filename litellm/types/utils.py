@@ -46,6 +46,7 @@ from .llms.openai import (
     FineTuningJob,
     ImageURLListItem,
     OpenAIChatCompletionChunk,
+    OpenAIChatCompletionFinishReason,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
@@ -1254,7 +1255,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
 
 
 class Choices(SafeAttributeModel, OpenAIObject):
-    finish_reason: str
+    finish_reason: OpenAIChatCompletionFinishReason
     index: int
     message: Message
     logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
@@ -3119,6 +3120,7 @@ class SearchProviders(str, Enum):
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
     EXA_AI = "exa_ai"
+    BRAVE = "brave"
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"

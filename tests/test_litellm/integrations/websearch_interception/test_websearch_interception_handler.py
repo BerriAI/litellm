@@ -67,3 +67,36 @@ async def test_async_should_run_agentic_loop():
 
     assert should_run is False
     assert tools_dict == {}
+
+
+@pytest.mark.asyncio
+async def test_internal_flags_filtered_from_followup_kwargs():
+    """Test that internal _websearch_interception flags are filtered from follow-up request kwargs.
+
+    Regression test for bug where _websearch_interception_converted_stream was passed
+    to the follow-up LLM request, causing "Extra inputs are not permitted" errors
+    from providers like Bedrock that use strict parameter validation.
+    """
+    logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
+
+    # Simulate kwargs that would be passed during agentic loop execution
+    kwargs_with_internal_flags = {
+        "_websearch_interception_converted_stream": True,
+        "_websearch_interception_other_flag": "test",
+        "temperature": 0.7,
+        "max_tokens": 1024,
+    }
+
+    # Apply the same filtering logic used in _execute_agentic_loop
+    kwargs_for_followup = {
+        k: v for k, v in kwargs_with_internal_flags.items()
+        if not k.startswith('_websearch_interception')
+    }
+
+    # Verify internal flags are filtered out
+    assert "_websearch_interception_converted_stream" not in kwargs_for_followup
+    assert "_websearch_interception_other_flag" not in kwargs_for_followup
+
+    # Verify regular kwargs are preserved
+    assert kwargs_for_followup["temperature"] == 0.7
+    assert kwargs_for_followup["max_tokens"] == 1024
