@@ -1,8 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
 import { Button } from "@tremor/react";
 import { Policy, PolicyAttachmentCreateRequest } from "./types";
-import { createPolicyAttachmentCall } from "../networking";
+import { createPolicyAttachmentCall, teamListCall, keyInfoCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const { Text } = Typography;
@@ -25,6 +25,52 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [scopeType, setScopeType] = useState<"global" | "specific">("global");
+  const [availableTeams, setAvailableTeams] = useState<string[]>([]);
+  const [availableKeys, setAvailableKeys] = useState<string[]>([]);
+  const [isLoadingTeams, setIsLoadingTeams] = useState(false);
+  const [isLoadingKeys, setIsLoadingKeys] = useState(false);
+
+  useEffect(() => {
+    if (visible && accessToken) {
+      loadTeamsAndKeys();
+    }
+  }, [visible, accessToken]);
+
+  const loadTeamsAndKeys = async () => {
+    if (!accessToken) return;
+
+    // Load teams
+    setIsLoadingTeams(true);
+    try {
+      const teamsResponse = await teamListCall(accessToken);
+      if (teamsResponse?.data) {
+        const teamAliases = teamsResponse.data
+          .map((t: any) => t.team_alias)
+          .filter(Boolean);
+        setAvailableTeams(teamAliases);
+      }
+    } catch (error) {
+      console.error("Failed to load teams:", error);
+    } finally {
+      setIsLoadingTeams(false);
+    }
+
+    // Load keys
+    setIsLoadingKeys(true);
+    try {
+      const keysResponse = await keyInfoCall(accessToken, null, null);
+      if (keysResponse?.data) {
+        const keyAliases = keysResponse.data
+          .map((k: any) => k.key_alias)
+          .filter(Boolean);
+        setAvailableKeys(keyAliases);
+      }
+    } catch (error) {
+      console.error("Failed to load keys:", error);
+    } finally {
+      setIsLoadingKeys(false);
+    }
+  };
 
   const resetForm = () => {
     form.resetFields();
@@ -135,12 +181,21 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
             <Form.Item
               name="teams"
               label="Teams"
-              tooltip="Team aliases this attachment applies to. Supports wildcards (e.g., healthcare-*)"
+              tooltip="Select team aliases or enter custom patterns. Supports wildcards (e.g., healthcare-*)"
             >
               <Select
                 mode="tags"
-                placeholder="Enter team aliases (e.g., healthcare-team)"
+                placeholder={isLoadingTeams ? "Loading teams..." : "Select or enter team aliases"}
+                loading={isLoadingTeams}
+                options={availableTeams.map((team) => ({
+                  label: team,
+                  value: team,
+                }))}
                 tokenSeparators={[","]}
+                showSearch
+                filterOption={(input, option) =>
+                  (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                }
                 style={{ width: "100%" }}
               />
             </Form.Item>
@@ -148,12 +203,21 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
             <Form.Item
               name="keys"
               label="Keys"
-              tooltip="Key aliases this attachment applies to. Supports wildcards (e.g., dev-*)"
+              tooltip="Select key aliases or enter custom patterns. Supports wildcards (e.g., dev-*)"
             >
               <Select
                 mode="tags"
-                placeholder="Enter key aliases (e.g., dev-key-*)"
+                placeholder={isLoadingKeys ? "Loading keys..." : "Select or enter key aliases"}
+                loading={isLoadingKeys}
+                options={availableKeys.map((key) => ({
+                  label: key,
+                  value: key,
+                }))}
                 tokenSeparators={[","]}
+                showSearch
+                filterOption={(input, option) =>
+                  (option?.label ?? "").toLowerCase().includes(input.toLowerCase())
+                }
                 style={{ width: "100%" }}
               />
             </Form.Item>

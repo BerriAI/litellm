@@ -5564,6 +5564,32 @@ export const deletePolicyAttachmentCall = async (accessToken: string, attachment
   }
 };
 
+export const getResolvedGuardrails = async (accessToken: string, policyId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}/resolved-guardrails` : `/policies/${policyId}/resolved-guardrails`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get resolved guardrails:", error);
+    throw error;
+  }
+};
+
 export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
