@@ -800,3 +800,77 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             assert provider_fields is not None, "Final chunk should have provider_specific_fields"
             assert "mcp_tool_calls" in provider_fields, "Should have mcp_tool_calls"
             assert "mcp_call_results" in provider_fields, "Should have mcp_call_results"
+
+
+@pytest.mark.asyncio
+async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatch):
+    """
+    Test that _execute_tool_calls sets proxy_server_request with arguments in logging_request_data
+    so that arguments are available in callbacks.
+    """
+    import importlib
+    from unittest.mock import MagicMock
+    
+    # Capture the kwargs passed to function_setup
+    captured_kwargs = {}
+    
+    def mock_function_setup(original_function, rules_obj, start_time, **kwargs):
+        captured_kwargs.update(kwargs)
+        # Return a mock logging object
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        logging_obj.pre_call = MagicMock()
+        logging_obj.post_call = MagicMock()
+        logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
+        logging_obj.async_success_handler = AsyncMock()
+        return logging_obj, kwargs
+    
+    # Mock the MCP server manager
+    mock_result = MagicMock()
+    mock_result.content = [MagicMock(text="test result")]
+    
+    async def mock_call_tool(**kwargs):
+        return mock_result
+    
+    # NOTE: avoid monkeypatch string path here because `litellm.responses` is also
+    # exported as a function on the top-level `litellm` package, which can confuse
+    # pytest's dotted-path resolver.
+    mcp_handler_module = importlib.import_module(
+        "litellm.responses.mcp.litellm_proxy_mcp_handler"
+    )
+    monkeypatch.setattr(mcp_handler_module, "function_setup", mock_function_setup)
+    monkeypatch.setattr(
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager.call_tool",
+        mock_call_tool,
+    )
+    
+    # Create test data
+    tool_calls = [
+        {
+            "id": "call-1",
+            "type": "function",
+            "function": {
+                "name": "test_tool",
+                "arguments": '{"param1": "value1", "param2": 123}',
+            },
+        }
+    ]
+    tool_server_map = {"test_tool": "test_server"}
+    user_api_key_auth = MagicMock()
+    user_api_key_auth.api_key = "test_key"
+    
+    # Call _execute_tool_calls
+    result = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+        tool_server_map=tool_server_map,
+        tool_calls=tool_calls,
+        user_api_key_auth=user_api_key_auth,
+    )
+    
+    # Verify that proxy_server_request was set with arguments
+    assert "proxy_server_request" in captured_kwargs, "proxy_server_request should be in logging_request_data"
+    proxy_server_request = captured_kwargs["proxy_server_request"]
+    assert "body" in proxy_server_request, "proxy_server_request should have body"
+    assert "name" in proxy_server_request["body"], "body should have name"
+    assert "arguments" in proxy_server_request["body"], "body should have arguments"
+    assert proxy_server_request["body"]["name"] == "test_tool", "name should match"
+    assert proxy_server_request["body"]["arguments"] == {"param1": "value1", "param2": 123}, "arguments should be parsed correctly"
