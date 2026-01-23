@@ -292,6 +292,69 @@ async def delete_policy(policy_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get(
+    "/policies/{policy_id}/resolved-guardrails",
+    tags=["Policies"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_resolved_guardrails(policy_id: str):
+    """
+    Get the resolved guardrails for a policy (including inherited guardrails).
+
+    This endpoint resolves the full inheritance chain and returns the final
+    set of guardrails that would be applied for this policy.
+
+    Example Request:
+    ```bash
+    curl -X GET "http://localhost:4000/policies/123e4567-e89b-12d3-a456-426614174000/resolved-guardrails" \\
+        -H "Authorization: Bearer <your_api_key>"
+    ```
+
+    Example Response:
+    ```json
+    {
+        "policy_id": "123e4567-e89b-12d3-a456-426614174000",
+        "policy_name": "healthcare-compliance",
+        "resolved_guardrails": ["pii_masking", "prompt_injection", "toxicity_filter"]
+    }
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+
+    try:
+        # Get the policy
+        policy = await POLICY_REGISTRY.get_policy_by_id_from_db(
+            policy_id=policy_id,
+            prisma_client=prisma_client,
+        )
+        if policy is None:
+            raise HTTPException(
+                status_code=404, detail=f"Policy with ID {policy_id} not found"
+            )
+
+        # Resolve guardrails
+        resolved = await POLICY_REGISTRY.resolve_guardrails_from_db(
+            policy_name=policy.policy_name,
+            prisma_client=prisma_client,
+        )
+
+        return {
+            "policy_id": policy.policy_id,
+            "policy_name": policy.policy_name,
+            "resolved_guardrails": resolved,
+        }
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error resolving guardrails: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Policy Attachment CRUD Endpoints
 # ─────────────────────────────────────────────────────────────────────────────
