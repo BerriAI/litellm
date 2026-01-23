@@ -14,7 +14,6 @@ from typing import Dict, Optional
 
 from litellm._logging import verbose_logger
 
-# Store original post method for restoration
 _original_httpx_post = None
 
 
@@ -35,38 +34,30 @@ class MockLangfuseResponse:
     
     @property
     def text(self) -> str:
-        """Return response text."""
         return self._text
     
     @property
     def content(self) -> bytes:
-        """Return response content."""
         return self._content
     
     def json(self) -> Dict:
-        """Return JSON response data."""
         return self._json_data
     
     def read(self) -> bytes:
-        """Read response content."""
         return self._content
     
     def raise_for_status(self):
-        """Raise exception for error status codes."""
         if self.status_code >= 400:
             raise Exception(f"HTTP {self.status_code}")
 
 
 def _mock_httpx_post(self, url, **kwargs):
     """Monkey-patched httpx.Client.post that intercepts Langfuse calls."""
-    # Only mock Langfuse API calls
     if isinstance(url, str) and ("langfuse.com" in url or "langfuse" in url.lower()):
         print(f"[LANGFUSE MOCK] POST to {url}")
         return MockLangfuseResponse(status_code=200, json_data={"status": "success"}, url=url)
-    # For non-Langfuse calls, use original method
     if _original_httpx_post is not None:
         return _original_httpx_post(self, url, **kwargs)
-    # Fallback: if original not set, create a temporary client for this call
     import httpx
     with httpx.Client() as client:
         return client.post(url, **kwargs)
@@ -85,7 +76,6 @@ def create_mock_langfuse_client():
         httpx.Client.post = _mock_httpx_post  # type: ignore
         print("[LANGFUSE MOCK] Patched httpx.Client.post")
     
-    # Return real client - monkey-patch handles interception
     return httpx.Client()
 
 
@@ -103,8 +93,6 @@ def should_use_langfuse_mock() -> bool:
     
     mock_mode = os.getenv("LANGFUSE_MOCK", "false")
     result = str_to_bool(mock_mode)
-    
-    # Ensure we return a bool, not None
     result = bool(result) if result is not None else False
     
     if result:

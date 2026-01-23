@@ -124,13 +124,10 @@ class LangFuseLogger:
             flush_interval
         )
         
-        # Check if we should use mock mode
         if should_use_langfuse_mock():
-            # Use mock client - exercises all code without network calls
             self.langfuse_client = create_mock_langfuse_client()
             self.is_mock_mode = True
         else:
-            # Use real httpx client
             http_client = _get_httpx_client()
             self.langfuse_client = http_client.client
             self.is_mock_mode = False
@@ -153,7 +150,6 @@ class LangFuseLogger:
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
         if self.is_mock_mode:
-            # In mock mode, use a fake project ID
             os.environ["LANGFUSE_PROJECT_ID"] = "mock-project-id"
             verbose_logger.debug("Langfuse Mock: Using mock project ID")
         else:
