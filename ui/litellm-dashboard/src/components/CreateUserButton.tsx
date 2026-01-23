@@ -255,9 +255,9 @@ export const CreateUserButton: React.FC<CreateuserProps> = ({
             }
             name="send_invite_email"
             valuePropName="checked"
-            initialValue={true}
+            initialValue={false}
           >
-            <Switch defaultChecked />
+            <Switch />
           </Form.Item>
           <Form.Item
             label={
