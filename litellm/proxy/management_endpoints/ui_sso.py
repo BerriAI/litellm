@@ -713,14 +713,13 @@ async def get_user_info_from_db(
 
         # Upsert SSO User to LiteLLM DB
 
-        if user_info is None:
-            user_info = await SSOAuthenticationHandler.upsert_sso_user(
-                result=result,
-                user_info=user_info,
-                user_email=user_email,
-                user_defined_values=user_defined_values,
-                prisma_client=prisma_client,
-            )
+        user_info = await SSOAuthenticationHandler.upsert_sso_user(
+            result=result,
+            user_info=user_info,
+            user_email=user_email,
+            user_defined_values=user_defined_values,
+            prisma_client=prisma_client,
+        )
 
         await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
             result=result,
@@ -1737,6 +1736,9 @@ class SSOAuthenticationHandler:
 
                 await prisma_client.db.litellm_usertable.update_many(
                     where={"user_id": user_id}, data=update_data
+                )
+                user_info = await prisma_client.db.litellm_usertable.find_unique(
+                    where={"user_id": user_id}
                 )
             else:
                 verbose_proxy_logger.info(
