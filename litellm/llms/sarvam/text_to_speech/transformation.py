@@ -10,7 +10,6 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple, Union
 import httpx
 from httpx import Headers
 
-import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.text_to_speech.transformation import (
     BaseTextToSpeechConfig,

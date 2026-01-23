@@ -8,15 +8,10 @@ from typing import List, Optional, Union
 
 from httpx import Headers, Response
 
-import litellm
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    OpenAIAudioTranscriptionOptionalParams,
-)
-from litellm.types.utils import FileTypes, TranscriptionResponse
+from litellm.types.utils import AllMessageValues, FileTypes, TranscriptionResponse
 
 from ...base_llm.audio_transcription.transformation import (
     AudioTranscriptionRequestData,
@@ -43,9 +38,7 @@ class SarvamAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
     def custom_llm_provider(self) -> str:
         return "sarvam"
 
-    def get_supported_openai_params(
-        self, model: str
-    ) -> List[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> List[str]:
         return ["language"]
 
     def map_openai_params(
