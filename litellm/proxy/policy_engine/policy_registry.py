@@ -207,8 +207,6 @@ class PolicyRegistry:
             PolicyDBResponse with the created policy
         """
         try:
-            from prisma import Json
-
             # Build data dict, only include condition if it's set
             data: Dict[str, Any] = {
                 "policy_name": policy_request.policy_name,
@@ -227,7 +225,7 @@ class PolicyRegistry:
                 data["created_by"] = created_by
                 data["updated_by"] = created_by
             if policy_request.condition is not None:
-                data["condition"] = Json(policy_request.condition.model_dump())
+                data["condition"] = policy_request.condition.model_dump()
 
             created_policy = await prisma_client.db.litellm_policytable.create(
                 data=data
@@ -304,8 +302,7 @@ class PolicyRegistry:
             if policy_request.guardrails_remove is not None:
                 update_data["guardrails_remove"] = policy_request.guardrails_remove
             if policy_request.condition is not None:
-                from prisma import Json
-                update_data["condition"] = Json(policy_request.condition.model_dump())
+                update_data["condition"] = policy_request.condition.model_dump()
 
             updated_policy = await prisma_client.db.litellm_policytable.update(
                 where={"policy_id": policy_id},
