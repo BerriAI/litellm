@@ -340,37 +340,41 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         # Also check if headers are provided in tools array (from request body)
         tools = self.original_request_params.get("tools")
-        if tools:
-            for tool in tools:
-                if isinstance(tool, dict) and tool.get("type") == "mcp":
-                    tool_headers = tool.get("headers", {})
-                    if tool_headers and isinstance(tool_headers, dict):
-                        # Merge tool headers into mcp_server_auth_headers
-                        headers_obj_from_tool = Headers(tool_headers)
-                        tool_mcp_server_auth_headers = (
-                            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
-                                headers_obj_from_tool
-                            )
-                        )
-
-                        if tool_mcp_server_auth_headers:
-                            if self.mcp_server_auth_headers is None:
-                                self.mcp_server_auth_headers = {}
-                            # Merge the headers from tool into existing headers
-                            for (
-                                server_alias,
-                                headers_dict,
-                            ) in tool_mcp_server_auth_headers.items():
-                                if server_alias not in self.mcp_server_auth_headers:
-                                    self.mcp_server_auth_headers[server_alias] = {}
-                                self.mcp_server_auth_headers[server_alias].update(
-                                    headers_dict
+        # Defensive check: ensure tools is iterable
+        if tools and hasattr(tools, '__iter__'):
+            try:
+                for tool in tools:
+                    if isinstance(tool, dict) and tool.get("type") == "mcp":
+                        tool_headers = tool.get("headers", {})
+                        if tool_headers and isinstance(tool_headers, dict):
+                            # Merge tool headers into mcp_server_auth_headers
+                            headers_obj_from_tool = Headers(tool_headers)
+                            tool_mcp_server_auth_headers = (
+                                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                                    headers_obj_from_tool
                                 )
+                            )
 
-                        # Also merge raw headers
-                        if self.raw_headers is None:
-                            self.raw_headers = {}
-                        self.raw_headers.update(tool_headers)
+                            if tool_mcp_server_auth_headers:
+                                if self.mcp_server_auth_headers is None:
+                                    self.mcp_server_auth_headers = {}
+                                # Merge the headers from tool into existing headers
+                                for (
+                                    server_alias,
+                                    headers_dict,
+                                ) in tool_mcp_server_auth_headers.items():
+                                    if server_alias not in self.mcp_server_auth_headers:
+                                        self.mcp_server_auth_headers[server_alias] = {}
+                                    self.mcp_server_auth_headers[server_alias].update(
+                                        headers_dict
+                                    )
+
+                            # Also merge raw headers
+                            if self.raw_headers is None:
+                                self.raw_headers = {}
+                            self.raw_headers.update(tool_headers)
+            except (TypeError, AttributeError) as e:
+                verbose_logger.debug(f"Error iterating over tools in _extract_mcp_headers_from_params: {e}")
 
     def _should_auto_execute_tools(self) -> bool:
         """Check if tools should be auto-executed"""
@@ -498,22 +502,24 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             from litellm.responses.main import aresponses
 
             # Make the initial response API call - but avoid the MCP wrapper
-            params = self.original_request_params.copy()
+            params = self.original_request_params.copy() if self.original_request_params else {}
             params["stream"] = True  # Ensure streaming
 
             # Use the pre-fetched all_tools from original_request_params (no re-processing needed)
             params_for_llm = {}
             for key, value in params.items():
-                params_for_llm[
-                    key
-                ] = value  # Copy all params as-is since tools are already processed
+                # Skip None values and ensure tools is a valid list
+                if value is None:
+                    continue
+                if key == "tools" and not isinstance(value, (list, tuple)):
+                    verbose_logger.warning(f"Skipping invalid tools value: {type(value)}")
+                    continue
+                params_for_llm[key] = value
 
-            tools_count = (
-                len(params_for_llm.get("tools", []))
-                if params_for_llm.get("tools")
-                else 0
-            )
+            tools = params_for_llm.get("tools")
+            tools_count = len(tools) if tools and isinstance(tools, (list, tuple)) else 0
             verbose_logger.debug(f"Making LLM call with {tools_count} tools")
+            
             response = await aresponses(**params_for_llm)
 
             # Set the base iterator

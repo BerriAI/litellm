@@ -559,11 +559,14 @@ if MCP_AVAILABLE:
 
     async def _get_allowed_mcp_servers_from_mcp_server_names(
         mcp_servers: Optional[List[str]],
-        allowed_mcp_servers: List[MCPServer],
+        allowed_mcp_servers: Optional[List[MCPServer]],
     ) -> List[MCPServer]:
         """
         Get the filtered MCP servers from the MCP server names
         """
+        # Defensive check: ensure allowed_mcp_servers is not None
+        if allowed_mcp_servers is None:
+            allowed_mcp_servers = []
 
         filtered_server: dict[str, MCPServer] = {}
         # Filter servers based on mcp_servers parameter if provided

@@ -140,14 +140,24 @@ class LiteLLM_Proxy_MCP_Handler:
         allowed_mcp_server_ids = (
             await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_auth)
         )
+        # Defensive check: ensure allowed_mcp_server_ids is a list
+        if allowed_mcp_server_ids is None:
+            allowed_mcp_server_ids = []
+        
         allowed_mcp_servers = global_mcp_server_manager.get_mcp_servers_from_ids(  # type: ignore[attr-defined]
             allowed_mcp_server_ids
         )
+        # Defensive check: ensure allowed_mcp_servers is a list
+        if allowed_mcp_servers is None:
+            allowed_mcp_servers = []
 
         allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
             allowed_mcp_servers=allowed_mcp_servers,
         )
+        # Defensive check: ensure the result is a list
+        if allowed_mcp_servers is None:
+            allowed_mcp_servers = []
 
         server_names: List[str] = []
         for server in allowed_mcp_servers:
@@ -165,7 +175,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def _deduplicate_mcp_tools(
-        mcp_tools: List[MCPTool], allowed_mcp_servers: List[str]
+        mcp_tools: Optional[List[MCPTool]], allowed_mcp_servers: Optional[List[str]]
     ) -> tuple[List[MCPTool], dict[str, str]]:
         """
         Deduplicate MCP tools by name, keeping the first occurrence of each tool.
@@ -177,6 +187,12 @@ class LiteLLM_Proxy_MCP_Handler:
             List of deduplicated MCP tools
             The returned dictionary maps each tool_name to the server_name
         """
+        # Defensive checks for None inputs
+        if mcp_tools is None:
+            mcp_tools = []
+        if allowed_mcp_servers is None:
+            allowed_mcp_servers = []
+            
         seen_names = set()
         deduplicated_tools = []
         tool_server_map: dict[str, str] = {}
@@ -201,9 +217,15 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     def _filter_mcp_tools_by_allowed_tools(
-        mcp_tools: List[MCPTool], mcp_tools_with_litellm_proxy: List[ToolParam]
+        mcp_tools: Optional[List[MCPTool]], mcp_tools_with_litellm_proxy: Optional[List[ToolParam]]
     ) -> List[MCPTool]:
         """Filter MCP tools based on allowed_tools parameter from the original tool configs."""
+        # Defensive checks for None inputs
+        if mcp_tools is None:
+            return []
+        if mcp_tools_with_litellm_proxy is None:
+            return list(mcp_tools)
+            
         # Collect all allowed tool names from all MCP tool configs
         allowed_tool_names = set()
         for tool_config in mcp_tools_with_litellm_proxy:
@@ -239,7 +261,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _process_mcp_tools_to_openai_format(
-        user_api_key_auth: Any, mcp_tools_with_litellm_proxy: List[ToolParam]
+        user_api_key_auth: Any, mcp_tools_with_litellm_proxy: Optional[List[ToolParam]]
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Centralized method to process MCP tools through the complete pipeline.
@@ -268,7 +290,7 @@ class LiteLLM_Proxy_MCP_Handler:
 
     @staticmethod
     async def _process_mcp_tools_without_openai_transform(
-        user_api_key_auth: Any, mcp_tools_with_litellm_proxy: List[ToolParam]
+        user_api_key_auth: Any, mcp_tools_with_litellm_proxy: Optional[List[ToolParam]]
     ) -> tuple[List[Any], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.

@@ -1177,4 +1177,75 @@ async def test_no_duplicate_mcp_tools_in_streaming_e2e():
         }
 
 
+@pytest.mark.asyncio
+async def test_mcp_handler_none_defensive_checks():
+    """
+    Test that MCP handler methods properly handle None inputs without raising
+    'argument of type NoneType is not iterable' errors.
     
+    This test verifies the fix for the bug where back-to-back MCP Responses API calls
+    could fail when certain parameters were None.
+    """
+    from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
+    
+    print("🧪 Testing MCP handler None defensive checks...")
+    
+    # Test 1: _deduplicate_mcp_tools with None inputs
+    result_tools, result_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        mcp_tools=None,
+        allowed_mcp_servers=None
+    )
+    assert result_tools == [], "Should return empty list for None mcp_tools"
+    assert result_map == {}, "Should return empty dict for None allowed_mcp_servers"
+    print("✅ _deduplicate_mcp_tools handles None inputs correctly")
+    
+    # Test 2: _deduplicate_mcp_tools with None mcp_tools but valid servers
+    result_tools, result_map = LiteLLM_Proxy_MCP_Handler._deduplicate_mcp_tools(
+        mcp_tools=None,
+        allowed_mcp_servers=["server1", "server2"]
+    )
+    assert result_tools == [], "Should return empty list for None mcp_tools"
+    print("✅ _deduplicate_mcp_tools handles None mcp_tools correctly")
+    
+    # Test 3: _filter_mcp_tools_by_allowed_tools with None inputs
+    result = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=None,
+        mcp_tools_with_litellm_proxy=None
+    )
+    assert result == [], "Should return empty list for None inputs"
+    print("✅ _filter_mcp_tools_by_allowed_tools handles None inputs correctly")
+    
+    # Test 4: _filter_mcp_tools_by_allowed_tools with None mcp_tools_with_litellm_proxy
+    mock_tools = [
+        type('MCPTool', (), {
+            'name': 'test_tool',
+            'description': 'A test tool',
+            'inputSchema': {}
+        })()
+    ]
+    result = LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
+        mcp_tools=mock_tools,
+        mcp_tools_with_litellm_proxy=None
+    )
+    assert len(result) == 1, "Should return all tools when mcp_tools_with_litellm_proxy is None"
+    print("✅ _filter_mcp_tools_by_allowed_tools handles None mcp_tools_with_litellm_proxy correctly")
+    
+    # Test 5: _process_mcp_tools_without_openai_transform with None input
+    result_tools, result_map = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        user_api_key_auth=None,
+        mcp_tools_with_litellm_proxy=None
+    )
+    assert result_tools == [], "Should return empty list for None mcp_tools_with_litellm_proxy"
+    assert result_map == {}, "Should return empty dict for None input"
+    print("✅ _process_mcp_tools_without_openai_transform handles None inputs correctly")
+    
+    # Test 6: _process_mcp_tools_without_openai_transform with empty list
+    result_tools, result_map = await LiteLLM_Proxy_MCP_Handler._process_mcp_tools_without_openai_transform(
+        user_api_key_auth=None,
+        mcp_tools_with_litellm_proxy=[]
+    )
+    assert result_tools == [], "Should return empty list for empty mcp_tools_with_litellm_proxy"
+    assert result_map == {}, "Should return empty dict for empty input"
+    print("✅ _process_mcp_tools_without_openai_transform handles empty list correctly")
+    
+    print("🎉 All MCP handler None defensive checks passed!")
