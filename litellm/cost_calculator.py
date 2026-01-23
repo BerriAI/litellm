@@ -422,6 +422,10 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "azure_ai":
+        return generic_cost_per_token(
+            model=model, usage=usage_block, custom_llm_provider=custom_llm_provider
+        )
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
