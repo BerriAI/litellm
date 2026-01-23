@@ -13,6 +13,14 @@ from litellm.types.utils import StandardLoggingPayload
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span
+from litellm.integrations._types.open_inference import (
+        MessageAttributes,
+        ImageAttributes,
+        SpanAttributes,
+        AudioAttributes,
+        EmbeddingAttributes,
+        OpenInferenceSpanKindValues
+)
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
@@ -20,11 +28,6 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     @staticmethod
     @override
     def set_messages(span: "Span", kwargs: Dict[str, Any]):
-        from litellm.integrations._types.open_inference import (
-            MessageAttributes,
-            SpanAttributes,
-        )
-
         messages = kwargs.get("messages")
 
         # for /chat/completions
@@ -90,13 +93,6 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
 
 def _set_response_attributes(span: "Span", response_obj):
     """Helper to set response output and token usage attributes on span."""
-    from litellm.integrations._types.open_inference import (
-        ImageAttributes,
-        MessageAttributes,
-        SpanAttributes,
-        AudioAttributes,
-        EmbeddingAttributes,
-    )
 
     if not hasattr(response_obj, "get"):
         return
@@ -243,7 +239,6 @@ def _infer_open_inference_span_kind(call_type: Optional[str]) -> str:
     """
     Map LiteLLM call types to OpenInference span kinds.
     """
-    from litellm.integrations._types.open_inference import OpenInferenceSpanKindValues
 
     if not call_type:
         return OpenInferenceSpanKindValues.UNKNOWN.value
@@ -297,10 +292,6 @@ def _set_tool_attributes(
     span: "Span", optional_tools: Optional[list], metadata_tools: Optional[list]
 ):
     """set tool attributes on span from optional_params or tool call metadata"""
-    from litellm.integrations._types.open_inference import (
-        SpanAttributes,
-    )
-
     if optional_tools:
         for idx, tool in enumerate(optional_tools):
             if not isinstance(tool, dict):
