@@ -11,12 +11,10 @@ from typing import Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.types.proxy.policy_engine import (
-    ConditionOperator,
     Policy,
     PolicyCondition,
     PolicyConfig,
     PolicyGuardrails,
-    PolicyStatement,
 )
 
 
@@ -30,7 +28,7 @@ class PolicyRegistry:
     Policies define WHAT guardrails to apply:
     - Base guardrails via guardrails.add/remove
     - Inheritance via inherit field
-    - Conditional guardrails via statements
+    - Conditional guardrails via condition.model
     """
 
     def __init__(self):
@@ -83,102 +81,18 @@ class PolicyRegistry:
             # Handle legacy format where guardrails might be a list
             guardrails = PolicyGuardrails(add=guardrails_data if guardrails_data else None)
 
-        # Parse statements (conditional guardrails)
-        statements = None
-        statements_data = policy_data.get("statements")
-        if statements_data:
-            statements = [
-                self._parse_statement(stmt_data) for stmt_data in statements_data
-            ]
+        # Parse condition (simple model-based condition)
+        condition = None
+        condition_data = policy_data.get("condition")
+        if condition_data:
+            condition = PolicyCondition(model=condition_data.get("model"))
 
         return Policy(
             inherit=policy_data.get("inherit"),
-            guardrails=guardrails,
-            statements=statements,
             description=policy_data.get("description"),
-        )
-
-    def _parse_statement(self, stmt_data: Dict[str, Any]) -> PolicyStatement:
-        """
-        Parse a policy statement from raw configuration data.
-
-        Args:
-            stmt_data: Raw statement configuration
-
-        Returns:
-            Parsed PolicyStatement object
-        """
-        condition = None
-        condition_data = stmt_data.get("condition")
-        if condition_data:
-            condition = self._parse_condition(condition_data)
-
-        return PolicyStatement(
-            sid=stmt_data.get("sid"),
-            guardrails=stmt_data.get("guardrails", []),
+            guardrails=guardrails,
             condition=condition,
         )
-
-    def _parse_condition(self, condition_data: Dict[str, Any]) -> PolicyCondition:
-        """
-        Parse a policy condition from raw configuration data.
-
-        Args:
-            condition_data: Raw condition configuration
-
-        Returns:
-            Parsed PolicyCondition object
-        """
-        model_op = None
-        team_op = None
-        key_op = None
-        metadata_ops = None
-
-        if "model" in condition_data:
-            model_op = self._parse_operator(condition_data["model"])
-        if "team" in condition_data:
-            team_op = self._parse_operator(condition_data["team"])
-        if "key" in condition_data:
-            key_op = self._parse_operator(condition_data["key"])
-        if "metadata" in condition_data:
-            metadata_ops = {
-                field: self._parse_operator(op_data)
-                for field, op_data in condition_data["metadata"].items()
-            }
-
-        return PolicyCondition(
-            model=model_op,
-            team=team_op,
-            key=key_op,
-            metadata=metadata_ops,
-        )
-
-    def _parse_operator(self, op_data: Dict[str, Any]) -> ConditionOperator:
-        """
-        Parse a condition operator from raw configuration data.
-
-        Args:
-            op_data: Raw operator configuration
-
-        Returns:
-            Parsed ConditionOperator object
-        """
-        # Build dict with alias names for Pydantic
-        operator_dict: Dict[str, Any] = {}
-        if "equals" in op_data:
-            operator_dict["equals"] = op_data["equals"]
-        if "in" in op_data:
-            operator_dict["in"] = op_data["in"]
-        if "prefix" in op_data:
-            operator_dict["prefix"] = op_data["prefix"]
-        if "not_equals" in op_data:
-            operator_dict["not_equals"] = op_data["not_equals"]
-        if "notIn" in op_data:
-            operator_dict["notIn"] = op_data["notIn"]
-        elif "not_in" in op_data:
-            operator_dict["notIn"] = op_data["not_in"]
-
-        return ConditionOperator.model_validate(operator_dict)
 
     def get_policy(self, policy_name: str) -> Optional[Policy]:
         """

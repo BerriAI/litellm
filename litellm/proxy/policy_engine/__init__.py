@@ -6,7 +6,7 @@ with scoping rules. Policies can target specific teams, API keys, and models usi
 wildcard patterns, and support inheritance from base policies.
 
 Configuration structure:
-- `policies`: Define WHAT guardrails to apply (with inheritance and statements)
+- `policies`: Define WHAT guardrails to apply (with inheritance and conditions)
 - `policy_attachments`: Define WHERE policies apply (teams, keys, models)
 
 Example:
@@ -17,22 +17,19 @@ policies:
     guardrails:
       add: [pii_blocker]
 
-  healthcare-compliance:
+  gpt4-safety:
     inherit: global-baseline
+    description: "Extra safety for GPT-4"
     guardrails:
-      add: [hipaa_audit]
-    statements:
-      - sid: "GPT4Only"
-        guardrails: [toxicity_filter]
-        condition:
-          model:
-            in: ["gpt-4", "gpt-4-turbo"]
+      add: [toxicity_filter]
+    condition:
+      model: "gpt-4.*"  # regex pattern
 
 policy_attachments:
   - policy: global-baseline
     scope: "*"
-  - policy: healthcare-compliance
-    teams: [healthcare-team]
+  - policy: gpt4-safety
+    scope: "*"
 ```
 """
 

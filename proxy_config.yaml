@@ -20,9 +20,10 @@ general_settings:
 #
 # Policies define guardrails with:
 # - inherit: Inherit guardrails from another policy
+# - description: Human-readable description
 # - guardrails.add: Add guardrails (on top of inherited)
 # - guardrails.remove: Remove guardrails (from inherited)
-# - statements: Conditional guardrails with AWS IAM-style conditions
+# - condition.model: Model pattern (exact or regex) for when guardrails apply
 #
 policies:
   # Global baseline policy
@@ -50,25 +51,23 @@ policies:
       remove:
         - pii_blocker
 
-  # Policy with conditional statements
-  conditional-safety:
-    description: "Model-specific guardrails using conditions"
+  # Policy with model condition (regex pattern)
+  gpt4-safety:
+    description: "Extra safety for GPT-4 models"
     guardrails:
       add:
-        - base_safety
-    statements:
-      - sid: "GPT4ToxicityFilter"
-        guardrails:
-          - toxicity_filter
-        condition:
-          model:
-            in: ["gpt-4", "gpt-4-turbo", "gpt-4o"]
-      - sid: "BedrockPIICheck"
-        guardrails:
-          - strict_pii_blocker
-        condition:
-          model:
-            prefix: "bedrock/"
+        - toxicity_filter
+    condition:
+      model: "gpt-4.*"  # regex: matches gpt-4, gpt-4-turbo, gpt-4o, etc.
+
+  # Policy with model condition (exact match list)
+  bedrock-compliance:
+    description: "Compliance for Bedrock models"
+    guardrails:
+      add:
+        - strict_pii_blocker
+    condition:
+      model: ["bedrock/claude-3", "bedrock/claude-2"]  # exact matches
 
 # ───────────────────────────────────────────────
 # POLICY ATTACHMENTS - Define WHERE policies apply
@@ -94,9 +93,9 @@ policy_attachments:
       - "dev-key-*"
       - "test-key-*"
 
-  # Model-specific attachment
-  - policy: conditional-safety
-    models:
-      - "gpt-4"
-      - "gpt-4-turbo"
-      - "bedrock/*"
+  # Model-specific policies (attached globally, condition filters by model)
+  - policy: gpt4-safety
+    scope: "*"
+
+  - policy: bedrock-compliance
+    scope: "*"

@@ -5,23 +5,18 @@ The Policy Engine allows administrators to define policies that combine guardrai
 with scoping rules. Policies can target specific teams, API keys, and models using
 wildcard patterns, and support inheritance from base policies.
 
-The engine supports two configuration styles:
-
-1. **Simple Style**: Policies with inline scope (original)
-2. **Advanced Style**: Policies with statements and separate attachments
-
-Both styles support the `inherit` field with `guardrails.add` and `guardrails.remove`.
+Configuration:
+- `policies`: Define WHAT guardrails to apply (with inheritance and conditions)
+- `policy_attachments`: Define WHERE policies apply (teams, keys, models)
 """
 
 from litellm.types.proxy.policy_engine.policy_types import (
-    ConditionOperator,
     Policy,
     PolicyAttachment,
     PolicyCondition,
     PolicyConfig,
     PolicyGuardrails,
     PolicyScope,
-    PolicyStatement,
 )
 from litellm.types.proxy.policy_engine.resolver_types import (
     PolicyGuardrailsResponse,
@@ -46,10 +41,7 @@ __all__ = [
     "PolicyConfig",
     "PolicyGuardrails",
     "PolicyScope",
-    # Condition types (new)
-    "ConditionOperator",
     "PolicyCondition",
-    "PolicyStatement",
     "PolicyAttachment",
     # Validation types
     "PolicyValidateRequest",
