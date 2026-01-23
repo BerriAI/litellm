@@ -1,4 +1,4 @@
-# Guardrail Policies
+# [Beta] Guardrail Policies
 
 Use policies to group guardrails and control which ones run for specific teams, keys, or models.
 
@@ -10,9 +10,13 @@ Use policies to group guardrails and control which ones run for specific teams, 
 
 ## Quick Start
 
-### 1. Define your guardrails
-
 ```yaml showLineNumbers title="config.yaml"
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+
+# 1. Define your guardrails
 guardrails:
   - guardrail_name: pii_masking
     litellm_params:
@@ -24,22 +28,16 @@ guardrails:
       guardrail: lakera
       mode: pre_call
       api_key: os.environ/LAKERA_API_KEY
-```
 
-### 2. Create a policy
-
-```yaml showLineNumbers title="config.yaml"
+# 2. Create a policy
 policies:
   my-policy:
     guardrails:
       add:
         - pii_masking
         - prompt_injection
-```
 
-### 3. Attach the policy
-
-```yaml showLineNumbers title="config.yaml"
+# 3. Attach the policy
 policy_attachments:
   - policy: my-policy
     scope: "*"  # apply to all requests
@@ -53,6 +51,10 @@ x-litellm-applied-guardrails: pii_masking,prompt_injection
 ```
 
 ## Add guardrails for a specific team
+
+:::info
+✨ Enterprise only feature for team/key-based policy attachments. [Get a free trial](https://www.litellm.ai/enterprise#trial)
+:::
 
 You have a global baseline, but want to add extra guardrails for a specific team.
 
@@ -82,6 +84,10 @@ policy_attachments:
 Now the `finance` team gets `pii_masking` + `strict_compliance_check` + `audit_logger`, while everyone else just gets `pii_masking`.
 
 ## Remove guardrails for a specific team
+
+:::info
+✨ Enterprise only feature for team/key-based policy attachments. [Get a free trial](https://www.litellm.ai/enterprise#trial)
+:::
 
 You have guardrails running globally, but want to disable some for a specific team (e.g., internal testing).
 
@@ -242,3 +248,36 @@ policy_attachments:
 |--------|-------------|
 | `x-litellm-applied-policies` | Policies that matched this request |
 | `x-litellm-applied-guardrails` | Guardrails that actually ran |
+
+## How it works
+
+Example config:
+
+```yaml showLineNumbers title="config.yaml"
+policies:
+  base:
+    guardrails:
+      add: [pii_masking]
+
+  finance-policy:
+    inherit: base
+    guardrails:
+      add: [audit_logger]
+
+policy_attachments:
+  - policy: base
+    scope: "*"
+  - policy: finance-policy
+    teams: [finance]
+```
+
+```mermaid
+flowchart TD
+    A["Request with team_alias='finance'"] --> B["Matches policies: base, finance-policy"]
+    B --> C["Resolves guardrails: pii_masking, audit_logger"]
+```
+
+1. Request comes in with `team_alias='finance'`
+2. Matches `base` (via `scope: "*"`) and `finance-policy` (via `teams: [finance]`)
+3. Resolves guardrails: `base` adds `pii_masking`, `finance-policy` inherits and adds `audit_logger`
+4. Final guardrails: `pii_masking`, `audit_logger`
