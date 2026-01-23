@@ -44,6 +44,17 @@ sequenceDiagram
 - **Auth Header Replacement** - Swap LiteLLM virtual key for actual provider credentials
 - **Logging** (optional) - Parse response to extract usage and calculate cost
 
+## Extra Operations
+
+| Operation | Description |
+|-----------|-------------|
+| `x-pass-*` headers | Strip prefix and forward (e.g., `x-pass-anthropic-beta` → `anthropic-beta`) |
+| `x-litellm-tags` header | Extract tags and add to request metadata for logging |
+| Streaming chunk collection | Collect chunks async for logging after stream completes |
+| Multipart form handling | Reconstruct multipart/form-data requests for file uploads |
+| Guardrails (opt-in) | Run content filtering when explicitly configured |
+| Cost injection | Inject cost into streaming chunks when `include_cost_in_streaming_usage` enabled |
+
 ## What Does NOT Change
 
 - Request body
