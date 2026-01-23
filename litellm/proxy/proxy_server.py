@@ -7727,6 +7727,9 @@ async def model_info_v2(
     debug: Optional[bool] = False,
     page: int = Query(1, description="Page number", ge=1),
     size: int = Query(50, description="Page size", ge=1),
+    search: Optional[str] = fastapi.Query(
+        None, description="Search model names (case-insensitive partial match)"
+    ),
 ):
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
@@ -7760,6 +7763,95 @@ async def model_info_v2(
     if model is not None:
         all_models = [m for m in all_models if m["model_name"] == model]
 
+    # Track total count for search (will be calculated if searching)
+    search_total_count = None
+    
+    # Apply search filter if provided
+    if search is not None and search.strip():
+        search_lower = search.lower().strip()
+        
+        # First, filter ALL models in router by search term (both config and db models)
+        filtered_router_models = [
+            m for m in all_models
+            if search_lower in m.get("model_name", "").lower()
+        ]
+        
+        # Separate filtered models into config vs db models, and track db model IDs
+        filtered_config_models = []
+        db_model_ids_in_router = set()
+        
+        for m in filtered_router_models:
+            model_info = m.get("model_info", {})
+            is_db_model = model_info.get("db_model", False)
+            model_id = model_info.get("id")
+            
+            if is_db_model and model_id:
+                db_model_ids_in_router.add(model_id)
+            else:
+                filtered_config_models.append(m)
+        
+        config_models_count = len(filtered_config_models)
+        db_models_in_router_count = len(db_model_ids_in_router)
+        router_models_count = config_models_count + db_models_in_router_count
+        
+        # Query database for additional models with search term (not already in router)
+        # We need enough models to fill the current page (size * page total models)
+        db_models = []
+        db_models_total_count = 0
+        models_needed_for_page = size * page  # Total models needed up to current page
+        
+        try:
+            # Build where condition for database query
+            db_where_condition: Dict[str, Any] = {
+                "model_name": {
+                    "contains": search_lower,
+                    "mode": "insensitive",
+                }
+            }
+            # Exclude models already in router if we have any
+            if db_model_ids_in_router:
+                db_where_condition["model_id"] = {
+                    "not": {"in": list(db_model_ids_in_router)}
+                }
+            
+            # Get total count of matching database models (excluding those already in router)
+            db_models_total_count = await prisma_client.db.litellm_proxymodeltable.count(
+                where=db_where_condition
+            )
+            
+            # Calculate total count for search results
+            search_total_count = router_models_count + db_models_total_count
+            
+            # Fetch database models if we need more for the current page
+            if router_models_count < models_needed_for_page:
+                models_to_fetch = min(
+                    models_needed_for_page - router_models_count,
+                    db_models_total_count
+                )
+                
+                if models_to_fetch > 0:
+                    db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
+                        where=db_where_condition,
+                        take=models_to_fetch,
+                    )
+                    
+                    # Convert database models to router format
+                    for db_model in db_models_raw:
+                        decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
+                        if decrypted_models:
+                            db_models.extend(decrypted_models)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error querying database models with search: {str(e)}"
+            )
+            # If error, use router models count as fallback
+            search_total_count = router_models_count
+        
+        # Combine all models: config models first, then db models from router, then db models from database
+        # filtered_router_models already contains both config and db models from router, so we can use it directly
+        all_models = filtered_router_models + db_models
+    # else: No search - models are already in all_models from llm_router.model_list
+
     if user_models_only:
         all_models = await non_admin_all_models(
             all_models=all_models,
@@ -7783,7 +7875,8 @@ async def model_info_v2(
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
     
-    total_count = len(all_models)
+    # Use search_total_count if searching, otherwise use len(all_models)
+    total_count = search_total_count if search_total_count is not None else len(all_models)
     
     skip = (page - 1) * size
     
@@ -7792,7 +7885,7 @@ async def model_info_v2(
     paginated_models = all_models[skip : skip + size]
     
     verbose_proxy_logger.debug(
-        f"Pagination: skip={skip}, take={size}, total_count={total_count}, total_pages={total_pages}"
+        f"Pagination: skip={skip}, take={size}, total_count={total_count}, total_pages={total_pages}, search={search}"
     )
     
     return {
