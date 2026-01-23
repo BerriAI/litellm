@@ -216,11 +216,9 @@ jobs:
 
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
-              --timings-type=file \
               --verbose \
               --command="xargs python -m pytest \
                 -vv \
-                tests/local_testing \
                 --cov=litellm \
                 --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -543,7 +541,6 @@ jobs:
 
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
-              --timings-type=file \
               --verbose \
               --command="xargs python -m pytest \
                 -k 'router' \
@@ -1835,7 +1832,6 @@ jobs:
 
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
-              --timings-type=file \
               --verbose \
               --command="xargs python -m pytest \
                 -vv \
