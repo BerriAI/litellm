@@ -203,6 +203,7 @@ class TestOCIImageUrlTransformation:
     """Tests for OCI image_url format handling in multimodal messages.
 
     Fixes: https://github.com/BerriAI/litellm/issues/18270
+    Fixes: https://github.com/BerriAI/litellm/issues/19589
     """
 
     def test_image_url_as_string(self):
@@ -224,7 +225,8 @@ class TestOCIImageUrlTransformation:
         assert len(result) == 1
         assert result[0].role == "USER"
         assert len(result[0].content) == 2
-        assert result[0].content[1].imageUrl == "https://example.com/image.png"
+        # imageUrl is now an OCIImageUrl object with a 'url' property
+        assert result[0].content[1].imageUrl.url == "https://example.com/image.png"
 
     def test_image_url_as_openai_object(self):
         """Test that image_url as OpenAI-style object {"url": "..."} works."""
@@ -245,7 +247,38 @@ class TestOCIImageUrlTransformation:
         assert len(result) == 1
         assert result[0].role == "USER"
         assert len(result[0].content) == 2
-        assert result[0].content[1].imageUrl == "https://example.com/image.png"
+        # imageUrl is now an OCIImageUrl object with a 'url' property
+        assert result[0].content[1].imageUrl.url == "https://example.com/image.png"
+
+    def test_image_url_serializes_as_object(self):
+        """Test that imageUrl serializes as {"url": "..."} for OCI API.
+
+        Fixes: https://github.com/BerriAI/litellm/issues/19589
+        OCI expects imageUrl to be an object with a 'url' property, not a plain string.
+        """
+        from litellm.llms.oci.chat.transformation import adapt_messages_to_generic_oci_standard
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this image."},
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,ABC123"}},
+                ],
+            }
+        ]
+
+        result = adapt_messages_to_generic_oci_standard(messages)
+        image_part = result[0].content[1]
+
+        # Serialize as OCI would receive it (with exclude_none=True)
+        serialized = image_part.model_dump(exclude_none=True)
+
+        # Verify the structure matches OCI's expected format
+        assert serialized == {
+            "type": "IMAGE",
+            "imageUrl": {"url": "data:image/png;base64,ABC123"}
+        }
 
     def test_image_url_invalid_type_raises_error(self):
         """Test that invalid image_url type raises an error."""
