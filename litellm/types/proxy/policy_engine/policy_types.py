@@ -1,8 +1,6 @@
 """
 Core policy type definitions.
 
-These types define the structure of policies in the configuration.
-
 Policy Engine Configuration:
 ```yaml
 policies:
@@ -15,12 +13,8 @@ policies:
     inherit: global-baseline
     guardrails:
       add: [hipaa_audit]
-    statements:
-      - sid: "GPT4Only"
-        guardrails: [toxicity_filter]
-        condition:
-          model:
-            in: ["gpt-4", "gpt-4-turbo"]
+    condition:
+      model: "gpt-4"  # exact match or regex pattern
 
 policy_attachments:
   - policy: global-baseline
@@ -32,7 +26,7 @@ policy_attachments:
 Key concepts:
 - `policies`: Define WHAT guardrails to apply (with inheritance via `inherit` and `guardrails.add`/`remove`)
 - `policy_attachments`: Define WHERE policies apply (teams, keys, models)
-- `statements`: Fine-grained conditional guardrails within a policy
+- `condition`: Optional model condition for when guardrails apply
 """
 
 from typing import Any, Dict, List, Optional, Union
@@ -40,131 +34,28 @@ from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, ConfigDict, Field
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Condition Operators (AWS IAM-style)
+# Policy Condition
 # ─────────────────────────────────────────────────────────────────────────────
-
-
-class ConditionOperator(BaseModel):
-    """
-    AWS IAM-style condition operators for matching values.
-
-    Supports:
-    - equals: Exact string match
-    - in_: Value must be in the list (alias: "in" in YAML)
-    - prefix: Value must start with the given prefix
-    - not_equals: Value must NOT equal
-    - not_in: Value must NOT be in the list
-
-    Example YAML:
-    ```yaml
-    condition:
-      model:
-        in: ["gpt-4", "gpt-4-turbo"]
-      team:
-        prefix: "healthcare-"
-    ```
-    """
-
-    equals: Optional[str] = Field(
-        default=None,
-        description="Exact string match.",
-    )
-    in_: Optional[List[str]] = Field(
-        default=None,
-        alias="in",
-        description="Value must be in this list.",
-    )
-    prefix: Optional[str] = Field(
-        default=None,
-        description="Value must start with this prefix.",
-    )
-    not_equals: Optional[str] = Field(
-        default=None,
-        description="Value must NOT equal this.",
-    )
-    not_in: Optional[List[str]] = Field(
-        default=None,
-        alias="notIn",
-        description="Value must NOT be in this list.",
-    )
-
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class PolicyCondition(BaseModel):
     """
-    Condition for when a policy statement applies.
+    Condition for when a policy's guardrails apply.
 
-    All specified conditions must match (AND logic).
-    If a field is None, it matches any value for that field.
+    Currently supports model-based conditions with exact match or regex.
 
     Example YAML:
     ```yaml
     condition:
-      model:
-        in: ["gpt-4", "gpt-4-turbo"]
-      team:
-        prefix: "healthcare-"
-      metadata:
-        environment:
-          equals: "production"
+      model: "gpt-4"           # exact match
+      model: "gpt-4.*"         # regex pattern
+      model: ["gpt-4", "gpt-4-turbo"]  # list of exact matches
     ```
     """
 
-    model: Optional[ConditionOperator] = Field(
+    model: Optional[Union[str, List[str]]] = Field(
         default=None,
-        description="Condition on the model name.",
-    )
-    team: Optional[ConditionOperator] = Field(
-        default=None,
-        description="Condition on the team alias.",
-    )
-    key: Optional[ConditionOperator] = Field(
-        default=None,
-        description="Condition on the API key alias.",
-    )
-    metadata: Optional[Dict[str, ConditionOperator]] = Field(
-        default=None,
-        description="Conditions on request metadata fields.",
-    )
-
-    model_config = ConfigDict(extra="forbid")
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Policy Statements
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class PolicyStatement(BaseModel):
-    """
-    A single statement within a policy.
-
-    Statements allow fine-grained control over when guardrails apply
-    using AWS IAM-style conditions.
-
-    Example YAML:
-    ```yaml
-    statements:
-      - sid: "RequirePIIOnGPT4"
-        guardrails: [pii_blocker]
-        condition:
-          model:
-            in: ["gpt-4", "gpt-4-turbo"]
-    ```
-    """
-
-    sid: Optional[str] = Field(
-        default=None,
-        description="Statement ID for identification and debugging.",
-    )
-    guardrails: List[str] = Field(
-        default_factory=list,
-        description="Guardrail names to apply when condition matches.",
-    )
-    condition: Optional[PolicyCondition] = Field(
-        default=None,
-        description="Condition for when this statement applies. If None, always applies.",
+        description="Model name(s) to match. Can be exact string, regex pattern, or list.",
     )
 
     model_config = ConfigDict(extra="forbid")
@@ -257,6 +148,11 @@ class PolicyGuardrails(BaseModel):
         return self.remove if self.remove else []
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Policy
+# ─────────────────────────────────────────────────────────────────────────────
+
+
 class Policy(BaseModel):
     """
     A policy that defines WHAT guardrails to apply.
@@ -268,8 +164,7 @@ class Policy(BaseModel):
     - Guardrails from `guardrails.add` are added to the inherited guardrails
     - Guardrails from `guardrails.remove` are removed from the inherited guardrails
 
-    Policies can also have `statements` for fine-grained conditional guardrails.
-    Statements are evaluated in addition to the base guardrails.
+    Policies can have a `condition` for model-based guardrail application.
 
     Example configuration:
     ```yaml
@@ -288,34 +183,21 @@ class Policy(BaseModel):
           add:
             - hipaa_audit
 
-      internal-dev:
-        inherit: global-baseline
-        description: "Relaxed policy for dev"
+      gpt4-safety:
+        description: "Extra safety for GPT-4 models"
         guardrails:
           add:
             - toxicity_filter
-          remove:
-            - phi_blocker
-
-      conditional-policy:
-        description: "Model-specific guardrails"
-        guardrails:
-          add:
-            - base_guardrail
-        statements:
-          - sid: "GPT4Safety"
-            guardrails: [toxicity_filter]
-            condition:
-              model:
-                in: ["gpt-4", "gpt-4-turbo"]
+        condition:
+          model: "gpt-4.*"  # regex pattern
 
     policy_attachments:
       - policy: global-baseline
         scope: "*"
       - policy: healthcare-compliance
         teams: [healthcare-team]
-      - policy: internal-dev
-        keys: ["dev-key-*"]
+      - policy: gpt4-safety
+        scope: "*"
     ```
     """
 
@@ -323,17 +205,17 @@ class Policy(BaseModel):
         default=None,
         description="Name of the parent policy to inherit from.",
     )
+    description: Optional[str] = Field(
+        default=None,
+        description="Human-readable description of the policy.",
+    )
     guardrails: PolicyGuardrails = Field(
         default_factory=PolicyGuardrails,
         description="Guardrails configuration with add/remove lists.",
     )
-    statements: Optional[List[PolicyStatement]] = Field(
+    condition: Optional[PolicyCondition] = Field(
         default=None,
-        description="Optional list of conditional statements for fine-grained guardrail control.",
-    )
-    description: Optional[str] = Field(
-        default=None,
-        description="Human-readable description of the policy.",
+        description="Optional condition for when this policy's guardrails apply.",
     )
 
     model_config = ConfigDict(extra="forbid")
