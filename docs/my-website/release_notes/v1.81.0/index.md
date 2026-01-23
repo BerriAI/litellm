@@ -62,7 +62,7 @@ This means you can now use Claude Code's web search tool with any provider, not 
 
 Proxy Admins can configure web search interception in their LiteLLM proxy config to enable this capability for their teams using Claude Code with Bedrock, Azure, or any other supported provider.
 
-[**Learn more →**](../../docs/tutorials/claude_code_websearch.md)
+[**Learn more →**](https://docs.litellm.ai/docs/tutorials/claude_code_websearch)
 
 ---
 
