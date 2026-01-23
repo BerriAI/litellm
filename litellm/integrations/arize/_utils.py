@@ -24,7 +24,6 @@ from litellm.integrations._types.open_inference import (
 
 
 class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
-
     @staticmethod
     @override
     def set_messages(span: "Span", kwargs: Dict[str, Any]):
@@ -59,7 +58,6 @@ class ArizeOTELAttributes(BaseLLMObsOTELAttributes):
     def set_response_output_messages(span: "Span", response_obj):
         """
         Sets output message attributes on the span from the LLM response.
-
         Args:
             span: The OpenTelemetry span to set attributes on
             response_obj: The response object containing choices with messages
