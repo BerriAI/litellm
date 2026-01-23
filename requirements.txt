@@ -14,7 +14,7 @@ boto3==1.40.53 # aws bedrock/sagemaker calls (has bedrock-agentcore-control, com
 redis==5.2.1 # redis caching
 redisvl==0.4.1 ## redis semantic caching
 prisma==0.11.0 # for db
-nodejs-wheel-binaries==24.12.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
+nodejs-wheel-binaries==20.20.0 ## required by prisma for migrations, prevents runtime download (updated from nodejs-bin for security fixes)
 mangum==0.17.0 # for aws lambda functions
 pynacl==1.6.2 # for encrypting keys
 google-cloud-aiplatform==1.133.0 # for vertex ai calls
