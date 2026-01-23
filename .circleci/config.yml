@@ -1853,7 +1853,6 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-    parallelism: 4
     steps:
       - checkout
       - setup_google_dns
