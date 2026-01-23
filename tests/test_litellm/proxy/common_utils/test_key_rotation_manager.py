@@ -4,7 +4,7 @@ Test key rotation manager functionality
 import os
 import sys
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -215,3 +215,135 @@ class TestKeyRotationManager:
         next_rotation = update_data["key_rotation_at"]
         time_diff = (next_rotation - now).total_seconds()
         assert 25 <= time_diff <= 35  # Should be around 30 seconds, allow some tolerance
+
+    @pytest.mark.asyncio
+    async def test_rotate_key_sets_grace_period_fields(self):
+        """
+        Test that key rotation properly sets grace period fields.
+        
+        This tests:
+        - previous_token is set to the old token hash
+        - previous_token_expires is set to now + grace_period_minutes
+        - grace_period_minutes is preserved
+        """
+        mock_prisma_client = AsyncMock()
+        manager = KeyRotationManager(mock_prisma_client)
+        
+        key_to_rotate = LiteLLM_VerificationToken(
+            token="old-token-hash",
+            auto_rotate=True,
+            rotation_interval="30s",
+            last_rotation_at=None,
+            key_rotation_at=None,
+            rotation_count=0,
+            grace_period_minutes=45,  # Custom grace period
+        )
+        
+        mock_response = GenerateKeyResponse(
+            key="new-api-key",
+            token_id="new-token-hash",
+            user_id="test-user"
+        )
+        
+        with patch('litellm.proxy.common_utils.key_rotation_manager.regenerate_key_fn', return_value=mock_response):
+            with patch('litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook'):
+                await manager._rotate_key(key_to_rotate)
+        
+        call_args = mock_prisma_client.db.litellm_verificationtoken.update.call_args
+        update_data = call_args[1]["data"]
+        
+        # Check grace period fields
+        assert update_data["previous_token"] == "old-token-hash"
+        assert "previous_token_expires" in update_data
+        assert isinstance(update_data["previous_token_expires"], datetime)
+        assert update_data["grace_period_minutes"] == 45
+        
+        # Verify grace expiry is approximately 45 minutes from now
+        now = datetime.now(timezone.utc)
+        grace_expiry = update_data["previous_token_expires"]
+        time_diff_minutes = (grace_expiry - now).total_seconds() / 60
+        assert 44 <= time_diff_minutes <= 46  # Allow 1 minute tolerance
+
+    @pytest.mark.asyncio
+    async def test_rotate_key_uses_default_grace_period(self):
+        """Test that key rotation uses default 30-minute grace period when not specified."""
+        mock_prisma_client = AsyncMock()
+        manager = KeyRotationManager(mock_prisma_client)
+        
+        key_to_rotate = LiteLLM_VerificationToken(
+            token="old-token-hash",
+            auto_rotate=True,
+            rotation_interval="30s",
+            rotation_count=0,
+            grace_period_minutes=None,  # Not set
+        )
+        
+        mock_response = GenerateKeyResponse(
+            key="new-api-key",
+            token_id="new-token-hash",
+            user_id="test-user"
+        )
+        
+        with patch('litellm.proxy.common_utils.key_rotation_manager.regenerate_key_fn', return_value=mock_response):
+            with patch('litellm.proxy.common_utils.key_rotation_manager.KeyManagementEventHooks.async_key_rotated_hook'):
+                await manager._rotate_key(key_to_rotate)
+        
+        call_args = mock_prisma_client.db.litellm_verificationtoken.update.call_args
+        update_data = call_args[1]["data"]
+        assert update_data["grace_period_minutes"] == 30
+        
+        now = datetime.now(timezone.utc)
+        grace_expiry = update_data["previous_token_expires"]
+        time_diff_minutes = (grace_expiry - now).total_seconds() / 60
+        assert 29 <= time_diff_minutes <= 31
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_grace_period_tokens(self):
+        """Test that cleanup_expired_grace_period_tokens removes expired previous tokens."""
+        mock_prisma_client = AsyncMock()
+        manager = KeyRotationManager(mock_prisma_client)
+        mock_prisma_client.db.litellm_verificationtoken.update_many.return_value = 3
+        
+        await manager.cleanup_expired_grace_period_tokens()
+        
+        mock_prisma_client.db.litellm_verificationtoken.update_many.assert_called_once()
+        call_args = mock_prisma_client.db.litellm_verificationtoken.update_many.call_args
+        
+        where_clause = call_args[1]["where"]
+        assert where_clause["previous_token"] == {"not": None}
+        assert "previous_token_expires" in where_clause
+        assert "lt" in where_clause["previous_token_expires"]
+        
+        data_clause = call_args[1]["data"]
+        assert data_clause["previous_token"] is None
+        assert data_clause["previous_token_expires"] is None
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_grace_period_tokens_handles_exception(self):
+        """Test that cleanup handles database exceptions gracefully without raising."""
+        mock_prisma_client = AsyncMock()
+        manager = KeyRotationManager(mock_prisma_client)
+        
+        mock_prisma_client.db.litellm_verificationtoken.update_many.side_effect = Exception(
+            "Database error"
+        )
+        
+        # Should not raise, just log the error
+        await manager.cleanup_expired_grace_period_tokens()
+        
+        # Verify the method was called (and failed)
+        mock_prisma_client.db.litellm_verificationtoken.update_many.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_grace_period_tokens_no_expired_tokens(self):
+        """Test cleanup when there are no expired tokens to clean up."""
+        mock_prisma_client = AsyncMock()
+        manager = KeyRotationManager(mock_prisma_client)
+        
+        # No tokens updated
+        mock_prisma_client.db.litellm_verificationtoken.update_many.return_value = 0
+        
+        await manager.cleanup_expired_grace_period_tokens()
+        
+        # Should complete without issues
+        mock_prisma_client.db.litellm_verificationtoken.update_many.assert_called_once()
