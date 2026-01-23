@@ -542,6 +542,7 @@ jobs:
                 --cov=litellm \
                 --cov-report=xml \
                 -n 4 \
+                --dist=loadscope \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
                 -vv"

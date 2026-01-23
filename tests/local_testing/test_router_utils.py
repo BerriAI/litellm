@@ -265,7 +265,7 @@ async def test_call_router_callbacks_on_success():
                 )
                 assert increment["increment_value"] == 1
 
-
+@pytest.mark.serial
 @pytest.mark.asyncio
 async def test_call_router_callbacks_on_failure():
     router = Router(
