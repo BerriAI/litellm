@@ -1,8 +1,10 @@
 """
-Policy Matcher - Matches requests against policy scopes.
+Policy Matcher - Matches requests against policy attachments.
 
 Uses existing wildcard pattern matching helpers to determine which policies
 apply to a given request based on team alias, key alias, and model.
+
+Policies are matched via policy_attachments which define WHERE each policy applies.
 """
 
 from typing import Dict, List, Optional
@@ -14,11 +16,13 @@ from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext, Policy
 
 class PolicyMatcher:
     """
-    Matches incoming requests against policy scopes.
+    Matches incoming requests against policy attachments.
 
     Supports wildcard patterns:
     - "*" matches everything
     - "prefix-*" matches anything starting with "prefix-"
+
+    Uses policy_attachments to determine which policies apply to a request.
     """
 
     @staticmethod
@@ -81,32 +85,29 @@ class PolicyMatcher:
 
     @staticmethod
     def get_matching_policies(
-        policies: Dict[str, Policy],
         context: PolicyMatchContext,
     ) -> List[str]:
         """
-        Get list of policy names that match the given context.
+        Get list of policy names that match the given context via attachments.
 
         Args:
-            policies: Dictionary of all policies
             context: The request context to match against
 
         Returns:
             List of policy names that match the context
         """
-        matching: List[str] = []
+        from litellm.proxy.policy_engine.attachment_registry import (
+            get_attachment_registry,
+        )
 
-        for policy_name, policy in policies.items():
-            if PolicyMatcher.scope_matches(scope=policy.scope, context=context):
-                matching.append(policy_name)
-                verbose_proxy_logger.debug(
-                    f"Policy '{policy_name}' matches context: "
-                    f"team_alias={context.team_alias}, "
-                    f"key_alias={context.key_alias}, "
-                    f"model={context.model}"
-                )
+        registry = get_attachment_registry()
+        if not registry.is_initialized():
+            verbose_proxy_logger.debug(
+                "AttachmentRegistry not initialized, returning empty list"
+            )
+            return []
 
-        return matching
+        return registry.get_attached_policies(context)
 
     @staticmethod
     def get_matching_policies_from_registry(
@@ -121,13 +122,4 @@ class PolicyMatcher:
         Returns:
             List of policy names that match the context
         """
-        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-
-        registry = get_policy_registry()
-        if not registry.is_initialized():
-            return []
-
-        return PolicyMatcher.get_matching_policies(
-            policies=registry.get_all_policies(),
-            context=context,
-        )
+        return PolicyMatcher.get_matching_policies(context=context)

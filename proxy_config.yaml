@@ -2,6 +2,101 @@ model_list:
   - model_name: "*"
     litellm_params:
       model: "*"
+  - model_name: "gpt-4"
+    litellm_params:
+      model: "gpt-4"
+      api_key: os.environ/OPENAI_API_KEY
+  - model_name: "gpt-3.5-turbo"
+    litellm_params:
+      model: "gpt-3.5-turbo"
+      api_key: os.environ/OPENAI_API_KEY
 
 general_settings:
   master_key: sk-1234
+
+# ───────────────────────────────────────────────
+# POLICIES - Define WHAT guardrails to apply
+# ───────────────────────────────────────────────
+#
+# Policies define guardrails with:
+# - inherit: Inherit guardrails from another policy
+# - guardrails.add: Add guardrails (on top of inherited)
+# - guardrails.remove: Remove guardrails (from inherited)
+# - statements: Conditional guardrails with AWS IAM-style conditions
+#
+policies:
+  # Global baseline policy
+  global-baseline:
+    description: "Base guardrails for all requests"
+    guardrails:
+      add:
+        - pii_blocker
+
+  # Healthcare policy - inherits from global-baseline
+  healthcare-compliance:
+    inherit: global-baseline
+    description: "HIPAA compliance for healthcare teams"
+    guardrails:
+      add:
+        - hipaa_audit
+
+  # Dev policy - inherits but removes PII blocker for testing
+  internal-dev:
+    inherit: global-baseline
+    description: "Relaxed policy for internal development"
+    guardrails:
+      add:
+        - toxicity_filter
+      remove:
+        - pii_blocker
+
+  # Policy with conditional statements
+  conditional-safety:
+    description: "Model-specific guardrails using conditions"
+    guardrails:
+      add:
+        - base_safety
+    statements:
+      - sid: "GPT4ToxicityFilter"
+        guardrails:
+          - toxicity_filter
+        condition:
+          model:
+            in: ["gpt-4", "gpt-4-turbo", "gpt-4o"]
+      - sid: "BedrockPIICheck"
+        guardrails:
+          - strict_pii_blocker
+        condition:
+          model:
+            prefix: "bedrock/"
+
+# ───────────────────────────────────────────────
+# POLICY ATTACHMENTS - Define WHERE policies apply
+# ───────────────────────────────────────────────
+#
+# Attachments are REQUIRED to make policies active.
+# A policy without an attachment will not be applied.
+#
+policy_attachments:
+  # Global attachment - applies to all requests
+  - policy: global-baseline
+    scope: "*"
+
+  # Team-specific attachment
+  - policy: healthcare-compliance
+    teams:
+      - healthcare-team
+      - medical-research
+
+  # Key pattern attachment
+  - policy: internal-dev
+    keys:
+      - "dev-key-*"
+      - "test-key-*"
+
+  # Model-specific attachment
+  - policy: conditional-safety
+    models:
+      - "gpt-4"
+      - "gpt-4-turbo"
+      - "bedrock/*"

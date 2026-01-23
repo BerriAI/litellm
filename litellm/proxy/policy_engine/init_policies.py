@@ -1,10 +1,15 @@
 """
 Policy Initialization - Loads policies from config and validates on startup.
+
+Configuration structure:
+- policies: Define WHAT guardrails to apply (with inheritance and statements)
+- policy_attachments: Define WHERE policies apply (teams, keys, models)
 """
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
 from litellm.proxy.policy_engine.policy_registry import get_policy_registry
 from litellm.proxy.policy_engine.policy_validator import PolicyValidator
 from litellm.types.proxy.policy_engine import PolicyValidationResponse
@@ -12,9 +17,85 @@ from litellm.types.proxy.policy_engine import PolicyValidationResponse
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
 
+# ANSI color codes for terminal output
+_green_color_code = "\033[92m"
+_blue_color_code = "\033[94m"
+_yellow_color_code = "\033[93m"
+_reset_color_code = "\033[0m"
+
+
+def _print_policies_on_startup(
+    policies_config: Dict[str, Any],
+    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
+) -> None:
+    """
+    Print loaded policies to console on startup (similar to model list).
+    """
+    import sys
+
+    print(  # noqa: T201
+        f"{_green_color_code}\nLiteLLM Policy Engine: Loaded {len(policies_config)} policies{_reset_color_code}\n"
+    )
+    sys.stdout.flush()
+
+    for policy_name, policy_data in policies_config.items():
+        guardrails = policy_data.get("guardrails", {})
+        inherit = policy_data.get("inherit")
+        statements = policy_data.get("statements", [])
+        description = policy_data.get("description")
+
+        guardrails_add = guardrails.get("add", []) if isinstance(guardrails, dict) else []
+        guardrails_remove = guardrails.get("remove", []) if isinstance(guardrails, dict) else []
+        inherit_str = f" (inherits: {inherit})" if inherit else ""
+
+        print(  # noqa: T201
+            f"{_blue_color_code}  - {policy_name}{inherit_str}{_reset_color_code}"
+        )
+        if description:
+            print(f"      description: {description}")  # noqa: T201
+        if guardrails_add:
+            print(f"      guardrails.add: {guardrails_add}")  # noqa: T201
+        if guardrails_remove:
+            print(f"      guardrails.remove: {guardrails_remove}")  # noqa: T201
+        if statements:
+            print(f"      statements: {len(statements)} conditional statement(s)")  # noqa: T201
+
+    # Print attachments
+    if policy_attachments_config:
+        print(  # noqa: T201
+            f"\n{_yellow_color_code}Policy Attachments: {len(policy_attachments_config)} attachment(s){_reset_color_code}"
+        )
+        for attachment in policy_attachments_config:
+            policy = attachment.get("policy", "unknown")
+            scope = attachment.get("scope")
+            teams = attachment.get("teams")
+            keys = attachment.get("keys")
+            models = attachment.get("models")
+
+            scope_parts = []
+            if scope == "*":
+                scope_parts.append("scope=* (global)")
+            if teams:
+                scope_parts.append(f"teams={teams}")
+            if keys:
+                scope_parts.append(f"keys={keys}")
+            if models:
+                scope_parts.append(f"models={models}")
+            scope_str = ", ".join(scope_parts) if scope_parts else "all"
+
+            print(f"  - {policy} -> {scope_str}")  # noqa: T201
+    else:
+        print(  # noqa: T201
+            f"\n{_yellow_color_code}Warning: No policy_attachments configured. Policies will not be applied to any requests.{_reset_color_code}"
+        )
+
+    print()  # noqa: T201
+    sys.stdout.flush()
+
 
 async def init_policies(
     policies_config: Dict[str, Any],
+    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
     prisma_client: Optional["PrismaClient"] = None,
     validate_db: bool = True,
     fail_on_error: bool = True,
@@ -26,9 +107,11 @@ async def init_policies(
     1. Parses the policy configuration
     2. Validates policies (guardrails exist, teams/keys exist in DB)
     3. Loads policies into the global registry
+    4. Loads attachments into the attachment registry (if provided)
 
     Args:
         policies_config: Dictionary mapping policy names to policy definitions
+        policy_attachments_config: Optional list of policy attachment configurations
         prisma_client: Optional Prisma client for database validation
         validate_db: Whether to validate team/key aliases against database
         fail_on_error: If True, raise exception on validation errors
@@ -41,8 +124,12 @@ async def init_policies(
     """
     verbose_proxy_logger.info(f"Initializing {len(policies_config)} policies...")
 
-    # Get the global registry
-    registry = get_policy_registry()
+    # Print policies to console on startup
+    _print_policies_on_startup(policies_config, policy_attachments_config)
+
+    # Get the global registries
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
 
     # Create validator
     validator = PolicyValidator(prisma_client=prisma_client)
@@ -80,7 +167,7 @@ async def init_policies(
 
     # Load policies into registry (even with warnings)
     try:
-        registry.load_policies(policies_config)
+        policy_registry.load_policies(policies_config)
         verbose_proxy_logger.info(
             f"Successfully loaded {len(policies_config)} policies"
         )
@@ -88,11 +175,23 @@ async def init_policies(
         verbose_proxy_logger.error(f"Failed to load policies: {str(e)}")
         raise
 
+    # Load attachments if provided
+    if policy_attachments_config:
+        try:
+            attachment_registry.load_attachments(policy_attachments_config)
+            verbose_proxy_logger.info(
+                f"Successfully loaded {len(policy_attachments_config)} policy attachments"
+            )
+        except Exception as e:
+            verbose_proxy_logger.error(f"Failed to load policy attachments: {str(e)}")
+            raise
+
     return validation_result
 
 
 def init_policies_sync(
     policies_config: Dict[str, Any],
+    policy_attachments_config: Optional[List[Dict[str, Any]]] = None,
     fail_on_error: bool = True,
 ) -> None:
     """
@@ -102,6 +201,7 @@ def init_policies_sync(
 
     Args:
         policies_config: Dictionary mapping policy names to policy definitions
+        policy_attachments_config: Optional list of policy attachment configurations
         fail_on_error: If True, raise exception on validation errors
     """
     import asyncio
@@ -116,6 +216,7 @@ def init_policies_sync(
     loop.run_until_complete(
         init_policies(
             policies_config=policies_config,
+            policy_attachments_config=policy_attachments_config,
             prisma_client=None,
             validate_db=False,
             fail_on_error=fail_on_error,
@@ -132,32 +233,42 @@ def get_policies_summary() -> Dict[str, Any]:
     """
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 
-    registry = get_policy_registry()
+    policy_registry = get_policy_registry()
+    attachment_registry = get_attachment_registry()
 
-    if not registry.is_initialized():
-        return {"initialized": False, "policies": {}}
+    if not policy_registry.is_initialized():
+        return {"initialized": False, "policies": {}, "attachments": []}
 
     resolved = PolicyResolver.get_all_resolved_policies()
 
-    summary = {
+    summary: Dict[str, Any] = {
         "initialized": True,
         "policy_count": len(resolved),
+        "attachment_count": len(attachment_registry.get_all_attachments()),
         "policies": {},
+        "attachments": [],
     }
 
     for policy_name, resolved_policy in resolved.items():
-        policy = registry.get_policy(policy_name)
+        policy = policy_registry.get_policy(policy_name)
         summary["policies"][policy_name] = {
             "inherit": policy.inherit if policy else None,
-            "scope": {
-                "teams": policy.scope.get_teams() if policy else [],
-                "keys": policy.scope.get_keys() if policy else [],
-                "models": policy.scope.get_models() if policy else [],
-            },
+            "description": policy.description if policy else None,
             "guardrails_add": policy.guardrails.get_add() if policy else [],
             "guardrails_remove": policy.guardrails.get_remove() if policy else [],
+            "statements_count": len(policy.statements) if policy and policy.statements else 0,
             "resolved_guardrails": resolved_policy.guardrails,
             "inheritance_chain": resolved_policy.inheritance_chain,
         }
+
+    # Add attachment info
+    for attachment in attachment_registry.get_all_attachments():
+        summary["attachments"].append({
+            "policy": attachment.policy,
+            "scope": attachment.scope,
+            "teams": attachment.teams,
+            "keys": attachment.keys,
+            "models": attachment.models,
+        })
 
     return summary

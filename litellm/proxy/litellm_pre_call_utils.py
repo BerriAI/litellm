@@ -1377,6 +1377,7 @@ def add_guardrails_from_policy_engine(
         metadata_variable_name: The name of the metadata field in data
         user_api_key_dict: The user's API key authentication info
     """
+    from litellm._logging import verbose_proxy_logger
     from litellm.proxy.common_utils.callback_utils import (
         add_policy_to_applied_policies_header,
     )
@@ -1386,7 +1387,12 @@ def add_guardrails_from_policy_engine(
     from litellm.types.proxy.policy_engine import PolicyMatchContext
 
     registry = get_policy_registry()
+    verbose_proxy_logger.debug(
+        f"Policy engine: registry initialized={registry.is_initialized()}, "
+        f"policy_count={len(registry.get_all_policies())}"
+    )
     if not registry.is_initialized():
+        verbose_proxy_logger.debug("Policy engine not initialized, skipping policy matching")
         return
 
     # Build context from request
@@ -1396,11 +1402,15 @@ def add_guardrails_from_policy_engine(
         model=data.get("model"),
     )
 
-    # Get matching policies
-    policies = registry.get_all_policies()
-    matching_policy_names = PolicyMatcher.get_matching_policies(
-        policies=policies, context=context
+    verbose_proxy_logger.debug(
+        f"Policy engine: matching policies for context team_alias={context.team_alias}, "
+        f"key_alias={context.key_alias}, model={context.model}"
     )
+
+    # Get matching policies via attachments
+    matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
+
+    verbose_proxy_logger.debug(f"Policy engine: matched policies: {matching_policy_names}")
 
     if not matching_policy_names:
         return
@@ -1412,9 +1422,9 @@ def add_guardrails_from_policy_engine(
         )
 
     # Resolve guardrails from matching policies
-    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(
-        context=context, policies=policies
-    )
+    resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context)
+
+    verbose_proxy_logger.debug(f"Policy engine: resolved guardrails: {resolved_guardrails}")
 
     if not resolved_guardrails:
         return
@@ -1431,6 +1441,10 @@ def add_guardrails_from_policy_engine(
     combined = set(existing_guardrails)
     combined.update(resolved_guardrails)
     data[metadata_variable_name]["guardrails"] = list(combined)
+
+    verbose_proxy_logger.debug(
+        f"Policy engine: added guardrails to request metadata: {list(combined)}"
+    )
 
 
 def add_provider_specific_headers_to_request(

@@ -2854,11 +2854,15 @@ class ProxyConfig:
             llm_router: Optional LLM router for model validation
         """
         if config is None:
+            verbose_proxy_logger.debug("Policy engine: config is None, skipping")
             return
 
         policies_config = config.get("policies", None)
         if not policies_config:
+            verbose_proxy_logger.debug("Policy engine: no policies in config, skipping")
             return
+
+        verbose_proxy_logger.info(f"Policy engine: found {len(policies_config)} policies in config")
 
         from litellm.proxy.policy_engine.init_policies import init_policies
         from litellm.proxy.policy_engine.policy_validator import PolicyValidator
