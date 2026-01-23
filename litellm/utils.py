@@ -1398,6 +1398,10 @@ def client(original_function):  # noqa: PLR0915
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObject,
+        )
+
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type = original_function.__name__
@@ -1745,7 +1749,9 @@ def client(original_function):  # noqa: PLR0915
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
-        from litellm.litellm_core_utils.redact_messages import LiteLLMLoggingObject
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObject,
+        )
 
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
