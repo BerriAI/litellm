@@ -7,6 +7,7 @@ import TabItem from '@theme/TabItem';
 LiteLLM Supports logging to the following Datdog Integrations:
 - `datadog` [Datadog Logs](https://docs.datadoghq.com/logs/)
 - `datadog_llm_observability` [Datadog LLM Observability](https://www.datadoghq.com/product/llm-observability/)
+- `datadog_cost_management` [Datadog Cloud Cost Management](#datadog-cloud-cost-management)
 - `ddtrace-run` [Datadog Tracing](#datadog-tracing)
 
 ## Datadog Logs
@@ -162,6 +163,50 @@ On the Datadog LLM Observability page, you should see that both input messages a
 
 <Image img={require('../../img/dd_llm_obs.png')} />
 
+
+
+<Image img={require('../../img/dd_llm_obs.png')} />
+
+
+## Datadog Cloud Cost Management
+
+| Feature | Details |
+|---------|---------|
+| **What is logged** | Aggregated LLM Costs (FOCUS format) |
+| **Events** | Periodic Uploads of Aggregated Cost Data |
+| **Product Link** | [Datadog Cloud Cost Management](https://docs.datadoghq.com/cost_management/) |
+
+We will use the `--config` to set `litellm.callbacks = ["datadog_cost_management"]`. This will periodically upload aggregated LLM cost data to Datadog.
+
+**Step 1**: Create a `config.yaml` file and set `litellm_settings`: `success_callback`
+
+```yaml
+model_list:
+ - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+litellm_settings:
+  callbacks: ["datadog_cost_management"]
+```
+
+**Step 2**: Set Required env variables
+
+```shell
+DD_API_KEY="your-api-key"
+DD_APP_KEY="your-app-key" # REQUIRED for Cost Management
+DD_SITE="us5.datadoghq.com"
+```
+
+**Step 3**: Start the proxy
+
+```shell
+litellm --config config.yaml
+```
+
+**How it works**
+* LiteLLM aggregates costs in-memory by Provider, Model, Date, and Tags.
+* Requires `DD_APP_KEY` for the Custom Costs API.
+* Costs are uploaded periodically (flushed).
 
 
 ### Datadog Tracing
