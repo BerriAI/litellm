@@ -270,9 +270,6 @@ model_list:
     litellm_params:
       model: deepseek/deepseek-chat
       api_key: os.environ/DEEPSEEK_API_KEY
-
-litellm_settings:
-  master_key: os.environ/LITELLM_MASTER_KEY
 ```
 
 ## Troubleshooting
