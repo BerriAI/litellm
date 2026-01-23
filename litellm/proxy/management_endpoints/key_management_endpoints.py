@@ -14,11 +14,11 @@ import copy
 import json
 import secrets
 import traceback
-import yaml
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple, cast
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
 import fastapi
+import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
 
 import litellm
@@ -31,6 +31,7 @@ from litellm.constants import (
     UI_SESSION_TOKEN_TEAM_ID,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._experimental.mcp_server.db import (
     rotate_mcp_server_credentials_master_key,
 )
@@ -2077,6 +2078,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     model_rpm_limit: Optional[dict] = None,
     model_tpm_limit: Optional[dict] = None,
     guardrails: Optional[list] = None,
+    policies: Optional[list] = None,
     prompts: Optional[list] = None,
     teams: Optional[list] = None,
     organization_id: Optional[str] = None,
@@ -2139,6 +2141,9 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     if guardrails is not None:
         metadata = metadata or {}
         metadata["guardrails"] = guardrails
+    if policies is not None:
+        metadata = metadata or {}
+        metadata["policies"] = policies
     if prompts is not None:
         metadata = metadata or {}
         metadata["prompts"] = prompts

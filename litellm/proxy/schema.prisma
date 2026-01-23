@@ -880,3 +880,36 @@ model LiteLLM_ClaudeCodePluginTable {
   @@index([name])
   @@map("litellm_claudecodeplugin")
 }
+
+// Policy table for storing policy configurations
+model LiteLLM_PolicyTable {
+  policy_id         String   @id @default(uuid())
+  policy_name       String   @unique
+  inherit           String?  // Parent policy name for inheritance
+  description       String?
+  guardrails_add    String[] @default([])  // Guardrails to add
+  guardrails_remove String[] @default([])  // Guardrails to remove (from inherited)
+  condition         Json?    // Condition for when policy applies, e.g. {model: "gpt-4.*"}
+  created_at        DateTime @default(now())
+  updated_at        DateTime @updatedAt
+  created_by        String?
+  updated_by        String?
+
+  @@index([policy_name])
+}
+
+// Policy attachment table for storing where policies apply
+model LiteLLM_PolicyAttachmentTable {
+  attachment_id String   @id @default(uuid())
+  policy_name   String   // Reference to policy
+  scope         String?  // "*" for global scope
+  teams         String[] @default([])  // Team aliases or patterns
+  keys          String[] @default([])  // Key aliases or patterns
+  models        String[] @default([])  // Model names or patterns
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+  created_by    String?
+  updated_by    String?
+
+  @@index([policy_name])
+}
