@@ -509,7 +509,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-
+    parallelism: 4
     steps:
       - checkout
       - setup_google_dns
@@ -523,6 +523,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-xdist==3.6.1"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
       # Run pytest and generate JUnit XML report
@@ -530,9 +531,20 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
-            python -m pytest tests/local_testing --cov=litellm --cov-report=xml -vv -k "router" -v --junitxml=test-results/junit.xml --durations=5
+            mkdir test-results
+            # Find test files only in local_testing
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=filesize \
+              --verbose \
+              --command="xargs python -m pytest -o junit_family=legacy \
+                -k 'router' \
+                --cov=litellm \
+                --cov-report=xml \
+                -n 4 \
+                --junitxml=test-results/junit.xml \
+                --durations=5 \
+                -vv"
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
