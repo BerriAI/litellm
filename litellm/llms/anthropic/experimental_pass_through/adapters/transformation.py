@@ -202,15 +202,13 @@ class LiteLLMAnthropicMessagesAdapter:
                 elif message_content and isinstance(message_content, list):
                     for content in message_content:
                         if content.get("type") == "text":
-                            text_obj = ChatCompletionTextObject(
+                            text_obj: Dict[str, Any] = ChatCompletionTextObject(
                                 type="text", text=content.get("text", "")
                             )
-                            # Preserve cache_control if present (for prompt caching)
-                            # Only for Anthropic models that support prompt caching
-                            cache_control = content.get("cache_control")
-                            if cache_control and model and self.is_anthropic_claude_model(model):
-                                text_obj["cache_control"] = cache_control  # type: ignore
-                            new_user_content_list.append(text_obj)
+                            # Preserve cache_control for prompt caching
+                            if content.get("cache_control"):
+                                text_obj["cache_control"] = content["cache_control"]
+                            new_user_content_list.append(text_obj)  # type: ignore
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
                             source = content.get("source", {})
@@ -222,10 +220,31 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_url_obj = ChatCompletionImageUrlObject(
                                     url=openai_image_url
                                 )
-                                image_obj = ChatCompletionImageObject(
+                                image_obj: Dict[str, Any] = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
-                                new_user_content_list.append(image_obj)
+                                # Preserve cache_control for prompt caching
+                                if content.get("cache_control"):
+                                    image_obj["cache_control"] = content["cache_control"]
+                                new_user_content_list.append(image_obj)  # type: ignore
+                        elif content.get("type") == "document":
+                            # Convert Anthropic document format (PDF, etc.) to OpenAI format
+                            source = content.get("source", {})
+                            openai_image_url = (
+                                self._translate_anthropic_image_to_openai(source)
+                            )
+
+                            if openai_image_url:
+                                image_url_obj = ChatCompletionImageUrlObject(
+                                    url=openai_image_url
+                                )
+                                doc_obj: Dict[str, Any] = ChatCompletionImageObject(
+                                    type="image_url", image_url=image_url_obj
+                                )
+                                # Preserve cache_control for prompt caching
+                                if content.get("cache_control"):
+                                    doc_obj["cache_control"] = content["cache_control"]
+                                new_user_content_list.append(doc_obj)  # type: ignore
                         elif content.get("type") == "tool_result":
                             if "content" not in content:
                                 tool_result = ChatCompletionToolMessage(
@@ -621,10 +640,30 @@ class LiteLLMAnthropicMessagesAdapter:
         if "system" in anthropic_message_request:
             system_content = anthropic_message_request["system"]
             if system_content:
-                new_messages.insert(
-                    0,
-                    ChatCompletionSystemMessage(role="system", content=system_content),
-                )
+                # Handle system as string or array of content blocks
+                if isinstance(system_content, str):
+                    new_messages.insert(
+                        0,
+                        ChatCompletionSystemMessage(role="system", content=system_content),
+                    )
+                elif isinstance(system_content, list):
+                    # Convert Anthropic system content blocks to OpenAI format
+                    # Preserve cache_control for prompt caching
+                    openai_system_content: List[Dict[str, Any]] = []
+                    for block in system_content:
+                        if isinstance(block, dict) and block.get("type") == "text":
+                            text_block: Dict[str, Any] = {
+                                "type": "text",
+                                "text": block.get("text", ""),
+                            }
+                            if block.get("cache_control"):
+                                text_block["cache_control"] = block["cache_control"]
+                            openai_system_content.append(text_block)
+                    if openai_system_content:
+                        new_messages.insert(
+                            0,
+                            ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
+                        )
 
         new_kwargs: ChatCompletionRequest = {
             "model": anthropic_message_request["model"],
