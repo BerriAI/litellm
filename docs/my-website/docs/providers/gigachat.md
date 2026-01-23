@@ -14,7 +14,8 @@ GigaChat is Sber AI's large language model, Russia's leading LLM provider.
 
 :::warning
 
-GigaChat API uses self-signed SSL certificates. You must pass `ssl_verify=False` in your requests.
+GigaChat API commonly uses self-signed SSL certificates. By default, LiteLLM sets `ssl_verify=false` for GigaChat.
+You can override per-request with `ssl_verify=True` or via env (`GIGACHAT_VERIFY_SSL_CERTS=true`).
 
 :::
 
@@ -30,9 +31,11 @@ GigaChat API uses self-signed SSL certificates. You must pass `ssl_verify=False`
 | Image Input | Yes (base64 and URL) - GigaChat-2-Max, GigaChat-2-Pro only |
 | Embeddings | Yes |
 
-## API Key
+## Authentication
 
-GigaChat uses OAuth authentication. Set your credentials as environment variables:
+GigaChat supports two authentication methods:
+
+### Method 1: OAuth 2.0
 
 ```python
 import os
@@ -41,8 +44,32 @@ import os
 os.environ['GIGACHAT_CREDENTIALS'] = "your-credentials-here"
 
 # Optional: Set scope (default is GIGACHAT_API_PERS for personal use)
-os.environ['GIGACHAT_SCOPE'] = "GIGACHAT_API_PERS"  # or GIGACHAT_API_B2B for business
+os.environ['GIGACHAT_SCOPE'] = "GIGACHAT_API_PERS"  # or GIGACHAT_API_B2B, GIGACHAT_API_CORP
 ```
+
+### Method 2: Basic Auth (user/password)
+
+```python
+import os
+
+os.environ['GIGACHAT_USER'] = "your-username"
+os.environ['GIGACHAT_PASSWORD'] = "your-password"
+```
+
+### Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `GIGACHAT_CREDENTIALS` | Yes* | - | Base64-encoded OAuth credentials (client_id:client_secret) |
+| `GIGACHAT_API_KEY` | Yes* | - | Alias for GIGACHAT_CREDENTIALS |
+| `GIGACHAT_USER` | Yes* | - | Username for basic auth |
+| `GIGACHAT_PASSWORD` | Yes* | - | Password for basic auth |
+| `GIGACHAT_SCOPE` | No | `GIGACHAT_API_PERS` | API scope (GIGACHAT_API_PERS, GIGACHAT_API_B2B, GIGACHAT_API_CORP) |
+| `GIGACHAT_AUTH_URL` | No | `https://ngw.devices.sberbank.ru:9443/api/v2/oauth` | OAuth endpoint URL |
+| `GIGACHAT_API_BASE` | No | `https://gigachat.devices.sberbank.ru/api/v1` | API base URL |
+| `GIGACHAT_VERIFY_SSL_CERTS` | No | `false` | Set `ssl_verify` for GigaChat requests|
+
+\* Either `GIGACHAT_CREDENTIALS`/`GIGACHAT_API_KEY` OR `GIGACHAT_USER`+`GIGACHAT_PASSWORD` is required.
 
 Get your credentials at: https://developers.sber.ru/studio/
 
@@ -188,9 +215,63 @@ response = embedding(
 print(response)
 ```
 
+## Sample Usage - PDF File Parsing
+
+```python
+import base64
+
+from litellm import completion
+
+def encode_file(file_path):
+    with open(file_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+file_path = "path_to_your_file.pdf"
+
+# Getting the base64 string
+base64_pdf = encode_file(file_path)
+response = completion(
+    model="gigachat/GigaChat-2-Max",
+    ssl_verify=False,
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Create a comprehensive summary of this pdf"},
+                {
+                    "type": "file",
+                    "file": {
+                        "filename": "Day_2_v6.pdf",
+                        "file_data": f"data:application/pdf;base64,{base64_pdf}"
+                    }
+                },
+            ],
+        }
+    ],
+)
+
+print(response.choices[0].message.content)
+```
 ## Usage with LiteLLM Proxy
 
-### 1. Set GigaChat Models on config.yaml
+### 1. Set Environment Variables
+
+```bash
+# Option 1: OAuth credentials
+export GIGACHAT_CREDENTIALS="your-base64-credentials"
+
+# Option 2: Basic auth
+export GIGACHAT_USER="your-username"
+export GIGACHAT_PASSWORD="your-password"
+
+# Optional settings
+export GIGACHAT_SCOPE="GIGACHAT_API_PERS"           # API scope
+export GIGACHAT_AUTH_URL="https://custom-auth-url"  # Custom OAuth URL
+export GIGACHAT_VERIFY_SSL_CERTS="false"            # SSL verification (default: false)
+```
+
+### 2. Set GigaChat Models on config.yaml
 
 ```yaml
 model_list:
@@ -211,7 +292,18 @@ model_list:
       ssl_verify: false
 ```
 
-### 2. Start Proxy
+#### Using Basic Auth in config.yaml
+
+```yaml
+model_list:
+  - model_name: gigachat
+    litellm_params:
+      model: gigachat/GigaChat-2-Max
+      ssl_verify: false
+      # Credentials will be read from GIGACHAT_USER and GIGACHAT_PASSWORD env vars
+```
+
+### 3. Start Proxy
 
 ```bash
 litellm --config config.yaml

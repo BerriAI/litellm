@@ -2,12 +2,23 @@
 GigaChat Chat Transformation
 
 Transforms OpenAI-format requests to GigaChat format and back.
+
+Based on official GigaChat SDK:
+https://github.com/ai-forever/gigachat
+
+Supported features:
+- All standard chat parameters (temperature, top_p, max_tokens, etc.)
+- Function calling (tools) with automatic format conversion
+- Structured output via JSON schema (emulated through function calls)
+- Image input (base64 and URL) with automatic file upload
+- Streaming with SSE parsing
+- GigaChat-specific parameters (repetition_penalty, profanity_check, flags, reasoning_effort)
 """
 
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional, Union, Tuple
 
 import httpx
 
@@ -18,6 +29,13 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 from ..authenticator import get_access_token
+from ..common_utils import (
+    GIGACHAT_BASE_URL,
+    USER_AGENT,
+    GigaChatError,
+    build_url,
+    get_gigachat_ssl_verify,
+)
 from ..file_handler import upload_file_sync
 
 if TYPE_CHECKING:
@@ -26,15 +44,6 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
-
-# GigaChat API endpoint
-GIGACHAT_BASE_URL = "https://gigachat.devices.sberbank.ru/api/v1"
-
-
-class GigaChatError(BaseLLMException):
-    """GigaChat API error."""
-
-    pass
 
 
 class GigaChatConfig(BaseConfig):
@@ -45,18 +54,24 @@ class GigaChatConfig(BaseConfig):
 
     Supported parameters:
         temperature: Sampling temperature (0-2, default 0.87)
-        top_p: Nucleus sampling parameter
+        top_p: Nucleus sampling parameter (alternative to temperature)
         max_tokens: Maximum tokens to generate
-        repetition_penalty: Repetition penalty factor
-        profanity_check: Enable content filtering
         stream: Enable streaming
+        repetition_penalty: Repetition penalty factor (1.0 = no penalty)
+        update_interval: Interval in seconds between stream updates
+        profanity_check: Enable content filtering
+        flags: List of feature flags for the API
+        reasoning_effort: Reasoning effort level ("low", "medium", "high")
     """
 
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     max_tokens: Optional[int] = None
     repetition_penalty: Optional[float] = None
+    update_interval: Optional[float] = None
     profanity_check: Optional[bool] = None
+    flags: Optional[List[str]] = None
+    reasoning_effort: Optional[str] = None
 
     def __init__(
         self,
@@ -64,7 +79,10 @@ class GigaChatConfig(BaseConfig):
         top_p: Optional[float] = None,
         max_tokens: Optional[int] = None,
         repetition_penalty: Optional[float] = None,
+        update_interval: Optional[float] = None,
         profanity_check: Optional[bool] = None,
+        flags: Optional[List[str]] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -73,6 +91,7 @@ class GigaChatConfig(BaseConfig):
         # Instance variables for current request context
         self._current_credentials: Optional[str] = None
         self._current_api_base: Optional[str] = None
+        self._current_ssl_verify: Optional[bool] = None
 
     def get_complete_url(
         self,
@@ -85,7 +104,7 @@ class GigaChatConfig(BaseConfig):
     ) -> str:
         """Get complete API URL for chat completions."""
         base = api_base or get_secret_str("GIGACHAT_API_BASE") or GIGACHAT_BASE_URL
-        return f"{base}/chat/completions"
+        return build_url(base, "chat/completions")
 
     def validate_environment(
         self,
@@ -97,12 +116,16 @@ class GigaChatConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
-        """
-        Set up headers with OAuth token.
-        """
+        """Set up headers with OAuth token."""
+        # Ensure ssl_verify is set for GigaChat requests even when caller doesn't pass it.
+        # Default is False due to self-signed certs; can be overridden by env vars or caller kwarg.
+        if litellm_params.get("ssl_verify") is None:
+            litellm_params["ssl_verify"] = get_gigachat_ssl_verify()
+        self._current_ssl_verify = litellm_params.get("ssl_verify")
+
         # Get access token
         credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
-        access_token = get_access_token(credentials=credentials)
+        access_token = get_access_token(credentials=credentials, ssl_verify=self._current_ssl_verify)
 
         # Store credentials for image uploads
         self._current_credentials = credentials
@@ -111,6 +134,7 @@ class GigaChatConfig(BaseConfig):
         headers["Authorization"] = f"Bearer {access_token}"
         headers["Content-Type"] = "application/json"
         headers["Accept"] = "application/json"
+        headers["User-Agent"] = USER_AGENT
 
         return headers
 
@@ -196,28 +220,31 @@ class GigaChatConfig(BaseConfig):
         for tool in tools:
             if tool.get("type") == "function":
                 func = tool.get("function", {})
-                functions.append({
+                giga_func: Dict[str, Any] = {
                     "name": func.get("name", ""),
                     "description": func.get("description", ""),
                     "parameters": func.get("parameters", {}),
-                })
+                }
+                functions.append(giga_func)
         return functions
 
-    def _upload_image(self, image_url: str) -> Optional[str]:
+    def _upload_file(self, file_url: str, filename: Optional[str] = None) -> Optional[str]:
         """
-        Upload image to GigaChat and return file_id.
+        Upload file to GigaChat and return file_id.
 
         Args:
-            image_url: URL or base64 data URL of the image
+            file_url: URL or base64 data URL of the file
 
         Returns:
             file_id string or None if upload failed
         """
         try:
             return upload_file_sync(
-                image_url=image_url,
+                file_url=file_url,
+                filename=filename,
                 credentials=self._current_credentials,
                 api_base=self._current_api_base,
+                ssl_verify=self._current_ssl_verify,
             )
         except Exception as e:
             verbose_logger.error(f"Failed to upload image: {e}")
@@ -235,17 +262,31 @@ class GigaChatConfig(BaseConfig):
         # Transform messages
         giga_messages = self._transform_messages(messages)
 
-        # Build request
-        request_data = {
+        request_data: Dict[str, Any] = {
             "model": model.replace("gigachat/", ""),
             "messages": giga_messages,
         }
 
-        # Add optional params
-        for key in ["temperature", "top_p", "max_tokens", "stream",
-                    "repetition_penalty", "profanity_check"]:
+        # Add standard optional params
+        for key in [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "repetition_penalty",
+            "update_interval",
+            "profanity_check",
+        ]:
             if key in optional_params:
                 request_data[key] = optional_params[key]
+
+        # Add flags if present
+        if "flags" in optional_params:
+            request_data["flags"] = optional_params["flags"]
+
+        # Add reasoning_effort if present
+        if "reasoning_effort" in optional_params:
+            request_data["reasoning_effort"] = optional_params["reasoning_effort"]
 
         # Add functions if present
         if "functions" in optional_params:
@@ -285,23 +326,7 @@ class GigaChatConfig(BaseConfig):
             # Handle list content (multimodal) - extract text and images
             content = message.get("content")
             if isinstance(content, list):
-                texts = []
-                attachments = []
-                for part in content:
-                    if isinstance(part, dict):
-                        if part.get("type") == "text":
-                            texts.append(part.get("text", ""))
-                        elif part.get("type") == "image_url":
-                            # Extract image URL and upload to GigaChat
-                            image_url = part.get("image_url", {})
-                            if isinstance(image_url, str):
-                                url = image_url
-                            else:
-                                url = image_url.get("url", "")
-                            if url:
-                                file_id = self._upload_image(url)
-                                if file_id:
-                                    attachments.append(file_id)
+                texts, attachments = self._handle_multimodel_content(content)
                 message["content"] = "\n".join(texts) if texts else ""
                 if attachments:
                     message["attachments"] = attachments
@@ -327,6 +352,33 @@ class GigaChatConfig(BaseConfig):
 
         # Collapse consecutive user messages
         return self._collapse_user_messages(transformed)
+
+    def _handle_multimodel_content(self, content: List) -> Tuple[List[str], List[str]]:
+        texts = []
+        attachments = []
+        for part in content:
+            if isinstance(part, dict):
+                if part.get("type") == "text":
+                    texts.append(part.get("text", ""))
+                elif part.get("type") == "image_url":
+                    # Extract image URL and upload to GigaChat
+                    image_url = part.get("image_url", {})
+                    if isinstance(image_url, str):
+                        url = image_url
+                    else:
+                        url = image_url.get("url", "")
+                    if url:
+                        file_id = self._upload_file(url)
+                        if file_id:
+                            attachments.append(file_id)
+                elif part.get("type") == "file" and part.get("file"):
+                    filename = part["file"].get("filename")
+                    file_data = part["file"].get("file_data")
+                    file_id = self._upload_file(file_data, filename)
+                    if file_id:
+                        attachments.append(file_id)
+
+        return texts, attachments
 
     def _collapse_user_messages(self, messages: List[dict]) -> List[dict]:
         """Collapse consecutive user messages into one."""
@@ -402,14 +454,16 @@ class GigaChatConfig(BaseConfig):
                     # Convert to tool_calls format
                     if isinstance(args, dict):
                         args = json.dumps(args, ensure_ascii=False)
-                    message_data["tool_calls"] = [{
-                        "id": f"call_{uuid.uuid4().hex[:24]}",
-                        "type": "function",
-                        "function": {
-                            "name": func_call.get("name", ""),
-                            "arguments": args,
+                    message_data["tool_calls"] = [
+                        {
+                            "id": f"call_{uuid.uuid4().hex[:24]}",
+                            "type": "function",
+                            "function": {
+                                "name": func_call.get("name", ""),
+                                "arguments": args,
+                            },
                         }
-                    }]
+                    ]
                     message_data.pop("function_call", None)
                     finish_reason = "tool_calls"
 
