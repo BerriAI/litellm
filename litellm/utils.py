@@ -8046,6 +8046,12 @@ class ProviderConfigManager:
             )
 
             return OpenrouterEmbeddingConfig()
+        elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
+            from litellm.llms.vercel_ai_gateway.embedding.transformation import (
+                VercelAIGatewayEmbeddingConfig,
+            )
+
+            return VercelAIGatewayEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
