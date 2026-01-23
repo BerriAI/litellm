@@ -546,7 +546,7 @@ except ImportError:
     enterprise_proxy_config = None
 ###################
 
-server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
 premium_user_data: Optional["EnterpriseLicenseData"] = (
@@ -824,7 +824,6 @@ app = FastAPI(
     title=_title,
     description=_description,
     version=version,
-    root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
 )
 

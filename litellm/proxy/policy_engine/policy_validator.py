@@ -190,7 +190,7 @@ class PolicyValidator:
                 PolicyValidationError(
                     policy_name=policy_name,
                     error_type=PolicyValidationErrorType.CIRCULAR_INHERITANCE,
-                    message=f"Inheritance chain too deep (exceeded max depth of 100)",
+                    message="Inheritance chain too deep (exceeded max depth of 100)",
                     field="inherit",
                 )
             )
