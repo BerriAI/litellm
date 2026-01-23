@@ -246,20 +246,26 @@ class LiteLLMAnthropicMessagesAdapter:
                                     doc_obj["cache_control"] = content["cache_control"]
                                 new_user_content_list.append(doc_obj)  # type: ignore
                         elif content.get("type") == "tool_result":
+                            # cache_control is on the tool_result block itself
+                            tool_result_cache_control = content.get("cache_control")
                             if "content" not in content:
-                                tool_result = ChatCompletionToolMessage(
+                                tool_result: Dict[str, Any] = ChatCompletionToolMessage(
                                     role="tool",
                                     tool_call_id=content.get("tool_use_id", ""),
                                     content="",
                                 )
-                                tool_message_list.append(tool_result)
+                                if tool_result_cache_control:
+                                    tool_result["cache_control"] = tool_result_cache_control
+                                tool_message_list.append(tool_result)  # type: ignore[arg-type]
                             elif isinstance(content.get("content"), str):
                                 tool_result = ChatCompletionToolMessage(
                                     role="tool",
                                     tool_call_id=content.get("tool_use_id", ""),
                                     content=str(content.get("content", "")),
                                 )
-                                tool_message_list.append(tool_result)
+                                if tool_result_cache_control:
+                                    tool_result["cache_control"] = tool_result_cache_control
+                                tool_message_list.append(tool_result)  # type: ignore[arg-type]
                             elif isinstance(content.get("content"), list):
                                 # Combine all content items into a single tool message
                                 # to avoid creating multiple tool_result blocks with the same ID
@@ -275,7 +281,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                             tool_call_id=content.get("tool_use_id", ""),
                                             content=c,
                                         )
-                                        tool_message_list.append(tool_result)
+                                        if tool_result_cache_control:
+                                            tool_result["cache_control"] = tool_result_cache_control
+                                        tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                     elif isinstance(c, dict):
                                         if c.get("type") == "text":
                                             tool_result = ChatCompletionToolMessage(
@@ -285,7 +293,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 ),
                                                 content=c.get("text", ""),
                                             )
-                                            tool_message_list.append(tool_result)
+                                            if tool_result_cache_control:
+                                                tool_result["cache_control"] = tool_result_cache_control
+                                            tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                         elif c.get("type") == "image":
                                             source = c.get("source", {})
                                             openai_image_url = (
@@ -301,7 +311,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 ),
                                                 content=openai_image_url,
                                             )
-                                            tool_message_list.append(tool_result)
+                                            if tool_result_cache_control:
+                                                tool_result["cache_control"] = tool_result_cache_control
+                                            tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                 else:
                                     # For multiple content items, combine into a single tool message
                                     # with list content to preserve all items while having one tool_use_id
@@ -350,7 +362,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                             tool_call_id=content.get("tool_use_id", ""),
                                             content=combined_content_parts,  # type: ignore
                                         )
-                                        tool_message_list.append(tool_result)
+                                        if tool_result_cache_control:
+                                            tool_result["cache_control"] = tool_result_cache_control
+                                        tool_message_list.append(tool_result)  # type: ignore[arg-type]
 
             if len(tool_message_list) > 0:
                 new_messages.extend(tool_message_list)
@@ -363,7 +377,9 @@ class LiteLLMAnthropicMessagesAdapter:
 
             ## ASSISTANT MESSAGE ##
             assistant_message_str: Optional[str] = None
-            tool_calls: List[ChatCompletionAssistantToolCall] = []
+            assistant_content_list: List[Dict[str, Any]] = []  # For content blocks with cache_control
+            has_cache_control_in_text = False
+            tool_calls: List[Dict[str, Any]] = []
             thinking_blocks: List[
                 Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]
             ] = []
@@ -376,10 +392,14 @@ class LiteLLMAnthropicMessagesAdapter:
                             assistant_message_str = str(content)
                         elif isinstance(content, dict):
                             if content.get("type") == "text":
-                                if assistant_message_str is None:
-                                    assistant_message_str = content.get("text", "")
-                                else:
-                                    assistant_message_str += content.get("text", "")
+                                text_block: Dict[str, Any] = {
+                                    "type": "text",
+                                    "text": content.get("text", ""),
+                                }
+                                if content.get("cache_control"):
+                                    text_block["cache_control"] = content["cache_control"]
+                                    has_cache_control_in_text = True
+                                assistant_content_list.append(text_block)
                             elif content.get("type") == "tool_use":
                                 function_chunk: ChatCompletionToolCallFunctionChunk = {
                                     "name": content.get("name", ""),
@@ -403,13 +423,15 @@ class LiteLLMAnthropicMessagesAdapter:
                                         provider_specific_fields
                                     )
 
-                                tool_calls.append(
-                                    ChatCompletionAssistantToolCall(
-                                        id=content.get("id", ""),
-                                        type="function",
-                                        function=function_chunk,
-                                    )
+                                tool_call: Dict[str, Any] = ChatCompletionAssistantToolCall(
+                                    id=content.get("id", ""),
+                                    type="function",
+                                    function=function_chunk,
                                 )
+                                # Preserve cache_control for tool_use blocks
+                                if content.get("cache_control"):
+                                    tool_call["cache_control"] = content["cache_control"]
+                                tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
                                 thinking_block = ChatCompletionThinkingBlock(
                                     type="thinking",
@@ -430,18 +452,30 @@ class LiteLLMAnthropicMessagesAdapter:
 
             if (
                 assistant_message_str is not None
+                or len(assistant_content_list) > 0
                 or len(tool_calls) > 0
                 or len(thinking_blocks) > 0
             ):
+                # Use list format if any text block has cache_control, otherwise use string
+                if has_cache_control_in_text and len(assistant_content_list) > 0:
+                    assistant_content: Any = assistant_content_list
+                elif len(assistant_content_list) > 0 and not has_cache_control_in_text:
+                    # Concatenate text blocks into string when no cache_control
+                    assistant_content = "".join(
+                        block.get("text", "") for block in assistant_content_list
+                    )
+                else:
+                    assistant_content = assistant_message_str
+
                 assistant_message = ChatCompletionAssistantMessage(
                     role="assistant",
-                    content=assistant_message_str,
+                    content=assistant_content,
                     thinking_blocks=(
                         thinking_blocks if len(thinking_blocks) > 0 else None
                     ),
                 )
                 if len(tool_calls) > 0:
-                    assistant_message["tool_calls"] = tool_calls
+                    assistant_message["tool_calls"] = tool_calls  # type: ignore
                 if len(thinking_blocks) > 0:
                     assistant_message["thinking_blocks"] = thinking_blocks  # type: ignore
                 new_messages.append(assistant_message)
@@ -554,7 +588,7 @@ class LiteLLMAnthropicMessagesAdapter:
         self, tools: List[AllAnthropicToolsValues]
     ) -> List[ChatCompletionToolParam]:
         new_tools: List[ChatCompletionToolParam] = []
-        mapped_tool_params = ["name", "input_schema", "description"]
+        mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
         for tool in tools:
             function_chunk = ChatCompletionToolParamFunctionChunk(
                 name=tool["name"],
@@ -567,11 +601,13 @@ class LiteLLMAnthropicMessagesAdapter:
             for k, v in tool.items():
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
-            new_tools.append(
-                ChatCompletionToolParam(type="function", function=function_chunk)
-            )
+            tool_param: Dict[str, Any] = ChatCompletionToolParam(type="function", function=function_chunk)
+            # Preserve cache_control for prompt caching
+            if tool.get("cache_control"):
+                tool_param["cache_control"] = tool["cache_control"]
+            new_tools.append(tool_param)  # type: ignore[arg-type]
 
-        return new_tools
+        return new_tools  # type: ignore[return-value]
 
     def translate_anthropic_output_format_to_openai(
         self, output_format: Any
