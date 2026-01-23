@@ -271,7 +271,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       }
 
       // Only add Content Filter patterns if there are changes
-      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter") {
+      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter" && hasUnsavedContentFilterChanges) {
         const originalPatterns = guardrailData.litellm_params?.patterns || [];
         const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
 
@@ -357,6 +357,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
         console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
+          if (paramName === "patterns" || paramName === "blocked_words") {
+            return;
+          }
           // Check for both direct parameter name and nested optional_params object
           let paramValue = values[paramName];
           if (paramValue === undefined || paramValue === null || paramValue === "") {
