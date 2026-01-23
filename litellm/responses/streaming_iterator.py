@@ -379,6 +379,9 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     return result
                 # If result is None, continue the loop to get the next chunk
 
+        except StopAsyncIteration:
+            # Normal end of stream - don't log as failure
+            raise
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
@@ -474,6 +477,9 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     return result
                 # If result is None, continue the loop to get the next chunk
 
+        except StopIteration:
+            # Normal end of stream - don't log as failure
+            raise
         except httpx.HTTPError as e:
             # Handle HTTP errors
             self.finished = True
