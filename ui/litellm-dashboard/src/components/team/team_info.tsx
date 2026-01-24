@@ -2,6 +2,8 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
   getGuardrailsList,
+  getPoliciesList,
+  getPolicyInfoWithGuardrails,
   Member,
   Organization,
   organizationInfoCall,
@@ -171,6 +173,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
+  const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -247,8 +252,53 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        if (!accessToken) return;
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPolicies();
   }, [accessToken]);
+
+  // Fetch resolved guardrails for all policies
+  useEffect(() => {
+    const fetchPolicyGuardrails = async () => {
+      if (!accessToken || !info?.policies || info.policies.length === 0) {
+        return;
+      }
+
+      setLoadingPolicies(true);
+      const guardrailsMap: Record<string, string[]> = {};
+
+      try {
+        await Promise.all(
+          info.policies.map(async (policyName: string) => {
+            try {
+              const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
+              guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
+            } catch (error) {
+              console.error(`Failed to fetch guardrails for policy ${policyName}:`, error);
+              guardrailsMap[policyName] = [];
+            }
+          })
+        );
+        setPolicyGuardrails(guardrailsMap);
+      } catch (error) {
+        console.error("Failed to fetch policy guardrails:", error);
+      } finally {
+        setLoadingPolicies(false);
+      }
+    };
+
+    fetchPolicyGuardrails();
+  }, [accessToken, info?.policies]);
 
   const handleMemberCreate = async (values: any) => {
     try {
@@ -603,6 +653,56 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 accessToken={accessToken}
               />
 
+              <Card>
+                <Text className="font-semibold text-gray-900 mb-3">Guardrails</Text>
+                {info.guardrails && info.guardrails.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {info.guardrails.map((guardrail: string, index: number) => (
+                      <Badge key={index} color="blue">
+                        {guardrail}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No guardrails configured</Text>
+                )}
+                {info.metadata?.disable_global_guardrails && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <Badge color="yellow">Global Guardrails Disabled</Badge>
+                  </div>
+                )}
+              </Card>
+
+              <Card>
+                <Text className="font-semibold text-gray-900 mb-3">Policies</Text>
+                {info.policies && info.policies.length > 0 ? (
+                  <div className="space-y-4">
+                    {info.policies.map((policy: string, index: number) => (
+                      <div key={index} className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge color="purple">{policy}</Badge>
+                          {loadingPolicies && <Text className="text-xs text-gray-400">Loading guardrails...</Text>}
+                        </div>
+                        {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
+                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
+                            <Text className="text-xs text-gray-500 mb-1">Resolved Guardrails:</Text>
+                            <div className="flex flex-wrap gap-1">
+                              {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
+                                <Badge key={gIndex} color="blue" size="xs">
+                                  {guardrail}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No policies configured</Text>
+                )}
+              </Card>
+
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
                 disabledCallbacks={[]}
@@ -812,6 +912,32 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     help="Bypass global guardrails for this team"
                   >
                     <Switch checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label={
+                      <span>
+                        Policies{" "}
+                        <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="policies"
+                    help="Select existing policies or enter new ones"
+                  >
+                    <Select
+                      mode="tags"
+                      placeholder="Select or enter policies"
+                      options={policiesList.map((name) => ({ value: name, label: name }))}
+                    />
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores" aria-label="Vector Stores">
