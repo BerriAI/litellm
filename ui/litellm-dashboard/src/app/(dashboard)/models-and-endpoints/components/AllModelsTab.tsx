@@ -8,10 +8,11 @@ import { getDisplayModelName } from "@/components/view_model/model_name_display"
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { PaginationState } from "@tanstack/react-table";
 import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
+import { Skeleton } from "antd";
+import debounce from "lodash/debounce";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
 import { transformModelData } from "../utils/modelDataTransformer";
-import { Skeleton } from "antd";
 type ModelViewMode = "all" | "current_team";
 
 interface AllModelsTabProps {
@@ -36,6 +37,7 @@ const AllModelsTab = ({
   const { data: teams } = useTeams();
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
+  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
   const [modelViewMode, setModelViewMode] = useState<ModelViewMode>("current_team");
   const [currentTeam, setCurrentTeam] = useState<Team | "personal">("personal");
   const [showFilters, setShowFilters] = useState<boolean>(false);
@@ -48,7 +50,26 @@ const AllModelsTab = ({
     pageSize: 50,
   });
 
-  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(currentPage, pageSize);
+  // Debounce search input
+  const debouncedUpdateSearch = useMemo(
+    () =>
+      debounce((value: string) => {
+        setDebouncedSearch(value);
+        // Reset to page 1 when search changes
+        setCurrentPage(1);
+        setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+      }, 200),
+    []
+  );
+
+  useEffect(() => {
+    debouncedUpdateSearch(modelNameSearch);
+    return () => {
+      debouncedUpdateSearch.cancel();
+    };
+  }, [modelNameSearch, debouncedUpdateSearch]);
+
+  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(currentPage, pageSize, debouncedSearch || undefined);
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = (model: string) => {
@@ -88,10 +109,8 @@ const AllModelsTab = ({
       return [];
     }
 
+    // Server-side search is now handled by the API, so we only filter by other criteria
     return modelData.data.filter((model: any) => {
-      const searchMatch =
-        modelNameSearch === "" || model.model_name.toLowerCase().includes(modelNameSearch.toLowerCase());
-
       const modelNameMatch =
         selectedModelGroup === "all" ||
         model.model_name === selectedModelGroup ||
@@ -120,13 +139,13 @@ const AllModelsTab = ({
         }
       }
 
-      return searchMatch && modelNameMatch && accessGroupMatch && teamAccessMatch;
+      return modelNameMatch && accessGroupMatch && teamAccessMatch;
     });
-  }, [modelData, modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
+  }, [modelData, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
 
   useEffect(() => {
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-  }, [modelNameSearch, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
+  }, [selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
 
   const resetFilters = () => {
     setModelNameSearch("");
@@ -354,8 +373,8 @@ const AllModelsTab = ({
                     <Skeleton.Input active style={{ width: 184, height: 20 }} />
                   ) : (
                     <span className="text-sm text-gray-700">
-                      {filteredData.length > 0
-                        ? `Showing 1 - ${filteredData.length} of ${filteredData.length} results`
+                      {paginationMeta.total_count > 0
+                        ? `Showing ${((currentPage - 1) * pageSize) + 1} - ${Math.min(currentPage * pageSize, paginationMeta.total_count)} of ${paginationMeta.total_count} results`
                         : "Showing 0 results"}
                     </span>
                   )}

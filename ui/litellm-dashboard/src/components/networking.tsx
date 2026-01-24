@@ -2007,17 +2007,20 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole, page, size);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
     params.append("page", page.toString());
     params.append("size", size.toString());
+    if (search && search.trim()) {
+      params.append("search", search.trim());
+    }
     if (params.toString()) {
       url += `?${params.toString()}`;
     }
