@@ -74,7 +74,7 @@ async def _mock_async_handler_post(self, url, data=None, json=None, params=None,
     """Monkey-patched AsyncHTTPHandler.post that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        print(f"[GCS MOCK] POST to {url}")
+        verbose_logger.info(f"[GCS MOCK] POST to {url}")
         # Simulate network latency
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         return MockGCSResponse(
@@ -94,7 +94,7 @@ async def _mock_async_handler_get(self, url, params=None, headers=None, follow_r
     """Monkey-patched AsyncHTTPHandler.get that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        print(f"[GCS MOCK] GET to {url}")
+        verbose_logger.info(f"[GCS MOCK] GET to {url}")
         # Simulate network latency
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         return MockGCSResponse(
@@ -114,7 +114,7 @@ async def _mock_async_handler_delete(self, url, data=None, json=None, params=Non
     """Monkey-patched AsyncHTTPHandler.delete that intercepts GCS calls."""
     # Only mock GCS API calls
     if isinstance(url, str) and "storage.googleapis.com" in url:
-        print(f"[GCS MOCK] DELETE to {url}")
+        verbose_logger.info(f"[GCS MOCK] DELETE to {url}")
         # Simulate network latency
         await asyncio.sleep(_MOCK_LATENCY_SECONDS)
         return MockGCSResponse(
@@ -146,29 +146,29 @@ def create_mock_gcs_client():
     if _mocks_initialized:
         return
     
-    print("[GCS MOCK] Initializing GCS mock client...")
+    verbose_logger.debug("[GCS MOCK] Initializing GCS mock client...")
     
     # Patch AsyncHTTPHandler methods (used by LiteLLM's custom httpx handler)
     if _original_async_handler_post is None:
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
         _original_async_handler_post = AsyncHTTPHandler.post
         AsyncHTTPHandler.post = _mock_async_handler_post  # type: ignore
-        print("[GCS MOCK] Patched AsyncHTTPHandler.post")
+        verbose_logger.debug("[GCS MOCK] Patched AsyncHTTPHandler.post")
     
     if _original_async_handler_get is None:
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
         _original_async_handler_get = AsyncHTTPHandler.get
         AsyncHTTPHandler.get = _mock_async_handler_get  # type: ignore
-        print("[GCS MOCK] Patched AsyncHTTPHandler.get")
+        verbose_logger.debug("[GCS MOCK] Patched AsyncHTTPHandler.get")
     
     if _original_async_handler_delete is None:
         from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
         _original_async_handler_delete = AsyncHTTPHandler.delete
         AsyncHTTPHandler.delete = _mock_async_handler_delete  # type: ignore
-        print("[GCS MOCK] Patched AsyncHTTPHandler.delete")
+        verbose_logger.debug("[GCS MOCK] Patched AsyncHTTPHandler.delete")
     
-    print(f"[GCS MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS*1000:.0f}ms")
-    print("[GCS MOCK] GCS mock client initialization complete")
+    verbose_logger.debug(f"[GCS MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS*1000:.0f}ms")
+    verbose_logger.debug("[GCS MOCK] GCS mock client initialization complete")
     
     _mocks_initialized = True
 
@@ -190,18 +190,18 @@ def mock_vertex_auth_methods():
         
         async def _mock_ensure_access_token_async(self, credentials, project_id, custom_llm_provider):
             """Mock async auth method - returns fake token."""
-            print(f"[GCS MOCK] Vertex AI auth: _ensure_access_token_async called")
+            verbose_logger.debug(f"[GCS MOCK] Vertex AI auth: _ensure_access_token_async called")
             return ("mock-gcs-token", "mock-project-id")
         
         def _mock_ensure_access_token(self, credentials, project_id, custom_llm_provider):
             """Mock sync auth method - returns fake token."""
-            print(f"[GCS MOCK] Vertex AI auth: _ensure_access_token called")
+            verbose_logger.debug(f"[GCS MOCK] Vertex AI auth: _ensure_access_token called")
             return ("mock-gcs-token", "mock-project-id")
         
         def _mock_get_token_and_url(self, model, auth_header, vertex_credentials, vertex_project, 
                                     vertex_location, gemini_api_key, stream, custom_llm_provider, api_base):
             """Mock get_token_and_url - returns fake token."""
-            print(f"[GCS MOCK] Vertex AI auth: _get_token_and_url called")
+            verbose_logger.debug(f"[GCS MOCK] Vertex AI auth: _get_token_and_url called")
             return ("mock-gcs-token", "https://storage.googleapis.com")
         
         # Patch the methods
@@ -209,7 +209,7 @@ def mock_vertex_auth_methods():
         VertexBase._ensure_access_token = _mock_ensure_access_token  # type: ignore
         VertexBase._get_token_and_url = _mock_get_token_and_url  # type: ignore
         
-        print("[GCS MOCK] Patched Vertex AI auth methods")
+        verbose_logger.debug("[GCS MOCK] Patched Vertex AI auth methods")
 
 
 def should_use_gcs_mock() -> bool:
