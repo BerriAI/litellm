@@ -9,8 +9,10 @@
 
 
 import asyncio
+import threading
 import json
 from datetime import datetime
+from contextlib import asynccontextmanager
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -107,6 +109,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Lock to prevent race conditions when creating session under concurrent load
         # Note: asyncio.Lock() can be created without an event loop; it only needs one when awaited
         self._session_lock: asyncio.Lock = asyncio.Lock()
+
+        # Track main thread ID to safely identity when we are running in main loop vs background thread
+
+        self._main_thread_id = threading.get_ident()
+
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -172,46 +179,47 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "http://" + self.presidio_anonymizer_api_base
             )
 
-    async def _get_http_session(self) -> aiohttp.ClientSession:
+    @asynccontextmanager
+    async def _get_session_iterator(
+        self,
+    ) -> AsyncGenerator[aiohttp.ClientSession, None]:
         """
-        Get or create the shared HTTP session for Presidio API calls.
+        Async context manager for yielding an HTTP session.
 
-        Fixes memory leak (issue #14540) where every guardrail check created
-        a new aiohttp.ClientSession that was never properly closed.
-
-        Thread-safe: Uses asyncio.Lock to prevent race conditions when
-        multiple concurrent requests try to create the session simultaneously.
+        Logic:
+        1. If running in the main thread (where the object was initialized/destined to live normally),
+           use the shared `self._http_session` (protected by a lock).
+        2. If running in a background thread (e.g. logging hook), yield a NEW ephemeral session
+           and ensure it is closed after use.
         """
-        async with self._session_lock:
-            if self._http_session is None or self._http_session.closed:
-                self._http_session = aiohttp.ClientSession()
-            return self._http_session
+
+        # Check if we are in the stored main thread
+        if threading.get_ident() == self._main_thread_id:
+            # Main thread -> use shared session
+            async with self._session_lock:
+                if self._http_session is None or self._http_session.closed:
+                    self._http_session = aiohttp.ClientSession()
+                yield self._http_session
+        else:
+            # Background thread -> create ephemeral session
+            # This avoids "attached to a different loop" or "no running event loop" errors
+            # when accessing the shared session created in the main loop
+            session = aiohttp.ClientSession()
+            try:
+                yield session
+            finally:
+                if not session.closed:
+                    await session.close()
 
     async def _close_http_session(self) -> None:
-        """Close the HTTP session if it exists."""
+        """Close the shared HTTP session if it exists."""
         if self._http_session is not None and not self._http_session.closed:
             await self._http_session.close()
             self._http_session = None
 
     def __del__(self):
-        """Cleanup: close HTTP session on instance destruction."""
-        if self._http_session is not None and not self._http_session.closed:
-            try:
-                # Try to close the session, but don't fail if event loop is gone
-                import asyncio
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        # Schedule cleanup, don't block __del__
-                        asyncio.create_task(self._close_http_session())
-                    else:
-                        loop.run_until_complete(self._close_http_session())
-                except RuntimeError:
-                    # Event loop is closed, can't clean up - not ideal but better than crashing
-                    pass
-            except Exception:
-                # Suppress all exceptions in __del__ to avoid issues during shutdown
-                pass
+        """Cleanup: we try to close, but doing async cleanup in __del__ is risky."""
+        pass
 
     def _get_presidio_analyze_request_payload(
         self,
@@ -273,28 +281,27 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return self.mock_redacted_text
 
             # Use shared session to prevent memory leak (issue #14540)
-            session = await self._get_http_session()
+            async with self._get_session_iterator() as session:
+                # Make the request to /analyze
+                analyze_url = f"{self.presidio_analyzer_api_base}analyze"
 
-            # Make the request to /analyze
-            analyze_url = f"{self.presidio_analyzer_api_base}analyze"
-
-            analyze_payload: PresidioAnalyzeRequest = (
-                self._get_presidio_analyze_request_payload(
-                    text=text,
-                    presidio_config=presidio_config,
-                    request_data=request_data,
+                analyze_payload: PresidioAnalyzeRequest = (
+                    self._get_presidio_analyze_request_payload(
+                        text=text,
+                        presidio_config=presidio_config,
+                        request_data=request_data,
+                    )
                 )
-            )
 
-            verbose_proxy_logger.debug(
-                "Making request to: %s with payload: %s",
-                analyze_url,
-                analyze_payload,
-            )
+                verbose_proxy_logger.debug(
+                    "Making request to: %s with payload: %s",
+                    analyze_url,
+                    analyze_payload,
+                )
 
-            async with session.post(analyze_url, json=analyze_payload) as response:
-                analyze_results = await response.json()
-                verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+                async with session.post(analyze_url, json=analyze_payload) as response:
+                    analyze_results = await response.json()
+                    verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
                 # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
                 # Presidio may return a dict instead of a list when errors occur
@@ -302,7 +309,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     if "error" in analyze_results:
                         verbose_proxy_logger.warning(
                             "Presidio analyzer returned error: %s, returning empty list",
-                            analyze_results.get("error")
+                            analyze_results.get("error"),
                         )
                         return []
                     # If it's a dict but not an error, try to process it as a single item
@@ -314,7 +321,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     except Exception as e:
                         verbose_proxy_logger.warning(
                             "Failed to parse Presidio dict response: %s, returning empty list",
-                            e
+                            e,
                         )
                         return []
 
@@ -351,20 +358,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return text
 
             # Use shared session to prevent memory leak (issue #14540)
-            session = await self._get_http_session()
+            async with self._get_session_iterator() as session:
+                # Make the request to /anonymize
+                anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+                verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+                anonymize_payload = {
+                    "text": text,
+                    "analyzer_results": analyze_results,
+                }
 
-            # Make the request to /anonymize
-            anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-            verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-            anonymize_payload = {
-                "text": text,
-                "analyzer_results": analyze_results,
-            }
-
-            async with session.post(
-                anonymize_url, json=anonymize_payload
-            ) as response:
-                redacted_text = await response.json()
+                async with session.post(
+                    anonymize_url, json=anonymize_payload
+                ) as response:
+                    redacted_text = await response.json()
 
             new_text = text
             if redacted_text is not None:
