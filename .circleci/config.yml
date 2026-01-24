@@ -224,7 +224,7 @@ jobs:
                 -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
                 -n 4 \
                 --timeout=300 \
-
+                --timeout_method=thread"
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
