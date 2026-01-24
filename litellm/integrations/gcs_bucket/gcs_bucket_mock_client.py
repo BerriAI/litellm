@@ -190,18 +190,18 @@ def mock_vertex_auth_methods():
         
         async def _mock_ensure_access_token_async(self, credentials, project_id, custom_llm_provider):
             """Mock async auth method - returns fake token."""
-            verbose_logger.debug(f"[GCS MOCK] Vertex AI auth: _ensure_access_token_async called")
+            verbose_logger.debug("[GCS MOCK] Vertex AI auth: _ensure_access_token_async called")
             return ("mock-gcs-token", "mock-project-id")
         
         def _mock_ensure_access_token(self, credentials, project_id, custom_llm_provider):
             """Mock sync auth method - returns fake token."""
-            verbose_logger.debug(f"[GCS MOCK] Vertex AI auth: _ensure_access_token called")
+            verbose_logger.debug("[GCS MOCK] Vertex AI auth: _ensure_access_token called")
             return ("mock-gcs-token", "mock-project-id")
         
         def _mock_get_token_and_url(self, model, auth_header, vertex_credentials, vertex_project, 
                                     vertex_location, gemini_api_key, stream, custom_llm_provider, api_base):
             """Mock get_token_and_url - returns fake token."""
-            verbose_logger.debug(f"[GCS MOCK] Vertex AI auth: _get_token_and_url called")
+            verbose_logger.debug("[GCS MOCK] Vertex AI auth: _get_token_and_url called")
             return ("mock-gcs-token", "https://storage.googleapis.com")
         
         # Patch the methods
