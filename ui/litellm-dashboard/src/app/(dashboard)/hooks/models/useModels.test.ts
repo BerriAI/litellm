@@ -102,6 +102,8 @@ describe("useModelsInfo", () => {
       "Admin",
       1,
       50,
+      undefined,
+      undefined,
       undefined
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
@@ -122,6 +124,8 @@ describe("useModelsInfo", () => {
       "Admin",
       2,
       25,
+      undefined,
+      undefined,
       undefined
     );
   });

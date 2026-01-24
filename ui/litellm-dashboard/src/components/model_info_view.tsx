@@ -1,4 +1,6 @@
-import { useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { useModelHub, useModelsInfo } from "@/app/(dashboard)/hooks/models/useModels";
+import { transformModelData } from "@/app/(dashboard)/models-and-endpoints/utils/modelDataTransformer";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon, KeyIcon, RefreshIcon, TrashIcon } from "@heroicons/react/outline";
 import {
@@ -16,7 +18,7 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Modal, Select, Tooltip } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../utils/dataUtils";
 import { formItemValidateJSON, truncateString } from "../utils/textUtils";
 import CacheControlSettings from "./add_model/cache_control_settings";
@@ -43,7 +45,6 @@ import { getDisplayModelName } from "./view_model/model_name_display";
 interface ModelInfoViewProps {
   modelId: string;
   onClose: () => void;
-  modelData: any;
   accessToken: string | null;
   userID: string | null;
   userRole: string | null;
@@ -54,7 +55,6 @@ interface ModelInfoViewProps {
 export default function ModelInfoView({
   modelId,
   onClose,
-  modelData,
   accessToken,
   userID,
   userRole,
@@ -75,20 +75,64 @@ export default function ModelInfoView({
   const [isAutoRouterModalOpen, setIsAutoRouterModalOpen] = useState(false);
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
   const [tagsList, setTagsList] = useState<Record<string, Tag>>({});
+
+  // Fetch model data using hook
+  const { data: rawModelDataResponse, isLoading: isLoadingModel } = useModelsInfo(1, 50, undefined, modelId);
+  const { data: modelCostMapData } = useModelCostMap();
+  const { data: modelHubData } = useModelHub();
+
+  // Transform the model data
+  const getProviderFromModel = (model: string) => {
+    if (modelCostMapData !== null && modelCostMapData !== undefined) {
+      if (typeof modelCostMapData == "object" && model in modelCostMapData) {
+        return modelCostMapData[model]["litellm_provider"];
+      }
+    }
+    return "openai";
+  };
+
+  const transformedModelData = useMemo(() => {
+    if (!rawModelDataResponse?.data || rawModelDataResponse.data.length === 0) {
+      return null;
+    }
+    const transformed = transformModelData(rawModelDataResponse, getProviderFromModel);
+    return transformed.data[0] || null;
+  }, [rawModelDataResponse, modelCostMapData]);
+
+  // Keep modelData variable name for backwards compatibility
+  const modelData = transformedModelData;
+
   const canEditModel =
     (userRole === "Admin" || modelData?.model_info?.created_by === userID) && modelData?.model_info?.db_model;
   const isAdmin = userRole === "Admin";
   const isAutoRouter = modelData?.litellm_params?.auto_router_config != null;
 
-  const { data: modelsInfoData } = useModelsInfo();
-  console.log("modelsInfoData, ", modelsInfoData);
   const usingExistingCredential =
     modelData?.litellm_params?.litellm_credential_name != null &&
     modelData?.litellm_params?.litellm_credential_name != undefined;
-  console.log("usingExistingCredential, ", usingExistingCredential);
-  console.log("modelData.litellm_params.litellm_credential_name, ", modelData?.litellm_params?.litellm_credential_name);
 
-  console.log("tagsList, ", modelData.litellm_params?.tags);
+  // Initialize localModelData from modelData when available
+  useEffect(() => {
+    if (modelData && !localModelData) {
+      let processedModelData = modelData;
+      if (!processedModelData.litellm_model_name) {
+        processedModelData = {
+          ...processedModelData,
+          litellm_model_name:
+            processedModelData?.litellm_params?.litellm_model_name ??
+            processedModelData?.litellm_params?.model ??
+            processedModelData?.model_info?.key ??
+            null,
+        };
+      }
+      setLocalModelData(processedModelData);
+
+      // Check if cache control is enabled
+      if (processedModelData?.litellm_params?.cache_control_injection_points) {
+        setShowCacheControl(true);
+      }
+    }
+  }, [modelData, localModelData]);
 
   useEffect(() => {
     const getExistingCredential = async () => {
@@ -106,6 +150,8 @@ export default function ModelInfoView({
 
     const getModelInfo = async () => {
       if (!accessToken) return;
+      // Only fetch if we don't have modelData yet
+      if (modelData) return;
       let modelInfoResponse = await modelInfoV1Call(accessToken, modelId);
       console.log("modelInfoResponse, ", modelInfoResponse);
       let specificModelData = modelInfoResponse.data[0];
@@ -270,6 +316,19 @@ export default function ModelInfoView({
     }
   };
 
+  // Show loading state
+  if (isLoadingModel) {
+    return (
+      <div className="p-4">
+        <TremorButton icon={ArrowLeftIcon} variant="light" onClick={onClose} className="mb-4">
+          Back to Models
+        </TremorButton>
+        <Text>Loading...</Text>
+      </div>
+    );
+  }
+
+  // Show not found if model is not found
   if (!modelData) {
     return (
       <div className="p-4">
@@ -353,6 +412,7 @@ export default function ModelInfoView({
     }
   };
   const isWildcardModel = modelData.litellm_model_name.includes("*");
+  console.log("isWildcardModel, ", isWildcardModel);
 
   return (
     <div className="p-4">
@@ -369,11 +429,10 @@ export default function ModelInfoView({
               size="small"
               icon={copiedStates["model-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(modelData.model_info.id, "model-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["model-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["model-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
           </div>
         </div>
@@ -484,10 +543,10 @@ export default function ModelInfoView({
                 Created At{" "}
                 {modelData.model_info.created_at
                   ? new Date(modelData.model_info.created_at).toLocaleDateString("en-US", {
-                      month: "short",
-                      day: "numeric",
-                      year: "numeric",
-                    })
+                    month: "short",
+                    day: "numeric",
+                    year: "numeric",
+                  })
                   : "Not Set"}
               </div>
               <div className="flex items-center gap-x-2">
@@ -891,27 +950,19 @@ export default function ModelInfoView({
                                 optionFilterProp="children"
                                 allowClear
                                 options={(() => {
-                                  const seen = new Set();
-                                  return modelsInfoData?.data
+                                  const wildcardProvider = modelData.litellm_model_name.split("/")[0];
+                                  return modelHubData?.data
                                     ?.filter((model: any) => {
-                                      const modelProvider = model.provider;
-                                      const wildcardProvider = modelData.litellm_model_name.split("/")[0];
+                                      // Filter by provider to match the wildcard provider
                                       return (
-                                        modelProvider === wildcardProvider &&
-                                        model.model_name !== modelData.litellm_model_name
+                                        model.providers?.includes(wildcardProvider) &&
+                                        model.model_group !== modelData.litellm_model_name
                                       );
                                     })
-                                    .filter((model: any) => {
-                                      if (seen.has(model.model_name)) {
-                                        return false;
-                                      }
-                                      seen.add(model.model_name);
-                                      return true;
-                                    })
                                     .map((model: any) => ({
-                                      value: model.model_name,
-                                      label: model.model_name,
-                                    }));
+                                      value: model.model_group,
+                                      label: model.model_group,
+                                    })) || [];
                                 })()}
                               />
                             </Form.Item>
