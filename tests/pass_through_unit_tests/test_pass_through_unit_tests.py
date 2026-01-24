@@ -420,6 +420,28 @@ def test_is_bedrock_agent_runtime_route():
     assert _is_bedrock_agent_runtime_route("/some/random/endpoint") is False
 
 
+def test_is_bedrock_kb_retrieve_route():
+    """
+    Test that _is_bedrock_kb_retrieve_route correctly identifies KB retrieve endpoints
+    """
+    from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+        _is_bedrock_kb_retrieve_route,
+    )
+
+    # Test KB retrieve endpoints (should return True)
+    assert _is_bedrock_kb_retrieve_route("/knowledgebases/kb-123/retrieve") is True
+    assert _is_bedrock_kb_retrieve_route("knowledgebases/kb-123/retrieve") is True
+    assert _is_bedrock_kb_retrieve_route("/knowledgebases/kb-123/retrieve/") is True
+
+    # Test non-retrieve KB endpoints (should return False)
+    assert _is_bedrock_kb_retrieve_route("/knowledgebases/kb-123/query") is False
+    assert _is_bedrock_kb_retrieve_route("/knowledgebases/kb-123") is False
+
+    # Test non-KB endpoints (should return False)
+    assert _is_bedrock_kb_retrieve_route("/model/test/converse") is False
+    assert _is_bedrock_kb_retrieve_route("/some/random/endpoint") is False
+
+
 def test_init_kwargs_filters_pricing_params(mock_request, mock_user_api_key_dict):
     """
     Test that pricing parameters are properly filtered out from the request body
