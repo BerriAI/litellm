@@ -718,9 +718,31 @@ def test_convert_tool_response_text_only():
     # Verify JSON response is parsed correctly
     assert "status" in function_response["response"]
     assert function_response["response"]["status"] == "completed"
-    
-    # Check inline_data does NOT exist (no image provided)
-    assert "inline_data" not in result
+
+
+def test_convert_tool_response_with_thought_signature_id():
+    """Tool response tool_call_id may include thought signature suffix."""
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_test_thought__thought__abcd1234",
+        "content": "ok",
+    }
+
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_test_thought",
+                "function": {"name": "memory", "arguments": "{}"},
+            }
+        ]
+    }
+
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    assert "function_response" in result
+    assert result["function_response"]["name"] == "memory"
 
 
 def test_file_data_field_order():

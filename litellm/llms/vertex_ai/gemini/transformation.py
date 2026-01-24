@@ -84,7 +84,7 @@ def _apply_gemini_3_metadata(
     video_metadata: Optional[Dict[str, Any]],
 ) -> PartType:
     """
-    Apply the unique media_resolution and video_metadata parameters of Gemini 3+    
+    Apply the unique media_resolution and video_metadata parameters of Gemini 3+
     """
     if model is None:
         return part
@@ -330,7 +330,9 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 )
 
                             # Convert detail to media_resolution_enum
-                            media_resolution_enum = _convert_detail_to_media_resolution_enum(detail)
+                            media_resolution_enum = (
+                                _convert_detail_to_media_resolution_enum(detail)
+                            )
 
                             try:
                                 _part = _process_gemini_media(
@@ -348,10 +350,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                     )
                                 )
                     user_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     _part = PartType(text=_message_content)
                     user_content.append(_part)
 
@@ -419,19 +418,26 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                                 _parts.append(_part)
 
                     assistant_content.extend(_parts)
-                elif (
-                    _message_content is not None
-                    and isinstance(_message_content, str)
-                ):
+                elif _message_content is not None and isinstance(_message_content, str):
                     assistant_text = _message_content
                     # Check if message has thought_signatures in provider_specific_fields
-                    provider_specific_fields = assistant_msg.get("provider_specific_fields")
+                    provider_specific_fields = assistant_msg.get(
+                        "provider_specific_fields"
+                    )
                     thought_signatures = None
-                    if provider_specific_fields and isinstance(provider_specific_fields, dict):
-                        thought_signatures = provider_specific_fields.get("thought_signatures")
-                    
+                    if provider_specific_fields and isinstance(
+                        provider_specific_fields, dict
+                    ):
+                        thought_signatures = provider_specific_fields.get(
+                            "thought_signatures"
+                        )
+
                     # If we have thought signatures, add them to the part
-                    if thought_signatures and isinstance(thought_signatures, list) and len(thought_signatures) > 0:
+                    if (
+                        thought_signatures
+                        and isinstance(thought_signatures, list)
+                        and len(thought_signatures) > 0
+                    ):
                         # Use the first signature for the text part (Gemini expects one signature per part)
                         assistant_content.append(PartType(text=assistant_text, thoughtSignature=thought_signatures[0]))  # type: ignore
                     else:
@@ -625,9 +631,9 @@ def sync_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = context_caching_endpoints.check_and_create_cache(
         messages=messages,
         optional_params=optional_params,
@@ -644,7 +650,6 @@ def sync_transform_request_body(
         vertex_location=vertex_location,
         vertex_auth_header=vertex_auth_header,
     )
-
 
     return _transform_request_body(
         messages=messages,
@@ -677,9 +682,9 @@ async def async_transform_request_body(
     context_caching_endpoints = ContextCachingEndpoints()
 
     (
-    messages,
-    optional_params,
-    cached_content,
+        messages,
+        optional_params,
+        cached_content,
     ) = await context_caching_endpoints.async_check_and_create_cache(
         messages=messages,
         optional_params=optional_params,
