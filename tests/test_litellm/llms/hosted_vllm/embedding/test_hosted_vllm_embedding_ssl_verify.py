@@ -1,11 +1,11 @@
 """
-Test SSL verification for hosted_vllm provider.
+Test SSL verification for hosted_vllm provider embeddings.
 
 This test ensures that the ssl_verify parameter is properly passed through
-to the HTTP client when using the hosted_vllm provider.
+to the HTTP client when using the hosted_vllm provider for embeddings.
 
 Issue: ssl_verify parameter was being ignored because hosted_vllm fell through
-to the OpenAI catch-all path in main.py, which doesn't pass ssl_verify to the HTTP client.
+to the openai_like catch-all path in main.py, which doesn't pass ssl_verify to the HTTP client.
 """
 
 import os
@@ -21,46 +21,40 @@ sys.path.insert(
 import litellm
 
 
-class TestHostedVLLMSSLVerify:
-    """Test suite for SSL verification in hosted_vllm provider."""
+class TestHostedVLLMEmbeddingSSLVerify:
+    """Test suite for SSL verification in hosted_vllm provider embeddings."""
 
     @patch("litellm.llms.custom_httpx.llm_http_handler._get_httpx_client")
-    def test_hosted_vllm_ssl_verify_false_sync(self, mock_get_httpx_client):
-        """Test that ssl_verify=False is passed to the HTTP client for sync calls."""
+    def test_hosted_vllm_embedding_ssl_verify_false_sync(self, mock_get_httpx_client):
+        """Test that ssl_verify=False is passed to the HTTP client for sync embedding calls."""
         # Setup mock client
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
-            "id": "chatcmpl-test",
-            "object": "chat.completion",
-            "created": 1234567890,
-            "model": "test-model",
-            "choices": [
+            "object": "list",
+            "data": [
                 {
+                    "object": "embedding",
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Test response",
-                    },
-                    "finish_reason": "stop",
+                    "embedding": [0.1, 0.2, 0.3, 0.4, 0.5],
                 }
             ],
+            "model": "text-embedding-model",
             "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15,
+                "prompt_tokens": 5,
+                "total_tokens": 5,
             },
         }
-        mock_response.text = '{"id": "chatcmpl-test", "object": "chat.completion", "created": 1234567890, "model": "test-model", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Test response"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}'
+        mock_response.text = '{"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]}], "model": "text-embedding-model", "usage": {"prompt_tokens": 5, "total_tokens": 5}}'
         mock_client.post.return_value = mock_response
         mock_get_httpx_client.return_value = mock_client
 
         try:
-            litellm.completion(
-                model="hosted_vllm/test-model",
-                messages=[{"role": "user", "content": "Hello"}],
+            litellm.embedding(
+                model="hosted_vllm/text-embedding-model",
+                input=["hello world"],
                 api_base="https://test-vllm.example.com/v1",
                 ssl_verify=False,
             )
@@ -87,37 +81,31 @@ class TestHostedVLLMSSLVerify:
 
     @patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client")
     @pytest.mark.asyncio
-    async def test_hosted_vllm_ssl_verify_false_async(
+    async def test_hosted_vllm_embedding_ssl_verify_false_async(
         self, mock_get_async_httpx_client
     ):
-        """Test that ssl_verify=False is passed to the HTTP client for async calls."""
+        """Test that ssl_verify=False is passed to the HTTP client for async embedding calls."""
         # Setup mock async client
         mock_client = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"content-type": "application/json"}
         mock_response.json.return_value = {
-            "id": "chatcmpl-test",
-            "object": "chat.completion",
-            "created": 1234567890,
-            "model": "test-model",
-            "choices": [
+            "object": "list",
+            "data": [
                 {
+                    "object": "embedding",
                     "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        "content": "Test response",
-                    },
-                    "finish_reason": "stop",
+                    "embedding": [0.1, 0.2, 0.3, 0.4, 0.5],
                 }
             ],
+            "model": "text-embedding-model",
             "usage": {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15,
+                "prompt_tokens": 5,
+                "total_tokens": 5,
             },
         }
-        mock_response.text = '{"id": "chatcmpl-test", "object": "chat.completion", "created": 1234567890, "model": "test-model", "choices": [{"index": 0, "message": {"role": "assistant", "content": "Test response"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}'
+        mock_response.text = '{"object": "list", "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2, 0.3, 0.4, 0.5]}], "model": "text-embedding-model", "usage": {"prompt_tokens": 5, "total_tokens": 5}}'
 
         async def mock_post(*args, **kwargs):
             return mock_response
@@ -126,9 +114,9 @@ class TestHostedVLLMSSLVerify:
         mock_get_async_httpx_client.return_value = mock_client
 
         try:
-            await litellm.acompletion(
-                model="hosted_vllm/test-model",
-                messages=[{"role": "user", "content": "Hello"}],
+            await litellm.aembedding(
+                model="hosted_vllm/text-embedding-model",
+                input=["hello world"],
                 api_base="https://test-vllm.example.com/v1",
                 ssl_verify=False,
             )
