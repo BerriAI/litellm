@@ -411,7 +411,6 @@ jobs:
             pip install "Pillow==10.3.0"
             pip install "jsonschema==4.22.0"
             pip install "websockets==13.1.0"
-            pip install "pytest-xdist==3.6.1"
       - setup_litellm_enterprise_pip
       - save_cache:
           paths:
@@ -431,7 +430,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/local_testing --cov=litellm -n 4 --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "caching or cache"
+            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml -x --junitxml=test-results/junit.xml --durations=5 -k "caching or cache"
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
