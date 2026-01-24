@@ -5412,6 +5412,24 @@ async def chat_completion(  # noqa: PLR0915
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)
+    if user_api_key_dict is not None:
+        if data.get("metadata") is None:
+            data["metadata"] = {}
+        if (
+            hasattr(user_api_key_dict, "user_id")
+            and user_api_key_dict.user_id is not None
+        ):
+            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        if (
+            hasattr(user_api_key_dict, "team_id")
+            and user_api_key_dict.team_id is not None
+        ):
+            data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+        if (
+            hasattr(user_api_key_dict, "org_id")
+            and user_api_key_dict.org_id is not None
+        ):
+            data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
@@ -5563,6 +5581,24 @@ async def completion(  # noqa: PLR0915
     data = {}
     try:
         data = await _read_request_body(request=request)
+        if user_api_key_dict is not None:
+            if data.get("metadata") is None:
+                data["metadata"] = {}
+            if (
+                hasattr(user_api_key_dict, "user_id")
+                and user_api_key_dict.user_id is not None
+            ):
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            if (
+                hasattr(user_api_key_dict, "team_id")
+                and user_api_key_dict.team_id is not None
+            ):
+                data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+            if (
+                hasattr(user_api_key_dict, "org_id")
+                and user_api_key_dict.org_id is not None
+            ):
+                data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         return await base_llm_response_processor.base_process_llm_request(
             request=request,
@@ -5781,6 +5817,25 @@ async def embeddings(  # noqa: PLR0915
                                 litellm.decode(model="gpt-3.5-turbo", tokens=i)
                             )
                         data["input"] = input_list
+
+        if user_api_key_dict is not None:
+            if data.get("metadata") is None:
+                data["metadata"] = {}
+            if (
+                hasattr(user_api_key_dict, "user_id")
+                and user_api_key_dict.user_id is not None
+            ):
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            if (
+                hasattr(user_api_key_dict, "team_id")
+                and user_api_key_dict.team_id is not None
+            ):
+                data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+            if (
+                hasattr(user_api_key_dict, "org_id")
+                and user_api_key_dict.org_id is not None
+            ):
+                data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
 
         # Use unified request processor (same as chat/completions and responses)
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
