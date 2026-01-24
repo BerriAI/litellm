@@ -73,7 +73,8 @@ export default function KeyInfoView({
   // Fetch resolved guardrails for all policies
   useEffect(() => {
     const fetchPolicyGuardrails = async () => {
-      if (!accessToken || !currentKeyData?.metadata?.policies || currentKeyData.metadata.policies.length === 0) {
+      const policies = currentKeyData?.metadata?.policies;
+      if (!accessToken || !policies || !Array.isArray(policies) || policies.length === 0) {
         return;
       }
 
@@ -82,7 +83,7 @@ export default function KeyInfoView({
 
       try {
         await Promise.all(
-          currentKeyData.metadata.policies.map(async (policyName: string) => {
+          policies.map(async (policyName: string) => {
             try {
               const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
               guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
@@ -521,9 +522,9 @@ export default function KeyInfoView({
 
               <Card>
                 <Text className="font-medium mb-3">Guardrails</Text>
-                {currentKeyData.guardrails && currentKeyData.guardrails.length > 0 ? (
+                {Array.isArray(currentKeyData.metadata?.guardrails) && currentKeyData.metadata.guardrails.length > 0 ? (
                   <div className="flex flex-wrap gap-2">
-                    {currentKeyData.guardrails.map((guardrail, index) => (
+                    {currentKeyData.metadata.guardrails.map((guardrail: string, index: number) => (
                       <Badge key={index} color="blue">
                         {guardrail}
                       </Badge>
@@ -532,16 +533,17 @@ export default function KeyInfoView({
                 ) : (
                   <Text className="text-gray-500">No guardrails configured</Text>
                 )}
-                {currentKeyData.metadata?.disable_global_guardrails && (
-                  <div className="mt-3 pt-3 border-t border-gray-200">
-                    <Badge color="yellow">Global Guardrails Disabled</Badge>
-                  </div>
-                )}
+                {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
+                  currentKeyData.metadata.disable_global_guardrails === true && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <Badge color="yellow">Global Guardrails Disabled</Badge>
+                    </div>
+                  )}
               </Card>
 
               <Card>
                 <Text className="font-medium mb-3">Policies</Text>
-                {currentKeyData.metadata?.policies && currentKeyData.metadata.policies.length > 0 ? (
+                {Array.isArray(currentKeyData.metadata?.policies) && currentKeyData.metadata.policies.length > 0 ? (
                   <div className="space-y-4">
                     {currentKeyData.metadata.policies.map((policy: string, index: number) => (
                       <div key={index} className="space-y-2">
