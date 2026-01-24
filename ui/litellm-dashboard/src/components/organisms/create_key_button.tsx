@@ -19,6 +19,7 @@ import ModelAliasManager from "../common_components/ModelAliasManager";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
 import PremiumLoggingSettings from "../common_components/PremiumLoggingSettings";
 import RateLimitTypeFormItem from "../common_components/RateLimitTypeFormItem";
+import RouterSettingsAccordion, { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import TeamDropdown from "../common_components/team_dropdown";
 import Createuser from "../create_user_button";
 import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
@@ -163,6 +164,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
+  const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
+  const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
   const handleOk = () => {
     setIsModalVisible(false);
     form.resetFields();
@@ -172,6 +175,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   const handleCancel = () => {
@@ -185,6 +190,8 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
+    setRouterSettings(null);
+    setRouterSettingsKey((prev) => prev + 1);
   };
 
   useEffect(() => {
@@ -381,6 +388,17 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       // Add model_aliases if any are defined
       if (Object.keys(modelAliases).length > 0) {
         formValues.aliases = JSON.stringify(modelAliases);
+      }
+
+      // Add router_settings if any are defined
+      if (routerSettings?.router_settings) {
+        // Only include router_settings if it has at least one non-null value
+        const hasValues = Object.values(routerSettings.router_settings).some(
+          (value) => value !== null && value !== undefined && value !== "",
+        );
+        if (hasValues) {
+          formValues.router_settings = routerSettings.router_settings;
+        }
       }
 
       let response;
@@ -1153,6 +1171,23 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                       </div>
                     </Tooltip>
                   )}
+
+                  <Accordion key={`router-settings-accordion-${routerSettingsKey}`} className="mt-4 mb-4">
+                    <AccordionHeader>
+                      <b>Router Settings</b>
+                    </AccordionHeader>
+                    <AccordionBody>
+                      <div className="mt-4 w-full">
+                        <RouterSettingsAccordion
+                          key={routerSettingsKey}
+                          accessToken={accessToken || ""}
+                          value={routerSettings || undefined}
+                          onChange={setRouterSettings}
+                          modelData={userModels.length > 0 ? { data: userModels.map((model) => ({ model_name: model })) } : undefined}
+                        />
+                      </div>
+                    </AccordionBody>
+                  </Accordion>
 
                   <Accordion className="mt-4 mb-4">
                     <AccordionHeader>
