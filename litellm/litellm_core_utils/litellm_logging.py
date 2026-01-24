@@ -4651,8 +4651,11 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def strip_trailing_slash(api_base: Optional[str]) -> Optional[str]:
-        if api_base and api_base[-1] == "/":
-            return api_base[:-1]
+        if api_base:
+            if api_base.endswith("//"):
+                return api_base.rstrip("/")
+            if api_base[-1] == "/":
+                return api_base[:-1]
         return api_base
 
     @staticmethod
