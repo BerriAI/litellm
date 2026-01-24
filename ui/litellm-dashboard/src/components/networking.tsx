@@ -5377,6 +5377,32 @@ export const getPoliciesList = async (accessToken: string) => {
   }
 };
 
+export const getPolicyInfoWithGuardrails = async (accessToken: string, policyName: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/info/${policyName}` : `/policy/info/${policyName}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to get policy info for ${policyName}:`, error);
+    throw error;
+  }
+};
+
 export const createPolicyCall = async (accessToken: string, policyData: any) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/policies` : `/policies`;

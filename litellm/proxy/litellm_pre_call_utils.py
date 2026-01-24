@@ -1500,10 +1500,13 @@ def add_guardrails_from_policy_engine(
     Add guardrails from the policy engine based on request context.
 
     This function:
-    1. Gets matching policies based on team_alias, key_alias, and model
-    2. Resolves guardrails from matching policies (including inheritance)
-    3. Adds guardrails to request metadata
-    4. Tracks applied policies in metadata for response headers
+    1. Extracts "policies" from request body (if present) for dynamic policy application
+    2. Gets matching policies based on team_alias, key_alias, and model (via attachments)
+    3. Combines dynamic policies with attachment-based policies
+    4. Resolves guardrails from all policies (including inheritance)
+    5. Adds guardrails to request metadata
+    6. Tracks applied policies in metadata for response headers
+    7. Removes "policies" from request body so it's not forwarded to LLM provider
 
     Args:
         data: The request data to update
@@ -1518,6 +1521,10 @@ def add_guardrails_from_policy_engine(
     from litellm.proxy.policy_engine.policy_registry import get_policy_registry
     from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
     from litellm.types.proxy.policy_engine import PolicyMatchContext
+
+    # Extract dynamic policies from request body (if present)
+    # These will be combined with attachment-based policies
+    request_body_policies = data.pop("policies", None)
 
     registry = get_policy_registry()
     verbose_proxy_logger.debug(
@@ -1545,12 +1552,18 @@ def add_guardrails_from_policy_engine(
 
     verbose_proxy_logger.debug(f"Policy engine: matched policies via attachments: {matching_policy_names}")
 
-    if not matching_policy_names:
+    # Combine attachment-based policies with dynamic request body policies
+    all_policy_names = set(matching_policy_names)
+    if request_body_policies and isinstance(request_body_policies, list):
+        all_policy_names.update(request_body_policies)
+        verbose_proxy_logger.debug(f"Policy engine: added dynamic policies from request body: {request_body_policies}")
+
+    if not all_policy_names:
         return
 
     # Filter to only policies whose conditions match the context
     applied_policy_names = PolicyMatcher.get_policies_with_matching_conditions(
-        policy_names=matching_policy_names,
+        policy_names=list(all_policy_names),
         context=context,
     )
 

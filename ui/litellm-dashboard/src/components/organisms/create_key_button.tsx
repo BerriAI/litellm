@@ -29,6 +29,7 @@ import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
   getGuardrailsList,
+  getPoliciesList,
   getPossibleUserRoles,
   getPromptsList,
   keyCreateCall,
@@ -150,6 +151,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [keyOwner, setKeyOwner] = useState("you");
   const [predefinedTags, setPredefinedTags] = useState(getPredefinedTags(data));
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
   const [promptsList, setPromptsList] = useState<string[]>([]);
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [selectedCreateKeyTeam, setSelectedCreateKeyTeam] = useState<Team | null>(team);
@@ -211,6 +213,16 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     const fetchPrompts = async () => {
       try {
         const response = await getPromptsList(accessToken);
@@ -221,6 +233,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     };
 
     fetchGuardrails();
+    fetchPolicies();
     fetchPrompts();
   }, [accessToken]);
 
@@ -914,6 +927,42 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                     }
                   >
                     <Switch disabled={!premiumUser} checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+                  <Form.Item
+                    label={
+                      <span>
+                        Policies{" "}
+                        <Tooltip title="Apply policies to this key to control guardrails and other settings">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()} // Prevent accordion from collapsing when clicking link
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="policies"
+                    className="mt-4"
+                    help={
+                      premiumUser
+                        ? "Select existing policies or enter new ones"
+                        : "Premium feature - Upgrade to set policies by key"
+                    }
+                  >
+                    <Select
+                      mode="tags"
+                      style={{ width: "100%" }}
+                      disabled={!premiumUser}
+                      placeholder={
+                        !premiumUser
+                          ? "Premium feature - Upgrade to set policies by key"
+                          : "Select or enter policies"
+                      }
+                      options={policiesList.map((name) => ({ value: name, label: name }))}
+                    />
                   </Form.Item>
                   <Form.Item
                     label={
