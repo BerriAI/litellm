@@ -2267,6 +2267,44 @@ def token_counter(
     )
 
 
+async def async_token_counter(
+    model="",
+    custom_tokenizer: Optional[Union[dict, SelectTokenizerResponse]] = None,
+    text: Optional[Union[str, List[str]]] = None,
+    messages: Optional[List] = None,
+    count_response_tokens: Optional[bool] = False,
+    tools: Optional[List[ChatCompletionToolParam]] = None,
+    tool_choice: Optional[ChatCompletionNamedToolChoiceParam] = None,
+    use_default_image_token_count: Optional[bool] = False,
+    default_token_count: Optional[int] = None,
+) -> int:
+    """
+    Async version of token_counter that runs in threadpool for large inputs.
+    
+    This prevents CPU-intensive tokenization from blocking the async event loop.
+    Uses threadpool when input size exceeds async_tokenizer_threshold_bytes.
+    
+    Args:
+        Same as token_counter()
+    
+    Returns:
+        int: The number of tokens in the text.
+    """
+    from litellm.litellm_core_utils.token_counter import async_token_counter as _async_token_counter_impl
+    
+    return await _async_token_counter_impl(
+        model=model,
+        custom_tokenizer=custom_tokenizer,
+        text=text,
+        messages=messages,
+        count_response_tokens=count_response_tokens,
+        tools=tools,
+        tool_choice=tool_choice,
+        use_default_image_token_count=use_default_image_token_count,
+        default_token_count=default_token_count,
+    )
+
+
 def supports_httpx_timeout(custom_llm_provider: str) -> bool:
     """
     Helper function to know if a provider implementation supports httpx timeout

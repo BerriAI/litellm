@@ -252,6 +252,9 @@ ssl_ecdh_curve: Optional[str] = (
 )
 disable_streaming_logging: bool = False
 disable_token_counter: bool = False
+async_tokenizer_threshold_bytes: Optional[int] = None  # Run tokenization in threadpool for inputs larger than this (e.g., 500000 for 500KB)
+tokenizer_threadpool_max_workers: int = 4  # Maximum threads for async tokenization
+tokenizer_timeout_seconds: Optional[float] = None  # Timeout for tokenization in threadpool (None = no timeout)
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
 extra_spend_tag_headers: Optional[List[str]] = None
