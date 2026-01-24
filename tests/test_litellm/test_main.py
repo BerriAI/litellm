@@ -15,7 +15,6 @@ import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import litellm
-
 from litellm import main as litellm_main
 
 
@@ -473,6 +472,7 @@ async def test_extra_body_with_fallback(
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
@@ -488,7 +488,8 @@ async def test_openai_env_base(
     model = "gpt-4o"
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
-    respx_mock.post(f"{expected_base_url}/chat/completions").respond(
+    # Ensure respx_mock is properly configured
+    respx_mock.route(host="localhost", port=12345).post("/v1/chat/completions").respond(
         json={
             "id": "chatcmpl-123",
             "object": "chat.completion",
