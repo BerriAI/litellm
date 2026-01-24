@@ -508,11 +508,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                     key
                 ] = value  # Copy all params as-is since tools are already processed
 
-            tools_count = (
-                len(params_for_llm.get("tools", []))
-                if params_for_llm.get("tools")
-                else 0
-            )
+            tools_count = len(params_for_llm.get("tools") or [])
             verbose_logger.debug(f"Making LLM call with {tools_count} tools")
             response = await aresponses(**params_for_llm)
 
@@ -536,9 +532,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
         except Exception as e:
             verbose_logger.error(f"Error creating initial response iterator: {e}")
-            import traceback
-
-            traceback.print_exc()
             self.base_iterator = None
             self.phase = "finished"
 
