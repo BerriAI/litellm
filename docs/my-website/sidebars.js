@@ -843,6 +843,7 @@ const sidebars = {
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
+        "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
         "completion/model_alias",
