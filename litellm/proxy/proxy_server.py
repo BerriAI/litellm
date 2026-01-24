@@ -7795,51 +7795,56 @@ async def _apply_search_filter_to_models(
     db_models_total_count = 0
     models_needed_for_page = size * page
     
-    try:
-        # Build where condition for database query
-        db_where_condition: Dict[str, Any] = {
-            "model_name": {
-                "contains": search_lower,
-                "mode": "insensitive",
+    # Only query database if prisma_client is available
+    if prisma_client is not None:
+        try:
+            # Build where condition for database query
+            db_where_condition: Dict[str, Any] = {
+                "model_name": {
+                    "contains": search_lower,
+                    "mode": "insensitive",
+                }
             }
-        }
-        # Exclude models already in router if we have any
-        if db_model_ids_in_router:
-            db_where_condition["model_id"] = {
-                "not": {"in": list(db_model_ids_in_router)}
-            }
-        
-        # Get total count of matching database models
-        db_models_total_count = await prisma_client.db.litellm_proxymodeltable.count(
-            where=db_where_condition
-        )
-        
-        # Calculate total count for search results
-        search_total_count = router_models_count + db_models_total_count
-        
-        # Fetch database models if we need more for the current page
-        if router_models_count < models_needed_for_page:
-            models_to_fetch = min(
-                models_needed_for_page - router_models_count,
-                db_models_total_count
+            # Exclude models already in router if we have any
+            if db_model_ids_in_router:
+                db_where_condition["model_id"] = {
+                    "not": {"in": list(db_model_ids_in_router)}
+                }
+            
+            # Get total count of matching database models
+            db_models_total_count = await prisma_client.db.litellm_proxymodeltable.count(
+                where=db_where_condition
             )
             
-            if models_to_fetch > 0:
-                db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
-                    where=db_where_condition,
-                    take=models_to_fetch,
+            # Calculate total count for search results
+            search_total_count = router_models_count + db_models_total_count
+            
+            # Fetch database models if we need more for the current page
+            if router_models_count < models_needed_for_page:
+                models_to_fetch = min(
+                    models_needed_for_page - router_models_count,
+                    db_models_total_count
                 )
                 
-                # Convert database models to router format
-                for db_model in db_models_raw:
-                    decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
-                    if decrypted_models:
-                        db_models.extend(decrypted_models)
-    except Exception as e:
-        verbose_proxy_logger.exception(
-            f"Error querying database models with search: {str(e)}"
-        )
-        # If error, use router models count as fallback
+                if models_to_fetch > 0:
+                    db_models_raw = await prisma_client.db.litellm_proxymodeltable.find_many(
+                        where=db_where_condition,
+                        take=models_to_fetch,
+                    )
+                    
+                    # Convert database models to router format
+                    for db_model in db_models_raw:
+                        decrypted_models = proxy_config.decrypt_model_list_from_db([db_model])
+                        if decrypted_models:
+                            db_models.extend(decrypted_models)
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error querying database models with search: {str(e)}"
+            )
+            # If error, use router models count as fallback
+            search_total_count = router_models_count
+    else:
+        # If no prisma_client, only use router models
         search_total_count = router_models_count
     
     # Combine all models
