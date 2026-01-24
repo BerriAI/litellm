@@ -3721,6 +3721,299 @@ async def test_model_info_v2_search_db_models(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_model_info_v2_filter_by_model_id(monkeypatch):
+    """
+    Test modelId parameter for filtering by specific model ID.
+    Tests that modelId searches in router config first, then database.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Create mock config models
+    mock_config_models = [
+        {
+            "model_name": "gpt-4-turbo",
+            "litellm_params": {"model": "gpt-4-turbo"},
+            "model_info": {"id": "config-model-1"},
+        },
+        {
+            "model_name": "claude-3-opus",
+            "litellm_params": {"model": "claude-3-opus"},
+            "model_info": {"id": "config-model-2"},
+        },
+    ]
+
+    # Mock llm_router with get_model_info method
+    mock_router = MagicMock()
+    mock_router.model_list = mock_config_models
+    mock_router.get_model_info = MagicMock(
+        side_effect=lambda id: next(
+            (m for m in mock_config_models if m["model_info"]["id"] == id), None
+        )
+    )
+
+    # Mock prisma_client for database queries
+    mock_prisma_client = MagicMock()
+    mock_db_table = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable = mock_db_table
+
+    # Mock database model
+    mock_db_model = MagicMock()
+    mock_db_model.model_id = "db-model-1"
+    mock_db_model.model_name = "db-gpt-3.5"
+    mock_db_model.litellm_params = '{"model": "gpt-3.5-turbo"}'
+    mock_db_model.model_info = '{"id": "db-model-1", "db_model": true}'
+
+    # Mock find_unique to return db model when searching for db-model-1
+    async def mock_find_unique(where):
+        if where.get("model_id") == "db-model-1":
+            return mock_db_model
+        return None
+
+    mock_db_table.find_unique = AsyncMock(side_effect=mock_find_unique)
+
+    # Mock proxy_config.decrypt_model_list_from_db
+    def mock_decrypt_models(db_models_list):
+        if db_models_list:
+            return [
+                {
+                    "model_name": db_models_list[0].model_name,
+                    "litellm_params": {"model": "gpt-3.5-turbo"},
+                    "model_info": {"id": db_models_list[0].model_id, "db_model": True},
+                }
+            ]
+        return []
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    monkeypatch.setattr(proxy_config, "decrypt_model_list_from_db", mock_decrypt_models)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test Case 1: Filter by modelId that exists in config
+        response = client.get("/v2/model/info", params={"modelId": "config-model-1"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_info"]["id"] == "config-model-1"
+        assert data["data"][0]["model_name"] == "gpt-4-turbo"
+        # Verify router.get_model_info was called
+        mock_router.get_model_info.assert_called_with(id="config-model-1")
+
+        # Test Case 2: Filter by modelId that exists in database (not in config)
+        response = client.get("/v2/model/info", params={"modelId": "db-model-1"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_info"]["id"] == "db-model-1"
+        assert data["data"][0]["model_name"] == "db-gpt-3.5"
+        # Verify database was queried
+        mock_db_table.find_unique.assert_called()
+
+        # Test Case 3: Filter by modelId that doesn't exist
+        mock_db_table.find_unique = AsyncMock(return_value=None)
+        response = client.get("/v2/model/info", params={"modelId": "non-existent-model"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert len(data["data"]) == 0
+
+        # Test Case 4: Filter by modelId with search parameter (should filter further)
+        response = client.get(
+            "/v2/model/info", params={"modelId": "config-model-1", "search": "claude"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # config-model-1 is gpt-4-turbo, doesn't match "claude", so should return empty
+        assert data["total_count"] == 0
+        assert len(data["data"]) == 0
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_filter_by_team_id(monkeypatch):
+    """
+    Test teamId parameter for filtering models by team ID.
+    Tests that teamId filters models based on direct_access or access_via_team_ids.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_TeamTable
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Create mock models with different access configurations
+    mock_models = [
+        {
+            "model_name": "model-direct-access",
+            "litellm_params": {"model": "gpt-4"},
+            "model_info": {
+                "id": "model-1",
+                "direct_access": True,  # Should be included
+            },
+        },
+        {
+            "model_name": "model-team-access",
+            "litellm_params": {"model": "claude-3"},
+            "model_info": {
+                "id": "model-2",
+                "direct_access": False,
+                "access_via_team_ids": ["team-123"],  # Should be included
+            },
+        },
+        {
+            "model_name": "model-no-access",
+            "litellm_params": {"model": "gemini-pro"},
+            "model_info": {
+                "id": "model-3",
+                "direct_access": False,
+                "access_via_team_ids": ["team-456"],  # Should NOT be included
+            },
+        },
+        {
+            "model_name": "model-multiple-teams",
+            "litellm_params": {"model": "gpt-3.5"},
+            "model_info": {
+                "id": "model-4",
+                "direct_access": False,
+                "access_via_team_ids": ["team-789", "team-123"],  # Should be included
+            },
+        },
+    ]
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.model_list = mock_models
+    
+    # Mock get_model_list to return models based on model_name filter
+    def mock_get_model_list(model_name=None, team_id=None):
+        if model_name:
+            return [m for m in mock_models if m["model_name"] == model_name]
+        return mock_models
+    
+    mock_router.get_model_list = MagicMock(side_effect=mock_get_model_list)
+
+    # Mock team database object - team has access to specific models
+    mock_team_db_object = MagicMock()
+    mock_team_db_object.model_dump.return_value = {
+        "team_id": "team-123",
+        "models": ["model-direct-access", "model-team-access", "model-multiple-teams"],  # Specific models
+    }
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+    mock_team_table = MagicMock()
+    mock_prisma_client.db.litellm_teamtable = mock_team_table
+    mock_team_table.find_unique = AsyncMock(return_value=mock_team_db_object)
+
+    # Mock LiteLLM_TeamTable - team has access to specific models
+    mock_team_object = LiteLLM_TeamTable(
+        team_id="team-123",
+        models=["model-direct-access", "model-team-access", "model-multiple-teams"],
+    )
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+    # Mock LiteLLM_TeamTable instantiation
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.LiteLLM_TeamTable",
+        lambda **kwargs: mock_team_object,
+    )
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test Case 1: Filter by teamId - should return models with direct_access=True or team-123 in access_via_team_ids
+        response = client.get("/v2/model/info", params={"teamId": "team-123"})
+        assert response.status_code == 200
+        data = response.json()
+        # Should include: model-1 (direct_access), model-2 (team-123 in access_via_team_ids), model-4 (team-123 in access_via_team_ids)
+        # Should NOT include: model-3 (team-456 only)
+        assert data["total_count"] == 3
+        assert len(data["data"]) == 3
+        model_ids = [m["model_info"]["id"] for m in data["data"]]
+        assert "model-1" in model_ids  # direct_access
+        assert "model-2" in model_ids  # team-123 in access_via_team_ids
+        assert "model-4" in model_ids  # team-123 in access_via_team_ids
+        assert "model-3" not in model_ids  # Should be excluded
+
+        # Test Case 2: Filter by teamId that doesn't exist - should return empty list
+        mock_team_table.find_unique = AsyncMock(return_value=None)
+        response = client.get("/v2/model/info", params={"teamId": "non-existent-team"})
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_count"] == 0
+        assert len(data["data"]) == 0
+
+        # Test Case 3: Filter by different teamId - should only return models with that team in access_via_team_ids
+        mock_team_db_object_456 = MagicMock()
+        mock_team_db_object_456.model_dump.return_value = {
+            "team_id": "team-456",
+            "models": ["model-no-access"],  # Team has access to model-no-access
+        }
+        mock_team_table.find_unique = AsyncMock(return_value=mock_team_db_object_456)
+        mock_team_object_456 = LiteLLM_TeamTable(
+            team_id="team-456",
+            models=["model-no-access"],
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.LiteLLM_TeamTable",
+            lambda **kwargs: mock_team_object_456,
+        )
+
+        response = client.get("/v2/model/info", params={"teamId": "team-456"})
+        assert response.status_code == 200
+        data = response.json()
+        # Should include: model-1 (direct_access), model-3 (team-456 in access_via_team_ids)
+        # Should NOT include: model-2 (team-123 only), model-4 (team-789 and team-123, but not team-456)
+        assert data["total_count"] >= 2
+        model_ids = [m["model_info"]["id"] for m in data["data"]]
+        assert "model-1" in model_ids  # direct_access
+        assert "model-3" in model_ids  # team-456 in access_via_team_ids
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
 async def test_apply_search_filter_to_models(monkeypatch):
     """
     Test the _apply_search_filter_to_models helper function.
