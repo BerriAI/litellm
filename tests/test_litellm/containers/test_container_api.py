@@ -179,8 +179,8 @@ class TestContainerAPI:
             name="Retrieved Container"
         )
         
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_retrieve_handler.return_value = mock_response
+        with patch('litellm.containers.main.base_llm_http_handler.container_retrieve_handler') as mock_handler:
+            mock_handler.return_value = mock_response
             
             response = retrieve_container(
                 container_id=container_id,

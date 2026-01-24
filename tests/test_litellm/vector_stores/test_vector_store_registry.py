@@ -133,6 +133,16 @@ def test_search_uses_registry_credentials():
     try:
         logger = MagicMock()
         logger._response_cost_calculator.return_value = 0
+        
+        # Mock the search response
+        mock_search_response = {
+            "object": "list",
+            "data": [],
+            "first_id": None,
+            "last_id": None,
+            "has_more": False
+        }
+        
         with patch.object(
             registry,
             "get_credentials_for_vector_store",
@@ -142,7 +152,7 @@ def test_search_uses_registry_credentials():
             return_value=MagicMock(),
         ), patch(
             "litellm.vector_stores.main.base_llm_http_handler.vector_store_search_handler",
-            return_value={},
+            return_value=mock_search_response,
         ) as mock_handler:
             search(vector_store_id="vs1", query="test", litellm_logging_obj=logger)
             mock_get_creds.assert_called_once_with("vs1")
