@@ -653,7 +653,9 @@ async def _initialize_shared_aiohttp_session():
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
             "enable_cleanup_closed": True,
+            "force_close": False,  # Critical: allows connection reuse and prevents starvation
         }
+        # Allow 0 for unlimited connections (previous behavior before v1.80.8)
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
@@ -664,7 +666,8 @@ async def _initialize_shared_aiohttp_session():
 
         verbose_proxy_logger.info(
             f"SESSION REUSE: Created shared aiohttp session for connection pooling (ID: {id(session)}, "
-            f"limit={AIOHTTP_CONNECTOR_LIMIT}, limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST})"
+            f"limit={AIOHTTP_CONNECTOR_LIMIT if AIOHTTP_CONNECTOR_LIMIT > 0 else 'unlimited'}, "
+            f"limit_per_host={AIOHTTP_CONNECTOR_LIMIT_PER_HOST if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0 else 'unlimited'})"
         )
         return session
     except Exception as e:
