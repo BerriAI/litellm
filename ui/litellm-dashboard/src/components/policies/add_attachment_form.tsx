@@ -4,6 +4,7 @@ import { Button } from "@tremor/react";
 import { Policy, PolicyAttachmentCreateRequest } from "./types";
 import { teamListCall, keyInfoCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const { Text } = Typography;
 
@@ -31,6 +32,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const [availableKeys, setAvailableKeys] = useState<string[]>([]);
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const [isLoadingKeys, setIsLoadingKeys] = useState(false);
+  const { userId, userRole } = useAuthorized();
 
   useEffect(() => {
     if (visible && accessToken) {
@@ -45,7 +47,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     // Load teams
     setIsLoadingTeams(true);
     try {
-      const teamsResponse = await teamListCall(accessToken);
+      const teamsResponse = await teamListCall(accessToken, userId, userRole);
       if (teamsResponse?.data) {
         const teamAliases = teamsResponse.data
           .map((t: any) => t.team_alias)
@@ -61,7 +63,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     // Load keys
     setIsLoadingKeys(true);
     try {
-      const keysResponse = await keyInfoCall(accessToken, null, null);
+      const keysResponse = await keyInfoCall(accessToken, []);
       if (keysResponse?.data) {
         const keyAliases = keysResponse.data
           .map((k: any) => k.key_alias)

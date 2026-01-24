@@ -5,6 +5,7 @@ import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
 import { Guardrail } from "../guardrails/types";
 import { getResolvedGuardrails, modelAvailableCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const { Text } = Typography;
 const { Option } = Select;
@@ -38,6 +39,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   const [isLoadingResolved, setIsLoadingResolved] = useState(false);
   const [modelConditionType, setModelConditionType] = useState<"model" | "regex">("model");
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const { userId, userRole } = useAuthorized();
 
   const isEditing = !!editingPolicy;
 
@@ -47,7 +49,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       // Detect if it's a regex pattern (contains *, ., [, ], etc.)
       const isRegex = modelCondition && /[.*+?^${}()|[\]\\]/.test(modelCondition);
       setModelConditionType(isRegex ? "regex" : "model");
-      
+
       form.setFieldsValue({
         policy_name: editingPolicy.policy_name,
         description: editingPolicy.description,
@@ -77,9 +79,9 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadAvailableModels = async () => {
     if (!accessToken) return;
-    
+
     try {
-      const response = await modelAvailableCall(accessToken, null, null, null);
+      const response = await modelAvailableCall(accessToken, userId, userRole);
       if (response?.data) {
         const models = response.data.map((m: any) => m.id || m.model_name).filter(Boolean);
         setAvailableModels(models);
@@ -91,7 +93,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const loadResolvedGuardrails = async (policyId: string) => {
     if (!accessToken) return;
-    
+
     setIsLoadingResolved(true);
     try {
       const data = await getResolvedGuardrails(accessToken, policyId);
@@ -132,7 +134,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
   const resolveParentGuardrails = (policy: Policy): string[] => {
     let resolved = new Set<string>();
-    
+
     // If parent inherits, resolve recursively
     if (policy.inherit) {
       const grandparent = existingPolicies.find(p => p.policy_name === policy.inherit);
