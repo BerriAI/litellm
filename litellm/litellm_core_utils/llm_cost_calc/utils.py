@@ -23,6 +23,15 @@ def _is_above_128k(tokens: float) -> bool:
     return False
 
 
+def get_billable_input_tokens(usage: Usage) -> int:
+    """
+    Returns the number of billable input tokens.
+    Subtracts cached tokens from prompt tokens if applicable.
+    """
+    details = _parse_prompt_tokens_details(usage)
+    return usage.prompt_tokens - details["cache_hit_tokens"]
+
+
 def select_cost_metric_for_model(
     model_info: ModelInfo,
 ) -> Literal["cost_per_character", "cost_per_token"]:
@@ -190,7 +199,6 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-
                     prompt_base_cost = cast(
                         float, _get_cost_per_unit(model_info, key, prompt_base_cost)
                     )
@@ -619,7 +627,11 @@ def generic_cost_per_token(  # noqa: PLR0915
             # Calculate text tokens as remainder when we have a breakdown
             # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
             text_tokens = max(
-                0, usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens
+                0,
+                usage.completion_tokens
+                - reasoning_tokens
+                - audio_tokens
+                - image_tokens,
             )
         else:
             # No breakdown at all, all tokens are text tokens
