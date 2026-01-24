@@ -8,7 +8,7 @@ import { getDisplayModelName } from "@/components/view_model/model_name_display"
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { PaginationState } from "@tanstack/react-table";
 import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
-import { Skeleton } from "antd";
+import { Skeleton, Spin } from "antd";
 import debounce from "lodash/debounce";
 import { useEffect, useMemo, useState } from "react";
 import { useModelsInfo } from "../../hooks/models/useModels";
@@ -34,7 +34,7 @@ const AllModelsTab = ({
 }: AllModelsTabProps) => {
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { userId, userRole, premiumUser } = useAuthorized();
-  const { data: teams } = useTeams();
+  const { data: teams, isLoading: isLoadingTeams } = useTeams();
 
   const [modelNameSearch, setModelNameSearch] = useState<string>("");
   const [debouncedSearch, setDebouncedSearch] = useState<string>("");
@@ -69,7 +69,16 @@ const AllModelsTab = ({
     };
   }, [modelNameSearch, debouncedUpdateSearch]);
 
-  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(currentPage, pageSize, debouncedSearch || undefined);
+  // Determine teamId to pass to the query - only pass if not "personal"
+  const teamIdForQuery = currentTeam === "personal" ? undefined : currentTeam.team_id;
+
+  const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(
+    currentPage,
+    pageSize,
+    debouncedSearch || undefined,
+    undefined,
+    teamIdForQuery
+  );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
   const getProviderFromModel = (model: string) => {
@@ -122,30 +131,21 @@ const AllModelsTab = ({
         model.model_info["access_groups"]?.includes(selectedModelAccessGroupFilter) ||
         !selectedModelAccessGroupFilter;
 
-      let teamAccessMatch = true;
-      if (modelViewMode === "current_team") {
-        if (currentTeam === "personal") {
-          teamAccessMatch = model.model_info?.direct_access === true;
-        } else {
-          // Check if model is directly associated with the team via team_ids
-          const directTeamAccess = model.model_info?.access_via_team_ids?.includes(currentTeam.team_id) === true;
-
-          // Check if any of the team's models match the model's access groups
-          const accessGroupMatch =
-            currentTeam.models?.some((teamModel: string) => model.model_info?.access_groups?.includes(teamModel)) ===
-            true;
-
-          teamAccessMatch = directTeamAccess || accessGroupMatch;
-        }
-      }
-
-      return modelNameMatch && accessGroupMatch && teamAccessMatch;
+      // Team filtering is now handled server-side via teamId query parameter
+      // Only apply client-side filtering for model groups and access groups
+      return modelNameMatch && accessGroupMatch;
     });
-  }, [modelData, selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
+  }, [modelData, selectedModelGroup, selectedModelAccessGroupFilter]);
 
   useEffect(() => {
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
-  }, [selectedModelGroup, selectedModelAccessGroupFilter, currentTeam, modelViewMode]);
+  }, [selectedModelGroup, selectedModelAccessGroupFilter]);
+
+  // Reset pagination when team changes
+  useEffect(() => {
+    setCurrentPage(1);
+    setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+  }, [teamIdForQuery]);
 
   const resetFilters = () => {
     setModelNameSearch("");
@@ -177,9 +177,17 @@ const AllModelsTab = ({
                       onValueChange={(value) => {
                         if (value === "personal") {
                           setCurrentTeam("personal");
+                          // Reset to page 1 when team changes
+                          setCurrentPage(1);
+                          setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
                         } else {
                           const team = teams?.find((t) => t.team_id === value);
-                          if (team) setCurrentTeam(team);
+                          if (team) {
+                            setCurrentTeam(team);
+                            // Reset to page 1 when team changes
+                            setCurrentPage(1);
+                            setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+                          }
                         }
                       }}
                     >
@@ -189,20 +197,29 @@ const AllModelsTab = ({
                           <span className="font-medium">Personal</span>
                         </div>
                       </SelectItem>
-                      {teams
-                        ?.filter((team) => team.team_id)
-                        .map((team) => (
-                          <SelectItem key={team.team_id} value={team.team_id}>
-                            <div className="flex items-center gap-2">
-                              <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                              <span className="font-medium">
-                                {team.team_alias
-                                  ? `${team.team_alias.slice(0, 30)}...`
-                                  : `Team ${team.team_id.slice(0, 30)}...`}
-                              </span>
-                            </div>
-                          </SelectItem>
-                        ))}
+                      {isLoadingTeams ? (
+                        <SelectItem value="loading">
+                          <div className="flex items-center gap-2">
+                            <Spin size="small" />
+                            <span className="font-medium text-gray-500">Loading teams...</span>
+                          </div>
+                        </SelectItem>
+                      ) : (
+                        teams
+                          ?.filter((team) => team.team_id)
+                          .map((team) => (
+                            <SelectItem key={team.team_id} value={team.team_id}>
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                                <span className="font-medium">
+                                  {team.team_alias
+                                    ? `${team.team_alias.slice(0, 30)}...`
+                                    : `Team ${team.team_id.slice(0, 30)}...`}
+                                </span>
+                              </div>
+                            </SelectItem>
+                          ))
+                      )}
                     </Select>
                   )}
                 </div>
