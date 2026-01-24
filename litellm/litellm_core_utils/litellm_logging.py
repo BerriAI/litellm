@@ -4254,7 +4254,7 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     # Check litellm_params using set intersection (only check keys that exist in both)
     matching_keys = _CUSTOM_PRICING_KEYS & litellm_params.keys()
     for key in matching_keys:
-        if litellm_params[key] is not None:
+        if litellm_params.get(key) is not None:
             return True
 
     # Check model_info
@@ -4264,7 +4264,7 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     if model_info:
         matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
         for key in matching_keys:
-            if model_info[key] is not None:
+            if model_info.get(key) is not None:
                 return True
 
     return False
