@@ -96,15 +96,19 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   const [toolPermissionDirty, setToolPermissionDirty] = useState(false);
 
   // Content Filter data ref (managed by ContentFilterManager)
-  const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[] }>({
+  const contentFilterDataRef = React.useRef<{ patterns: any[]; blockedWords: any[]; contentCategories: any[] }>({
     patterns: [],
     blockedWords: [],
+    contentCategories: [],
   });
 
   // Memoize onDataChange callback to prevent unnecessary re-renders
-  const handleContentFilterDataChange = useCallback((patterns: any[], blockedWords: any[]) => {
-    contentFilterDataRef.current = { patterns, blockedWords };
-  }, []);
+  const handleContentFilterDataChange = useCallback(
+    (patterns: any[], blockedWords: any[], contentCategories: any[] = []) => {
+      contentFilterDataRef.current = { patterns, blockedWords, contentCategories };
+    },
+    [],
+  );
 
   const fetchGuardrailInfo = async () => {
     try {
@@ -275,10 +279,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         const formattedData = formatContentFilterDataForAPI(
           contentFilterDataRef.current.patterns || [],
           contentFilterDataRef.current.blockedWords || [],
+          contentFilterDataRef.current.contentCategories || [],
         );
 
         updateData.litellm_params.patterns = formattedData.patterns;
         updateData.litellm_params.blocked_words = formattedData.blocked_words;
+        updateData.litellm_params.categories = formattedData.categories;
       }
 
       if (guardrailData.litellm_params?.guardrail === "tool_permission") {
