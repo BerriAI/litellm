@@ -53,13 +53,26 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        return AnthropicConfig.map_openai_params(
+        # Force tool-based structured outputs for Bedrock Invoke
+        # (similar to VertexAI fix in #19201)
+        # Bedrock Invoke doesn't support output_format parameter
+        original_model = model
+        if "response_format" in non_default_params:
+            # Use a model name that forces tool-based approach
+            model = "claude-3-sonnet-20240229"
+        
+        optional_params = AnthropicConfig.map_openai_params(
             self,
             non_default_params,
             optional_params,
             model,
             drop_params,
         )
+        
+        # Restore original model name
+        model = original_model
+        
+        return optional_params
 
 
     def transform_request(
@@ -90,6 +103,8 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
 
         _anthropic_request.pop("model", None)
         _anthropic_request.pop("stream", None)
+        # Bedrock Invoke doesn't support output_format parameter
+        _anthropic_request.pop("output_format", None)
         if "anthropic_version" not in _anthropic_request:
             _anthropic_request["anthropic_version"] = self.anthropic_version
 
@@ -116,6 +131,17 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
+
+        # Filter out beta headers that Bedrock Invoke doesn't support
+        # (e.g., structured-outputs beta which causes "invalid beta flag" error)
+        beta_headers_to_remove = set()
+        for beta in beta_set:
+            # Remove structured output beta headers - not supported by Bedrock Invoke
+            if "structured-outputs" in beta.lower():
+                beta_headers_to_remove.add(beta)
+        
+        for beta in beta_headers_to_remove:
+            beta_set.discard(beta)
 
         if beta_set:
             _anthropic_request["anthropic_beta"] = list(beta_set)
