@@ -70,8 +70,6 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
 
 
 def test_cost_calculator_with_usage(monkeypatch):
-    from litellm import get_model_info
-
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -122,6 +120,10 @@ def test_cost_calculator_with_usage(monkeypatch):
             "gemini-2.0-flash-001": temp_model_info_object
         },
     )
+
+    # Invalidate caches after modifying litellm.model_cost
+    from litellm.utils import _invalidate_model_cost_lowercase_map
+    _invalidate_model_cost_lowercase_map()
 
     result = response_cost_calculator(
         response_object=mr,
