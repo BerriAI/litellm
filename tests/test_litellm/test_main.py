@@ -488,8 +488,11 @@ async def test_openai_env_base(
     model = "gpt-4o"
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
-    # Ensure respx_mock is properly configured
-    respx_mock.route(host="localhost", port=12345).post("/v1/chat/completions").respond(
+    # Ensure respx_mock is properly configured - use correct respx API
+    respx_mock.post(
+        url__regex=r"http://localhost:12345/v1/chat/completions.*"
+    ).mock(return_value=httpx.Response(
+        status_code=200,
         json={
             "id": "chatcmpl-123",
             "object": "chat.completion",
@@ -507,7 +510,7 @@ async def test_openai_env_base(
             ],
             "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
         }
-    )
+    ))
 
     response = await litellm.acompletion(model=model, messages=messages)
 
