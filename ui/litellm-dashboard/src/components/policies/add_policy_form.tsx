@@ -344,6 +344,14 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
           <Text strong>Conditions (Optional)</Text>
         </Divider>
 
+        <Alert
+          message="Model Scope"
+          description="By default, this policy will run on all models. You can optionally restrict it to specific models below."
+          type="info"
+          showIcon
+          style={{ marginBottom: 16 }}
+        />
+
         <Form.Item label="Model Condition Type">
           <Radio.Group
             value={modelConditionType}
@@ -359,18 +367,18 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
 
         <Form.Item
           name="model_condition"
-          label={modelConditionType === "model" ? "Model" : "Regex Pattern"}
+          label={modelConditionType === "model" ? "Model (Optional)" : "Regex Pattern (Optional)"}
           tooltip={
             modelConditionType === "model"
-              ? "Select a specific model to apply this policy to"
-              : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*)"
+              ? "Select a specific model to apply this policy to. Leave empty to apply to all models."
+              : "Enter a regex pattern to match models (e.g., gpt-4.* or bedrock/.*). Leave empty to apply to all models."
           }
         >
           {modelConditionType === "model" ? (
             <Select
               showSearch
               allowClear
-              placeholder="Select a model"
+              placeholder="Leave empty to apply to all models"
               options={availableModels.map((model) => ({
                 label: model,
                 value: model,
@@ -381,7 +389,7 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
               style={{ width: "100%" }}
             />
           ) : (
-            <TextInput placeholder="e.g., gpt-4.* or bedrock/claude-.*" />
+            <TextInput placeholder="Leave empty to apply to all models (e.g., gpt-4.* or bedrock/claude-.*)" />
           )}
         </Form.Item>
 
