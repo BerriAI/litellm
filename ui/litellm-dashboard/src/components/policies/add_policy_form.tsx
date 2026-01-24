@@ -3,7 +3,7 @@ import { Form, Select, Modal, Divider, Typography, Tag, Alert, Radio } from "ant
 import { Button, TextInput, Textarea } from "@tremor/react";
 import { Policy, PolicyCreateRequest, PolicyUpdateRequest } from "./types";
 import { Guardrail } from "../guardrails/types";
-import { createPolicyCall, updatePolicyCall, getResolvedGuardrails, modelAvailableCall } from "../networking";
+import { getResolvedGuardrails, modelAvailableCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const { Text } = Typography;
@@ -17,6 +17,8 @@ interface AddPolicyFormProps {
   editingPolicy?: Policy | null;
   existingPolicies: Policy[];
   availableGuardrails: Guardrail[];
+  createPolicy: (accessToken: string, policyData: any) => Promise<any>;
+  updatePolicy: (accessToken: string, policyId: string, policyData: any) => Promise<any>;
 }
 
 const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
@@ -27,6 +29,8 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
   editingPolicy,
   existingPolicies,
   availableGuardrails,
+  createPolicy,
+  updatePolicy,
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -188,10 +192,10 @@ const AddPolicyForm: React.FC<AddPolicyFormProps> = ({
       };
 
       if (isEditing && editingPolicy) {
-        await updatePolicyCall(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
+        await updatePolicy(accessToken, editingPolicy.policy_id, data as PolicyUpdateRequest);
         NotificationsManager.success("Policy updated successfully");
       } else {
-        await createPolicyCall(accessToken, data as PolicyCreateRequest);
+        await createPolicy(accessToken, data as PolicyCreateRequest);
         NotificationsManager.success("Policy created successfully");
       }
 
