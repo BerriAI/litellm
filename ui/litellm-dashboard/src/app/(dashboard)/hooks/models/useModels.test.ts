@@ -101,7 +101,8 @@ describe("useModelsInfo", () => {
       "test-user-id",
       "Admin",
       1,
-      50
+      50,
+      undefined
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -120,7 +121,8 @@ describe("useModelsInfo", () => {
       "test-user-id",
       "Admin",
       2,
-      25
+      25,
+      undefined
     );
   });
 
