@@ -243,7 +243,7 @@ const Createuser: React.FC<CreateuserProps> = ({
             label={
               <span>
                 Send Invite Email{" "}
-                <Tooltip title="Send an invitation email to the user with login instructions.">
+                <Tooltip title="Send an invitation email to the user with login instructions. Requires email settings to be configured.">
                   <InfoCircleOutlined />
                 </Tooltip>
               </span>
