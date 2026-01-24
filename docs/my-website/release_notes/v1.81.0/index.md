@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:v1.81.0.rc.1
+docker.litellm.ai/berriai/litellm:v1.81.0-stable
 ```
 
 </TabItem>
