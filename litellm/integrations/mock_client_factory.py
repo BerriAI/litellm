@@ -27,6 +27,7 @@ class MockClientConfig:
     url_matchers: Optional[List[str]] = None  # List of strings to match in URLs (e.g., ["storage.googleapis.com"])
     patch_async_handler: bool = True  # Whether to patch AsyncHTTPHandler.post
     patch_sync_client: bool = False  # Whether to patch httpx.Client.post
+    patch_http_handler: bool = False  # Whether to patch HTTPHandler.post (for sync calls that use HTTPHandler)
     
     def __post_init__(self):
         """Ensure url_matchers is a list."""
@@ -105,6 +106,7 @@ def create_mock_client_factory(config: MockClientConfig):
     # Store original methods for restoration
     _original_async_handler_post = None
     _original_sync_client_post = None
+    _original_http_handler_post = None
     _mocks_initialized = False
     
     # Calculate mock latency
@@ -147,10 +149,27 @@ def create_mock_client_factory(config: MockClientConfig):
         if _original_sync_client_post is not None:
             return _original_sync_client_post(self, url, **kwargs)
     
+    # Create HTTPHandler mock (for sync calls that use HTTPHandler.post)
+    def _mock_http_handler_post(self, url, data=None, json=None, params=None, headers=None, timeout=None, stream=False, files=None, content=None, logging_obj=None):
+        """Monkey-patched HTTPHandler.post that intercepts API calls."""
+        if isinstance(url, str) and _is_mock_url(url):
+            verbose_logger.info(f"[{config.name} MOCK] POST to {url}")
+            import time
+            time.sleep(_MOCK_LATENCY_SECONDS)
+            return MockResponse(
+                status_code=config.default_status_code,
+                json_data=config.default_json_data,
+                url=url,
+                elapsed_seconds=_MOCK_LATENCY_SECONDS
+            )
+        if _original_http_handler_post is not None:
+            return _original_http_handler_post(self, url=url, data=data, json=json, params=params, headers=headers, timeout=timeout, stream=stream, files=files, content=content, logging_obj=logging_obj)
+        raise RuntimeError("Original HTTPHandler.post not available")
+    
     # Create mock client initialization function
     def create_mock_client():
         """Initialize the mock client by patching HTTP handlers."""
-        nonlocal _original_async_handler_post, _original_sync_client_post, _mocks_initialized
+        nonlocal _original_async_handler_post, _original_sync_client_post, _original_http_handler_post, _mocks_initialized
         
         if _mocks_initialized:
             return
@@ -167,6 +186,12 @@ def create_mock_client_factory(config: MockClientConfig):
             _original_sync_client_post = httpx.Client.post
             httpx.Client.post = _mock_sync_client_post  # type: ignore
             verbose_logger.debug(f"[{config.name} MOCK] Patched httpx.Client.post")
+        
+        if config.patch_http_handler and _original_http_handler_post is None:
+            from litellm.llms.custom_httpx.http_handler import HTTPHandler
+            _original_http_handler_post = HTTPHandler.post
+            HTTPHandler.post = _mock_http_handler_post  # type: ignore
+            verbose_logger.debug(f"[{config.name} MOCK] Patched HTTPHandler.post")
         
         verbose_logger.debug(f"[{config.name} MOCK] Mock latency set to {_MOCK_LATENCY_SECONDS*1000:.0f}ms")
         verbose_logger.debug(f"[{config.name} MOCK] {config.name} mock client initialization complete")
