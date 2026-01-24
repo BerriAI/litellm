@@ -3428,3 +3428,4 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     structured_messages: List[
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
+    model: Optional[str]  # the model being used for the LLM call
