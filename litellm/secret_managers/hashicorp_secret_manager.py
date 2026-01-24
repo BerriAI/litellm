@@ -563,7 +563,7 @@ class HashicorpSecretManager(BaseSecretManager):
 
             return create_response
 
-        except httpx.TimeoutException as e:
+        except httpx.TimeoutException:
             verbose_logger.exception("Timeout error occurred during secret rotation")
             return {"status": "error", "message": "Timeout error occurred"}
         except Exception as e:

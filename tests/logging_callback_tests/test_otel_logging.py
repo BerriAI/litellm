@@ -10,11 +10,25 @@ sys.path.insert(
 
 import pytest
 import litellm
-from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig, Span
 import asyncio
 import logging
+from opentelemetry import trace
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from litellm._logging import verbose_logger
+from litellm.integrations.arize.arize_phoenix import ArizePhoenixLogger
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes as OISpanAttributes,
+)
+from litellm.integrations.opentelemetry import (
+    LITELLM_PROXY_REQUEST_SPAN_NAME,
+    LITELLM_TRACER_NAME,
+    LITELLM_REQUEST_SPAN_NAME,
+    OpenTelemetry,
+    OpenTelemetryConfig,
+    RAW_REQUEST_SPAN_NAME,
+    Span,
+)
 from litellm.proxy._types import SpanAttributes
 
 verbose_logger.setLevel(logging.DEBUG)
@@ -242,3 +256,51 @@ def validate_redacted_message_span_attributes(span):
         ), f"Non-metadata attribute found: {attr}"
 
     pass
+
+@pytest.mark.asyncio
+async def test_arize_phoenix_adds_openinference_kind_and_avoids_duplicate_litellm_spans():
+    """
+    Ensure Arize Phoenix spans include OpenInference span kind and do not create
+    a duplicate litellm_request span when a proxy parent span is already active.
+    """
+
+    exporter.clear()
+    litellm.logging_callback_manager._reset_all_callbacks()
+
+    otel_logger = ArizePhoenixLogger(config=OpenTelemetryConfig(exporter=exporter))
+    litellm.callbacks = [otel_logger]
+    litellm.success_callback = []
+    litellm.failure_callback = []
+
+    tracer = trace.get_tracer(LITELLM_TRACER_NAME)
+    parent_span = tracer.start_span(LITELLM_PROXY_REQUEST_SPAN_NAME)
+
+    # Keep parent span active; OpenTelemetry logger will attach attributes and end it.
+    with trace.use_span(parent_span, end_on_exit=False):
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "ping"}],
+            mock_response="pong",
+        )
+
+    # Flush span processing
+    await asyncio.sleep(1)
+
+    if parent_span.is_recording():
+        parent_span.end()
+
+    spans = exporter.get_finished_spans()
+
+    span_names = [span.name for span in spans]
+    assert LITELLM_REQUEST_SPAN_NAME not in span_names
+    assert span_names.count(LITELLM_PROXY_REQUEST_SPAN_NAME) == 1
+    assert span_names.count(RAW_REQUEST_SPAN_NAME) == 1
+
+    # All spans should belong to the same trace (parent + raw child)
+    assert len({span.context.trace_id for span in spans}) == 1
+    assert len(spans) == 2
+
+    proxy_span = next(span for span in spans if span.name == LITELLM_PROXY_REQUEST_SPAN_NAME)
+    assert proxy_span.attributes.get(OISpanAttributes.OPENINFERENCE_SPAN_KIND) == OpenInferenceSpanKindValues.LLM.value
+
+    exporter.clear()

@@ -276,17 +276,12 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
 
         const formattedData = formatContentFilterDataForAPI(
-          contentFilterDataRef.current.patterns,
-          contentFilterDataRef.current.blockedWords,
+          contentFilterDataRef.current.patterns || [],
+          contentFilterDataRef.current.blockedWords || [],
         );
 
-        if (JSON.stringify(originalPatterns) !== JSON.stringify(formattedData.patterns)) {
-          updateData.litellm_params.patterns = formattedData.patterns;
-        }
-
-        if (JSON.stringify(originalBlockedWords) !== JSON.stringify(formattedData.blocked_words)) {
-          updateData.litellm_params.blocked_words = formattedData.blocked_words;
-        }
+        updateData.litellm_params.patterns = formattedData.patterns;
+        updateData.litellm_params.blocked_words = formattedData.blocked_words;
       }
 
       if (guardrailData.litellm_params?.guardrail === "tool_permission") {
