@@ -3720,6 +3720,220 @@ async def test_model_info_v2_search_db_models(monkeypatch):
         app.dependency_overrides = original_overrides
 
 
+@pytest.mark.asyncio
+async def test_apply_search_filter_to_models(monkeypatch):
+    """
+    Test the _apply_search_filter_to_models helper function.
+    Tests search filtering logic for config models, db models, and database queries.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.proxy_server import _apply_search_filter_to_models, proxy_config
+
+    # Create mock models with mix of config and db models
+    mock_models = [
+        {
+            "model_name": "gpt-4-turbo",
+            "model_info": {"id": "gpt-4-turbo"},  # Config model
+        },
+        {
+            "model_name": "db-gpt-3.5",
+            "model_info": {"id": "db-model-1", "db_model": True},  # DB model in router
+        },
+        {
+            "model_name": "claude-3-opus",
+            "model_info": {"id": "claude-3-opus"},  # Config model
+        },
+    ]
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+    mock_db_table = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable = mock_db_table
+
+    # Mock database models
+    mock_db_model_1 = MagicMock(
+        model_id="db-model-2",
+        model_name="db-gemini-pro",
+        litellm_params='{"model": "gemini-pro"}',
+        model_info='{"id": "db-model-2", "db_model": true}',
+    )
+
+    # Mock proxy_config.decrypt_model_list_from_db
+    mock_decrypt = MagicMock(return_value=[{"model_name": "db-gemini-pro", "model_info": {"id": "db-model-2", "db_model": True}}])
+
+    monkeypatch.setattr(proxy_config, "decrypt_model_list_from_db", mock_decrypt)
+
+    # Test Case 1: No search term - should return all models unchanged
+    result_models, total_count = await _apply_search_filter_to_models(
+        all_models=mock_models.copy(),
+        search="",
+        page=1,
+        size=50,
+        prisma_client=mock_prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert result_models == mock_models
+    assert total_count is None
+
+    # Test Case 2: Search for "gpt" - should filter router models and query DB
+    mock_db_table.count = AsyncMock(return_value=0)
+    mock_db_table.find_many = AsyncMock(return_value=[])
+
+    result_models, total_count = await _apply_search_filter_to_models(
+        all_models=mock_models.copy(),
+        search="gpt",
+        page=1,
+        size=50,
+        prisma_client=mock_prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert len(result_models) == 2
+    model_names = [m["model_name"] for m in result_models]
+    assert "gpt-4-turbo" in model_names
+    assert "db-gpt-3.5" in model_names
+    assert "claude-3-opus" not in model_names
+    assert total_count == 2  # Only router models match
+
+    # Test Case 3: Search with DB models matching
+    mock_db_table.count = AsyncMock(return_value=1)
+    mock_db_table.find_many = AsyncMock(return_value=[mock_db_model_1])
+
+    result_models, total_count = await _apply_search_filter_to_models(
+        all_models=mock_models.copy(),
+        search="gemini",
+        page=1,
+        size=50,
+        prisma_client=mock_prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert total_count == 1  # Router models (0) + DB models (1)
+    assert len(result_models) == 1
+    assert result_models[0]["model_name"] == "db-gemini-pro"
+
+    # Test Case 4: Case-insensitive search
+    # Reset mocks - no DB models should match "GPT"
+    mock_db_table.count = AsyncMock(return_value=0)
+    mock_db_table.find_many = AsyncMock(return_value=[])
+    
+    result_models, total_count = await _apply_search_filter_to_models(
+        all_models=mock_models.copy(),
+        search="GPT",
+        page=1,
+        size=50,
+        prisma_client=mock_prisma_client,
+        proxy_config=proxy_config,
+    )
+    assert len(result_models) == 2
+    model_names = [m["model_name"] for m in result_models]
+    assert "gpt-4-turbo" in model_names
+    assert "db-gpt-3.5" in model_names
+
+    # Test Case 5: Database query error - should fallback to router models count
+    mock_db_table.count = AsyncMock(side_effect=Exception("DB error"))
+    mock_db_table.find_many = AsyncMock(return_value=[])
+
+    result_models, total_count = await _apply_search_filter_to_models(
+        all_models=mock_models.copy(),
+        search="gpt",
+        page=1,
+        size=50,
+        prisma_client=mock_prisma_client,
+        proxy_config=proxy_config,
+    )
+    # Should still return filtered router models
+    assert len(result_models) == 2
+    assert total_count == 2  # Fallback to router models count
+
+
+def test_paginate_models_response():
+    """
+    Test the _paginate_models_response helper function.
+    Tests pagination calculation and response formatting.
+    """
+    from litellm.proxy.proxy_server import _paginate_models_response
+
+    # Create mock models
+    mock_models = [
+        {"model_name": f"model-{i}", "model_info": {"id": f"model-{i}"}}
+        for i in range(25)
+    ]
+
+    # Test Case 1: Basic pagination - first page
+    result = _paginate_models_response(
+        all_models=mock_models,
+        page=1,
+        size=10,
+        total_count=None,
+        search=None,
+    )
+    assert result["total_count"] == 25
+    assert result["current_page"] == 1
+    assert result["total_pages"] == 3  # ceil(25/10) = 3
+    assert result["size"] == 10
+    assert len(result["data"]) == 10
+    assert result["data"][0]["model_name"] == "model-0"
+
+    # Test Case 2: Second page
+    result = _paginate_models_response(
+        all_models=mock_models,
+        page=2,
+        size=10,
+        total_count=None,
+        search=None,
+    )
+    assert result["current_page"] == 2
+    assert len(result["data"]) == 10
+    assert result["data"][0]["model_name"] == "model-10"
+
+    # Test Case 3: Last page (partial)
+    result = _paginate_models_response(
+        all_models=mock_models,
+        page=3,
+        size=10,
+        total_count=None,
+        search=None,
+    )
+    assert result["current_page"] == 3
+    assert len(result["data"]) == 5  # Only 5 models left
+    assert result["data"][0]["model_name"] == "model-20"
+
+    # Test Case 4: With explicit total_count (for search scenarios)
+    result = _paginate_models_response(
+        all_models=mock_models[:10],  # Only 10 models in list
+        page=1,
+        size=10,
+        total_count=50,  # But total_count says 50
+        search="test",
+    )
+    assert result["total_count"] == 50
+    assert result["total_pages"] == 5  # ceil(50/10) = 5
+    assert len(result["data"]) == 10
+
+    # Test Case 5: Empty models list
+    result = _paginate_models_response(
+        all_models=[],
+        page=1,
+        size=10,
+        total_count=0,
+        search=None,
+    )
+    assert result["total_count"] == 0
+    assert result["total_pages"] == 0
+    assert len(result["data"]) == 0
+
+    # Test Case 6: Page beyond available data
+    result = _paginate_models_response(
+        all_models=mock_models[:10],
+        page=5,
+        size=10,
+        total_count=10,
+        search=None,
+    )
+    assert result["current_page"] == 5
+    assert len(result["data"]) == 0  # No data for page 5
+
+
 def test_enrich_model_info_with_litellm_data():
     """
     Test the _enrich_model_info_with_litellm_data helper function.
