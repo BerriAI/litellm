@@ -10,17 +10,22 @@ Usage:
 
 import httpx
 import json
+from datetime import timedelta
 from typing import Dict, Optional
 
 from litellm._logging import verbose_logger
 
 _original_httpx_post = None
 
+# Default mock latency in seconds (simulates network round-trip)
+# Typical Langfuse API calls take 50-150ms
+_MOCK_LATENCY_SECONDS = float(__import__("os").getenv("LANGFUSE_MOCK_LATENCY_MS", "100")) / 1000.0
+
 
 class MockLangfuseResponse:
     """Mock httpx.Response that satisfies Langfuse SDK requirements."""
     
-    def __init__(self, status_code: int = 200, json_data: Optional[Dict] = None, url: Optional[str] = None):
+    def __init__(self, status_code: int = 200, json_data: Optional[Dict] = None, url: Optional[str] = None, elapsed_seconds: float = 0.0):
         self.status_code = status_code
         self._json_data = json_data or {"status": "success"}
         self.headers = httpx.Headers({})
@@ -28,7 +33,9 @@ class MockLangfuseResponse:
         self.is_error = status_code >= 400
         self.is_redirect = 300 <= status_code < 400
         self.url = httpx.URL(url) if url else httpx.URL("")
-        self.elapsed = httpx.Timeout(0.0)
+        # Set realistic elapsed time based on mock latency
+        elapsed_time = elapsed_seconds if elapsed_seconds > 0 else _MOCK_LATENCY_SECONDS
+        self.elapsed = timedelta(seconds=elapsed_time)
         self._text = json.dumps(self._json_data)
         self._content = self._text.encode("utf-8")
     
@@ -70,7 +77,7 @@ def _mock_httpx_post(self, url, **kwargs):
     """Monkey-patched httpx.Client.post that intercepts Langfuse calls."""
     if _is_langfuse_url(url):
         verbose_logger.info(f"[LANGFUSE MOCK] POST to {url}")
-        return MockLangfuseResponse(status_code=200, json_data={"status": "success"}, url=url)
+        return MockLangfuseResponse(status_code=200, json_data={"status": "success"}, url=url, elapsed_seconds=_MOCK_LATENCY_SECONDS)
     
     if _original_httpx_post is not None:
         return _original_httpx_post(self, url, **kwargs)
