@@ -2,8 +2,9 @@ import React, { useState, useEffect } from "react";
 import { Modal, Form, Select, Radio, Divider, Typography } from "antd";
 import { Button } from "@tremor/react";
 import { Policy, PolicyAttachmentCreateRequest } from "./types";
-import { createPolicyAttachmentCall, teamListCall, keyInfoCall } from "../networking";
+import { teamListCall, keyInfoCall } from "../networking";
 import NotificationsManager from "../molecules/notifications_manager";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 
 const { Text } = Typography;
 
@@ -13,6 +14,7 @@ interface AddAttachmentFormProps {
   onSuccess: () => void;
   accessToken: string | null;
   policies: Policy[];
+  createAttachment: (accessToken: string, attachmentData: any) => Promise<any>;
 }
 
 const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
@@ -21,6 +23,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   onSuccess,
   accessToken,
   policies,
+  createAttachment,
 }) => {
   const [form] = Form.useForm();
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -29,6 +32,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
   const [availableKeys, setAvailableKeys] = useState<string[]>([]);
   const [isLoadingTeams, setIsLoadingTeams] = useState(false);
   const [isLoadingKeys, setIsLoadingKeys] = useState(false);
+  const { userId, userRole } = useAuthorized();
 
   useEffect(() => {
     if (visible && accessToken) {
@@ -43,7 +47,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     // Load teams
     setIsLoadingTeams(true);
     try {
-      const teamsResponse = await teamListCall(accessToken);
+      const teamsResponse = await teamListCall(accessToken, userId, userRole);
       if (teamsResponse?.data) {
         const teamAliases = teamsResponse.data
           .map((t: any) => t.team_alias)
@@ -59,7 +63,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
     // Load keys
     setIsLoadingKeys(true);
     try {
-      const keysResponse = await keyInfoCall(accessToken, null, null);
+      const keysResponse = await keyInfoCall(accessToken, []);
       if (keysResponse?.data) {
         const keyAliases = keysResponse.data
           .map((k: any) => k.key_alias)
@@ -111,7 +115,7 @@ const AddAttachmentForm: React.FC<AddAttachmentFormProps> = ({
         }
       }
 
-      await createPolicyAttachmentCall(accessToken, data);
+      await createAttachment(accessToken, data);
       NotificationsManager.success("Attachment created successfully");
 
       resetForm();

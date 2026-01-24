@@ -14,6 +14,10 @@ import {
   getPolicyAttachmentsList,
   deletePolicyAttachmentCall,
   getGuardrailsList,
+  getPolicyInfo,
+  createPolicyCall,
+  updatePolicyCall,
+  createPolicyAttachmentCall,
 } from "../networking";
 import {
   Policy,
@@ -194,6 +198,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
                 }}
                 accessToken={accessToken}
                 isAdmin={isAdmin}
+                getPolicy={getPolicyInfo}
               />
             ) : (
               <PolicyTable
@@ -217,6 +222,8 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               editingPolicy={editingPolicy}
               existingPolicies={policiesList}
               availableGuardrails={guardrailsList}
+              createPolicy={createPolicyCall}
+              updatePolicy={updatePolicyCall}
             />
 
             <DeleteResourceModal
@@ -259,6 +266,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               onSuccess={handleAttachmentSuccess}
               accessToken={accessToken}
               policies={policiesList}
+              createAttachment={createPolicyAttachmentCall}
             />
           </TabPanel>
         </TabPanels>
