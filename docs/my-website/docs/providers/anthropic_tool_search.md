@@ -231,15 +231,16 @@ model_list:
 #### Client Request
 
 ```python showLineNumbers title="Client Request via Proxy"
-import openai
+from anthropic import Anthropic
 
-client = openai.OpenAI(
+client = Anthropic(
     api_key="your-litellm-proxy-key",
     base_url="http://0.0.0.0:4000"
 )
 
-response = client.chat.completions.create(
+response = client.messages.create(
     model="claude-sonnet",
+    max_tokens=1024,
     messages=[
         {"role": "user", "content": "What's the weather?"}
     ],
@@ -249,17 +250,14 @@ response = client.chat.completions.create(
             "name": "tool_search_tool_regex"
         },
         {
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather information",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "location": {"type": "string"}
-                    },
-                    "required": ["location"]
-                }
+            "name": "get_weather",
+            "description": "Get weather information",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
             },
             "defer_loading": True
         }
@@ -496,45 +494,44 @@ model_list:
 #### Client Request
 
 ```python showLineNumbers title="Client Request via Proxy (Messages API)"
-import httpx
+from anthropic import Anthropic
 
-async with httpx.AsyncClient() as client:
-    response = await client.post(
-        "http://0.0.0.0:4000/anthropic/v1/messages",
-        headers={
-            "Authorization": "Bearer your-litellm-proxy-key",
-            "anthropic-beta": "advanced-tool-use-2025-11-20"
-        },
-        json={
-            "model": "claude-sonnet-messages",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": "What's the weather?"
-                }
-            ],
-            "tools": [
-                {
-                    "type": "tool_search_tool_regex_20251119",
-                    "name": "tool_search_tool_regex"
-                },
-                {
-                    "name": "get_weather",
-                    "description": "Get weather information",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "location": {"type": "string"}
-                        },
-                        "required": ["location"]
-                    },
-                    "defer_loading": True
-                }
-            ],
-            "max_tokens": 1024
+client = Anthropic(
+    api_key="your-litellm-proxy-key",
+    base_url="http://0.0.0.0:4000"
+)
+
+response = client.messages.create(
+    model="claude-sonnet-messages",
+    max_tokens=1024,
+    messages=[
+        {
+            "role": "user",
+            "content": "What's the weather?"
         }
-    )
-    print(response.json())
+    ],
+    tools=[
+        {
+            "type": "tool_search_tool_regex_20251119",
+            "name": "tool_search_tool_regex"
+        },
+        {
+            "name": "get_weather",
+            "description": "Get weather information",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            },
+            "defer_loading": True
+        }
+    ],
+    extra_headers={"anthropic-beta": "advanced-tool-use-2025-11-20"}
+)
+
+print(response)
 ```
 
 ---
