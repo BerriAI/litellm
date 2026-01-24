@@ -8,11 +8,7 @@ Usage:
     Set GCS_MOCK=true in environment variables or config to enable mock mode.
 """
 
-import httpx
-import json
 import asyncio
-from datetime import timedelta
-from typing import Dict, Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.mock_client_factory import MockClientConfig, create_mock_client_factory, MockResponse

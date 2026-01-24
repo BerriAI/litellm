@@ -10,7 +10,7 @@ import httpx
 import json
 import asyncio
 from datetime import timedelta
-from typing import Dict, Optional, Callable, List, cast
+from typing import Dict, Optional, List, cast
 from dataclasses import dataclass
 
 from litellm._logging import verbose_logger
@@ -96,7 +96,7 @@ def _is_url_match(url, matchers: List[str]) -> bool:
         return False
 
 
-def create_mock_client_factory(config: MockClientConfig):
+def create_mock_client_factory(config: MockClientConfig):  # noqa: PLR0915
     """
     Factory function that creates mock client functions based on configuration.
     
