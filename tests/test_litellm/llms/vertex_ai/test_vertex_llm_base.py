@@ -1048,3 +1048,23 @@ class TestVertexBase:
             MockCredentials.from_info.assert_called_once_with(json_obj)
             mock_creds.with_scopes.assert_called_once_with(scopes)
             assert result == "scoped_creds"
+
+    def test_credentials_leakage_on_invalid_json(self):
+        """Test that invalid credentials do not leak sensitive data in exception message"""
+        vertex_base = VertexBase()
+
+        # Create a fake sensitive credential string with private key-like content
+        sensitive_credentials = '{"type": "service_account", "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQE...\\n-----END PRIVATE KEY-----"}'
+
+        # Call load_auth with invalid credentials (will fail to parse as file or JSON)
+        with pytest.raises(Exception) as exc_info:
+            vertex_base.load_auth(credentials=sensitive_credentials, project_id=None)
+
+        # Verify that the error message does NOT contain the sensitive credentials
+        error_message = str(exc_info.value)
+        assert sensitive_credentials not in error_message
+        assert "private_key" not in error_message
+        assert "-----BEGIN PRIVATE KEY-----" not in error_message
+
+        # Verify that error message is generic and helpful
+        assert "Unable to load vertex credentials" in error_message or "Check if credentials contain valid JSON" in error_message
