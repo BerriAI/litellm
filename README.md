@@ -258,6 +258,14 @@ LiteLLM Performance: **8ms P95 latency** at 1k RPS (See benchmarks [here](https:
 
 Support for more providers. Missing a provider or LLM Platform, raise a [feature request](https://github.com/BerriAI/litellm/issues/new?assignees=&labels=enhancement&projects=&template=feature_request.yml&title=%5BFeature%5D%3A+).
 
+## OSS Adopters 
+<img width="250" height="104" alt="Stripe wordmark - Blurple - Small" src="https://github.com/user-attachments/assets/f7296d4f-9fbd-460d-9d05-e4df31697c4b" />
+
+<img width="250" height="69" alt="download__1_-removebg-preview" src="https://github.com/user-attachments/assets/0be4bd8a-7cfa-48d3-9090-f415fe948280" />
+
+
+
+
 ## Supported Providers ([Website Supported Models](https://models.litellm.ai/) | [Docs](https://docs.litellm.ai/docs/providers))
 
 | Provider                                                                            | `/chat/completions` | `/messages` | `/responses` | `/embeddings` | `/image/generations` | `/audio/transcriptions` | `/audio/speech` | `/moderations` | `/batches` | `/rerank` |
@@ -374,7 +382,9 @@ Support for more providers. Missing a provider or LLM Platform, raise a [feature
 1. (In root) create virtual environment `python -m venv .venv`
 2. Activate virtual environment `source .venv/bin/activate`
 3. Install dependencies `pip install -e ".[all]"`
-4. Start proxy backend `python litellm/proxy_cli.py`
+4. `pip install prisma`
+5. `prisma generate`
+6. Start proxy backend `python litellm/proxy/proxy_cli.py`
 
 ### Frontend
 1. Navigate to `ui/litellm-dashboard`

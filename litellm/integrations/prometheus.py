@@ -21,7 +21,12 @@ from typing import (
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, UserAPIKeyAuth
+from litellm.proxy._types import (
+    LiteLLM_DeletedVerificationToken,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    UserAPIKeyAuth,
+)
 from litellm.types.integrations.prometheus import *
 from litellm.types.integrations.prometheus import _sanitize_prometheus_label_name
 from litellm.types.utils import StandardLoggingPayload
@@ -402,6 +407,19 @@ class PrometheusLogger(CustomLogger):
                 name="litellm_cached_tokens_metric",
                 documentation="Total tokens served from LiteLLM cache",
                 labelnames=self.get_labels_for_metric("litellm_cached_tokens_metric"),
+            )
+
+            # User and Team count metrics
+            self.litellm_total_users_metric = self._gauge_factory(
+                "litellm_total_users",
+                "Total number of users in LiteLLM",
+                labelnames=[],
+            )
+
+            self.litellm_teams_count_metric = self._gauge_factory(
+                "litellm_teams_count",
+                "Total number of teams in LiteLLM",
+                labelnames=[],
             )
 
         except Exception as e:
@@ -2150,7 +2168,7 @@ class PrometheusLogger(CustomLogger):
         self,
         data_fetch_function: Callable[..., Awaitable[Tuple[List[Any], Optional[int]]]],
         set_metrics_function: Callable[[List[Any]], Awaitable[None]],
-        data_type: Literal["teams", "keys"],
+        data_type: Literal["teams", "keys", "users"],
     ):
         """
         Generic method to initialize budget metrics for teams or API keys.
@@ -2242,7 +2260,7 @@ class PrometheusLogger(CustomLogger):
 
         async def fetch_keys(
             page_size: int, page: int
-        ) -> Tuple[List[Union[str, UserAPIKeyAuth, Any]], Optional[int]]:
+        ) -> Tuple[List[Union[str, UserAPIKeyAuth, LiteLLM_DeletedVerificationToken]], Optional[int]]:
             key_list_response = await _list_key_helper(
                 prisma_client=prisma_client,
                 page=page,
@@ -2336,6 +2354,38 @@ class PrometheusLogger(CustomLogger):
         await self._initialize_team_budget_metrics()
         await self._initialize_api_key_budget_metrics()
         await self._initialize_user_budget_metrics()
+        await self._initialize_user_and_team_count_metrics()
+
+    async def _initialize_user_and_team_count_metrics(self):
+        """
+        Initialize user and team count metrics by querying the database.
+
+        Updates:
+        - litellm_total_users: Total count of users in the database
+        - litellm_teams_count: Total count of teams in the database
+        """
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is None:
+            verbose_logger.debug(
+                "Prometheus: skipping user/team count metrics initialization, DB not initialized"
+            )
+            return
+
+        try:
+            # Get total user count
+            total_users = await prisma_client.db.litellm_usertable.count()
+            self.litellm_total_users_metric.set(total_users)
+            verbose_logger.debug(f"Prometheus: set litellm_total_users to {total_users}")
+
+            # Get total team count
+            total_teams = await prisma_client.db.litellm_teamtable.count()
+            self.litellm_teams_count_metric.set(total_teams)
+            verbose_logger.debug(f"Prometheus: set litellm_teams_count to {total_teams}")
+        except Exception as e:
+            verbose_logger.exception(
+                f"Error initializing user/team count metrics: {str(e)}"
+            )
 
     async def _set_key_list_budget_metrics(
         self, keys: List[Union[str, UserAPIKeyAuth]]

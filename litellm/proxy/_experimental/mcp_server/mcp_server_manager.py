@@ -38,9 +38,11 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
 )
 from litellm.proxy._experimental.mcp_server.utils import (
+    MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
     get_server_prefix,
     is_tool_name_prefixed,
+    merge_mcp_headers,
     normalize_server_name,
     split_server_prefix_from_name,
     validate_mcp_server_name,
@@ -61,6 +63,45 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
 )
+from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name
+
+
+# Probe includes characters on both sides of the separator to mimic real prefixed tool names.
+_separator_probe_tool_name = f"litellm{MCP_TOOL_PREFIX_SEPARATOR}probe"
+_separator_probe = validate_tool_name(_separator_probe_tool_name)
+if not _separator_probe.is_valid:
+    verbose_logger.warning(
+        "MCP tool prefix separator '%s' violates SEP-986. See %s",
+        MCP_TOOL_PREFIX_SEPARATOR,
+        SEP_986_URL,
+    )
+
+
+def _warn_on_server_name_fields(
+    *,
+    server_id: str,
+    alias: Optional[str],
+    server_name: Optional[str],
+):
+    def _warn(field_name: str, value: Optional[str]) -> None:
+        if not value:
+            return
+        result = validate_tool_name(value)
+        if result.is_valid:
+            return
+
+        warning_text = "; ".join(result.warnings) if result.warnings else "Validation failed"
+        verbose_logger.warning(
+            "MCP server '%s' has invalid %s '%s': %s",
+            server_id,
+            field_name,
+            value,
+            warning_text,
+        )
+
+    _warn("alias", alias)
+    _warn("server_name", server_name)
+
 
 
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
@@ -209,6 +250,12 @@ class MCPServerManager:
                 alias=alias,
             )
 
+            _warn_on_server_name_fields(
+                server_id=server_id,
+                alias=alias,
+                server_name=server_name,
+            )
+
             auth_type = server_config.get("auth_type", None)
             if server_url and auth_type is not None and auth_type == MCPAuth.oauth2:
                 mcp_oauth_metadata = await self._descovery_metadata(
@@ -326,7 +373,7 @@ class MCPServerManager:
             server_prefix = get_server_prefix(server)
 
             # Build headers from server configuration
-            headers = {}
+            headers: Dict[str, str] = {}
 
             # Add authentication headers if configured
             if server.authentication_token:
@@ -339,10 +386,15 @@ class MCPServerManager:
                 elif server.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {server.authentication_token}"
 
-            # Add any extra headers from server config
-            # Note: extra_headers is a List[str] of header names to forward, not a dict
-            # For OpenAPI tools, we'll just use the authentication headers
-            # If extra_headers were needed, they would be processed separately
+            # Add any static headers from server config.
+            #
+            # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
+            # from the client request (not available in this OpenAPI tool generation step).
+            # `static_headers` is a dict of concrete headers to always send.
+            headers = merge_mcp_headers(
+                extra_headers=headers,
+                static_headers=server.static_headers,
+            ) or {}
 
             verbose_logger.debug(
                 f"Using headers for OpenAPI tools (excluding sensitive values): "
@@ -2099,6 +2151,11 @@ class MCPServerManager:
                 new_registry[server.server_id] = existing_server
                 continue
 
+            _warn_on_server_name_fields(
+                server_id=server.server_id,
+                alias=getattr(server, "alias", None),
+                server_name=getattr(server, "server_name", None),
+            )
             verbose_logger.debug(
                 f"Building server from DB: {server.server_id} ({server.server_name})"
             )

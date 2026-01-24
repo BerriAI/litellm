@@ -42,6 +42,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/guardrail_policies",
         "proxy/guardrails/guardrail_load_balancing",
         {
           type: "category",
@@ -121,11 +122,15 @@ const sidebars = {
           label: "Claude Code",
           items: [
             "tutorials/claude_responses_api",
+            "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
+            "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
+            "tutorials/claude_code_plugin_marketplace",
           ]
         },
+        "tutorials/opencode_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
@@ -276,10 +281,19 @@ const sidebars = {
             "tutorials/scim_litellm",
             {
               type: "category",
+              label: "UI Usage Tracking",
+              items: [
+                "proxy/customer_usage",
+                "proxy/endpoint_activity"
+              ]
+            },
+            {
+              type: "category",
               label: "UI Logs",
               items: [
                 "proxy/ui_logs",
-                "proxy/ui_logs_sessions"
+                "proxy/ui_logs_sessions",
+                "proxy/deleted_keys_teams"
               ]
             }
           ],
@@ -329,7 +343,6 @@ const sidebars = {
             "proxy/team_budgets",
             "proxy/tag_budgets",
             "proxy/customers",
-            "proxy/customer_usage",
             "proxy/dynamic_rate_limit",
             "proxy/rate_limit_tiers",
             "proxy/temporary_budget_increase",
@@ -506,7 +519,14 @@ const sidebars = {
             "mcp_troubleshoot",
           ]
         },
-        "anthropic_unified",
+        {
+          type: "category",
+          label: "/v1/messages",
+          items: [
+            "anthropic_unified/index",
+            "anthropic_unified/structured_output",
+          ]
+        },
         "anthropic_count_tokens",
         "moderation",
         "ocr",
@@ -552,6 +572,7 @@ const sidebars = {
             "search/perplexity",
             "search/tavily",
             "search/exa_ai",
+            "search/brave",
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
@@ -708,6 +729,8 @@ const sidebars = {
         "providers/galadriel",
         "providers/github",
         "providers/github_copilot",
+        "providers/gmi",
+        "providers/chatgpt",
         "providers/gradient_ai",
         "providers/groq",
         "providers/helicone",
@@ -994,6 +1017,7 @@ const sidebars = {
       items: [
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
+        "troubleshoot/spend_queue_warnings",
       ],
     },
   ],

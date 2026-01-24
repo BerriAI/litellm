@@ -22,11 +22,13 @@ from pydantic import BaseModel
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     BlockTeamRequest,
     CommonProxyErrors,
     DeleteTeamRequest,
     LiteLLM_AuditLogs,
+    LiteLLM_DeletedTeamTable,
     LiteLLM_ManagementEndpoint_MetadataFields,
     LiteLLM_ManagementEndpoint_MetadataFields_Premium,
     LiteLLM_ModelTable,
@@ -34,7 +36,6 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTableWithMembers,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
-    LiteLLM_DeletedTeamTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LiteLLM_VerificationToken,
@@ -102,7 +103,7 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMemberAddResult,
     UpdateTeamMemberPermissionsRequest,
 )
-from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+
 router = APIRouter()
 
 
@@ -689,6 +690,7 @@ async def new_team(  # noqa: PLR0915
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
@@ -1228,6 +1230,7 @@ async def update_team(   # noqa: PLR0915
     - organization_id: Optional[str] - The organization id of the team. Default is None. Create via `/organization/new`.
     - model_aliases: Optional[dict] - Model aliases for the team. [Docs](https://docs.litellm.ai/docs/proxy/team_based_routing#create-team-with-model-alias)
     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
+    - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.

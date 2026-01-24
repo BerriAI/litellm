@@ -102,6 +102,11 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_score_thresholds or {}
         )
         self.presidio_language = presidio_language or "en"
+        # Shared HTTP session to prevent memory leaks (issue #14540)
+        self._http_session: Optional[aiohttp.ClientSession] = None
+        # Lock to prevent race conditions when creating session under concurrent load
+        # Note: asyncio.Lock() can be created without an event loop; it only needs one when awaited
+        self._session_lock: asyncio.Lock = asyncio.Lock()
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -167,6 +172,47 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 "http://" + self.presidio_anonymizer_api_base
             )
 
+    async def _get_http_session(self) -> aiohttp.ClientSession:
+        """
+        Get or create the shared HTTP session for Presidio API calls.
+
+        Fixes memory leak (issue #14540) where every guardrail check created
+        a new aiohttp.ClientSession that was never properly closed.
+
+        Thread-safe: Uses asyncio.Lock to prevent race conditions when
+        multiple concurrent requests try to create the session simultaneously.
+        """
+        async with self._session_lock:
+            if self._http_session is None or self._http_session.closed:
+                self._http_session = aiohttp.ClientSession()
+            return self._http_session
+
+    async def _close_http_session(self) -> None:
+        """Close the HTTP session if it exists."""
+        if self._http_session is not None and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
+
+    def __del__(self):
+        """Cleanup: close HTTP session on instance destruction."""
+        if self._http_session is not None and not self._http_session.closed:
+            try:
+                # Try to close the session, but don't fail if event loop is gone
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # Schedule cleanup, don't block __del__
+                        asyncio.create_task(self._close_http_session())
+                    else:
+                        loop.run_until_complete(self._close_http_session())
+                except RuntimeError:
+                    # Event loop is closed, can't clean up - not ideal but better than crashing
+                    pass
+            except Exception:
+                # Suppress all exceptions in __del__ to avoid issues during shutdown
+                pass
+
     def _get_presidio_analyze_request_payload(
         self,
         text: str,
@@ -223,67 +269,69 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
                 return []
 
-            async with aiohttp.ClientSession() as session:
-                if self.mock_redacted_text is not None:
-                    return self.mock_redacted_text
+            if self.mock_redacted_text is not None:
+                return self.mock_redacted_text
 
-                # Make the request to /analyze
-                analyze_url = f"{self.presidio_analyzer_api_base}analyze"
+            # Use shared session to prevent memory leak (issue #14540)
+            session = await self._get_http_session()
 
-                analyze_payload: PresidioAnalyzeRequest = (
-                    self._get_presidio_analyze_request_payload(
-                        text=text,
-                        presidio_config=presidio_config,
-                        request_data=request_data,
-                    )
+            # Make the request to /analyze
+            analyze_url = f"{self.presidio_analyzer_api_base}analyze"
+
+            analyze_payload: PresidioAnalyzeRequest = (
+                self._get_presidio_analyze_request_payload(
+                    text=text,
+                    presidio_config=presidio_config,
+                    request_data=request_data,
                 )
+            )
 
-                verbose_proxy_logger.debug(
-                    "Making request to: %s with payload: %s",
-                    analyze_url,
-                    analyze_payload,
-                )
+            verbose_proxy_logger.debug(
+                "Making request to: %s with payload: %s",
+                analyze_url,
+                analyze_payload,
+            )
 
-                async with session.post(analyze_url, json=analyze_payload) as response:
-                    analyze_results = await response.json()
-                    verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+            async with session.post(analyze_url, json=analyze_payload) as response:
+                analyze_results = await response.json()
+                verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
 
-                    # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
-                    # Presidio may return a dict instead of a list when errors occur
-                    if isinstance(analyze_results, dict):
-                        if "error" in analyze_results:
-                            verbose_proxy_logger.warning(
-                                "Presidio analyzer returned error: %s, returning empty list",
-                                analyze_results.get("error")
-                            )
-                            return []
-                        # If it's a dict but not an error, try to process it as a single item
-                        verbose_proxy_logger.debug(
-                            "Presidio returned dict (not list), attempting to process as single item"
+                # Handle error responses from Presidio (e.g., {'error': 'No text provided'})
+                # Presidio may return a dict instead of a list when errors occur
+                if isinstance(analyze_results, dict):
+                    if "error" in analyze_results:
+                        verbose_proxy_logger.warning(
+                            "Presidio analyzer returned error: %s, returning empty list",
+                            analyze_results.get("error")
                         )
-                        try:
-                            return [PresidioAnalyzeResponseItem(**analyze_results)]
-                        except Exception as e:
-                            verbose_proxy_logger.warning(
-                                "Failed to parse Presidio dict response: %s, returning empty list",
-                                e
-                            )
-                            return []
+                        return []
+                    # If it's a dict but not an error, try to process it as a single item
+                    verbose_proxy_logger.debug(
+                        "Presidio returned dict (not list), attempting to process as single item"
+                    )
+                    try:
+                        return [PresidioAnalyzeResponseItem(**analyze_results)]
+                    except Exception as e:
+                        verbose_proxy_logger.warning(
+                            "Failed to parse Presidio dict response: %s, returning empty list",
+                            e
+                        )
+                        return []
 
-                    # Normal case: list of results
-                    final_results = []
-                    for item in analyze_results:
-                        try:
-                            final_results.append(PresidioAnalyzeResponseItem(**item))
-                        except TypeError as te:
-                            # Handle case where item is not a dict (shouldn't happen, but be defensive)
-                            verbose_proxy_logger.warning(
-                                "Skipping invalid Presidio result item: %s (error: %s)",
-                                item,
-                                te,
-                            )
-                            continue
-                    return final_results
+                # Normal case: list of results
+                final_results = []
+                for item in analyze_results:
+                    try:
+                        final_results.append(PresidioAnalyzeResponseItem(**item))
+                    except TypeError as te:
+                        # Handle case where item is not a dict (shouldn't happen, but be defensive)
+                        verbose_proxy_logger.warning(
+                            "Skipping invalid Presidio result item: %s (error: %s)",
+                            item,
+                            te,
+                        )
+                        continue
+                return final_results
         except Exception as e:
             raise e
 
@@ -302,46 +350,48 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if isinstance(analyze_results, list) and len(analyze_results) == 0:
                 return text
 
-            async with aiohttp.ClientSession() as session:
-                # Make the request to /anonymize
-                anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
-                verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
-                anonymize_payload = {
-                    "text": text,
-                    "analyzer_results": analyze_results,
-                }
+            # Use shared session to prevent memory leak (issue #14540)
+            session = await self._get_http_session()
 
-                async with session.post(
-                    anonymize_url, json=anonymize_payload
-                ) as response:
-                    redacted_text = await response.json()
+            # Make the request to /anonymize
+            anonymize_url = f"{self.presidio_anonymizer_api_base}anonymize"
+            verbose_proxy_logger.debug("Making request to: %s", anonymize_url)
+            anonymize_payload = {
+                "text": text,
+                "analyzer_results": analyze_results,
+            }
 
-                new_text = text
-                if redacted_text is not None:
-                    verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
-                    for item in redacted_text["items"]:
-                        start = item["start"]
-                        end = item["end"]
-                        replacement = item["text"]  # replacement token
-                        if item["operator"] == "replace" and output_parse_pii is True:
-                            # check if token in dict
-                            # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
-                            if replacement in self.pii_tokens:
-                                replacement = replacement + str(uuid.uuid4())
+            async with session.post(
+                anonymize_url, json=anonymize_payload
+            ) as response:
+                redacted_text = await response.json()
 
-                            self.pii_tokens[replacement] = new_text[
-                                start:end
-                            ]  # get text it'll replace
+            new_text = text
+            if redacted_text is not None:
+                verbose_proxy_logger.debug("redacted_text: %s", redacted_text)
+                for item in redacted_text["items"]:
+                    start = item["start"]
+                    end = item["end"]
+                    replacement = item["text"]  # replacement token
+                    if item["operator"] == "replace" and output_parse_pii is True:
+                        # check if token in dict
+                        # if exists, add a uuid to the replacement token for swapping back to the original text in llm response output parsing
+                        if replacement in self.pii_tokens:
+                            replacement = replacement + str(uuid.uuid4())
 
-                        new_text = new_text[:start] + replacement + new_text[end:]
-                        entity_type = item.get("entity_type", None)
-                        if entity_type is not None:
-                            masked_entity_count[entity_type] = (
-                                masked_entity_count.get(entity_type, 0) + 1
-                            )
-                    return redacted_text["text"]
-                else:
-                    raise Exception(f"Invalid anonymizer response: {redacted_text}")
+                        self.pii_tokens[replacement] = new_text[
+                            start:end
+                        ]  # get text it'll replace
+
+                    new_text = new_text[:start] + replacement + new_text[end:]
+                    entity_type = item.get("entity_type", None)
+                    if entity_type is not None:
+                        masked_entity_count[entity_type] = (
+                            masked_entity_count.get(entity_type, 0) + 1
+                        )
+                return redacted_text["text"]
+            else:
+                raise Exception(f"Invalid anonymizer response: {redacted_text}")
         except Exception as e:
             raise e
 

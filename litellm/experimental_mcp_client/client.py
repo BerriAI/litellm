@@ -4,14 +4,13 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
-from datetime import timedelta
 from typing import Awaitable, Callable, Dict, List, Optional, TypeVar, Union
 
 import httpx
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.types import (
     CallToolRequestParams as MCPCallToolRequestParams,
     GetPromptRequestParams,
@@ -80,6 +79,7 @@ class MCPClient:
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up."""
         transport_ctx = None
+        http_client: Optional[httpx.AsyncClient] = None
 
         try:
             if self.transport_type == MCPTransport.stdio:
@@ -105,13 +105,15 @@ class MCPClient:
                 headers = self._get_auth_headers()
                 httpx_client_factory = self._create_httpx_client_factory()
                 verbose_logger.debug(
-                    "litellm headers for streamablehttp_client: %s", headers
+                    "litellm headers for streamable_http_client: %s", headers
                 )
-                transport_ctx = streamablehttp_client(
-                    url=self.server_url,
-                    timeout=timedelta(seconds=self.timeout),
+                http_client = httpx_client_factory(
                     headers=headers,
-                    httpx_client_factory=httpx_client_factory,
+                    timeout=httpx.Timeout(self.timeout),
+                )
+                transport_ctx = streamable_http_client(
+                    url=self.server_url,
+                    http_client=http_client,
                 )
 
             if transport_ctx is None:
@@ -128,6 +130,9 @@ class MCPClient:
                 "MCP client run_with_session failed for %s", self.server_url or "stdio"
             )
             raise
+        finally:
+            if http_client is not None:
+                await http_client.aclose()
 
     def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """

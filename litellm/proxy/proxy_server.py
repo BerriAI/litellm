@@ -203,6 +203,9 @@ from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_ro
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
+from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
+    claude_code_marketplace_router,
+)
 from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_router
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
     router as anthropic_skills_router,
@@ -331,6 +334,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 from litellm.proxy.management_endpoints.organization_endpoints import (
     router as organization_router,
 )
+from litellm.proxy.management_endpoints.policy_endpoints import router as policy_router
 from litellm.proxy.management_endpoints.router_settings_endpoints import (
     router as router_settings_router,
 )
@@ -377,6 +381,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
 )
+from litellm.proxy.policy_engine.policy_endpoints import router as policy_crud_router
 from litellm.proxy.prompts.prompt_endpoints import router as prompts_router
 from litellm.proxy.public_endpoints import router as public_endpoints_router
 from litellm.proxy.rag_endpoints.endpoints import router as rag_router
@@ -542,12 +547,12 @@ except ImportError:
     enterprise_proxy_config = None
 ###################
 
-server_root_path = os.getenv("SERVER_ROOT_PATH", "")
+server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional[
-    "EnterpriseLicenseData"
-] = _license_check.airgapped_license_data
+premium_user_data: Optional["EnterpriseLicenseData"] = (
+    _license_check.airgapped_license_data
+)
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -820,7 +825,6 @@ app = FastAPI(
     title=_title,
     description=_description,
     version=version,
-    root_path=server_root_path,  # check if user passed root path, FastAPI defaults this value to ""
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
 )
 
@@ -896,7 +900,7 @@ def get_openapi_schema():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -922,7 +926,7 @@ def custom_openapi():
     from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
-    
+
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -1113,8 +1117,13 @@ try:
     # In development, we restructure directly in _experimental/out.
     # In non-root Docker, we restructure in /var/lib/litellm/ui.
     try:
-        _restructure_ui_html_files(ui_path)
-        verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
+        if is_non_root and ui_path == "/var/lib/litellm/ui":
+            verbose_proxy_logger.info(
+                f"Skipping runtime UI restructuring for non-root Docker. UI at {ui_path} is pre-restructured."
+            )
+        else:
+            _restructure_ui_html_files(ui_path)
+            verbose_proxy_logger.info(f"Restructured UI directory: {ui_path}")
     except PermissionError as e:
         verbose_proxy_logger.exception(
             f"Permission error while restructuring UI directory {ui_path}: {e}"
@@ -1200,9 +1209,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional[
-    "ClientSession"
-] = None  # Global shared session for connection reuse
+shared_aiohttp_session: Optional["ClientSession"] = (
+    None  # Global shared session for connection reuse
+)
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1210,9 +1219,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[
-    RedisCache
-] = None  # redis cache used for tracking spend, tpm/rpm limits
+redis_usage_cache: Optional[RedisCache] = (
+    None  # redis cache used for tracking spend, tpm/rpm limits
+)
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
@@ -1551,9 +1560,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[
-                LiteLLM_TeamTable
-            ] = await user_api_key_cache.async_get_cache(key=_id)
+            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
+                await user_api_key_cache.async_get_cache(key=_id)
+            )
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2730,6 +2739,14 @@ class ProxyConfig:
             for k, v in router_settings.items():
                 if k in available_args:
                     router_params[k] = v
+                elif k == "health_check_interval":
+                    raise ValueError(
+                        f"'{k}' is NOT a valid router_settings parameter. Please move it to 'general_settings'."
+                    )
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Key '{k}' is not a valid argument for Router.__init__(). Ignoring this key."
+                    )
         router = litellm.Router(
             **router_params,
             assistants_config=assistants_config,
@@ -2754,6 +2771,13 @@ class ProxyConfig:
                 config_file_path=config_file_path,
                 llm_router=router,
             )
+
+        # Policy Engine settings
+        await self._init_policy_engine(
+            config=config,
+            prisma_client=prisma_client,
+            llm_router=router,
+        )
 
         ## Prompt settings
         prompts: Optional[List[Dict]] = None
@@ -2814,6 +2838,45 @@ class ProxyConfig:
                 vector_store_registry_config
             )
         pass
+
+    async def _init_policy_engine(
+        self,
+        config: Optional[dict],
+        prisma_client: Optional["PrismaClient"],
+        llm_router: Optional["Router"],
+    ):
+        """
+        Initialize the policy engine from config.
+
+        Args:
+            config: The proxy configuration dictionary
+            prisma_client: Optional Prisma client for DB validation
+            llm_router: Optional LLM router for model validation
+        """
+
+        from litellm.proxy.policy_engine.init_policies import init_policies
+        from litellm.proxy.policy_engine.policy_validator import PolicyValidator
+        if config is None:
+            verbose_proxy_logger.debug("Policy engine: config is None, skipping")
+            return
+
+        policies_config = config.get("policies", None)
+        if not policies_config:
+            verbose_proxy_logger.debug("Policy engine: no policies in config, skipping")
+            return
+
+        policy_attachments_config = config.get("policy_attachments", None)
+
+        verbose_proxy_logger.info(f"Policy engine: found {len(policies_config)} policies in config")
+
+        # Initialize policies
+        await init_policies(
+            policies_config=policies_config,
+            policy_attachments_config=policy_attachments_config,
+            prisma_client=prisma_client,
+            validate_db=prisma_client is not None,
+            fail_on_error=True,
+        )
 
     def _load_alerting_settings(self, general_settings: dict):
         """
@@ -3092,17 +3155,19 @@ class ProxyConfig:
 
     async def _update_llm_router(
         self,
-        new_models: list,
+        new_models: Optional[Json],
         proxy_logging_obj: ProxyLogging,
     ):
         global llm_router, llm_model_list, master_key, general_settings
-
+        config_data = await proxy_config.get_config()
+        search_tools = self.parse_search_tools(config_data)
         try:
+            models_list: list = new_models if isinstance(new_models, list) else []
             if llm_router is None and master_key is not None:
-                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
 
                 _model_list: list = self.decrypt_model_list_from_db(
-                    new_models=new_models
+                    new_models=models_list
                 )
                 if len(_model_list) > 0:
                     verbose_proxy_logger.debug(f"_model_list: {_model_list}")
@@ -3111,16 +3176,17 @@ class ProxyConfig:
                         router_general_settings=RouterGeneralSettings(
                             async_only_mode=True  # only init async clients
                         ),
+                        search_tools=search_tools,
                         ignore_invalid_deployments=True,
                     )
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
-                verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
                 ## DELETE MODEL LOGIC
-                await self._delete_deployment(db_models=new_models)
+                await self._delete_deployment(db_models=models_list)
 
                 ## ADD MODEL LOGIC
-                self._add_deployment(db_models=new_models)
+                self._add_deployment(db_models=models_list)
 
         except Exception as e:
             verbose_proxy_logger.exception(
@@ -3131,7 +3197,6 @@ class ProxyConfig:
             llm_model_list = llm_router.get_model_list()
 
         # check if user set any callbacks in Config Table
-        config_data = await proxy_config.get_config()
         self._add_callbacks_from_db_config(config_data)
 
         # router settings
@@ -3737,6 +3802,9 @@ class ProxyConfig:
         if self._should_load_db_object(object_type="guardrails"):
             await self._init_guardrails_in_db(prisma_client=prisma_client)
 
+        if self._should_load_db_object(object_type="policies"):
+            await self._init_policies_in_db(prisma_client=prisma_client)
+
         if self._should_load_db_object(object_type="vector_stores"):
             await self._init_vector_stores_in_db(prisma_client=prisma_client)
 
@@ -3941,10 +4009,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[
-                Guardrail
-            ] = await GuardrailRegistry.get_all_guardrails_from_db(
-                prisma_client=prisma_client
+            guardrails_in_db: List[Guardrail] = (
+                await GuardrailRegistry.get_all_guardrails_from_db(
+                    prisma_client=prisma_client
+                )
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -3956,6 +4024,36 @@ class ProxyConfig:
         except Exception as e:
             verbose_proxy_logger.exception(
                 "litellm.proxy.proxy_server.py::ProxyConfig:_init_guardrails_in_db - {}".format(
+                    str(e)
+                )
+            )
+
+    async def _init_policies_in_db(self, prisma_client: PrismaClient):
+        """
+        Initialize policies and policy attachments from database into the in-memory registries.
+        """
+        from litellm.proxy.policy_engine.attachment_registry import (
+            get_attachment_registry,
+        )
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        try:
+            # Get the global singleton instances
+            policy_registry = get_policy_registry()
+            attachment_registry = get_attachment_registry()
+
+            # Sync policies from DB to in-memory registry
+            await policy_registry.sync_policies_from_db(prisma_client=prisma_client)
+
+            # Sync attachments from DB to in-memory registry
+            await attachment_registry.sync_attachments_from_db(prisma_client=prisma_client)
+
+            verbose_proxy_logger.debug(
+                "Successfully synced policies and attachments from DB"
+            )
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                "litellm.proxy.proxy_server.py::ProxyConfig:_init_policies_in_db - {}".format(
                     str(e)
                 )
             )
@@ -4271,9 +4369,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ[
-            "AZURE_API_VERSION"
-        ] = api_version  # set this for azure - litellm can read this from the env
+        os.environ["AZURE_API_VERSION"] = (
+            api_version  # set this for azure - litellm can read this from the env
+        )
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -5065,6 +5163,7 @@ async def model_list(
     only_model_access_groups: Optional[bool] = False,
     include_metadata: Optional[bool] = False,
     fallback_type: Optional[str] = None,
+    scope: Optional[str] = None,
 ):
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
@@ -5075,14 +5174,85 @@ async def model_list(
     - include_metadata: Include additional metadata in the response with fallback information
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
+    - scope: Optional scope parameter. Currently only accepts "expand".
+             When scope=expand is passed, proxy admins, team admins, and org admins
+             will receive all proxy models as if they are a proxy admin.
     """
     global llm_model_list, general_settings, llm_router, prisma_client, user_api_key_cache, proxy_logging_obj
 
+    from litellm.proxy.management_endpoints.common_utils import (
+        _user_has_admin_privileges,
+    )
     from litellm.proxy.utils import (
         create_model_info_response,
         get_available_models_for_user,
     )
 
+    # Validate scope parameter if provided
+    if scope is not None and scope != "expand":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid scope parameter. Only 'expand' is currently supported. Received: {scope}",
+        )
+
+    # Check if scope=expand is requested and user has admin privileges
+    should_expand_scope = False
+    if scope == "expand":
+        should_expand_scope = await _user_has_admin_privileges(
+            user_api_key_dict=user_api_key_dict,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+
+    # If scope=expand and user has admin privileges, return all proxy models
+    if should_expand_scope:
+        # Get all proxy models as if user is a proxy admin
+        if llm_router is None:
+            proxy_model_list = []
+            model_access_groups = {}
+        else:
+            proxy_model_list = llm_router.get_model_names()
+            model_access_groups = llm_router.get_model_access_groups()
+
+        # Include model access groups if requested
+        if include_model_access_groups:
+            proxy_model_list = list(set(proxy_model_list + list(model_access_groups.keys())))
+
+        # Get complete model list including wildcard routes if requested
+        from litellm.proxy.auth.model_checks import get_complete_model_list
+
+        all_models = get_complete_model_list(
+            key_models=[],
+            team_models=[],
+            proxy_model_list=proxy_model_list,
+            user_model=None,
+            infer_model_from_keys=False,
+            return_wildcard_routes=return_wildcard_routes or False,
+            llm_router=llm_router,
+            model_access_groups=model_access_groups,
+            include_model_access_groups=include_model_access_groups or False,
+            only_model_access_groups=only_model_access_groups or False,
+        )
+
+        # Build response data with all proxy models
+        model_data = []
+        for model in all_models:
+            model_info = create_model_info_response(
+                model_id=model,
+                provider="openai",
+                include_metadata=include_metadata or False,
+                fallback_type=fallback_type,
+                llm_router=llm_router,
+            )
+            model_data.append(model_info)
+
+        return dict(
+            data=model_data,
+            object="list",
+        )
+
+    # Otherwise, use the normal behavior (current implementation)
     # Get available models for the user
     all_models = await get_available_models_for_user(
         user_api_key_dict=user_api_key_dict,
@@ -7498,6 +7668,77 @@ async def get_all_team_and_direct_access_models(
     return all_models
 
 
+def _enrich_model_info_with_litellm_data(
+    model: Dict[str, Any], debug: bool = False, llm_router: Optional[Router] = None
+) -> Dict[str, Any]:
+    """
+    Enrich a model dictionary with litellm model info (pricing, context window, etc.)
+    and remove sensitive information.
+    
+    Args:
+        model: Model dictionary to enrich
+        debug: Whether to include debug information like openai_client
+        llm_router: Optional router instance for debug info
+        
+    Returns:
+        Enriched model dictionary with sensitive info removed
+    """
+    # provided model_info in config.yaml
+    model_info = model.get("model_info", {})
+    if debug is True:
+        _openai_client = "None"
+        if llm_router is not None:
+            _openai_client = (
+                llm_router._get_client(
+                    deployment=model, kwargs={}, client_type="async"
+                )
+                or "None"
+            )
+        else:
+            _openai_client = "llm_router_is_None"
+        openai_client = str(_openai_client)
+        model["openai_client"] = openai_client
+
+    # read litellm model_prices_and_context_window.json to get the following:
+    # input_cost_per_token, output_cost_per_token, max_tokens
+    litellm_model_info = get_litellm_model_info(model=model)
+
+    # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
+    if litellm_model_info == {}:
+        # use litellm_param model_name to get model_info
+        litellm_params = model.get("litellm_params", {})
+        litellm_model = litellm_params.get("model", None)
+        try:
+            litellm_model_info = litellm.get_model_info(model=litellm_model)
+        except Exception:
+            litellm_model_info = {}
+    # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
+    if litellm_model_info == {}:
+        # use litellm_param model_name to get model_info
+        litellm_params = model.get("litellm_params", {})
+        litellm_model = litellm_params.get("model", None)
+        if litellm_model:
+            split_model = litellm_model.split("/")
+            if len(split_model) > 0:
+                litellm_model = split_model[-1]
+            try:
+                litellm_model_info = litellm.get_model_info(
+                    model=litellm_model, custom_llm_provider=split_model[0]
+                )
+            except Exception:
+                litellm_model_info = {}
+    for k, v in litellm_model_info.items():
+        if k not in model_info:
+            model_info[k] = v
+    model["model_info"] = model_info
+    # don't return the api key / vertex credentials
+    # don't return the llm credentials
+    model = remove_sensitive_info_from_deployment(
+        model, excluded_keys={"litellm_credential_name"}
+    )
+    return model
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -7517,6 +7758,8 @@ async def model_info_v2(
         False, description="Return all models across all teams user is in."
     ),
     debug: Optional[bool] = False,
+    page: int = Query(1, description="Page number", ge=1),
+    size: int = Query(50, description="Page size", ge=1),
 ):
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
@@ -7525,7 +7768,13 @@ async def model_info_v2(
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
     if llm_router is None or not llm_router.model_list:
-        return {"data": []}
+        return {
+            "data": [],
+            "total_count": 0,
+            "current_page": page,
+            "total_pages": 0,
+            "size": size,
+        }
 
     if prisma_client is None:
         raise HTTPException(
@@ -7560,62 +7809,32 @@ async def model_info_v2(
             all_models=all_models,
         )
     # fill in model info based on config.yaml and litellm model_prices_and_context_window.json
-    for _model in all_models:
-        # provided model_info in config.yaml
-        model_info = _model.get("model_info", {})
-        if debug is True:
-            _openai_client = "None"
-            if llm_router is not None:
-                _openai_client = (
-                    llm_router._get_client(
-                        deployment=_model, kwargs={}, client_type="async"
-                    )
-                    or "None"
-                )
-            else:
-                _openai_client = "llm_router_is_None"
-            openai_client = str(_openai_client)
-            _model["openai_client"] = openai_client
-
-        # read litellm model_prices_and_context_window.json to get the following:
-        # input_cost_per_token, output_cost_per_token, max_tokens
-        litellm_model_info = get_litellm_model_info(model=_model)
-
-        # 2nd pass on the model, try seeing if we can find model in litellm model_cost map
-        if litellm_model_info == {}:
-            # use litellm_param model_name to get model_info
-            litellm_params = _model.get("litellm_params", {})
-            litellm_model = litellm_params.get("model", None)
-            try:
-                litellm_model_info = litellm.get_model_info(model=litellm_model)
-            except Exception:
-                litellm_model_info = {}
-        # 3rd pass on the model, try seeing if we can find model but without the "/" in model cost map
-        if litellm_model_info == {}:
-            # use litellm_param model_name to get model_info
-            litellm_params = _model.get("litellm_params", {})
-            litellm_model = litellm_params.get("model", None)
-            split_model = litellm_model.split("/")
-            if len(split_model) > 0:
-                litellm_model = split_model[-1]
-            try:
-                litellm_model_info = litellm.get_model_info(
-                    model=litellm_model, custom_llm_provider=split_model[0]
-                )
-            except Exception:
-                litellm_model_info = {}
-        for k, v in litellm_model_info.items():
-            if k not in model_info:
-                model_info[k] = v
-        _model["model_info"] = model_info
-        # don't return the api key / vertex credentials
-        # don't return the llm credentials
-        _model = remove_sensitive_info_from_deployment(
-            _model, excluded_keys={"litellm_credential_name"}
+    for i, _model in enumerate(all_models):
+        all_models[i] = _enrich_model_info_with_litellm_data(
+            model=_model, debug=debug if debug is not None else False, llm_router=llm_router
         )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
-    return {"data": all_models}
+    
+    total_count = len(all_models)
+    
+    skip = (page - 1) * size
+    
+    total_pages = -(-total_count // size) if total_count > 0 else 0
+    
+    paginated_models = all_models[skip : skip + size]
+    
+    verbose_proxy_logger.debug(
+        f"Pagination: skip={skip}, take={size}, total_count={total_count}, total_pages={total_pages}"
+    )
+    
+    return {
+        "data": paginated_models,
+        "total_count": total_count,
+        "current_page": page,
+        "total_pages": total_pages,
+        "size": size,
+    }
 
 
 @router.get(
@@ -9726,9 +9945,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[
-                                idx
-                            ].field_description = sub_field_info.description
+                            nested_fields[idx].field_description = (
+                                sub_field_info.description
+                            )
                         idx += 1
 
                     _stored_in_db = None
@@ -10499,6 +10718,7 @@ app.include_router(llm_passthrough_router)
 app.include_router(mcp_management_router)
 app.include_router(anthropic_router)
 app.include_router(anthropic_skills_router)
+app.include_router(claude_code_marketplace_router)
 app.include_router(google_router)
 app.include_router(langfuse_router)
 app.include_router(pass_through_router)
@@ -10515,6 +10735,8 @@ app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
 app.include_router(guardrails_router)
+app.include_router(policy_router)
+app.include_router(policy_crud_router)
 app.include_router(search_tool_management_router)
 app.include_router(prompts_router)
 app.include_router(callback_management_endpoints_router)

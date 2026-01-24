@@ -44,8 +44,8 @@ commands:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
+            pip install "pydantic==2.11.0"
+            pip install "mcp==1.25.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -119,7 +119,7 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-
+    parallelism: 4
     steps:
       - checkout
       - setup_google_dns
@@ -207,12 +207,24 @@ jobs:
       - run:
           name: Run tests
           command: |
-            pwd
-            ls
-            # Add --timeout to kill hanging tests after 300s (5 min)
-            # Add -v to show test names as they run for debugging
-            # Add --tb=short for shorter tracebacks
-            python -m pytest -vv tests/local_testing --cov=litellm --cov-report=xml --junitxml=test-results/junit.xml --durations=20 -k "not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache" -n 4 --timeout=300 --timeout_method=thread
+            mkdir test-results
+
+            # Discover test files
+            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
+
+            echo "$TEST_FILES" | circleci tests run \
+              --split-by=timings \
+              --verbose \
+              --command="xargs python -m pytest \
+                -vv \
+                --cov=litellm \
+                --cov-report=xml \
+                --junitxml=test-results/junit.xml \
+                --durations=20 \
+                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
+                -n 4 \
+                --timeout=300 \
+
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -499,7 +511,6 @@ jobs:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
-
     steps:
       - checkout
       - setup_google_dns
@@ -513,6 +524,7 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-retry==1.6.3"
             pip install "pytest-asyncio==0.21.1"
+            pip install "pytest-xdist==3.6.1"
             pip install semantic_router --no-deps
             pip install aurelio_sdk --no-deps
       # Run pytest and generate JUnit XML report
@@ -1152,8 +1164,8 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
-            pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
+            pip install "pydantic==2.11.0"
+            pip install "mcp==1.25.0"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
@@ -1556,8 +1568,8 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
             pip install "hypercorn==0.17.3"
-            pip install "pydantic==2.10.2"
-            pip install "mcp==1.10.1"
+            pip install "pydantic==2.11.0"
+            pip install "mcp==1.25.0"
             pip install "requests-mock>=1.12.1"
             pip install "responses==0.25.7"
             pip install "pytest-xdist==3.6.1"
@@ -1743,13 +1755,14 @@ jobs:
             pip install "pytest-cov==5.0.0"
             pip install "pytest-asyncio==0.21.1"
             pip install "respx==0.22.0"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - run:
           name: Run tests
           command: |
             pwd
             ls
-            python -m pytest -vv tests/image_gen_tests --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/image_gen_tests -n 4 --cov=litellm --cov-report=xml -x -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1792,6 +1805,7 @@ jobs:
             pip install "mlflow==2.17.2"
             pip install "anthropic==0.52.0"
             pip install "blockbuster==1.5.24"
+            pip install "pytest-xdist==3.6.1"
       # Run pytest and generate JUnit XML report
       - setup_litellm_enterprise_pip
       - run:
@@ -1799,7 +1813,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -vv tests/logging_callback_tests --cov=litellm --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
+            python -m pytest -vv tests/logging_callback_tests --cov=litellm -n 4 --cov-report=xml -s -v --junitxml=test-results/junit.xml --durations=5
           no_output_timeout: 120m
       - run:
           name: Rename the coverage files
@@ -1915,7 +1929,7 @@ jobs:
             pip install "pytest-asyncio==0.21.1"
             pip install "pytest-cov==5.0.0"
             pip install "tomli==2.2.1"
-            pip install "mcp==1.10.1"
+            pip install "mcp==1.25.0"
       - run:
           name: Run tests
           command: |
@@ -2192,6 +2206,8 @@ jobs:
             pip install "asyncio==3.4.3"
             pip install "PyGithub==1.59.1"
             pip install "openai==1.100.1"
+            pip install "litellm[proxy]"
+            pip install "pytest-xdist==3.6.1"
       - run:
           name: Install dockerize
           command: |
@@ -2268,7 +2284,7 @@ jobs:
           command: |
             pwd
             ls
-            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
+            python -m pytest -s -vv tests/*.py -x --junitxml=test-results/junit.xml -n 4 --durations=5 --ignore=tests/otel_tests --ignore=tests/spend_tracking_tests --ignore=tests/pass_through_tests --ignore=tests/proxy_admin_ui_tests --ignore=tests/load_tests --ignore=tests/llm_translation --ignore=tests/llm_responses_api_testing --ignore=tests/mcp_tests --ignore=tests/guardrails_tests --ignore=tests/image_gen_tests --ignore=tests/pass_through_unit_tests
           no_output_timeout: 120m
 
       # Store test results

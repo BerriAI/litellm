@@ -323,12 +323,20 @@ EMAIL_BUDGET_ALERT_TTL = int(os.getenv("EMAIL_BUDGET_ALERT_TTL", 24 * 60 * 60)) 
 EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE = float(os.getenv("EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE", 0.8))  # 80% of max budget
 ############### LLM Provider Constants ###############
 ### ANTHROPIC CONSTANTS ###
+ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv(
+    "ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01"
+)
 ANTHROPIC_SKILLS_API_BETA_VERSION = "skills-2025-10-02"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES = {
     "low": 1,
     "medium": 5,
     "high": 10,
 }
+
+# LiteLLM standard web search tool name
+# Used for web search interception across providers
+LITELLM_WEB_SEARCH_TOOL_NAME = "litellm_web_search"
+
 DEFAULT_IMAGE_ENDPOINT_MODEL = "dall-e-2"
 DEFAULT_VIDEO_ENDPOINT_MODEL = "sora-2"
 
@@ -410,6 +418,7 @@ LITELLM_CHAT_PROVIDERS = [
     "galadriel",
     "gradient_ai",
     "github_copilot",  # GitHub Copilot Chat API
+    "chatgpt",  # ChatGPT subscription API
     "novita",
     "meta_llama",
     "featherless_ai",
@@ -537,6 +546,10 @@ DEFAULT_CHAT_COMPLETION_PARAM_VALUES = {
     "web_search_options": None,
     "service_tier": None,
     "safety_identifier": None,
+    "prompt_cache_key": None,
+    "prompt_cache_retention": None,
+    "store": None,
+    "metadata": None,
 }
 
 openai_compatible_endpoints: List = [
@@ -608,6 +621,7 @@ openai_compatible_providers: List = [
     "lm_studio",
     "galadriel",
     "github_copilot",  # GitHub Copilot Chat API
+    "chatgpt",  # ChatGPT subscription API
     "novita",
     "meta_llama",
     "publicai",  # PublicAI - JSON-configured provider
@@ -1053,7 +1067,7 @@ known_tokenizer_config = {
 }
 
 
-OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null"]
+OPENAI_FINISH_REASONS = ["stop", "length", "function_call", "content_filter", "null", "finish_reason_unspecified", "malformed_function_call", "guardrail_intervened", "eos"]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS = int(
     os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60)
 )  # 1 minute
@@ -1108,6 +1122,20 @@ BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES = [
     "generateQuery/",
     "optimize-prompt/",
 ]
+
+
+# Headers that are safe to forward from incoming requests to Vertex AI
+# Using an allowlist approach for security - only forward headers we explicitly trust
+ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS = {
+    "anthropic-beta",  # Required for Anthropic features like extended context windows
+    "content-type",  # Required for request body parsing
+}
+
+# Prefix for headers that should be forwarded to the provider with the prefix stripped
+# e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
+# Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
+PASS_THROUGH_HEADER_PREFIX = "x-pass-"
+
 BASE_MCP_ROUTE = "/mcp"
 
 BATCH_STATUS_POLL_INTERVAL_SECONDS = int(
