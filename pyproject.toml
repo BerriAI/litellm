@@ -77,7 +77,6 @@ grpcio = [
     {version = ">=1.62.3,!=1.68.*,!=1.69.*,!=1.70.*,!=1.71.0,!=1.71.1,!=1.72.0,!=1.72.1,!=1.73.0", python = "<3.14", optional = true},
     {version = ">=1.75.0", python = ">=3.14", optional = true},
 ]
-typing-extensions = "^4.15.0"
 
 [tool.poetry.extras]
 proxy = [
@@ -105,7 +104,6 @@ proxy = [
     "rich",
     "polars",
     "soundfile",
-    "structlog",
 ]
 
 extra_proxy = [
@@ -169,10 +167,6 @@ opentelemetry-api = "^1.28.0"
 opentelemetry-sdk = "^1.28.0"
 opentelemetry-exporter-otlp = "^1.28.0"
 azure-identity = {version = "^1.15.0", python = ">=3.9"}
-
-
-[tool.poetry.group.proxy.dependencies]
-structlog = "^25.5.0"
 
 [build-system]
 requires = ["poetry-core", "wheel"]
