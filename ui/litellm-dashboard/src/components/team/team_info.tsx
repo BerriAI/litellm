@@ -96,6 +96,8 @@ export interface TeamData {
       model_aliases: Record<string, string>;
     } | null;
     created_at: string;
+    guardrails?: string[];
+    policies?: string[];
     object_permission?: {
       object_permission_id: string;
       mcp_servers: string[];
@@ -270,7 +272,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   // Fetch resolved guardrails for all policies
   useEffect(() => {
     const fetchPolicyGuardrails = async () => {
-      if (!accessToken || !info?.policies || info.policies.length === 0) {
+      if (!accessToken || !teamData?.team_info?.policies || teamData.team_info.policies.length === 0) {
         return;
       }
 
@@ -279,7 +281,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
 
       try {
         await Promise.all(
-          info.policies.map(async (policyName: string) => {
+          teamData.team_info.policies.map(async (policyName: string) => {
             try {
               const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
               guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
@@ -298,7 +300,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
     };
 
     fetchPolicyGuardrails();
-  }, [accessToken, info?.policies]);
+  }, [accessToken, teamData?.team_info?.policies]);
 
   const handleMemberCreate = async (values: any) => {
     try {
@@ -462,6 +464,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           logging: values.logging_settings || [],
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
+        policies: values.policies || [],
         organization_id: values.organization_id,
       };
 
@@ -757,6 +760,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     team_member_budget: info.team_member_budget_table?.max_budget,
                     team_member_budget_duration: info.team_member_budget_table?.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
+                    policies: info.policies || [],
                     disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
                     metadata: info.metadata
                       ? JSON.stringify(
