@@ -279,7 +279,7 @@ const PoliciesPanel: React.FC<PoliciesPanelProps> = ({
               description={
                 <div>
                   <p className="mb-3">
-                    Policy attachments control where your policies apply. Policies don't do anything until you attach them to specific teams, keys, models, or globally.
+                    Policy attachments control where your policies apply. Policies don&apos;t do anything until you attach them to specific teams, keys, models, or globally.
                   </p>
                   <p className="mb-2 font-semibold">Attachment Scopes:</p>
                   <ul className="list-disc list-inside mb-3 space-y-1 ml-2">
