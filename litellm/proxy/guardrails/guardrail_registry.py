@@ -240,6 +240,7 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
+            team_id = guardrail.get("team_id")
             # Properly serialize LitellmParams Pydantic model to dict
             litellm_params_obj: Any = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
@@ -257,6 +258,7 @@ class GuardrailRegistry:
                     "guardrail_name": guardrail_name,
                     "litellm_params": litellm_params,
                     "guardrail_info": guardrail_info,
+                    "team_id": team_id,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
                 }
@@ -294,6 +296,7 @@ class GuardrailRegistry:
         """
         try:
             guardrail_name = guardrail.get("guardrail_name")
+            team_id = guardrail.get("team_id")
             # Properly serialize LitellmParams Pydantic model to dict
             litellm_params_obj: Any = guardrail.get("litellm_params", {})
             if hasattr(litellm_params_obj, "model_dump"):
@@ -312,6 +315,7 @@ class GuardrailRegistry:
                     "guardrail_name": guardrail_name,
                     "litellm_params": litellm_params,
                     "guardrail_info": guardrail_info,
+                    "team_id": team_id,
                     "updated_at": datetime.now(timezone.utc),
                 },
             )
@@ -324,13 +328,30 @@ class GuardrailRegistry:
     @staticmethod
     async def get_all_guardrails_from_db(
         prisma_client: PrismaClient,
+        team_id: Optional[str] = None,
     ) -> List[Guardrail]:
         """
         Get all guardrails from the database
+        
+        Args:
+            prisma_client: The Prisma client instance
+            team_id: Optional team_id to filter guardrails by team. If provided, returns only 
+                    guardrails that belong to that team or have no team_id (global guardrails)
         """
         try:
+            where_clause = {}
+            if team_id is not None:
+                # Get guardrails that belong to this team OR have no team_id (global)
+                where_clause = {
+                    "OR": [
+                        {"team_id": team_id},
+                        {"team_id": None},
+                    ]
+                }
+            
             guardrails_from_db = (
                 await prisma_client.db.litellm_guardrailstable.find_many(
+                    where=where_clause,
                     order={"created_at": "desc"},
                 )
             )
