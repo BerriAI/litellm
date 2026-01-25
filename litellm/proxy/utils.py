@@ -1854,16 +1854,14 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        potential_error_response = (
+                        callback_response = (
                             await _callback.async_post_call_streaming_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=complete_response,
                             )
                         )
-                        if isinstance(
-                            potential_error_response, str
-                        ) and potential_error_response.startswith("data: "):
-                            return potential_error_response
+                        if callback_response is not None:
+                            response = callback_response
                 except Exception as e:
                     raise e
         return response
