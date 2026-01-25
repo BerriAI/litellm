@@ -683,26 +683,46 @@ def responses(
             custom_llm_provider=custom_llm_provider,
         )
 
-        # Call the handler with _is_async flag instead of directly calling the async handler
-        response = base_llm_http_handler.response_api_handler(
-            model=model,
-            input=input,
-            responses_api_provider_config=responses_api_provider_config,
-            response_api_optional_request_params=responses_api_request_params,
-            custom_llm_provider=custom_llm_provider,
-            litellm_params=litellm_params,
-            logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
-            extra_body=extra_body,
-            timeout=timeout or request_timeout,
-            _is_async=_is_async,
-            client=kwargs.get("client"),
-            fake_stream=responses_api_provider_config.should_fake_stream(
-                model=model, stream=stream, custom_llm_provider=custom_llm_provider
-            ),
-            litellm_metadata=kwargs.get("litellm_metadata", {}),
-            shared_session=kwargs.get("shared_session"),
-        )
+        # Call the native Responses API handler when available.
+        # For OpenAI-compatible providers like hosted_vllm, some deployments may not have `/responses`
+        # enabled yet; fall back to the chat-completions bridge in that case.
+        try:
+            response = base_llm_http_handler.response_api_handler(
+                model=model,
+                input=input,
+                responses_api_provider_config=responses_api_provider_config,
+                response_api_optional_request_params=responses_api_request_params,
+                custom_llm_provider=custom_llm_provider,
+                litellm_params=litellm_params,
+                logging_obj=litellm_logging_obj,
+                extra_headers=extra_headers,
+                extra_body=extra_body,
+                timeout=timeout or request_timeout,
+                _is_async=_is_async,
+                client=kwargs.get("client"),
+                fake_stream=responses_api_provider_config.should_fake_stream(
+                    model=model, stream=stream, custom_llm_provider=custom_llm_provider
+                ),
+                litellm_metadata=kwargs.get("litellm_metadata", {}),
+                shared_session=kwargs.get("shared_session"),
+            )
+        except Exception as e:
+            status_code = getattr(e, "status_code", None)
+            if (
+                custom_llm_provider == litellm.LlmProviders.HOSTED_VLLM.value
+                and status_code in {404, 405, 501}
+            ):
+                return litellm_completion_transformation_handler.response_api_handler(
+                    model=model,
+                    input=input,
+                    responses_api_request=response_api_optional_params,
+                    custom_llm_provider=custom_llm_provider,
+                    _is_async=_is_async,
+                    stream=stream,
+                    extra_headers=extra_headers,
+                    **kwargs,
+                )
+            raise
 
         # Update the responses_api_response_id with the model_id
         if isinstance(response, ResponsesAPIResponse):

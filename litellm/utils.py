@@ -8186,6 +8186,9 @@ class ProviderConfigManager:
     ) -> Optional[BaseResponsesAPIConfig]:
         if litellm.LlmProviders.OPENAI == provider:
             return litellm.OpenAIResponsesAPIConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            # hosted_vllm is OpenAI-compatible and now supports /responses
+            return litellm.OpenAIResponsesAPIConfig()
         elif litellm.LlmProviders.AZURE == provider:
             # Check if it's an O-series model
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
