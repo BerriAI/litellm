@@ -550,9 +550,9 @@ except ImportError:
 server_root_path = get_server_root_path()
 _license_check = LicenseCheck()
 premium_user: bool = _license_check.is_premium()
-premium_user_data: Optional["EnterpriseLicenseData"] = (
-    _license_check.airgapped_license_data
-)
+premium_user_data: Optional[
+    "EnterpriseLicenseData"
+] = _license_check.airgapped_license_data
 global_max_parallel_request_retries_env: Optional[str] = os.getenv(
     "LITELLM_GLOBAL_MAX_PARALLEL_REQUEST_RETRIES"
 )
@@ -1209,9 +1209,9 @@ master_key: Optional[str] = None
 config_agents: Optional[List[AgentConfig]] = None
 otel_logging = False
 prisma_client: Optional[PrismaClient] = None
-shared_aiohttp_session: Optional["ClientSession"] = (
-    None  # Global shared session for connection reuse
-)
+shared_aiohttp_session: Optional[
+    "ClientSession"
+] = None  # Global shared session for connection reuse
 user_api_key_cache = DualCache(
     default_in_memory_ttl=UserAPIKeyCacheTTLEnum.in_memory_cache_ttl.value
 )
@@ -1219,9 +1219,9 @@ model_max_budget_limiter = _PROXY_VirtualKeyModelMaxBudgetLimiter(
     dual_cache=user_api_key_cache
 )
 litellm.logging_callback_manager.add_litellm_callback(model_max_budget_limiter)
-redis_usage_cache: Optional[RedisCache] = (
-    None  # redis cache used for tracking spend, tpm/rpm limits
-)
+redis_usage_cache: Optional[
+    RedisCache
+] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
@@ -1560,9 +1560,9 @@ async def update_cache(  # noqa: PLR0915
         _id = "team_id:{}".format(team_id)
         try:
             # Fetch the existing cost for the given user
-            existing_spend_obj: Optional[LiteLLM_TeamTable] = (
-                await user_api_key_cache.async_get_cache(key=_id)
-            )
+            existing_spend_obj: Optional[
+                LiteLLM_TeamTable
+            ] = await user_api_key_cache.async_get_cache(key=_id)
             if existing_spend_obj is None:
                 # do nothing if team not in api key cache
                 return
@@ -2856,6 +2856,7 @@ class ProxyConfig:
 
         from litellm.proxy.policy_engine.init_policies import init_policies
         from litellm.proxy.policy_engine.policy_validator import PolicyValidator
+
         if config is None:
             verbose_proxy_logger.debug("Policy engine: config is None, skipping")
             return
@@ -2867,7 +2868,9 @@ class ProxyConfig:
 
         policy_attachments_config = config.get("policy_attachments", None)
 
-        verbose_proxy_logger.info(f"Policy engine: found {len(policies_config)} policies in config")
+        verbose_proxy_logger.info(
+            f"Policy engine: found {len(policies_config)} policies in config"
+        )
 
         # Initialize policies
         await init_policies(
@@ -4009,10 +4012,10 @@ class ProxyConfig:
         )
 
         try:
-            guardrails_in_db: List[Guardrail] = (
-                await GuardrailRegistry.get_all_guardrails_from_db(
-                    prisma_client=prisma_client
-                )
+            guardrails_in_db: List[
+                Guardrail
+            ] = await GuardrailRegistry.get_all_guardrails_from_db(
+                prisma_client=prisma_client
             )
             verbose_proxy_logger.debug(
                 "guardrails from the DB %s", str(guardrails_in_db)
@@ -4046,7 +4049,9 @@ class ProxyConfig:
             await policy_registry.sync_policies_from_db(prisma_client=prisma_client)
 
             # Sync attachments from DB to in-memory registry
-            await attachment_registry.sync_attachments_from_db(prisma_client=prisma_client)
+            await attachment_registry.sync_attachments_from_db(
+                prisma_client=prisma_client
+            )
 
             verbose_proxy_logger.debug(
                 "Successfully synced policies and attachments from DB"
@@ -4369,9 +4374,9 @@ async def initialize(  # noqa: PLR0915
         user_api_base = api_base
         dynamic_config[user_model]["api_base"] = api_base
     if api_version:
-        os.environ["AZURE_API_VERSION"] = (
-            api_version  # set this for azure - litellm can read this from the env
-        )
+        os.environ[
+            "AZURE_API_VERSION"
+        ] = api_version  # set this for azure - litellm can read this from the env
     if max_tokens:  # model-specific param
         dynamic_config[user_model]["max_tokens"] = max_tokens
     if temperature:  # model-specific param
@@ -5217,7 +5222,9 @@ async def model_list(
 
         # Include model access groups if requested
         if include_model_access_groups:
-            proxy_model_list = list(set(proxy_model_list + list(model_access_groups.keys())))
+            proxy_model_list = list(
+                set(proxy_model_list + list(model_access_groups.keys()))
+            )
 
         # Get complete model list including wildcard routes if requested
         from litellm.proxy.auth.model_checks import get_complete_model_list
@@ -7674,12 +7681,12 @@ def _enrich_model_info_with_litellm_data(
     """
     Enrich a model dictionary with litellm model info (pricing, context window, etc.)
     and remove sensitive information.
-    
+
     Args:
         model: Model dictionary to enrich
         debug: Whether to include debug information like openai_client
         llm_router: Optional router instance for debug info
-        
+
     Returns:
         Enriched model dictionary with sensitive info removed
     """
@@ -7689,9 +7696,7 @@ def _enrich_model_info_with_litellm_data(
         _openai_client = "None"
         if llm_router is not None:
             _openai_client = (
-                llm_router._get_client(
-                    deployment=model, kwargs={}, client_type="async"
-                )
+                llm_router._get_client(deployment=model, kwargs={}, client_type="async")
                 or "None"
             )
         else:
@@ -8140,7 +8145,9 @@ async def model_info_v2(
     # This must happen before teamId filtering so that direct_access and access_via_team_ids are populated
     for i, _model in enumerate(all_models):
         all_models[i] = _enrich_model_info_with_litellm_data(
-            model=_model, debug=debug if debug is not None else False, llm_router=llm_router
+            model=_model,
+            debug=debug if debug is not None else False,
+            llm_router=llm_router,
         )
     
     # Apply teamId filter if provided
@@ -9623,7 +9630,7 @@ def get_logo_url():
 
 
 @app.get("/get_image", include_in_schema=False)
-def get_image():
+async def get_image():
     """Get logo to show on admin UI"""
 
     # get current_dir
@@ -9642,25 +9649,37 @@ def get_image():
     if is_non_root and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
+    cache_dir = assets_dir if is_non_root else current_dir
+    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
+
+    # [OPTIMIZATION] Check if the cached image exists first
+    if os.path.exists(cache_path):
+        return FileResponse(cache_path, media_type="image/jpeg")
+
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
-        # Download the image and cache it
-        client = HTTPHandler()
-        response = client.get(logo_path)
-        if response.status_code == 200:
-            # Save the image to a local file
-            cache_dir = assets_dir if is_non_root else current_dir
-            cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-            with open(cache_path, "wb") as f:
-                f.write(response.content)
+        try:
+            # Download the image and cache it
+            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-            # Return the cached image as a FileResponse
-            return FileResponse(cache_path, media_type="image/jpeg")
-        else:
-            # Handle the case when the image cannot be downloaded
+            async_client = AsyncHTTPHandler(timeout=5.0)
+            response = await async_client.get(logo_path)
+            if response.status_code == 200:
+                # Save the image to a local file
+                with open(cache_path, "wb") as f:
+                    f.write(response.content)
+
+                # Return the cached image as a FileResponse
+                return FileResponse(cache_path, media_type="image/jpeg")
+            else:
+                # Handle the case when the image cannot be downloaded
+                return FileResponse(default_logo, media_type="image/jpeg")
+        except Exception as e:
+            # Handle any exceptions during the download (e.g., timeout, connection error)
+            verbose_proxy_logger.debug(f"Error downloading logo from {logo_path}: {e}")
             return FileResponse(default_logo, media_type="image/jpeg")
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL
@@ -10278,9 +10297,9 @@ async def get_config_list(
                             hasattr(sub_field_info, "description")
                             and sub_field_info.description is not None
                         ):
-                            nested_fields[idx].field_description = (
-                                sub_field_info.description
-                            )
+                            nested_fields[
+                                idx
+                            ].field_description = sub_field_info.description
                         idx += 1
 
                     _stored_in_db = None

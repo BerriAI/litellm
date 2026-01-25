@@ -10,7 +10,11 @@ import httpx
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
-from mcp.client.streamable_http import streamable_http_client
+
+try:
+    from mcp.client.streamable_http import streamable_http_client  # type: ignore
+except ImportError:
+    streamable_http_client = None
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
