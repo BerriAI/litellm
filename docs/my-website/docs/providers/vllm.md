@@ -155,6 +155,13 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
 
 vLLM now supports the Responses API for multi-turn conversations. Models like GPT-OSS work great with this.
 
+:::info
+Use Responses API when you need:
+- Multi-turn conversations with automatic state management
+- Long context handling with compaction
+- Background task support
+:::
+
 <Tabs>
 <TabItem value="sdk" label="SDK">
 
