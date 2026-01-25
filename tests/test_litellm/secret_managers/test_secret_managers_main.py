@@ -67,7 +67,7 @@ def test_oidc_google_cached(mock_oidc_cache):
     mock_oidc_cache.get_cache.return_value = "cached_token"
 
     secret_name = "oidc/google/[invalid url, do not cite]"
-    with patch("litellm.HTTPHandler") as mock_http:
+    with patch("litellm.secret_managers.main.HTTPHandler") as mock_http:
         result = get_secret(secret_name)
 
         assert result == "cached_token", f"Expected cached token, got {result}"
@@ -75,6 +75,7 @@ def test_oidc_google_cached(mock_oidc_cache):
         mock_http.assert_not_called()
 
 
+@patch("litellm.secret_managers.main.oidc_cache")
 def test_oidc_google_failure(mock_oidc_cache):
     mock_handler = MockHTTPHandler(timeout=600.0)
     mock_handler.status_code = 400
@@ -147,7 +148,12 @@ def test_oidc_azure_file_success(mock_env, tmp_path):
 
 
 @patch("litellm.secret_managers.main.get_azure_ad_token_provider")
+@patch.dict(os.environ, {}, clear=False)  # Ensure AZURE_FEDERATED_TOKEN_FILE is not set
 def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider):
+    # Ensure the env var is not set so it falls through to Azure AD token provider
+    if "AZURE_FEDERATED_TOKEN_FILE" in os.environ:
+        del os.environ["AZURE_FEDERATED_TOKEN_FILE"]
+    
     mock_token_provider = Mock(return_value="azure_ad_token")
     mock_get_azure_ad_token_provider.return_value = mock_token_provider
     secret_name = "oidc/azure/api://azure-audience"

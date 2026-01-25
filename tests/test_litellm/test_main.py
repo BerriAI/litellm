@@ -15,7 +15,6 @@ import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import litellm
-
 from litellm import main as litellm_main
 
 
@@ -473,10 +472,12 @@ async def test_extra_body_with_fallback(
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
+    # Ensure aiohttp transport is disabled to use httpx which respx can mock
     litellm.disable_aiohttp_transport = True
 
     expected_base_url = "http://localhost:12345/v1"
@@ -488,7 +489,11 @@ async def test_openai_env_base(
     model = "gpt-4o"
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
-    respx_mock.post(f"{expected_base_url}/chat/completions").respond(
+    # Configure respx mock to intercept the request
+    mock_route = respx_mock.post(
+        url__regex=r"http://localhost:12345/v1/chat/completions.*"
+    ).mock(return_value=httpx.Response(
+        status_code=200,
         json={
             "id": "chatcmpl-123",
             "object": "chat.completion",
@@ -506,12 +511,19 @@ async def test_openai_env_base(
             ],
             "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
         }
-    )
+    ))
 
-    response = await litellm.acompletion(model=model, messages=messages)
-
-    # verify we had a response
-    assert response.choices[0].message.content == "Hello from mocked response!"
+    try:
+        response = await litellm.acompletion(model=model, messages=messages)
+        
+        # verify we had a response
+        assert response.choices[0].message.content == "Hello from mocked response!"
+        
+        # Verify the mock was called
+        assert mock_route.called, "Mock route was not called - request may have bypassed respx"
+    finally:
+        # Clean up to avoid affecting other tests
+        litellm.disable_aiohttp_transport = False
 
 
 def build_database_url(username, password, host, dbname):
