@@ -57,20 +57,31 @@ def extract_base_model_patterns(model_name: str) -> List[str]:
     # Try to extract model family patterns
     # Match patterns like: llama-3.1-70b, mistral-7b, qwen-72b, etc.
     
-    # Pattern 1: family-version-size-variant (e.g., llama-3.1-70b-instruct)
-    match = re.search(r'(llama|mistral|qwen|yi|phi|gemma|mixtral)[-_]?(\d+\.?\d*)?[-_]?(\d+[bkm])?[-_]?(\w+)?', name, re.IGNORECASE)
+    # First, find size if it exists (e.g., 7b, 70b, 72b)
+    size_match = re.search(r'(\d+[bkm])\b', name, re.IGNORECASE)
+    size = size_match.group(1).lower() if size_match else None
     
-    if match:
-        family = match.group(1).lower()
-        version = match.group(2) if match.group(2) else None
-        size = match.group(3).lower() if match.group(3) else None
-        variant = match.group(4).lower() if match.group(4) else None
+    # Find model family
+    family_match = re.search(r'\b(llama|mistral|qwen|yi|phi|gemma|mixtral)', name, re.IGNORECASE)
+    family = family_match.group(1).lower() if family_match else None
+    
+    # Find version (numbers with optional dots, not followed by b/k/m)
+    version_match = re.search(r'[-_](\d+(?:\.\d+)?)(?!b|k|m)', name, re.IGNORECASE)
+    version = version_match.group(1) if version_match else None
+    
+    # Find variant (instruct, chat, base, etc.)
+    variant_match = re.search(r'[-_](instruct|chat|base|code)', name, re.IGNORECASE)
+    variant = variant_match.group(1).lower() if variant_match else None
+    
+    if family:
         
         # Build patterns from most specific to least specific
         if variant and size and version:
             patterns.append(f"{family}-{version}-{size}-{variant}")
         if size and version:
             patterns.append(f"{family}-{version}-{size}")
+        if version and size:
+            patterns.append(f"{family}-{size}")  # Also try without version
         if version:
             patterns.append(f"{family}-{version}")
         if size:

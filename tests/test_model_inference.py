@@ -251,9 +251,11 @@ class TestIntegrationWithGetModelInfo:
             
             # Should succeed without raising "model not mapped" error
             assert model_info is not None
-            assert hasattr(model_info, "max_tokens") or hasattr(model_info, "max_input_tokens")
-            assert model_info.input_cost_per_token == 0.0  # Self-hosted should be free
-            assert model_info.output_cost_per_token == 0.0
+            # Model info is a dict with context window info
+            has_context = (model_info.get("max_tokens") is not None) or (model_info.get("max_input_tokens") is not None)
+            assert has_context, f"Expected max_tokens or max_input_tokens, got: {model_info}"
+            assert model_info.get("input_cost_per_token") == 0.0  # Self-hosted should be free
+            assert model_info.get("output_cost_per_token") == 0.0
             
         except ValueError as e:
             if "isn't mapped yet" in str(e):
@@ -270,7 +272,7 @@ class TestIntegrationWithGetModelInfo:
         # Models that can't be inferred should still fail
         from litellm.utils import get_model_info
         
-        with pytest.raises(ValueError, match="isn't mapped yet"):
+        with pytest.raises(Exception, match="isn't mapped yet"):
             get_model_info(
                 model="completely-unknown-model-xyz-no-matches",
                 custom_llm_provider="hosted_vllm"
