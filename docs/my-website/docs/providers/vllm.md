@@ -160,6 +160,8 @@ Use Responses API when you need:
 - Multi-turn conversations with automatic state management
 - Long context handling with compaction
 - Background task support
+
+[See full Responses API docs →](../response_api.md)
 :::
 
 <Tabs>
