@@ -151,6 +151,61 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
   </Tabs>
 
 
+## Responses API
+
+vLLM now supports the Responses API for multi-turn conversations. Models like GPT-OSS work great with this.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import responses
+import os
+
+os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000"
+
+response = responses(
+    model="hosted_vllm/gpt-oss-120b",
+    input="what's the weather like?",
+)
+print(response)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add to config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-oss
+    litellm_params:
+      model: hosted_vllm/gpt-oss-120b
+      api_base: http://localhost:8000
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Call it
+
+```bash
+curl http://0.0.0.0:4000/v1/responses \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-oss",
+    "input": "whats the weather like?"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+
 ## Embeddings
 
 <Tabs>
