@@ -2058,6 +2058,7 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     max_budget: Optional[float] = None,  # max_budget is used to Budget Per user
     blocked: Optional[bool] = None,
     budget_duration: Optional[str] = None,  # max_budget is used to Budget Per user
+    budget_reset_at: Optional[datetime] = None,  # manual override for initial user/key budget reset time
     token: Optional[str] = None,
     key: Optional[
         str
@@ -2123,10 +2124,27 @@ async def generate_key_helper_fn(  # noqa: PLR0915
     else:
         key_reset_at = get_budget_reset_time(budget_duration=key_budget_duration)
 
-    if budget_duration is None:  # one-time budget
-        reset_at = None
+    if budget_reset_at is not None:
+        try:
+            # try to parse budget_reset_at
+            if isinstance(budget_reset_at, datetime):
+                _reset_candidate = budget_reset_at
+            else:
+                _reset_candidate = datetime.fromisoformat(str(budget_reset_at).replace("Z", "+00:00"))
+            # ensure tz-aware datetime
+            if _reset_candidate.tzinfo is None:
+                _reset_candidate = _reset_candidate.replace(tzinfo=timezone.utc)
+            reset_at = _reset_candidate
+        except Exception:
+            if budget_duration is None: # fallback to one-time budget
+                reset_at = None
+            else:
+                reset_at = get_budget_reset_time(budget_duration=budget_duration) # calculate based on budget duration
     else:
-        reset_at = get_budget_reset_time(budget_duration=budget_duration)
+        if budget_duration is None:  # one-time budget
+            reset_at = None
+        else:
+            reset_at = get_budget_reset_time(budget_duration=budget_duration) # calculate based on budget duration
 
     aliases_json = json.dumps(aliases)
     config_json = json.dumps(config)
