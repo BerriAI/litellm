@@ -1,5 +1,4 @@
 import os
-import ssl
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -244,6 +243,277 @@ class TestMCPClient:
             assert isinstance(test_client, httpx.AsyncClient)
             assert test_client.headers is not None
             await test_client.aclose()
+
+
+class TestMCPClientSessionCaching:
+    """Test MCP Client session caching (connection pooling) functionality"""
+
+    def test_session_cache_defaults_to_disabled(self):
+        """Test that session caching is disabled by default for backwards compatibility"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+        )
+        assert client.use_session_cache is False
+        assert client.session_cache_ttl == 300.0
+
+    def test_session_cache_can_be_enabled(self):
+        """Test that session caching can be enabled"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+            session_cache_ttl=60.0,
+        )
+        assert client.use_session_cache is True
+        assert client.session_cache_ttl == 60.0
+
+    def test_is_session_valid_returns_false_when_no_session(self):
+        """Test _is_session_valid returns False when no session is cached"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+        assert client._is_session_valid() is False
+
+    def test_is_session_valid_returns_false_when_no_timestamp(self):
+        """Test _is_session_valid returns False when session exists but no timestamp"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+        client._cached_session = MagicMock()
+        client._session_last_used_at = None
+        assert client._is_session_valid() is False
+
+    def test_is_session_valid_returns_false_when_ttl_expired(self):
+        """Test _is_session_valid returns False when TTL has expired"""
+        import time
+
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+            session_cache_ttl=1.0,  # 1 second TTL
+        )
+        client._cached_session = MagicMock()
+        client._session_last_used_at = time.time() - 2.0  # 2 seconds ago
+        assert client._is_session_valid() is False
+
+    def test_is_session_valid_returns_true_when_within_ttl(self):
+        """Test _is_session_valid returns True when session is within TTL"""
+        import time
+
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+            session_cache_ttl=300.0,  # 5 minutes
+        )
+        client._cached_session = MagicMock()
+        client._session_last_used_at = time.time()  # Just now
+        assert client._is_session_valid() is True
+
+    @pytest.mark.asyncio
+    async def test_cleanup_cached_session(self):
+        """Test _cleanup_cached_session properly cleans up resources"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+
+        # Setup mock cached resources
+        mock_session = MagicMock()
+        mock_session.__aexit__ = AsyncMock()
+        mock_transport_ctx = MagicMock()
+        mock_transport_ctx.__aexit__ = AsyncMock()
+        mock_http_client = MagicMock()
+        mock_http_client.aclose = AsyncMock()
+
+        client._cached_session = mock_session
+        client._cached_transport_ctx = mock_transport_ctx
+        client._cached_http_client = mock_http_client
+        client._session_last_used_at = 12345.0
+
+        await client._cleanup_cached_session()
+
+        # Verify cleanup was called
+        mock_session.__aexit__.assert_called_once()
+        mock_transport_ctx.__aexit__.assert_called_once()
+        mock_http_client.aclose.assert_called_once()
+
+        # Verify state was cleared
+        assert client._cached_session is None
+        assert client._cached_transport_ctx is None
+        assert client._cached_http_client is None
+        assert client._session_last_used_at is None
+
+    @pytest.mark.asyncio
+    async def test_close_cleans_up_session(self):
+        """Test close() properly cleans up cached session"""
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+
+        # Setup mock cached session
+        mock_session = MagicMock()
+        mock_session.__aexit__ = AsyncMock()
+        client._cached_session = mock_session
+
+        await client.close()
+
+        # Verify session was cleaned up
+        assert client._cached_session is None
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.sse_client")
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_run_operation_uses_cached_session_when_enabled(
+        self, mock_session_class, mock_sse_client
+    ):
+        """Test _run_operation uses run_with_cached_session when caching is enabled"""
+        # Setup mocks
+        mock_transport = (MagicMock(), MagicMock())
+        mock_sse_client.return_value.__aenter__ = AsyncMock(return_value=mock_transport)
+        mock_sse_client.return_value.__aexit__ = AsyncMock()
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
+        mock_session_instance.__aexit__ = AsyncMock()
+        mock_session_instance.initialize = AsyncMock()
+        mock_session_class.return_value = mock_session_instance
+
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+
+        call_count = 0
+
+        async def _operation(session):
+            nonlocal call_count
+            call_count += 1
+            return f"result_{call_count}"
+
+        # First call should create session
+        result1 = await client._run_operation(_operation)
+        assert result1 == "result_1"
+
+        # Session should be cached
+        assert client._cached_session is not None
+
+        # Second call should reuse session (not create new one)
+        result2 = await client._run_operation(_operation)
+        assert result2 == "result_2"
+
+        # sse_client should only be called once (session reused)
+        assert mock_sse_client.call_count == 1
+
+        # Clean up
+        await client.close()
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.sse_client")
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_run_operation_creates_new_session_when_disabled(
+        self, mock_session_class, mock_sse_client
+    ):
+        """Test _run_operation uses run_with_session (new connection) when caching is disabled"""
+        # Setup mocks
+        mock_transport = (MagicMock(), MagicMock())
+        mock_sse_client.return_value.__aenter__ = AsyncMock(return_value=mock_transport)
+        mock_sse_client.return_value.__aexit__ = AsyncMock()
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
+        mock_session_instance.__aexit__ = AsyncMock()
+        mock_session_instance.initialize = AsyncMock()
+        mock_session_class.return_value = mock_session_instance
+
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=False,  # Caching disabled
+        )
+
+        async def _operation(session):
+            return "result"
+
+        # First call
+        await client._run_operation(_operation)
+
+        # Second call
+        await client._run_operation(_operation)
+
+        # sse_client should be called twice (new session each time)
+        assert mock_sse_client.call_count == 2
+
+        # No cached session should exist
+        assert client._cached_session is None
+
+    @pytest.mark.asyncio
+    @patch("litellm.experimental_mcp_client.client.sse_client")
+    @patch("litellm.experimental_mcp_client.client.ClientSession")
+    async def test_get_or_create_session_creates_new_when_none_cached(
+        self, mock_session_class, mock_sse_client
+    ):
+        """Test _get_or_create_session creates new session when none is cached"""
+        # Setup mocks
+        mock_transport = (MagicMock(), MagicMock())
+        mock_sse_client.return_value.__aenter__ = AsyncMock(return_value=mock_transport)
+        mock_sse_client.return_value.__aexit__ = AsyncMock()
+
+        mock_session_instance = MagicMock()
+        mock_session_instance.__aenter__ = AsyncMock(return_value=mock_session_instance)
+        mock_session_instance.__aexit__ = AsyncMock()
+        mock_session_instance.initialize = AsyncMock()
+        mock_session_class.return_value = mock_session_instance
+
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+
+        # No session cached initially
+        assert client._cached_session is None
+
+        # Get or create should create a new session
+        session = await client._get_or_create_session()
+
+        assert session is not None
+        assert client._cached_session is not None
+        assert client._session_last_used_at is not None
+
+        # Clean up
+        await client.close()
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_session_reuses_valid_session(self):
+        """Test _get_or_create_session reuses session when valid"""
+        import time
+
+        client = MCPClient(
+            server_url="http://localhost:8765/sse",
+            transport_type=MCPTransport.sse,
+            use_session_cache=True,
+        )
+
+        # Pre-cache a mock session
+        mock_session = MagicMock()
+        client._cached_session = mock_session
+        client._session_last_used_at = time.time()
+
+        # Get or create should return the cached session
+        session = await client._get_or_create_session()
+
+        assert session is mock_session
 
 
 if __name__ == "__main__":
