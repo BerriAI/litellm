@@ -171,6 +171,22 @@ response = responses(
 print(response)
 ```
 
+### Streaming
+
+```python
+from litellm import responses
+
+response = responses(
+    model="hosted_vllm/gpt-oss-120b",
+    input="tell me a story",
+    stream=True,
+    api_base="http://localhost:8000"
+)
+
+for chunk in response:
+    print(chunk)
+```
+
 </TabItem>
 <TabItem value="proxy" label="PROXY">
 
