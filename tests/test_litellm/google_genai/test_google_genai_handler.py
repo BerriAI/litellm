@@ -183,8 +183,10 @@ def test_stream_transformation_error_sync():
         "translate_completion_output_params_streaming", 
         return_value=None
     ):
-        # Mock at the module level where it's imported
-        with patch("litellm.google_genai.adapters.handler.litellm.completion", return_value=mock_stream):
+        # Mock litellm.completion at the module level where it's imported
+        # We need to patch it in the handler module, not in litellm itself
+        with patch("litellm.google_genai.adapters.handler.litellm") as mock_litellm:
+            mock_litellm.completion.return_value = mock_stream
             # Call the handler with stream=True and expect a ValueError
             with pytest.raises(ValueError, match="Failed to transform streaming response"):
                 GenerateContentToCompletionHandler.generate_content_handler(
@@ -210,8 +212,11 @@ async def test_stream_transformation_error_async():
         "translate_completion_output_params_streaming", 
         return_value=None
     ):
-        # Mock at the module level where it's imported
-        with patch("litellm.google_genai.adapters.handler.litellm.acompletion", return_value=mock_stream):
+        # Mock litellm.acompletion at the module level where it's imported
+        # We need to patch it in the handler module, not in litellm itself
+        with patch("litellm.google_genai.adapters.handler.litellm") as mock_litellm:
+            # Use AsyncMock for async function
+            mock_litellm.acompletion = AsyncMock(return_value=mock_stream)
             # Call the handler with stream=True and expect a ValueError
             with pytest.raises(ValueError, match="Failed to transform streaming response"):
                 await GenerateContentToCompletionHandler.async_generate_content_handler(
