@@ -2726,7 +2726,7 @@ class ProxyConfig:
         router_settings = config.get("router_settings", None)
 
         if router_settings and isinstance(router_settings, dict):
-            arg_spec = inspect.getfullargspec(litellm.Router)
+            sig = inspect.signature(litellm.Router)
             # model list and search_tools already set
             exclude_args = {
                 "self",
@@ -2734,7 +2734,7 @@ class ProxyConfig:
                 "search_tools",
             }
 
-            available_args = [x for x in arg_spec.args if x not in exclude_args]
+            available_args = [x for x in sig.parameters.keys() if x not in exclude_args]
 
             for k, v in router_settings.items():
                 if k in available_args:

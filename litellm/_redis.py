@@ -25,7 +25,7 @@ from ._logging import verbose_logger
 
 
 def _get_redis_kwargs():
-    arg_spec = inspect.getfullargspec(redis.Redis)
+    sig = inspect.signature(redis.Redis)
 
     # Only allow primitive arguments
     exclude_args = {
@@ -36,7 +36,7 @@ def _get_redis_kwargs():
 
     include_args = ["url", "redis_connect_func", "gcp_service_account", "gcp_ssl_ca_certs"]
 
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+    available_args = [x for x in sig.parameters.keys() if x not in exclude_args] + include_args
 
     return available_args
 
@@ -44,7 +44,7 @@ def _get_redis_kwargs():
 def _get_redis_url_kwargs(client=None):
     if client is None:
         client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.Redis.from_url)
+    sig = inspect.signature(redis.Redis.from_url)
 
     # Only allow primitive arguments
     exclude_args = {
@@ -55,7 +55,7 @@ def _get_redis_url_kwargs(client=None):
 
     include_args = ["url"]
 
-    available_args = [x for x in arg_spec.args if x not in exclude_args] + include_args
+    available_args = [x for x in sig.parameters.keys() if x not in exclude_args] + include_args
 
     return available_args
 
@@ -63,12 +63,12 @@ def _get_redis_url_kwargs(client=None):
 def _get_redis_cluster_kwargs(client=None):
     if client is None:
         client = redis.Redis.from_url
-    arg_spec = inspect.getfullargspec(redis.RedisCluster)
+    sig = inspect.signature(redis.RedisCluster)
 
     # Only allow primitive arguments
     exclude_args = {"self", "connection_pool", "retry", "host", "port", "startup_nodes"}
 
-    available_args = [x for x in arg_spec.args if x not in exclude_args]
+    available_args = [x for x in sig.parameters.keys() if x not in exclude_args]
     available_args.append("password")
     available_args.append("username")
     available_args.append("ssl")

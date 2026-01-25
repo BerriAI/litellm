@@ -26,10 +26,10 @@ def get_init_params(cls: Type) -> list[str]:
         )
 
     init_method = cls.__init__
-    argspec = inspect.getfullargspec(init_method)
+    sig = inspect.signature(init_method)
 
     # The first argument is usually 'self', so we exclude it
-    return argspec.args[1:]  # Exclude 'self'
+    return [x for x in sig.parameters.keys() if x != 'self']
 
 
 router_init_params = set(get_init_params(litellm.router.Router))
