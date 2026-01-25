@@ -5521,9 +5521,23 @@ def _get_model_info_helper(  # noqa: PLR0915
                         _model_info = None
 
             if _model_info is None or key is None:
-                raise ValueError(
-                    "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                # Try model inference for self-hosted providers
+                from litellm.model_inference import infer_model_capabilities
+                
+                inferred_info = infer_model_capabilities(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider or ""
                 )
+                
+                if inferred_info:
+                    # Use inferred model info
+                    key = inferred_info.get("key", model)
+                    _model_info = inferred_info
+                else:
+                    # Inference failed, raise original error
+                    raise ValueError(
+                        "This model isn't mapped yet. Add it here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
+                    )
 
             _input_cost_per_token: Optional[float] = _model_info.get(
                 "input_cost_per_token"
