@@ -3,25 +3,15 @@ import time
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
-from aiohttp import FormData
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes  # type: ignore
-from openai.types.chat.chat_completion import ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
     PromptTokensDetails,
 )
-from openai.types.moderation import (
-    Categories,
-    CategoryAppliedInputTypes,
-    CategoryScores,
-)
-from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
-from typing_extensions import Callable, Dict, Required, TypedDict, override
+from typing_extensions import Dict, Required, TypedDict
 
-import litellm
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
@@ -52,7 +42,6 @@ from .llms.openai import (
     ResponsesAPIResponse,
     WebSearchOptions,
 )
-from .rerank import RerankResponse
 
 if TYPE_CHECKING:
     from .vector_stores import VectorStoreSearchResponse
@@ -2501,6 +2490,7 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
         dict
     ]  # special param to log k,v pairs to spendlogs for a call
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     requester_metadata: Optional[dict]
     requester_custom_headers: Optional[
         Dict[str, str]
@@ -2686,6 +2676,7 @@ class StandardLoggingPayload(TypedDict):
     request_tags: list
     end_user: Optional[str]
     requester_ip_address: Optional[str]
+    user_agent: Optional[str]
     messages: Optional[Union[str, list, dict]]
     response: Optional[Union[str, list, dict]]
     error_str: Optional[str]

@@ -150,6 +150,8 @@ class UserAPIKeyLabelNames(Enum):
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
     MODEL_GROUP = "model_group"
+    CLIENT_IP = "client_ip"
+    USER_AGENT = "user_agent"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -258,6 +260,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.STATUS_CODE.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -272,6 +276,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
@@ -321,6 +327,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_spend_metric = [
@@ -332,6 +340,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_input_tokens_metric = [
@@ -449,6 +459,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_deployment_total_requests = [
@@ -461,6 +473,8 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.CLIENT_IP.value,
+        UserAPIKeyLabelNames.USER_AGENT.value,
     ]
 
     litellm_deployment_success_responses = litellm_deployment_total_requests
@@ -576,6 +590,12 @@ class UserAPIKeyLabelValues(BaseModel):
     ] = None
     route: Annotated[
         Optional[str], Field(..., alias=UserAPIKeyLabelNames.ROUTE.value)
+    ] = None
+    client_ip: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.CLIENT_IP.value)
+    ] = None
+    user_agent: Annotated[
+        Optional[str], Field(..., alias=UserAPIKeyLabelNames.USER_AGENT.value)
     ] = None
 
 
