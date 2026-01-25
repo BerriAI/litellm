@@ -67,7 +67,7 @@ def test_oidc_google_cached(mock_oidc_cache):
     mock_oidc_cache.get_cache.return_value = "cached_token"
 
     secret_name = "oidc/google/[invalid url, do not cite]"
-    with patch("litellm.HTTPHandler") as mock_http:
+    with patch("litellm.secret_managers.main.HTTPHandler") as mock_http:
         result = get_secret(secret_name)
 
         assert result == "cached_token", f"Expected cached token, got {result}"
@@ -75,6 +75,7 @@ def test_oidc_google_cached(mock_oidc_cache):
         mock_http.assert_not_called()
 
 
+@patch("litellm.secret_managers.main.oidc_cache")
 def test_oidc_google_failure(mock_oidc_cache):
     mock_handler = MockHTTPHandler(timeout=600.0)
     mock_handler.status_code = 400
