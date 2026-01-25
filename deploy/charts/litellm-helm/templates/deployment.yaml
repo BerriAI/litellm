@@ -10,7 +10,7 @@ metadata:
     {{- toYaml .Values.deploymentLabels | nindent 4 }}
     {{- end }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
+  {{- if and (not .Values.keda.enabled) (not .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:

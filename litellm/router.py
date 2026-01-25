@@ -63,6 +63,7 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -4681,26 +4682,35 @@ class Router:
                 parent_otel_span=parent_otel_span,
             )
 
-            # raises an exception if this error should not be retries
-            self.should_retry_this_error(
-                error=e,
-                healthy_deployments=_healthy_deployments,
-                all_deployments=_all_deployments,
-                context_window_fallbacks=context_window_fallbacks,
-                regular_fallbacks=fallbacks,
-                content_policy_fallbacks=content_policy_fallbacks,
-            )
-
+            # Check retry policy FIRST, before should_retry_this_error
+            # This allows retry policies to override the healthy deployments check
+            _retry_policy_applies = False
             if (
                 self.retry_policy is not None
                 or self.model_group_retry_policy is not None
             ):
                 # get num_retries from retry policy
+                # Use the model_group captured at the start of the function, or get it from metadata
+                # kwargs.get("model") at this point is the deployment model, not the model_group
+                _model_group_for_retry_policy = model_group or _metadata.get("model_group") or kwargs.get("model")
                 _retry_policy_retries = self.get_num_retries_from_retry_policy(
-                    exception=original_exception, model_group=kwargs.get("model")
+                    exception=original_exception, model_group=_model_group_for_retry_policy
                 )
                 if _retry_policy_retries is not None:
                     num_retries = _retry_policy_retries
+                    _retry_policy_applies = True
+
+            # raises an exception if this error should not be retries
+            # Skip this check if retry policy applies (retry policy takes precedence)
+            if not _retry_policy_applies:
+                self.should_retry_this_error(
+                    error=e,
+                    healthy_deployments=_healthy_deployments,
+                    all_deployments=_all_deployments,
+                    context_window_fallbacks=context_window_fallbacks,
+                    regular_fallbacks=fallbacks,
+                    content_policy_fallbacks=content_policy_fallbacks,
+                )
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
@@ -4864,6 +4874,12 @@ class Router:
             and content_policy_fallbacks is not None
         ):
             raise error
+
+        status_code = getattr(error, "status_code", None)
+        if status_code is not None and not litellm._should_retry(status_code):
+            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
+            if status_code not in (401, 403):
+                raise error
 
         if isinstance(error, litellm.NotFoundError):
             raise error
@@ -5862,7 +5878,8 @@ class Router:
                 ),
             )
             # done reading model["litellm_params"]
-            if custom_llm_provider not in litellm.provider_list:
+            # Check if provider is supported: either in enum or JSON-configured
+            if custom_llm_provider not in litellm.provider_list and not JSONProviderRegistry.exists(custom_llm_provider):
                 raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         #### DEPLOYMENT NAMES INIT ########
@@ -6338,19 +6355,20 @@ class Router:
         elif custom_llm_provider != "azure":
             model = _model
 
-            potential_models = self.pattern_router.route(received_model_name)
-            if "*" in model and potential_models is not None:  # if wildcard route
-                for potential_model in potential_models:
-                    try:
-                        if potential_model.get("model_info", {}).get(
-                            "id"
-                        ) == deployment.get("model_info", {}).get("id"):
-                            model = potential_model.get("litellm_params", {}).get(
-                                "model"
-                            )
-                            break
-                    except Exception:
-                        pass
+            if "*" in model:  # only call pattern_router for wildcard models
+                potential_models = self.pattern_router.route(received_model_name)
+                if potential_models is not None:
+                    for potential_model in potential_models:
+                        try:
+                            if potential_model.get("model_info", {}).get(
+                                "id"
+                            ) == deployment.get("model_info", {}).get("id"):
+                                model = potential_model.get("litellm_params", {}).get(
+                                    "model"
+                                )
+                                break
+                        except Exception:
+                            pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
         if model is None:
