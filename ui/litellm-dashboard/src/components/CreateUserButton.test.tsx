@@ -215,6 +215,23 @@ describe("CreateUserButton", { timeout: 20000 }, () => {
     });
   });
 
+  it("should render send invite email toggle in modal with default off", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<CreateUserButton {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /\+ invite user/i })).toBeInTheDocument();
+    });
+    await user.click(screen.getByRole("button", { name: /\+ invite user/i }));
+
+    const dialog = screen.getByRole("dialog", { name: /invite user/i });
+    expect(within(dialog).getByText("Send Invite Email")).toBeInTheDocument();
+
+    const switchToggle = within(dialog).getByRole("switch");
+    expect(switchToggle).toBeInTheDocument();
+    expect(switchToggle).not.toBeChecked();
+  });
+
   it("should close modal when cancel is clicked in standalone mode", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CreateUserButton {...defaultProps} />);
