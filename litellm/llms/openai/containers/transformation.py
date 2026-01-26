@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseContainerConfig = Any
+    from ...base_llm.containers.transformation import BaseContainerConfig
     BaseLLMException = Any
 
 
