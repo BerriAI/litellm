@@ -24,6 +24,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    normalize_email,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -665,6 +666,85 @@ def test_build_sso_user_update_data_without_role():
 
     assert update_data["user_email"] == "test@example.com"
     assert "user_role" not in update_data
+
+
+def test_normalize_email():
+    """
+    Test that normalize_email correctly lowercases email addresses and handles edge cases.
+    """
+    # Test with lowercase email
+    assert normalize_email("test@example.com") == "test@example.com"
+    
+    # Test with uppercase email
+    assert normalize_email("TEST@EXAMPLE.COM") == "test@example.com"
+    
+    # Test with mixed case email
+    assert normalize_email("Test.User@Example.COM") == "test.user@example.com"
+    
+    # Test with None
+    assert normalize_email(None) is None
+    
+    # Test with empty string
+    assert normalize_email("") == ""
+
+
+def test_build_sso_user_update_data_normalizes_email():
+    """
+    Test that _build_sso_user_update_data normalizes email addresses to lowercase.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="test-user-789",
+        email="Test.User@Example.COM",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="Test.User@Example.COM",
+        user_id="test-user-789",
+    )
+
+    # Email should be normalized to lowercase
+    assert update_data["user_email"] == "test.user@example.com"
+    assert "user_role" not in update_data
+
+
+def test_generic_response_convertor_normalizes_email():
+    """
+    Test that generic_response_convertor normalizes email addresses.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    mock_response = {
+        "preferred_username": "user123",
+        "email": "Test.User@Example.COM",
+        "sub": "Test User",
+        "first_name": "Test",
+        "last_name": "User",
+        "provider": "generic",
+    }
+
+    # Mock JWT handler
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+
+    # Email should be normalized to lowercase
+    assert result.email == "test.user@example.com"
+    assert result.id == "user123"
+    assert result.display_name == "Test User"
 
 
 @pytest.mark.asyncio
