@@ -229,14 +229,18 @@ class PrometheusLogger(CustomLogger):
             self.litellm_remaining_api_key_requests_for_model = self._gauge_factory(
                 "litellm_remaining_api_key_requests_for_model",
                 "Remaining Requests API Key can make for model (model based rpm limit on key)",
-                labelnames=["hashed_api_key", "api_key_alias", "model"],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_remaining_api_key_requests_for_model"
+                ),
             )
 
             # Remaining MODEL TPM limit for API Key
             self.litellm_remaining_api_key_tokens_for_model = self._gauge_factory(
                 "litellm_remaining_api_key_tokens_for_model",
                 "Remaining Tokens API Key can make for model (model based tpm limit on key)",
-                labelnames=["hashed_api_key", "api_key_alias", "model"],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_remaining_api_key_tokens_for_model"
+                ),
             )
 
             ########################################
@@ -385,15 +389,9 @@ class PrometheusLogger(CustomLogger):
             self.litellm_llm_api_failed_requests_metric = self._counter_factory(
                 name="litellm_llm_api_failed_requests_metric",
                 documentation="deprecated - use litellm_proxy_failed_requests_metric",
-                labelnames=[
-                    "end_user",
-                    "hashed_api_key",
-                    "api_key_alias",
-                    "model",
-                    "team",
-                    "team_alias",
-                    "user",
-                ],
+                labelnames=self.get_labels_for_metric(
+                    "litellm_llm_api_failed_requests_metric"
+                ),
             )
 
             self.litellm_requests_metric = self._counter_factory(
@@ -966,6 +964,8 @@ class PrometheusLogger(CustomLogger):
             route=standard_logging_payload["metadata"].get(
                 "user_api_key_request_route"
             ),
+            client_ip=standard_logging_payload["metadata"].get("requester_ip_address"),
+            user_agent=standard_logging_payload["metadata"].get("user_agent"),
         )
 
         if (
@@ -1023,6 +1023,7 @@ class PrometheusLogger(CustomLogger):
             user_api_key_alias=user_api_key_alias,
             kwargs=kwargs,
             metadata=_metadata,
+            model_id=enum_values.model_id,
         )
 
         # set latency metrics
@@ -1257,6 +1258,7 @@ class PrometheusLogger(CustomLogger):
         user_api_key_alias: Optional[str],
         kwargs: dict,
         metadata: dict,
+        model_id: Optional[str] = None,
     ):
         from litellm.proxy.common_utils.callback_utils import (
             get_model_group_from_litellm_kwargs,
@@ -1278,11 +1280,11 @@ class PrometheusLogger(CustomLogger):
         )
 
         self.litellm_remaining_api_key_requests_for_model.labels(
-            user_api_key, user_api_key_alias, model_group
+            user_api_key, user_api_key_alias, model_group, model_id
         ).set(remaining_requests)
 
         self.litellm_remaining_api_key_tokens_for_model.labels(
-            user_api_key, user_api_key_alias, model_group
+            user_api_key, user_api_key_alias, model_group, model_id
         ).set(remaining_tokens)
 
     def _set_latency_metrics(
@@ -1408,6 +1410,7 @@ class PrometheusLogger(CustomLogger):
                 user_api_team,
                 user_api_team_alias,
                 user_id,
+                standard_logging_payload.get("model_id", ""),
             ).inc()
             self.set_llm_deployment_failure_metrics(kwargs)
         except Exception as e:
@@ -1596,6 +1599,10 @@ class PrometheusLogger(CustomLogger):
                 litellm_params=request_data,
                 proxy_server_request=request_data.get("proxy_server_request", {}),
             )
+            _metadata = request_data.get("metadata", {}) or {}
+            model_id = _metadata.get("model_info", {}).get("id") or request_data.get(
+                "model_info", {}
+            ).get("id")
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 user=user_api_key_dict.user_id,
@@ -1610,6 +1617,9 @@ class PrometheusLogger(CustomLogger):
                 exception_class=self._get_exception_class_name(original_exception),
                 tags=_tags,
                 route=user_api_key_dict.request_route,
+                client_ip=_metadata.get("requester_ip_address"),
+                user_agent=_metadata.get("user_agent"),
+                model_id=model_id,
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
@@ -1649,6 +1659,7 @@ class PrometheusLogger(CustomLogger):
             ):
                 return
 
+            _metadata = data.get("metadata", {}) or {}
             enum_values = UserAPIKeyLabelValues(
                 end_user=user_api_key_dict.end_user_id,
                 hashed_api_key=user_api_key_dict.api_key,
@@ -1664,6 +1675,8 @@ class PrometheusLogger(CustomLogger):
                     litellm_params=data,
                     proxy_server_request=data.get("proxy_server_request", {}),
                 ),
+                client_ip=_metadata.get("requester_ip_address"),
+                user_agent=_metadata.get("user_agent"),
             )
             _labels = prometheus_label_factory(
                 supported_enum_labels=self.get_labels_for_metric(
@@ -1736,6 +1749,10 @@ class PrometheusLogger(CustomLogger):
                     "user_api_key_team_alias"
                 ],
                 tags=standard_logging_payload.get("request_tags", []),
+                client_ip=standard_logging_payload["metadata"].get(
+                    "requester_ip_address"
+                ),
+                user_agent=standard_logging_payload["metadata"].get("user_agent"),
             )
 
             """
