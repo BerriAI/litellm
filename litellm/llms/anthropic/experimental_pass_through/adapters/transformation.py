@@ -168,6 +168,15 @@ class LiteLLMAnthropicMessagesAdapter:
             return provider_specific_fields.get("signature")
         return None
 
+    def _should_preserve_cache_control(
+        self, cache_control: Any, model: Optional[str]
+    ) -> bool:
+        """
+        Check if cache_control should be preserved for prompt caching.
+        Only preserves cache_control for Anthropic Claude models that support it.
+        """
+        return bool(cache_control and model and self.is_anthropic_claude_model(model))
+
     def translatable_anthropic_params(self) -> List:
         """
         Which anthropic params, we need to translate to the openai format.
@@ -205,9 +214,9 @@ class LiteLLMAnthropicMessagesAdapter:
                             text_obj: Dict[str, Any] = ChatCompletionTextObject(
                                 type="text", text=content.get("text", "")
                             )
-                            # Preserve cache_control for prompt caching
-                            if content.get("cache_control"):
-                                text_obj["cache_control"] = content["cache_control"]
+                            cache_control = content.get("cache_control")
+                            if self._should_preserve_cache_control(cache_control, model):
+                                text_obj["cache_control"] = cache_control  # type: ignore
                             new_user_content_list.append(text_obj)  # type: ignore
                         elif content.get("type") == "image":
                             # Convert Anthropic image format to OpenAI format
@@ -223,9 +232,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                 image_obj: Dict[str, Any] = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
-                                # Preserve cache_control for prompt caching
-                                if content.get("cache_control"):
-                                    image_obj["cache_control"] = content["cache_control"]
+                                cache_control = content.get("cache_control")
+                                if self._should_preserve_cache_control(cache_control, model):
+                                    image_obj["cache_control"] = cache_control  # type: ignore
                                 new_user_content_list.append(image_obj)  # type: ignore
                         elif content.get("type") == "document":
                             # Convert Anthropic document format (PDF, etc.) to OpenAI format
@@ -241,21 +250,21 @@ class LiteLLMAnthropicMessagesAdapter:
                                 doc_obj: Dict[str, Any] = ChatCompletionImageObject(
                                     type="image_url", image_url=image_url_obj
                                 )
-                                # Preserve cache_control for prompt caching
-                                if content.get("cache_control"):
-                                    doc_obj["cache_control"] = content["cache_control"]
+                                cache_control = content.get("cache_control")
+                                if self._should_preserve_cache_control(cache_control, model):
+                                    doc_obj["cache_control"] = cache_control  # type: ignore
                                 new_user_content_list.append(doc_obj)  # type: ignore
                         elif content.get("type") == "tool_result":
-                            # cache_control is on the tool_result block itself
                             tool_result_cache_control = content.get("cache_control")
+                            should_preserve_cache_control = self._should_preserve_cache_control(tool_result_cache_control, model)
                             if "content" not in content:
                                 tool_result: Dict[str, Any] = ChatCompletionToolMessage(
                                     role="tool",
                                     tool_call_id=content.get("tool_use_id", ""),
                                     content="",
                                 )
-                                if tool_result_cache_control:
-                                    tool_result["cache_control"] = tool_result_cache_control
+                                if should_preserve_cache_control:
+                                    tool_result["cache_control"] = tool_result_cache_control  # type: ignore
                                 tool_message_list.append(tool_result)  # type: ignore[arg-type]
                             elif isinstance(content.get("content"), str):
                                 tool_result = ChatCompletionToolMessage(
@@ -263,8 +272,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                     tool_call_id=content.get("tool_use_id", ""),
                                     content=str(content.get("content", "")),
                                 )
-                                if tool_result_cache_control:
-                                    tool_result["cache_control"] = tool_result_cache_control
+                                if should_preserve_cache_control:
+                                    tool_result["cache_control"] = tool_result_cache_control  # type: ignore
                                 tool_message_list.append(tool_result)  # type: ignore[arg-type]
                             elif isinstance(content.get("content"), list):
                                 # Combine all content items into a single tool message
@@ -281,8 +290,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                             tool_call_id=content.get("tool_use_id", ""),
                                             content=c,
                                         )
-                                        if tool_result_cache_control:
-                                            tool_result["cache_control"] = tool_result_cache_control
+                                        if should_preserve_cache_control:
+                                            tool_result["cache_control"] = tool_result_cache_control  # type: ignore
                                         tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                     elif isinstance(c, dict):
                                         if c.get("type") == "text":
@@ -293,8 +302,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 ),
                                                 content=c.get("text", ""),
                                             )
-                                            if tool_result_cache_control:
-                                                tool_result["cache_control"] = tool_result_cache_control
+                                            if should_preserve_cache_control:
+                                                tool_result["cache_control"] = tool_result_cache_control  # type: ignore
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                         elif c.get("type") == "image":
                                             source = c.get("source", {})
@@ -311,8 +320,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                                 ),
                                                 content=openai_image_url,
                                             )
-                                            if tool_result_cache_control:
-                                                tool_result["cache_control"] = tool_result_cache_control
+                                            if should_preserve_cache_control:
+                                                tool_result["cache_control"] = tool_result_cache_control  # type: ignore
                                             tool_message_list.append(tool_result)  # type: ignore[arg-type]
                                 else:
                                     # For multiple content items, combine into a single tool message
@@ -362,8 +371,8 @@ class LiteLLMAnthropicMessagesAdapter:
                                             tool_call_id=content.get("tool_use_id", ""),
                                             content=combined_content_parts,  # type: ignore
                                         )
-                                        if tool_result_cache_control:
-                                            tool_result["cache_control"] = tool_result_cache_control
+                                        if should_preserve_cache_control:
+                                            tool_result["cache_control"] = tool_result_cache_control  # type: ignore
                                         tool_message_list.append(tool_result)  # type: ignore[arg-type]
 
             if len(tool_message_list) > 0:
@@ -396,8 +405,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     "type": "text",
                                     "text": content.get("text", ""),
                                 }
-                                if content.get("cache_control"):
-                                    text_block["cache_control"] = content["cache_control"]
+                                cache_control = content.get("cache_control")
+                                if self._should_preserve_cache_control(cache_control, model):
+                                    text_block["cache_control"] = cache_control  # type: ignore
                                     has_cache_control_in_text = True
                                 assistant_content_list.append(text_block)
                             elif content.get("type") == "tool_use":
@@ -428,9 +438,9 @@ class LiteLLMAnthropicMessagesAdapter:
                                     type="function",
                                     function=function_chunk,
                                 )
-                                # Preserve cache_control for tool_use blocks
-                                if content.get("cache_control"):
-                                    tool_call["cache_control"] = content["cache_control"]
+                                tool_use_cache_control = content.get("cache_control")
+                                if self._should_preserve_cache_control(tool_use_cache_control, model):
+                                    tool_call["cache_control"] = tool_use_cache_control  # type: ignore
                                 tool_calls.append(tool_call)
                             elif content.get("type") == "thinking":
                                 thinking_block = ChatCompletionThinkingBlock(
@@ -585,7 +595,7 @@ class LiteLLMAnthropicMessagesAdapter:
             )
 
     def translate_anthropic_tools_to_openai(
-        self, tools: List[AllAnthropicToolsValues]
+        self, tools: List[AllAnthropicToolsValues], model: Optional[str] = None
     ) -> List[ChatCompletionToolParam]:
         new_tools: List[ChatCompletionToolParam] = []
         mapped_tool_params = ["name", "input_schema", "description", "cache_control"]
@@ -602,9 +612,9 @@ class LiteLLMAnthropicMessagesAdapter:
                 if k not in mapped_tool_params:  # pass additional computer kwargs
                     function_chunk.setdefault("parameters", {}).update({k: v})
             tool_param: Dict[str, Any] = ChatCompletionToolParam(type="function", function=function_chunk)
-            # Preserve cache_control for prompt caching
-            if tool.get("cache_control"):
-                tool_param["cache_control"] = tool["cache_control"]
+            cache_control = tool.get("cache_control")
+            if self._should_preserve_cache_control(cache_control, model):
+                tool_param["cache_control"] = cache_control  # type: ignore
             new_tools.append(tool_param)  # type: ignore[arg-type]
 
         return new_tools  # type: ignore[return-value]
@@ -684,16 +694,17 @@ class LiteLLMAnthropicMessagesAdapter:
                     )
                 elif isinstance(system_content, list):
                     # Convert Anthropic system content blocks to OpenAI format
-                    # Preserve cache_control for prompt caching
                     openai_system_content: List[Dict[str, Any]] = []
+                    model_name = anthropic_message_request.get("model", "")
                     for block in system_content:
                         if isinstance(block, dict) and block.get("type") == "text":
                             text_block: Dict[str, Any] = {
                                 "type": "text",
                                 "text": block.get("text", ""),
                             }
-                            if block.get("cache_control"):
-                                text_block["cache_control"] = block["cache_control"]
+                            cache_control = block.get("cache_control")
+                            if self._should_preserve_cache_control(cache_control, model_name):
+                                text_block["cache_control"] = cache_control  # type: ignore
                             openai_system_content.append(text_block)
                     if openai_system_content:
                         new_messages.insert(
@@ -730,7 +741,8 @@ class LiteLLMAnthropicMessagesAdapter:
             tools = anthropic_message_request["tools"]
             if tools:
                 new_kwargs["tools"] = self.translate_anthropic_tools_to_openai(
-                    tools=cast(List[AllAnthropicToolsValues], tools)
+                    tools=cast(List[AllAnthropicToolsValues], tools),
+                    model=new_kwargs.get("model"),
                 )
 
         ## CONVERT THINKING
