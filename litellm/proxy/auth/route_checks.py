@@ -392,7 +392,15 @@ class RouteChecks:
         # Ensure route is a string before attempting regex matching
         if not isinstance(route, str):
             return False
-        pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
+
+        def _placeholder_to_regex(match: re.Match) -> str:
+            placeholder = match.group(0).strip("{}")
+            if placeholder.endswith(":path"):
+                # allow "/" in the placeholder value, but don't eat the route suffix after ":"
+                return r"[^:]+"
+            return r"[^/]+"
+
+        pattern = re.sub(r"\{[^}]+\}", _placeholder_to_regex, pattern)
         # Anchor the pattern to match the entire string
         pattern = f"^{pattern}$"
         if re.match(pattern, route):
