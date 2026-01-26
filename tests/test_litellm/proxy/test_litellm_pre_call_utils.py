@@ -1347,8 +1347,17 @@ async def test_embedding_header_forwarding_with_model_group():
     This test verifies the fix for embedding endpoints not forwarding headers
     similar to how chat completion endpoints do.
     """
-    # Import the module that add_litellm_data_to_request uses to access litellm
+    import importlib
+
     import litellm.proxy.litellm_pre_call_utils as pre_call_utils_module
+
+    # Reload the module to ensure it has a fresh reference to litellm
+    # This is necessary because conftest.py reloads litellm at module scope,
+    # which can cause the module's litellm reference to become stale
+    importlib.reload(pre_call_utils_module)
+
+    # Re-import the function after reload to get the fresh version
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 
     # Setup mock request for embeddings
     request_mock = MagicMock(spec=Request)
@@ -1380,10 +1389,10 @@ async def test_embedding_header_forwarding_with_model_group():
     )
 
     # Mock model_group_settings to enable header forwarding for the model
-    # Use patch to ensure we modify the litellm reference that pre_call_utils actually uses
+    # Use string-based patch to ensure we patch the current sys.modules['litellm']
     # This avoids issues with module reloading during parallel test execution
     mock_settings = MagicMock(forward_client_headers_to_llm_api=["local-openai/*"])
-    with patch.object(pre_call_utils_module.litellm, "model_group_settings", mock_settings):
+    with patch("litellm.model_group_settings", mock_settings):
         # Call add_litellm_data_to_request which includes header forwarding logic
         updated_data = await add_litellm_data_to_request(
             data=data,
