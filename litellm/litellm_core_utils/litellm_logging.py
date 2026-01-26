@@ -205,6 +205,11 @@ _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
 
+# Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
+_CUSTOM_PRICING_KEYS: frozenset = frozenset(
+    CustomPricingLiteLLMParams.model_fields.keys()
+)
+
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -539,10 +544,8 @@ class Logging(LiteLLMLoggingBaseClass):
         if "stream_options" in additional_params:
             self.stream_options = additional_params["stream_options"]
         ## check if custom pricing set ##
-        custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
-        for key in custom_pricing_keys:
-            if litellm_params.get(key) is not None:
-                self.custom_pricing = True
+        if any(litellm_params.get(key) is not None for key in _CUSTOM_PRICING_KEYS & litellm_params.keys()):
+            self.custom_pricing = True
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
@@ -4248,15 +4251,21 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     if litellm_params is None:
         return False
 
+    # Check litellm_params using set intersection (only check keys that exist in both)
+    matching_keys = _CUSTOM_PRICING_KEYS & litellm_params.keys()
+    for key in matching_keys:
+        if litellm_params.get(key) is not None:
+            return True
+
+    # Check model_info
     metadata: dict = litellm_params.get("metadata", {}) or {}
     model_info: dict = metadata.get("model_info", {}) or {}
 
-    custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
-    for key in custom_pricing_keys:
-        if litellm_params.get(key, None) is not None:
-            return True
-        elif model_info.get(key, None) is not None:
-            return True
+    if model_info:
+        matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+        for key in matching_keys:
+            if model_info.get(key) is not None:
+                return True
 
     return False
 
@@ -4652,7 +4661,10 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def strip_trailing_slash(api_base: Optional[str]) -> Optional[str]:
         if api_base:
-            return api_base.rstrip("/")
+            if api_base.endswith("//"):
+                return api_base.rstrip("/")
+            if api_base[-1] == "/":
+                return api_base[:-1]
         return api_base
 
     @staticmethod

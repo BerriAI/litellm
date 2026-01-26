@@ -2007,17 +2007,26 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole, page, size);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
     params.append("page", page.toString());
     params.append("size", size.toString());
+    if (search && search.trim()) {
+      params.append("search", search.trim());
+    }
+    if (modelId && modelId.trim()) {
+      params.append("modelId", modelId.trim());
+    }
+    if (teamId && teamId.trim()) {
+      params.append("teamId", teamId.trim());
+    }
     if (params.toString()) {
       url += `?${params.toString()}`;
     }
@@ -5373,6 +5382,32 @@ export const getPoliciesList = async (accessToken: string) => {
     return data;
   } catch (error) {
     console.error("Failed to get policies list:", error);
+    throw error;
+  }
+};
+
+export const getPolicyInfoWithGuardrails = async (accessToken: string, policyName: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/info/${policyName}` : `/policy/info/${policyName}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to get policy info for ${policyName}:`, error);
     throw error;
   }
 };

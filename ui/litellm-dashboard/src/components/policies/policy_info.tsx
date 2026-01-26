@@ -3,7 +3,7 @@ import { Card, Badge, Button } from "@tremor/react";
 import { ArrowLeftIcon, PencilIcon } from "@heroicons/react/outline";
 import { Descriptions, Tag, Spin, Divider, Typography, Alert } from "antd";
 import { Policy } from "./types";
-import { getPolicyInfo, getResolvedGuardrails } from "../networking";
+import { getResolvedGuardrails } from "../networking";
 
 const { Title, Text } = Typography;
 
@@ -13,6 +13,7 @@ interface PolicyInfoViewProps {
   onEdit: (policy: Policy) => void;
   accessToken: string | null;
   isAdmin: boolean;
+  getPolicy: (accessToken: string, policyId: string) => Promise<any>;
 }
 
 const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
@@ -21,6 +22,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
   onEdit,
   accessToken,
   isAdmin,
+  getPolicy,
 }) => {
   const [policy, setPolicy] = useState<Policy | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -32,7 +34,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
 
     setIsLoading(true);
     try {
-      const data = await getPolicyInfo(accessToken, policyId);
+      const data = await getPolicy(accessToken, policyId);
       setPolicy(data);
       
       // Also fetch resolved guardrails
@@ -50,7 +52,7 @@ const PolicyInfoView: React.FC<PolicyInfoViewProps> = ({
     } finally {
       setIsLoading(false);
     }
-  }, [policyId, accessToken]);
+  }, [policyId, accessToken, getPolicy]);
 
   useEffect(() => {
     fetchPolicy();

@@ -643,6 +643,17 @@ class Router:
         self.initialize_router_endpoints()
         self.apply_default_settings()
 
+    @staticmethod
+    def get_valid_args() -> List[str]:
+        """
+        Returns a list of valid arguments for the Router.__init__ method.
+        """
+        arg_spec = inspect.getfullargspec(Router.__init__)
+        valid_args = arg_spec.args + arg_spec.kwonlyargs
+        if "self" in valid_args:
+            valid_args.remove("self")
+        return valid_args
+
     def apply_default_settings(self):
         """
         Apply the default settings to the router.
@@ -4692,9 +4703,12 @@ class Router:
                 # get num_retries from retry policy
                 # Use the model_group captured at the start of the function, or get it from metadata
                 # kwargs.get("model") at this point is the deployment model, not the model_group
-                _model_group_for_retry_policy = model_group or _metadata.get("model_group") or kwargs.get("model")
+                _model_group_for_retry_policy = (
+                    model_group or _metadata.get("model_group") or kwargs.get("model")
+                )
                 _retry_policy_retries = self.get_num_retries_from_retry_policy(
-                    exception=original_exception, model_group=_model_group_for_retry_policy
+                    exception=original_exception,
+                    model_group=_model_group_for_retry_policy,
                 )
                 if _retry_policy_retries is not None:
                     num_retries = _retry_policy_retries
@@ -5879,7 +5893,10 @@ class Router:
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
-            if custom_llm_provider not in litellm.provider_list and not JSONProviderRegistry.exists(custom_llm_provider):
+            if (
+                custom_llm_provider not in litellm.provider_list
+                and not JSONProviderRegistry.exists(custom_llm_provider)
+            ):
                 raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         #### DEPLOYMENT NAMES INIT ########
@@ -6355,19 +6372,20 @@ class Router:
         elif custom_llm_provider != "azure":
             model = _model
 
-            potential_models = self.pattern_router.route(received_model_name)
-            if "*" in model and potential_models is not None:  # if wildcard route
-                for potential_model in potential_models:
-                    try:
-                        if potential_model.get("model_info", {}).get(
-                            "id"
-                        ) == deployment.get("model_info", {}).get("id"):
-                            model = potential_model.get("litellm_params", {}).get(
-                                "model"
-                            )
-                            break
-                    except Exception:
-                        pass
+            if "*" in model:  # only call pattern_router for wildcard models
+                potential_models = self.pattern_router.route(received_model_name)
+                if potential_models is not None:
+                    for potential_model in potential_models:
+                        try:
+                            if potential_model.get("model_info", {}).get(
+                                "id"
+                            ) == deployment.get("model_info", {}).get("id"):
+                                model = potential_model.get("litellm_params", {}).get(
+                                    "model"
+                                )
+                                break
+                        except Exception:
+                            pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
         if model is None:
