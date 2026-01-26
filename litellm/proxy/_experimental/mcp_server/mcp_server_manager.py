@@ -11,7 +11,7 @@ import datetime
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast, Callable
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -1825,6 +1825,7 @@ class MCPServerManager:
         oauth2_headers: Optional[Dict[str, str]],
         raw_headers: Optional[Dict[str, str]],
         proxy_logging_obj: Optional[ProxyLogging],
+        host_progress_callback: Optional[Callable] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -1909,7 +1910,7 @@ class MCPServerManager:
         )
 
         async def _call_tool_via_client(client, params):
-            return await client.call_tool(params)
+            return await client.call_tool(params, host_progress_callback=host_progress_callback)
 
         tasks.append(
             asyncio.create_task(_call_tool_via_client(client, call_tool_params))
@@ -1946,6 +1947,8 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        host_progress_callback: Optional[Callable] = None,
+
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -2021,6 +2024,7 @@ class MCPServerManager:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 proxy_logging_obj=proxy_logging_obj,
+                host_progress_callback=host_progress_callback,
             )
 
         # For OpenAPI tools, await outside the client context
