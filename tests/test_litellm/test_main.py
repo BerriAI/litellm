@@ -477,6 +477,12 @@ async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
+    # Clear cache to ensure no cached clients from previous tests interfere
+    # This prevents cache pollution where a previous test cached a client with
+    # aiohttp transport, which would bypass respx mocks
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    
     # Ensure aiohttp transport is disabled to use httpx which respx can mock
     litellm.disable_aiohttp_transport = True
 
