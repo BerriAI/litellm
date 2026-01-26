@@ -1518,6 +1518,7 @@ def completion(  # type: ignore # noqa: PLR0915
             litellm_metadata=kwargs.get("litellm_metadata"),
             disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
             drop_params=kwargs.get("drop_params"),
+            additional_drop_params=kwargs.get("additional_drop_params"),
             prompt_id=prompt_id,
             prompt_variables=prompt_variables,
             ssl_verify=ssl_verify,
