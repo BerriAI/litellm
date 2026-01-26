@@ -244,6 +244,93 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return managed_object.created_by == user_id
         return True  # don't raise error if managed object is not found
 
+    async def list_user_batches(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        limit: Optional[int] = None,
+        after: Optional[str] = None,
+        provider: Optional[str] = None,
+        target_model_names: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        # Provider filtering is not supported for managed batches
+        # This is because the encoded object ids stored in the managed objects table do not contain the provider information
+        # To support provider filtering, we would need to store the provider information in the encoded object ids
+        if provider:
+            raise Exception(
+                "Filtering by 'provider' is not supported when using managed batches. "
+                "Use 'target_model_names' to filter by specific model names instead."
+            )
+        
+        where_clause: Dict[str, Any] = {"file_purpose": "batch"}
+        
+        # Filter by user who created the batch
+        if user_api_key_dict.user_id:
+            where_clause["created_by"] = user_api_key_dict.user_id
+        
+        if after:
+            where_clause["id"] = {"gt": after}
+        
+        # Fetch more than needed to allow for post-fetch filtering
+        fetch_limit = limit or 20
+        if target_model_names:
+            # Fetch extra to account for filtering
+            fetch_limit = max(fetch_limit * 3, 100)
+        
+        batches = await self.prisma_client.db.litellm_managedobjecttable.find_many(
+            where=where_clause,
+            take=fetch_limit,
+            order={"created_at": "desc"},
+        )
+        
+        # Parse target_model_names filter
+        target_models_filter: List[str] = []
+        if target_model_names:
+            target_models_filter = [m.strip() for m in target_model_names.split(",") if m.strip()]
+        
+        batch_objects: List[LiteLLMBatch] = []
+        for batch in batches:
+            try:
+                # Stop once we have enough after filtering
+                if len(batch_objects) >= (limit or 20):
+                    break
+
+                batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
+                batch_obj = LiteLLMBatch(**batch_data)
+                batch_obj.id = batch.unified_object_id
+
+                # If no target_model_names filter, add the batch to the list
+                if not target_models_filter:
+                    batch_objects.append(batch_obj)
+                    continue
+                
+                # Filter by target_model_names
+                decoded_id = _is_base64_encoded_unified_file_id(batch.unified_object_id)
+                model_id = None
+                if decoded_id:
+                    model_id = get_model_id_from_unified_batch_id(decoded_id)
+
+                # Skip batches without decodable IDs if filtering is requested
+                if not model_id:
+                    continue
+
+                if any(target.lower() in model_id.lower() for target in target_models_filter):
+                    batch_objects.append(batch_obj)
+                    continue
+                   
+            except Exception as e:
+                verbose_logger.warning(
+                    f"Failed to parse batch object {batch.unified_object_id}: {e}"
+                )
+                continue
+        
+        return {
+            "object": "list",
+            "data": batch_objects,
+            "first_id": batch_objects[0].id if batch_objects else None,
+            "last_id": batch_objects[-1].id if batch_objects else None,
+            "has_more": len(batch_objects) == (limit or 20),
+        }
+
     async def get_user_created_file_ids(
         self, user_api_key_dict: UserAPIKeyAuth, model_object_ids: List[str]
     ) -> List[OpenAIFileObject]:
