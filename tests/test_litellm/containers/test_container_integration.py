@@ -385,10 +385,12 @@ class TestContainerIntegration:
             name="Provider Test Container"
         )
         
-        with patch.object(litellm.main.base_llm_http_handler, 'container_create_handler', return_value=mock_response):
+        with patch.object(litellm.main.base_llm_http_handler, 'container_create_handler', return_value=mock_response) as mock_handler:
             response = create_container(
                 name="Provider Test Container",
                 custom_llm_provider=provider
             )
             
             assert response.name == "Provider Test Container"
+            # Verify the mock was actually called (not making real API calls)
+            mock_handler.assert_called_once()
