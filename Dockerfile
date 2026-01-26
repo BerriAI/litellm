@@ -20,7 +20,8 @@ RUN python -m pip install build
 COPY . .
 
 # Build Admin UI
-RUN chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
+# Convert Windows line endings to Unix and make executable
+RUN sed -i 's/\r$//' docker/build_admin_ui.sh && chmod +x docker/build_admin_ui.sh && ./docker/build_admin_ui.sh
 
 # Build the package
 RUN rm -rf dist/* && python -m build
@@ -65,12 +66,14 @@ RUN find /usr/lib -type f -path "*/tornado/test/*" -delete && \
     find /usr/lib -type d -path "*/tornado/test" -delete
 
 # Install semantic_router and aurelio-sdk using script
-RUN chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
+# Convert Windows line endings to Unix and make executable
+RUN sed -i 's/\r$//' docker/install_auto_router.sh && chmod +x docker/install_auto_router.sh && ./docker/install_auto_router.sh
 
 # Generate prisma client
 RUN prisma generate
-RUN chmod +x docker/entrypoint.sh
-RUN chmod +x docker/prod_entrypoint.sh
+# Convert Windows line endings to Unix for entrypoint scripts
+RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh
+RUN sed -i 's/\r$//' docker/prod_entrypoint.sh && chmod +x docker/prod_entrypoint.sh
 
 EXPOSE 4000/tcp
 

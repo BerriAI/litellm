@@ -18,6 +18,7 @@ import KeyInfoView from "../templates/key_info_view";
 import { SessionView } from "./SessionView";
 import { VectorStoreViewer } from "./VectorStoreViewer";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
+import { CostBreakdownViewer } from "./CostBreakdownViewer";
 import FilterComponent from "../molecules/filter";
 import { FilterOption } from "../molecules/filter";
 import { useLogFilterLogic } from "./log_filter_logic";
@@ -27,6 +28,9 @@ import AuditLogs from "./audit_logs";
 import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
+import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
+import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
+import NewBadge from "../common_components/NewBadge";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -354,7 +358,7 @@ export default function SpendLogsTable({
     sessionLogs.data?.data?.map((log) => ({
       ...log,
       onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-      onSessionClick: (sessionId: string) => {},
+      onSessionClick: (sessionId: string) => { },
     })) || [];
 
   // Add this function to handle manual refresh
@@ -364,6 +368,24 @@ export default function SpendLogsTable({
 
   const handleRowExpand = (requestId: string | null) => {
     setExpandedRequestId(requestId);
+  };
+
+  // Function to extract unique error codes from logs
+  const extractErrorCodes = (logs: LogEntry[], searchText: string = "") => {
+    const errorCodes = new Set<string>();
+    logs.forEach((log) => {
+      const metadata = log.metadata || {};
+      if (metadata.status === "failure" && metadata.error_information) {
+        const errorCode = metadata.error_information.error_code;
+        if (errorCode && (!searchText || errorCode.toLowerCase().includes(searchText.toLowerCase()))) {
+          errorCodes.add(errorCode);
+        }
+      }
+    });
+    return Array.from(errorCodes).map((code) => ({
+      label: code,
+      value: code,
+    }));
   };
 
   const logFilterOptions: FilterOption[] = [
@@ -427,6 +449,14 @@ export default function SpendLogsTable({
       },
     },
     {
+      name: "Error Code",
+      label: "Error Code",
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        return extractErrorCodes(logsData.data, searchText);
+      },
+    },
+    {
       name: "Key Hash",
       label: "Key Hash",
       isSearchable: false,
@@ -475,6 +505,8 @@ export default function SpendLogsTable({
         <TabList>
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
+          <Tab><>Deleted Keys <NewBadge /></></Tab>
+          <Tab><>Deleted Teams <NewBadge /></></Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -499,12 +531,8 @@ export default function SpendLogsTable({
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
-                premiumUser={premiumUser}
                 backButtonText="Back to Logs"
               />
             ) : selectedSessionId ? (
@@ -514,7 +542,7 @@ export default function SpendLogsTable({
                   data={sessionData}
                   renderSubComponent={RequestViewer}
                   getRowCanExpand={() => true}
-                  // Optionally: add session-specific row expansion state
+                // Optionally: add session-specific row expansion state
                 />
               </div>
             ) : (
@@ -574,9 +602,8 @@ export default function SpendLogsTable({
                                   {quickSelectOptions.map((option) => (
                                     <button
                                       key={option.label}
-                                      className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                        displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
-                                      }`}
+                                      className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
+                                        }`}
                                       onClick={() => {
                                         setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
                                         setStartTime(
@@ -594,9 +621,8 @@ export default function SpendLogsTable({
                                   ))}
                                   <div className="border-t my-2" />
                                   <button
-                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                      isCustomDate ? "bg-blue-50 text-blue-600" : ""
-                                    }`}
+                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${isCustomDate ? "bg-blue-50 text-blue-600" : ""
+                                      }`}
                                     onClick={() => setIsCustomDate(!isCustomDate)}
                                   >
                                     Custom Range
@@ -726,6 +752,8 @@ export default function SpendLogsTable({
               allTeams={allTeams}
             />
           </TabPanel>
+          <TabPanel><DeletedKeysPage /></TabPanel>
+          <TabPanel><DeletedTeamsPage /></TabPanel>
         </TabPanels>
       </TabGroup>
     </div>
@@ -909,11 +937,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <div className="flex">
               <span className="font-medium w-1/3">Status:</span>
               <span
-                className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
-                  (row.original.metadata?.status || "Success").toLowerCase() !== "failure"
-                    ? "bg-green-100 text-green-800"
-                    : "bg-red-100 text-red-800"
-                }`}
+                className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${(row.original.metadata?.status || "Success").toLowerCase() !== "failure"
+                  ? "bg-green-100 text-green-800"
+                  : "bg-red-100 text-red-800"
+                  }`}
               >
                 {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
               </span>
@@ -939,6 +966,9 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
           </div>
         </div>
       </div>
+
+      {/* Cost Breakdown - Show if cost breakdown data is available */}
+      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
 
       {/* Configuration Info Message - Show when data is missing */}
       <ConfigInfoMessage show={missingData} />

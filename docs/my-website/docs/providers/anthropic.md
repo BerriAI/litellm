@@ -444,7 +444,7 @@ Here's what a sample Raw Request from LiteLLM for Anthropic Context Caching look
 POST Request Sent from LiteLLM:
 curl -X POST \
 https://api.anthropic.com/v1/messages \
--H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' -H 'anthropic-beta: prompt-caching-2024-07-31' \
+-H 'accept: application/json' -H 'anthropic-version: 2023-06-01' -H 'content-type: application/json' -H 'x-api-key: sk-...' \
 -d '{'model': 'claude-3-5-sonnet-20240620', [
     {
       "role": "user",
@@ -472,6 +472,8 @@ https://api.anthropic.com/v1/messages \
   "max_tokens": 10
 }'
 ```
+
+**Note:** Anthropic no longer requires the `anthropic-beta: prompt-caching-2024-07-31` header. Prompt caching now works automatically when you use `cache_control` in your messages.
 ::: 
 
 ### Caching - Large Context Caching 
@@ -1690,9 +1692,9 @@ Assistant:
 ```
 
 
-## Usage - PDF 
+## Usage - PDF
 
-Pass base64 encoded PDF files to Anthropic models using the `image_url` field.
+Pass base64 encoded PDF files to Anthropic models using the `file` content type with a `file_data` field.
 
 <Tabs>
 <TabItem value="sdk" label="SDK">

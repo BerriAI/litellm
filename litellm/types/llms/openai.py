@@ -71,7 +71,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_validator
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -654,6 +654,8 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     file_id: str
     filename: str
     format: str
+    detail: str  # For video/image resolution control (low, medium, high, ultra_high)
+    video_metadata: Dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -1191,11 +1193,54 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     status: Optional[str] = None
     text: Optional[Union["ResponseText", Dict[str, Any]]] = None
     truncation: Optional[Literal["auto", "disabled"]] = None
-    usage: Optional[ResponseAPIUsage] = None
+    usage: Optional[Any] = None
     user: Optional[str] = None
     store: Optional[bool] = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @field_validator("usage", mode="before")
+    @classmethod
+    def validate_usage(cls, value):
+        """Convert usage dict to ResponseAPIUsage object if needed"""
+        if value is None:
+            return value
+        if isinstance(value, dict):
+            return ResponseAPIUsage(**value)
+        return value
+
+    @property
+    def output_text(self) -> str:
+        """
+        Convenience property that aggregates all `output_text` items from the `output` list.
+
+        If no `output_text` content blocks exist, then an empty string is returned.
+
+        This matches the OpenAI SDK's Response.output_text behavior.
+        """
+        texts: List[str] = []
+        for output_item in self.output:
+            # Handle both dict and object access patterns
+            if isinstance(output_item, dict):
+                item_type = output_item.get("type")
+                content = output_item.get("content", [])
+            else:
+                item_type = getattr(output_item, "type", None)
+                content = getattr(output_item, "content", [])
+
+            if item_type == "message" and content:
+                for content_item in content:
+                    if isinstance(content_item, dict):
+                        content_type = content_item.get("type")
+                        text = content_item.get("text", "") or ""
+                    else:
+                        content_type = getattr(content_item, "type", None)
+                        text = getattr(content_item, "text", "") or ""
+
+                    if content_type == "output_text":
+                        texts.append(text)
+
+        return "".join(texts)
 
 
 class ResponsesAPIStreamEvents(str, Enum):
@@ -1215,6 +1260,8 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Reasoning summary events
     RESPONSE_PART_ADDED = "response.reasoning_summary_part.added"
     REASONING_SUMMARY_TEXT_DELTA = "response.reasoning_summary_text.delta"
+    REASONING_SUMMARY_TEXT_DONE = "response.reasoning_summary_text.done"
+    REASONING_SUMMARY_PART_DONE = "response.reasoning_summary_part.done"
 
     # Output item events
     OUTPUT_ITEM_ADDED = "response.output_item.added"
@@ -1302,6 +1349,24 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     delta: str
+
+
+class ReasoningSummaryTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE]
+    item_id: str
+    output_index: int
+    sequence_number: int
+    summary_index: int
+    text: str
+
+
+class ReasoningSummaryPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
+    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE]
+    item_id: str
+    output_index: int
+    sequence_number: int
+    summary_index: int
+    part: BaseLiteLLMOpenAIResponseObject
 
 
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1558,6 +1623,8 @@ ResponsesAPIStreamingResponse = Annotated[
         ResponseIncompleteEvent,
         ResponsePartAddedEvent,
         ReasoningSummaryTextDeltaEvent,
+        ReasoningSummaryTextDoneEvent,
+        ReasoningSummaryPartDoneEvent,
         OutputItemAddedEvent,
         OutputItemDoneEvent,
         ContentPartAddedEvent,
@@ -1945,7 +2012,7 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length"
+    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
 ]
 
 

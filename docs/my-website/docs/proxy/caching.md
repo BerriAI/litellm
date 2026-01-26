@@ -1,28 +1,29 @@
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
+import Tabs from '@theme/Tabs'; import TabItem from '@theme/TabItem';
 
-# Caching 
+# Caching
 
-:::note 
+:::note
 
 For OpenAI/Anthropic Prompt Caching, go [here](../completion/prompt_caching.md)
 
 :::
 
-Cache LLM Responses. LiteLLM's caching system stores and reuses LLM responses to save costs and reduce latency. When you make the same request twice, the cached response is returned instead of calling the LLM API again.
-
-
+Cache LLM Responses. LiteLLM's caching system stores and reuses LLM responses to save costs and
+reduce latency. When you make the same request twice, the cached response is returned instead of
+calling the LLM API again.
 
 ### Supported Caches
 
 - In Memory Cache
 - Disk Cache
-- Redis Cache 
+- Redis Cache
 - Qdrant Semantic Cache
 - Redis Semantic Cache
-- s3 Bucket Cache 
+- S3 Bucket Cache
+- GCS Bucket Cache
 
 ## Quick Start
+
 <Tabs>
 
 <TabItem value="redis" label="redis cache">
@@ -30,6 +31,7 @@ Cache LLM Responses. LiteLLM's caching system stores and reuses LLM responses to
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 
 #### Step 1: Add `cache` to the config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -41,18 +43,19 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache: True # set cache responses to True, litellm defaults to using a redis cache
 ```
 
-#### [OPTIONAL] Step 1.5: Add redis namespaces, default ttl 
+#### [OPTIONAL] Step 1.5: Add redis namespaces, default ttl
 
 #### Namespace
+
 If you want to create some folder for your keys, you can set a namespace, like this:
 
 ```yaml
 litellm_settings:
-  cache: true 
-  cache_params:        # set cache params for redis
+  cache: true
+  cache_params: # set cache params for redis
     type: redis
     namespace: "litellm.caching.caching"
 ```
@@ -63,7 +66,7 @@ and keys will be stored like:
 litellm.caching.caching:<hash>
 ```
 
-#### Redis Cluster 
+#### Redis Cluster
 
 <Tabs>
 
@@ -75,12 +78,11 @@ model_list:
     litellm_params:
       model: "*"
 
-
 litellm_settings:
   cache: True
   cache_params:
     type: redis
-    redis_startup_nodes: [{"host": "127.0.0.1", "port": "7001"}] 
+    redis_startup_nodes: [{ "host": "127.0.0.1", "port": "7001" }]
 ```
 
 </TabItem>
@@ -121,8 +123,7 @@ print("REDIS_CLUSTER_NODES", os.environ["REDIS_CLUSTER_NODES"])
 
 </Tabs>
 
-#### Redis Sentinel 
-
+#### Redis Sentinel
 
 <Tabs>
 
@@ -133,7 +134,6 @@ model_list:
   - model_name: "*"
     litellm_params:
       model: "*"
-
 
 litellm_settings:
   cache: true
@@ -181,18 +181,17 @@ print("REDIS_SENTINEL_NODES", os.environ["REDIS_SENTINEL_NODES"])
 
 ```yaml
 litellm_settings:
-  cache: true 
-  cache_params:        # set cache params for redis
+  cache: true
+  cache_params: # set cache params for redis
     type: redis
     ttl: 600 # will be cached on redis for 600s
-    # default_in_memory_ttl: Optional[float], default is None. time in seconds. 
-    # default_in_redis_ttl: Optional[float], default is None. time in seconds. 
+    # default_in_memory_ttl: Optional[float], default is None. time in seconds.
+    # default_in_redis_ttl: Optional[float], default is None. time in seconds.
 ```
-
 
 #### SSL
 
-just set `REDIS_SSL="True"` in your .env, and LiteLLM will pick this up. 
+just set `REDIS_SSL="True"` in your .env, and LiteLLM will pick this up.
 
 ```env
 REDIS_SSL="True"
@@ -204,14 +203,14 @@ For quick testing, you can also use REDIS_URL, eg.:
 REDIS_URL="rediss://.."
 ```
 
-but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between using it vs. redis_host, port, etc.
+but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between
+using it vs. redis_host, port, etc.
 
 #### GCP IAM Authentication
 
 For GCP Memorystore Redis with IAM authentication, install the required dependency:
 
-:::info
-IAM authentication for redis is only supported via GCP and only on Redis Clusters for now.
+:::info IAM authentication for redis is only supported via GCP and only on Redis Clusters for now.
 :::
 
 ```shell
@@ -229,7 +228,8 @@ litellm_settings:
   cache: True
   cache_params:
     type: redis
-    redis_startup_nodes: [{"host": "10.128.0.2", "port": 6379}, {"host": "10.128.0.2", "port": 11008}]
+    redis_startup_nodes:
+      [{ "host": "10.128.0.2", "port": 6379 }, { "host": "10.128.0.2", "port": 11008 }]
     gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"
     ssl: true
     ssl_cert_reqs: null
@@ -241,7 +241,6 @@ litellm_settings:
 <TabItem value="gcp-iam-env" label="Set on .env">
 
 You can configure GCP IAM Redis authentication in your .env:
-
 
 For Redis Cluster:
 
@@ -283,24 +282,44 @@ Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable cac
   ```
 
 **Additional kwargs**  
-You can pass in any additional redis.Redis arg, by storing the variable + value in your os environment, like this: 
+:::info
+Use `REDIS_*` environment variables to configure all Redis client library parameters. This is the suggested mechanism for toggling Redis settings as it automatically maps environment variables to Redis client kwargs.
+:::
+
+You can pass in any additional redis.Redis arg, by storing the variable + value in your os
+environment, like this:
+
 ```shell
 REDIS_<redis-kwarg-name> = ""
-``` 
+```
+
+For example:
+```shell
+REDIS_SSL = "True"
+REDIS_SSL_CERT_REQS = "None" 
+REDIS_CONNECTION_POOL_KWARGS = '{"max_connections": 20}'
+```
+
+:::warning
+**Note**: For non-string Redis parameters (like integers, booleans, or complex objects), avoid using `REDIS_*` environment variables as they may fail during Redis client initialization. Instead, use `cache_kwargs` in your router configuration for such parameters.
+:::
 
 [**See how it's read from the environment**](https://github.com/BerriAI/litellm/blob/4d7ff1b33b9991dcf38d821266290631d9bcd2dd/litellm/_redis.py#L40)
+
 #### Step 3: Run proxy with config
+
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
-</TabItem>
 
+</TabItem>
 
 <TabItem value="qdrant-semantic" label="Qdrant Semantic cache">
 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 
 #### Step 1: Add `cache` to the config.yaml
+
 ```yaml
 model_list:
   - model_name: fake-openai-endpoint
@@ -315,13 +334,13 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache: True          # set cache responses to True, litellm defaults to using a redis cache
+  cache: True # set cache responses to True, litellm defaults to using a redis cache
   cache_params:
     type: qdrant-semantic
     qdrant_semantic_cache_embedding_model: openai-embedding # the model should be defined on the model_list
     qdrant_collection_name: test_collection
     qdrant_quantization_config: binary
-    similarity_threshold: 0.8   # similarity threshold for semantic cache
+    similarity_threshold: 0.8 # similarity threshold for semantic cache
 ```
 
 #### Step 2: Add Qdrant Credentials to your .env
@@ -332,10 +351,10 @@ QDRANT_API_BASE = "https://5392d382-45*********.cloud.qdrant.io"
 ```
 
 #### Step 3: Run proxy with config
+
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
-
 
 #### Step 4. Test it
 
@@ -351,13 +370,15 @@ curl -i http://localhost:4000/v1/chat/completions \
   }'
 ```
 
-**Expect to see `x-litellm-semantic-similarity` in the response headers when semantic caching is one**
+**Expect to see `x-litellm-semantic-similarity` in the response headers when semantic caching is
+one**
 
 </TabItem>
 
 <TabItem value="s3" label="s3 cache">
 
 #### Step 1: Add `cache` to the config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -369,28 +390,70 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache: True          # set cache responses to True
-  cache_params:        # set cache params for s3
+  cache: True # set cache responses to True
+  cache_params: # set cache params for s3
     type: s3
-    s3_bucket_name: cache-bucket-litellm   # AWS Bucket Name for S3
-    s3_region_name: us-west-2              # AWS Region Name for S3
-    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID  # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
-    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY  # AWS Secret Access Key for S3
-    s3_endpoint_url: https://s3.amazonaws.com  # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
+    s3_bucket_name: cache-bucket-litellm # AWS Bucket Name for S3
+    s3_region_name: us-west-2 # AWS Region Name for S3
+    s3_aws_access_key_id: os.environ/AWS_ACCESS_KEY_ID # us os.environ/<variable name> to pass environment variables. This is AWS Access Key ID for S3
+    s3_aws_secret_access_key: os.environ/AWS_SECRET_ACCESS_KEY # AWS Secret Access Key for S3
+    s3_endpoint_url: https://s3.amazonaws.com # [OPTIONAL] S3 endpoint URL, if you want to use Backblaze/cloudflare s3 buckets
 ```
 
 #### Step 2: Run proxy with config
+
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
+
 </TabItem>
 
+<TabItem value="gcs" label="gcs cache">
+
+#### Step 1: Add `cache` to the config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-3.5-turbo
+    litellm_params:
+      model: gpt-3.5-turbo
+  - model_name: text-embedding-ada-002
+    litellm_params:
+      model: text-embedding-ada-002
+
+litellm_settings:
+  set_verbose: True
+  cache: True # set cache responses to True
+  cache_params: # set cache params for gcs
+    type: gcs
+    gcs_bucket_name: cache-bucket-litellm # GCS Bucket Name for caching
+    gcs_path_service_account: os.environ/GCS_PATH_SERVICE_ACCOUNT # use os.environ/<variable name> to pass environment variables. This is the path to your GCS service account JSON file
+    gcs_path: cache/ # [OPTIONAL] GCS path prefix for cache objects
+```
+
+#### Step 2: Add GCS Credentials to .env
+
+Set the GCS environment variables in your .env file:
+
+```shell
+GCS_BUCKET_NAME="your-gcs-bucket-name"
+GCS_PATH_SERVICE_ACCOUNT="/path/to/service-account.json"
+```
+
+#### Step 3: Run proxy with config
+
+```shell
+$ litellm --config /path/to/config.yaml
+```
+
+</TabItem>
 
 <TabItem value="redis-sem" label="redis semantic cache">
 
 Caching can be enabled by adding the `cache` key in the `config.yaml`
 
 #### Step 1: Add `cache` to the config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -405,40 +468,45 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache: True          # set cache responses to True
+  cache: True # set cache responses to True
   cache_params:
-    type: "redis-semantic"  
-    similarity_threshold: 0.8   # similarity threshold for semantic cache
+    type: "redis-semantic"
+    similarity_threshold: 0.8 # similarity threshold for semantic cache
     redis_semantic_cache_embedding_model: azure-embedding-model # set this to a model_name set in model_list
 ```
 
 #### Step 2: Add Redis Credentials to .env
+
 Set either `REDIS_URL` or the `REDIS_HOST` in your os environment, to enable caching.
 
-  ```shell
-  REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
-  ## OR ## 
-  REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
-  REDIS_PORT = ""       # REDIS_PORT='18841'
-  REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
-  ```
+```shell
+REDIS_URL = ""        # REDIS_URL='redis://username:password@hostname:port/database'
+## OR ##
+REDIS_HOST = ""       # REDIS_HOST='redis-18841.c274.us-east-1-3.ec2.cloud.redislabs.com'
+REDIS_PORT = ""       # REDIS_PORT='18841'
+REDIS_PASSWORD = ""   # REDIS_PASSWORD='liteLlmIsAmazing'
+```
 
 **Additional kwargs**  
-You can pass in any additional redis.Redis arg, by storing the variable + value in your os environment, like this: 
+You can pass in any additional redis.Redis arg, by storing the variable + value in your os
+environment, like this:
+
 ```shell
 REDIS_<redis-kwarg-name> = ""
-``` 
+```
 
 #### Step 3: Run proxy with config
+
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
-</TabItem>
 
+</TabItem>
 
 <TabItem value="local" label="In Memory Cache">
 
 #### Step 1: Add `cache` to the config.yaml
+
 ```yaml
 litellm_settings:
   cache: True
@@ -447,6 +515,7 @@ litellm_settings:
 ```
 
 #### Step 2: Run proxy with config
+
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
@@ -456,15 +525,17 @@ $ litellm --config /path/to/config.yaml
 <TabItem value="disk" label="Disk Cache">
 
 #### Step 1: Add `cache` to the config.yaml
+
 ```yaml
 litellm_settings:
   cache: True
   cache_params:
     type: disk
-    disk_cache_dir: /tmp/litellm-cache  # OPTIONAL, default to ./.litellm_cache
+    disk_cache_dir: /tmp/litellm-cache # OPTIONAL, default to ./.litellm_cache
 ```
 
 #### Step 2: Run proxy with config
+
 ```shell
 $ litellm --config /path/to/config.yaml
 ```
@@ -472,7 +543,6 @@ $ litellm --config /path/to/config.yaml
 </TabItem>
 
 </Tabs>
-
 
 ## Usage
 
@@ -482,6 +552,7 @@ $ litellm --config /path/to/config.yaml
 <TabItem value="chat_completions" label="/chat/completions">
 
 Send the same request twice:
+
 ```shell
 curl http://0.0.0.0:4000/v1/chat/completions \
   -H "Content-Type: application/json" \
@@ -499,10 +570,12 @@ curl http://0.0.0.0:4000/v1/chat/completions \
      "temperature": 0.7
    }'
 ```
+
 </TabItem>
 <TabItem value="embeddings" label="/embeddings">
 
 Send the same request twice:
+
 ```shell
 curl --location 'http://0.0.0.0:4000/embeddings' \
   --header 'Content-Type: application/json' \
@@ -518,18 +591,19 @@ curl --location 'http://0.0.0.0:4000/embeddings' \
   "input": ["write a litellm poem"]
   }'
 ```
+
 </TabItem>
 </Tabs>
 
 ### Dynamic Cache Controls
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `ttl` | *Optional(int)* | Will cache the response for the user-defined amount of time (in seconds) |
-| `s-maxage` | *Optional(int)* | Will only accept cached responses that are within user-defined range (in seconds) |
-| `no-cache` | *Optional(bool)* | Will not store the response in cache. |
-| `no-store` | *Optional(bool)* | Will not cache the response |
-| `namespace` | *Optional(str)* | Will cache the response under a user-defined namespace |
+| Parameter   | Type             | Description                                                                       |
+| ----------- | ---------------- | --------------------------------------------------------------------------------- |
+| `ttl`       | _Optional(int)_  | Will cache the response for the user-defined amount of time (in seconds)          |
+| `s-maxage`  | _Optional(int)_  | Will only accept cached responses that are within user-defined range (in seconds) |
+| `no-cache`  | _Optional(bool)_ | Will not store the response in cache.                                             |
+| `no-store`  | _Optional(bool)_ | Will not cache the response                                                       |
+| `namespace` | _Optional(str)_  | Will cache the response under a user-defined namespace                            |
 
 Each cache parameter can be controlled on a per-request basis. Here are examples for each parameter:
 
@@ -558,6 +632,7 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+
 </TabItem>
 
 <TabItem value="curl" label="curl">
@@ -574,6 +649,7 @@ curl http://localhost:4000/v1/chat/completions \
     ]
   }'
 ```
+
 </TabItem>
 </Tabs>
 
@@ -602,6 +678,7 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+
 </TabItem>
 
 <TabItem value="curl" label="curl">
@@ -618,10 +695,12 @@ curl http://localhost:4000/v1/chat/completions \
     ]
   }'
 ```
+
 </TabItem>
 </Tabs>
 
 ### `no-cache`
+
 Force a fresh response, bypassing the cache.
 
 <Tabs>
@@ -645,6 +724,7 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+
 </TabItem>
 
 <TabItem value="curl" label="curl">
@@ -661,13 +741,13 @@ curl http://localhost:4000/v1/chat/completions \
     ]
   }'
 ```
+
 </TabItem>
 </Tabs>
 
 ### `no-store`
 
 Will not store the response in cache.
-
 
 <Tabs>
 <TabItem value="openai" label="OpenAI Python SDK">
@@ -690,6 +770,7 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+
 </TabItem>
 
 <TabItem value="curl" label="curl">
@@ -706,10 +787,12 @@ curl http://localhost:4000/v1/chat/completions \
     ]
   }'
 ```
+
 </TabItem>
 </Tabs>
 
 ### `namespace`
+
 Store the response under a specific cache namespace.
 
 <Tabs>
@@ -733,6 +816,7 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+
 </TabItem>
 
 <TabItem value="curl" label="curl">
@@ -749,36 +833,37 @@ curl http://localhost:4000/v1/chat/completions \
     ]
   }'
 ```
+
 </TabItem>
 </Tabs>
 
-
-
 ## Set cache for proxy, but not on the actual llm api call
 
-Use this if you just want to enable features like rate limiting, and loadbalancing across multiple instances.
+Use this if you just want to enable features like rate limiting, and loadbalancing across multiple
+instances.
 
-Set `supported_call_types: []` to disable caching on the actual api call. 
-
+Set `supported_call_types: []` to disable caching on the actual api call.
 
 ```yaml
 litellm_settings:
   cache: True
   cache_params:
     type: redis
-    supported_call_types: [] 
+    supported_call_types: []
 ```
 
-
 ## Debugging Caching - `/cache/ping`
+
 LiteLLM Proxy exposes a `/cache/ping` endpoint to test if the cache is working as expected
 
 **Usage**
+
 ```shell
 curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1234"
 ```
 
 **Expected Response - when cache healthy**
+
 ```shell
 {
     "status": "healthy",
@@ -803,7 +888,8 @@ curl --location 'http://0.0.0.0:4000/cache/ping'  -H "Authorization: Bearer sk-1
 
 ### Control Call Types Caching is on for - (`/chat/completion`, `/embeddings`, etc.)
 
-By default, caching is on for all call types. You can control which call types caching is on for by setting `supported_call_types` in `cache_params`
+By default, caching is on for all call types. You can control which call types caching is on for by
+setting `supported_call_types` in `cache_params`
 
 **Cache will only be on for the call types specified in `supported_call_types`**
 
@@ -812,10 +898,13 @@ litellm_settings:
   cache: True
   cache_params:
     type: redis
-    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
-                          # /chat/completions, /completions, /embeddings, /audio/transcriptions
+    supported_call_types:
+      ["acompletion", "atext_completion", "aembedding", "atranscription"]
+      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
+
 ### Set Cache Params on config.yaml
+
 ```yaml
 model_list:
   - model_name: gpt-3.5-turbo
@@ -827,22 +916,25 @@ model_list:
 
 litellm_settings:
   set_verbose: True
-  cache: True          # set cache responses to True, litellm defaults to using a redis cache
-  cache_params:         # cache_params are optional
-    type: "redis"  # The type of cache to initialize. Can be "local" or "redis". Defaults to "local".
-    host: "localhost"  # The host address for the Redis cache. Required if type is "redis".
-    port: 6379  # The port number for the Redis cache. Required if type is "redis".
-    password: "your_password"  # The password for the Redis cache. Required if type is "redis".
-    
+  cache: True # set cache responses to True, litellm defaults to using a redis cache
+  cache_params: # cache_params are optional
+    type: "redis" # The type of cache to initialize. Can be "local", "redis", "s3", or "gcs". Defaults to "local".
+    host: "localhost" # The host address for the Redis cache. Required if type is "redis".
+    port: 6379 # The port number for the Redis cache. Required if type is "redis".
+    password: "your_password" # The password for the Redis cache. Required if type is "redis".
+
     # Optional configurations
-    supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
-                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
+    supported_call_types:
+      ["acompletion", "atext_completion", "aembedding", "atranscription"]
+      # /chat/completions, /completions, /embeddings, /audio/transcriptions
 ```
 
-### Deleting Cache Keys - `/cache/delete` 
+### Deleting Cache Keys - `/cache/delete`
+
 In order to delete a cache key, send a request to `/cache/delete` with the `keys` you want to delete
 
-Example 
+Example
+
 ```shell
 curl -X POST "http://0.0.0.0:4000/cache/delete" \
   -H "Authorization: Bearer sk-1234" \
@@ -854,7 +946,10 @@ curl -X POST "http://0.0.0.0:4000/cache/delete" \
 ```
 
 #### Viewing Cache Keys from responses
-You can view the cache_key in the response headers, on cache hits the cache key is sent as the `x-litellm-cache-key` response headers
+
+You can view the cache_key in the response headers, on cache hits the cache key is sent as the
+`x-litellm-cache-key` response headers
+
 ```shell
 curl -i --location 'http://0.0.0.0:4000/chat/completions' \
     --header 'Authorization: Bearer sk-1234' \
@@ -871,7 +966,8 @@ curl -i --location 'http://0.0.0.0:4000/chat/completions' \
 }'
 ```
 
-Response from litellm proxy 
+Response from litellm proxy
+
 ```json
 date: Thu, 04 Apr 2024 17:37:21 GMT
 content-type: application/json
@@ -891,7 +987,7 @@ x-litellm-cache-key: 586bf3f3c1bf5aecb55bd9996494d3bbc69eb58397163add6d49537762a
     ],
     "created": 1712252235,
 }
-             
+
 ```
 
 ### **Set Caching Default Off - Opt in only **
@@ -916,7 +1012,6 @@ litellm_settings:
 
 2. **Opting in to cache when cache is default off**
 
-
 <Tabs>
 <TabItem value="openai" label="OpenAI Python SDK">
 
@@ -939,6 +1034,7 @@ chat_completion = client.chat.completions.create(
     }
 )
 ```
+
 </TabItem>
 
 <TabItem value="curl" label="curl">
@@ -977,45 +1073,49 @@ litellm_settings:
 
 ```yaml
 cache_params:
-  # ttl 
+  # ttl
   ttl: Optional[float]
   default_in_memory_ttl: Optional[float]
   default_in_redis_ttl: Optional[float]
   max_connections: Optional[Int]
 
-  # Type of cache (options: "local", "redis", "s3")
+  # Type of cache (options: "local", "redis", "s3", "gcs")
   type: s3
 
   # List of litellm call types to cache for
   # Options: "completion", "acompletion", "embedding", "aembedding"
-  supported_call_types: ["acompletion", "atext_completion", "aembedding", "atranscription"]
-                      # /chat/completions, /completions, /embeddings, /audio/transcriptions
+  supported_call_types:
+    ["acompletion", "atext_completion", "aembedding", "atranscription"]
+    # /chat/completions, /completions, /embeddings, /audio/transcriptions
 
   # Redis cache parameters
-  host: localhost  # Redis server hostname or IP address
-  port: "6379"  # Redis server port (as a string)
-  password: secret_password  # Redis server password
+  host: localhost # Redis server hostname or IP address
+  port: "6379" # Redis server port (as a string)
+  password: secret_password # Redis server password
   namespace: Optional[str] = None,
-  
+
   # GCP IAM Authentication for Redis
-  gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com"  # GCP service account for IAM authentication
-  gcp_ssl_ca_certs: "./server-ca.pem"  # Path to SSL CA certificate file for GCP Memorystore Redis
-  ssl: true  # Enable SSL for secure connections  
-  ssl_cert_reqs: null  # Set to null for self-signed certificates
-  ssl_check_hostname: false  # Set to false for self-signed certificates
-  
+  gcp_service_account: "projects/-/serviceAccounts/your-sa@project.iam.gserviceaccount.com" # GCP service account for IAM authentication
+  gcp_ssl_ca_certs: "./server-ca.pem" # Path to SSL CA certificate file for GCP Memorystore Redis
+  ssl: true # Enable SSL for secure connections
+  ssl_cert_reqs: null # Set to null for self-signed certificates
+  ssl_check_hostname: false # Set to false for self-signed certificates
 
   # S3 cache parameters
-  s3_bucket_name: your_s3_bucket_name  # Name of the S3 bucket
-  s3_region_name: us-west-2  # AWS region of the S3 bucket
-  s3_api_version: 2006-03-01  # AWS S3 API version
-  s3_use_ssl: true  # Use SSL for S3 connections (options: true, false)
-  s3_verify: true  # SSL certificate verification for S3 connections (options: true, false)
-  s3_endpoint_url: https://s3.amazonaws.com  # S3 endpoint URL
-  s3_aws_access_key_id: your_access_key  # AWS Access Key ID for S3
-  s3_aws_secret_access_key: your_secret_key  # AWS Secret Access Key for S3
-  s3_aws_session_token: your_session_token  # AWS Session Token for temporary credentials
+  s3_bucket_name: your_s3_bucket_name # Name of the S3 bucket
+  s3_region_name: us-west-2 # AWS region of the S3 bucket
+  s3_api_version: 2006-03-01 # AWS S3 API version
+  s3_use_ssl: true # Use SSL for S3 connections (options: true, false)
+  s3_verify: true # SSL certificate verification for S3 connections (options: true, false)
+  s3_endpoint_url: https://s3.amazonaws.com # S3 endpoint URL
+  s3_aws_access_key_id: your_access_key # AWS Access Key ID for S3
+  s3_aws_secret_access_key: your_secret_key # AWS Secret Access Key for S3
+  s3_aws_session_token: your_session_token # AWS Session Token for temporary credentials
 
+  # GCS cache parameters
+  gcs_bucket_name: your_gcs_bucket_name # Name of the GCS bucket
+  gcs_path_service_account: /path/to/service-account.json # Path to GCS service account JSON file
+  gcs_path: cache/ # [OPTIONAL] GCS path prefix for cache objects
 ```
 
 ## Provider-Specific Optional Parameters Caching

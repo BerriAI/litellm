@@ -89,6 +89,7 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
             "audio_timestamp",
             "automatic_function_calling",
             "thinking_config",
+            "image_config",
         ]
 
     def map_generate_content_optional_params(
@@ -153,7 +154,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         gemini_api_key = api_key or self._get_google_ai_studio_api_key(
             dict(litellm_params or {})
         )
-        if gemini_api_key is not None:
+        if isinstance(gemini_api_key, dict):
+            default_headers.update(gemini_api_key)
+        elif gemini_api_key is not None:
             default_headers[self.XGOOGLE_API_KEY] = gemini_api_key
         if headers is not None:
             default_headers.update(headers)
@@ -312,7 +315,9 @@ class GoogleGenAIConfig(BaseGoogleGenAIGenerateContentConfig, VertexLLM):
         )
 
         request_dict = cast(dict, typed_generate_content_request)
-
+        
+        if system_instruction is not None:
+            request_dict["systemInstruction"] = system_instruction
         return request_dict
 
     def transform_generate_content_response(

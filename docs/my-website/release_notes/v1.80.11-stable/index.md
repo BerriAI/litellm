@@ -1,5 +1,5 @@
 ---
-title: "[Preview] v1.80.11 - Google Interactions API"
+title: "v1.80.11-stable - Google Interactions API"
 slug: "v1-80-11"
 date: 2025-12-20T10:00:00
 authors:
@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-docker.litellm.ai/berriai/litellm:v1.80.11.rc.1
+docker.litellm.ai/berriai/litellm:v1.80.11-stable
 ```
 
 </TabItem>

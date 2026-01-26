@@ -133,6 +133,26 @@ ALL_LOGGERS = [
 ]
 
 
+def _get_loggers_to_initialize():
+    """
+    Get all loggers that should be initialized with the JSON handler.
+
+    Includes third-party integration loggers (like langfuse) if they are
+    configured as callbacks.
+    """
+    import litellm
+
+    loggers = list(ALL_LOGGERS)
+
+    # Add langfuse logger if langfuse is being used as a callback
+    langfuse_callbacks = {"langfuse", "langfuse_otel"}
+    all_callbacks = set(litellm.success_callback + litellm.failure_callback)
+    if langfuse_callbacks & all_callbacks:
+        loggers.append(logging.getLogger("langfuse"))
+
+    return loggers
+
+
 def _initialize_loggers_with_handler(handler: logging.Handler):
     """
     Initialize all loggers with a handler
@@ -140,10 +160,70 @@ def _initialize_loggers_with_handler(handler: logging.Handler):
     - Adds a handler to each logger
     - Prevents bubbling to parent/root (critical to prevent duplicate JSON logs)
     """
-    for lg in ALL_LOGGERS:
+    for lg in _get_loggers_to_initialize():
         lg.handlers.clear()  # remove any existing handlers
         lg.addHandler(handler)  # add JSON formatter handler
         lg.propagate = False  # prevent bubbling to parent/root
+
+
+def _get_uvicorn_json_log_config():
+    """
+    Generate a uvicorn log_config dictionary that applies JSON formatting to all loggers.
+    
+    This ensures that uvicorn's access logs, error logs, and all application logs
+    are formatted as JSON when json_logs is enabled.
+    """
+    json_formatter_class = "litellm._logging.JsonFormatter"
+    
+    # Use the module-level log_level variable for consistency
+    uvicorn_log_level = log_level.upper()
+    
+    log_config = {
+        "version": 1,
+        "disable_existing_loggers": False,
+        "formatters": {
+            "json": {
+                "()": json_formatter_class,
+            },
+            "default": {
+                "()": json_formatter_class,
+            },
+            "access": {
+                "()": json_formatter_class,
+            },
+        },
+        "handlers": {
+            "default": {
+                "formatter": "json",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+            "access": {
+                "formatter": "access",
+                "class": "logging.StreamHandler",
+                "stream": "ext://sys.stdout",
+            },
+        },
+        "loggers": {
+            "uvicorn": {
+                "handlers": ["default"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+            "uvicorn.error": {
+                "handlers": ["default"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+            "uvicorn.access": {
+                "handlers": ["access"],
+                "level": uvicorn_log_level,
+                "propagate": False,
+            },
+        },
+    }
+    
+    return log_config
 
 
 def _turn_on_json():

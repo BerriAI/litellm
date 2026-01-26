@@ -1055,3 +1055,56 @@ def test_translate_anthropic_messages_to_openai_tool_result_single_item_backward
         f"got {type(tool_message['content'])}"
     )
     assert tool_message["content"] == "72°F and sunny"
+
+
+def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
+    """
+    When a streaming choice contains both text content and tool_calls,
+    both should be processed (tool_calls should not be ignored).
+    """
+    # streaming choice with both text and tool_calls
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                provider_specific_fields=None,
+                content="Here is some text for litellm",
+                role=None,
+                function_call=None,
+                tool_calls=[
+                    ChatCompletionDeltaToolCall(
+                        id="toolu_bdrk_013xRVejhv3ybmLEGCoZib2b",
+                        function=Function(arguments='{"cmd": "init"}', name="Bash"),
+                        type="function",
+                        index=0,
+                    )
+                ],
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    # When both text and tool_calls exist, tool_calls (input_json_delta) takes priority
+    (
+        type_of_content,
+        content_block_delta,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic(choices=choices)
+
+    assert type_of_content == "input_json_delta"
+    assert content_block_delta["partial_json"] == '{"cmd": "init"}'
+
+    # When both text and tool_calls exist, tool_use should be detected and tool name captured
+    (
+        block_type,
+        content_block_start,
+    ) = adapter._translate_streaming_openai_chunk_to_anthropic_content_block(
+        choices=choices
+    )
+
+    assert block_type == "tool_use"
+    assert content_block_start["name"] == "Bash"
+    assert content_block_start["id"] == "toolu_bdrk_013xRVejhv3ybmLEGCoZib2b"

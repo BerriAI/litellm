@@ -134,10 +134,14 @@ export function CloudZeroIntegrationSettings({ settings, onSettingsUpdated }: Cl
             }}
           >
             <Descriptions.Item label="API Key (Redacted)">
-              <span className="font-mono text-gray-600">{settings.api_key_masked}</span>
+              <span className="font-mono text-gray-600">
+                {settings.api_key_masked || <span className="text-gray-400 italic">Not configured</span>}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="Connection ID">
-              <span className="font-mono text-gray-600">{settings.connection_id}</span>
+              <span className="font-mono text-gray-600">
+                {settings.connection_id || <span className="text-gray-400 italic">Not configured</span>}
+              </span>
             </Descriptions.Item>
             <Descriptions.Item label="Timezone">
               {settings.timezone || <span className="text-gray-400 italic">Default (UTC)</span>}

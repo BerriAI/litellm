@@ -813,7 +813,7 @@ from test_completion import response_format_tests
 @pytest.mark.parametrize(
     "model,region",
     [
-        ("vertex_ai/mistral-large-2411", "us-central1"),
+        ("vertex_ai/mistral-small-2503", "us-central1"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),
     ],
@@ -886,7 +886,7 @@ async def test_partner_models_httpx(model, region, sync_mode):
         ("vertex_ai/meta/llama-4-scout-17b-16e-instruct-maas", "us-east5"),
         ("vertex_ai/qwen/qwen3-coder-480b-a35b-instruct-maas", "us-south1"),
         (
-            "vertex_ai/mistral-large-2411",
+            "vertex_ai/mistral-small-2503",
             "us-central1",
         ),  # critical - we had this issue: https://github.com/BerriAI/litellm/issues/13888
         ("vertex_ai/openai/gpt-oss-20b-maas", "us-central1"),
@@ -1386,14 +1386,15 @@ async def test_gemini_pro_json_schema_args_sent_httpx(
             print(mock_call.call_args.kwargs["json"]["generationConfig"])
 
             if supports_response_schema:
+                # Gemini 2.x+ uses response_json_schema, Gemini 1.x uses response_schema
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    in mock_call.call_args.kwargs["json"]["generationConfig"]
-                )
+                    "response_schema" in gen_config or "response_json_schema" in gen_config
+                ), f"Expected response_schema or response_json_schema in {gen_config}"
             else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    not in mock_call.call_args.kwargs["json"]["generationConfig"]
+                    "response_schema" not in gen_config and "response_json_schema" not in gen_config
                 )
                 assert (
                     "Use this JSON schema:"
@@ -1566,10 +1567,11 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
             print(mock_call.call_args.kwargs["json"]["generationConfig"])
 
             if supports_response_schema:
+                # Gemini 2.x+ uses response_json_schema, Gemini 1.x uses response_schema
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    in mock_call.call_args.kwargs["json"]["generationConfig"]
-                )
+                    "response_schema" in gen_config or "response_json_schema" in gen_config
+                ), f"Expected response_schema or response_json_schema in {gen_config}"
                 assert (
                     "response_mime_type"
                     in mock_call.call_args.kwargs["json"]["generationConfig"]
@@ -1581,9 +1583,9 @@ async def test_gemini_pro_json_schema_args_sent_httpx_openai_schema(
                     == "application/json"
                 )
             else:
+                gen_config = mock_call.call_args.kwargs["json"]["generationConfig"]
                 assert (
-                    "response_schema"
-                    not in mock_call.call_args.kwargs["json"]["generationConfig"]
+                    "response_schema" not in gen_config and "response_json_schema" not in gen_config
                 )
                 assert (
                     "Use this JSON schema:"
@@ -2350,8 +2352,7 @@ async def test_completion_fine_tuned_model():
     expected_payload = {
         "contents": [
             {"role": "user", "parts": [{"text": "Write a short poem about the sky"}]}
-        ],
-        "generationConfig": {},
+        ]
     }
 
     with patch(
@@ -2831,7 +2832,6 @@ def test_gemini_function_call_parameter_in_messages():
                 }
             ],
             "toolConfig": {"functionCallingConfig": {"mode": "AUTO"}},
-            "generationConfig": {},
         } == mock_client.call_args.kwargs["json"]
 
 

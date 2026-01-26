@@ -1678,6 +1678,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     end_user: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by end user"
     ),
+    error_code: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by error code (e.g., '404', '500')"
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -1757,12 +1760,27 @@ async def ui_view_spend_logs(  # noqa: PLR0915
         if model is not None:
             where_conditions["model"] = model
 
+        # Build metadata filters
+        metadata_filters = []
         if key_alias is not None:
-            where_conditions["metadata"] = {
+            metadata_filters.append({
                 "path": ["user_api_key_alias"],
                 "string_contains": key_alias,
-            }
+            })
 
+        if error_code is not None:
+            metadata_filters.append({
+                "path": ["error_information", "error_code"],
+                "equals": f'"{error_code}"',
+            })
+
+        if metadata_filters:
+            if len(metadata_filters) == 1:
+                where_conditions["metadata"] = metadata_filters[0]
+            else:
+                where_conditions["AND"] = where_conditions.get("AND", []) + [
+                    {"metadata": filter_cond} for filter_cond in metadata_filters
+                ]
         if end_user is not None:
             where_conditions["end_user"] = end_user
 
@@ -1938,7 +1956,7 @@ async def view_spend_logs(  # noqa: PLR0915
 
     Example Request for specific api_key
     ```
-    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-Fn8Ej39NkBQmUagFEoUWPQ" \
+    curl -X GET "http://0.0.0.0:8000/spend/logs?api_key=sk-test-example-key-123" \
 -H "Authorization: Bearer sk-1234"
     ```
 

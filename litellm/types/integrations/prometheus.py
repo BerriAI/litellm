@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Tuple, Union
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 from typing_extensions import Annotated
@@ -175,6 +175,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_remaining_api_key_budget_metric",
     "litellm_api_key_max_budget_metric",
     "litellm_api_key_budget_remaining_hours_metric",
+    "litellm_remaining_user_budget_metric",
+    "litellm_user_max_budget_metric",
+    "litellm_user_budget_remaining_hours_metric",
     "litellm_deployment_state",
     "litellm_deployment_failure_responses",
     "litellm_deployment_total_requests",
@@ -185,6 +188,14 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_redis_daily_spend_update_queue_size",
     "litellm_in_memory_spend_update_queue_size",
     "litellm_redis_spend_update_queue_size",
+    "litellm_request_queue_time_seconds",
+    "litellm_guardrail_latency_seconds",
+    "litellm_guardrail_errors_total",
+    "litellm_guardrail_requests_total",
+    # Cache metrics
+    "litellm_cache_hits_metric",
+    "litellm_cache_misses_metric",
+    "litellm_cached_tokens_metric",
 ]
 
 
@@ -218,6 +229,23 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
     ]
+
+    litellm_request_queue_time_seconds = [
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    # Guardrail metrics - these use custom labels (guardrail_name, status, error_type, hook_type)
+    # which are not part of UserAPIKeyLabelNames
+    litellm_guardrail_latency_seconds: List[str] = []
+    litellm_guardrail_errors_total: List[str] = []
+    litellm_guardrail_requests_total: List[str] = []
 
     litellm_proxy_total_requests_metric = [
         UserAPIKeyLabelNames.END_USER.value,
@@ -396,6 +424,18 @@ class PrometheusMetricLabels:
         litellm_remaining_api_key_budget_metric
     )
 
+    litellm_remaining_user_budget_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_max_budget_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
     # Add deployment metrics
     litellm_deployment_failure_responses = [
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
@@ -436,6 +476,21 @@ class PrometheusMetricLabels:
 
     litellm_redis_spend_update_queue_size: List[str] = []
 
+    # Cache metrics - track cache hits, misses, and tokens served from cache
+    _cache_metric_labels = [
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.TEAM.value,
+        UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_cache_hits_metric = _cache_metric_labels
+    litellm_cache_misses_metric = _cache_metric_labels
+    litellm_cached_tokens_metric = _cache_metric_labels
+
     @staticmethod
     def get_labels(label_name: DEFINED_PROMETHEUS_METRICS) -> List[str]:
         default_labels = getattr(PrometheusMetricLabels, label_name)
@@ -458,11 +513,6 @@ class PrometheusMetricLabels:
         )
 
         return default_labels + custom_labels
-
-
-from typing import List, Optional
-
-from pydantic import BaseModel, Field
 
 
 class UserAPIKeyLabelValues(BaseModel):
