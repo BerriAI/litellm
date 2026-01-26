@@ -16,8 +16,10 @@ import {
   MailOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MoonOutlined,
   SafetyOutlined,
   SlackOutlined,
+  SunOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
@@ -36,6 +38,8 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -49,9 +53,10 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  isDarkMode,
+  toggleDarkMode
 }) => {
   const baseUrl = getProxyBaseUrl();
-  console.log("baseUrl", baseUrl);
   const [logoutUrl, setLogoutUrl] = useState("");
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
   const { logoUrl } = useTheme();
@@ -227,6 +232,15 @@ const Navbar: React.FC<NavbarProps> = ({
             >
               Star us on GitHub
             </Button>
+            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
+            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
+            {false && <Switch
+              data-testid="dark-mode-toggle"
+              checked={isDarkMode}
+              onChange={toggleDarkMode}
+              checkedChildren={<MoonOutlined />}
+              unCheckedChildren={<SunOutlined />}
+            />}
             <a
               href="https://docs.litellm.ai/docs/"
               target="_blank"

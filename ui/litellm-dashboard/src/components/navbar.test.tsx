@@ -52,6 +52,8 @@ describe("Navbar", () => {
     setProxySettings: vi.fn(),
     accessToken: "test-token",
     isPublicPage: false,
+    isDarkMode: false,
+    toggleDarkMode: vi.fn(),
   };
 
   it("should render without crashing", () => {
@@ -197,5 +199,12 @@ describe("Navbar", () => {
     const cookieUtils = vi.mocked(await import("@/utils/cookieUtils"));
     expect(cookieUtils.clearTokenCookies).toHaveBeenCalled();
     expect(window.location.href).toBe("");
+  });
+
+  it("should not render dark mode toggle slider", () => {
+    renderWithProviders(<Navbar {...defaultProps} />);
+
+    // DO NOT RENDER THIS UNTIL ALL COMPONENTS ARE CONFIRMED TO SUPPORT DARK MODE STYLES. IT IS AN ISSUE IF THIS TEST FAILS.
+    expect(screen.queryByTestId("dark-mode-toggle")).not.toBeInTheDocument();
   });
 });
