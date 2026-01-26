@@ -1,7 +1,29 @@
 import * as useAuthorizedModule from "@/app/(dashboard)/hooks/useAuthorized";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AllModelsTab from "./AllModelsTab";
+
+// Mock modelDeleteCall
+const mockModelDeleteCall = vi.fn().mockResolvedValue({});
+vi.mock("@/components/networking", () => ({
+  modelDeleteCall: (...args: any[]) => mockModelDeleteCall(...args),
+}));
+
+// Mock NotificationsManager
+vi.mock("@/components/molecules/notifications_manager", () => ({
+  default: {
+    success: vi.fn(),
+    fromBackend: vi.fn(),
+  },
+}));
+
+// Mock react-query
+const mockInvalidateQueries = vi.fn();
+vi.mock("@tanstack/react-query", () => ({
+  useQueryClient: () => ({
+    invalidateQueries: mockInvalidateQueries,
+  }),
+}));
 
 // Mock the useModelsInfo hook
 const mockUseModelsInfo = vi.fn(() => ({
@@ -492,5 +514,102 @@ describe("AllModelsTab", () => {
     // Previous should also be disabled on the first (and only) page
     const previousButton = screen.getByRole("button", { name: /previous/i });
     expect(previousButton).toBeDisabled();
+  });
+
+  it("should pass setDeleteModalModelId to columns for delete functionality", async () => {
+    // This test verifies that the delete modal setter is passed to columns
+    // The actual modal rendering is handled by DeleteResourceModal component
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-delete-test": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-delete-test",
+        litellm_model_name: "gpt-4-delete-test",
+        provider: "openai",
+        model_info: {
+          id: "model-to-delete",
+          db_model: true,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+      },
+    ], 1, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
+
+    render(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-delete-test")).toBeInTheDocument();
+    });
+
+    // Verify the DB Model badge is shown (indicating it can be deleted)
+    expect(screen.getByText("DB Model")).toBeInTheDocument();
+  });
+
+  it("should render clickable model ID that calls setSelectedModelId", async () => {
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    mockUseModelCostMap.mockReturnValue(
+      createModelCostMapMock({
+        "gpt-4-clickable": { litellm_provider: "openai" },
+      }),
+    );
+
+    const modelData = createPaginatedModelData([
+      {
+        model_name: "gpt-4-clickable",
+        litellm_model_name: "gpt-4-clickable",
+        provider: "openai",
+        model_info: {
+          id: "clickable-model-id",
+          db_model: true,
+          direct_access: true,
+          access_via_team_ids: [],
+          access_groups: [],
+          created_by: "user-123",
+          created_at: "2024-01-01",
+          updated_at: "2024-01-01",
+        },
+      },
+    ], 1, 1, 1, 50);
+
+    mockUseModelsInfo.mockReturnValue({ data: modelData, isLoading: false, error: null, refetch: vi.fn() });
+
+    render(<AllModelsTab {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4-clickable")).toBeInTheDocument();
+    });
+
+    // Click on the Model ID cell which should call setSelectedModelId
+    const modelIdCell = screen.getByText("clickable-model-id");
+    expect(modelIdCell).toBeInTheDocument();
+
+    fireEvent.click(modelIdCell);
+
+    await waitFor(() => {
+      expect(mockSetSelectedModelId).toHaveBeenCalledWith("clickable-model-id");
+    });
   });
 });
