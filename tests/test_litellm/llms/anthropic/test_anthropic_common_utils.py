@@ -179,3 +179,59 @@ def test_oauth_case_insensitive_authorization_header():
     headers_mixed = {"AUTHORIZATION": f"Bearer {FAKE_OAUTH_TOKEN}"}
     updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers_mixed, None)
     assert is_anthropic_oauth_key(extracted_api_key)
+
+
+def test_oauth_passthrough_endpoint_headers():
+    """Test 9: Pass-through endpoint correctly builds OAuth headers"""
+    from litellm.llms.anthropic.common_utils import (
+        optionally_handle_anthropic_oauth,
+        set_anthropic_headers,
+    )
+
+    # Simulate pass-through endpoint flow with OAuth token
+    incoming_headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
+    oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(
+        headers=incoming_headers, api_key=None
+    )
+
+    # Should extract OAuth API key
+    assert oauth_api_key is not None
+    assert oauth_api_key == FAKE_OAUTH_TOKEN
+
+    # Build custom headers like pass-through endpoint does
+    custom_headers = set_anthropic_headers(oauth_api_key)
+    custom_headers["anthropic-dangerous-direct-browser-access"] = oauth_headers.get(
+        "anthropic-dangerous-direct-browser-access", "true"
+    )
+
+    # Should use Authorization header, not x-api-key
+    assert "x-api-key" not in custom_headers
+    assert "authorization" in custom_headers
+    assert custom_headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
+    assert custom_headers["anthropic-dangerous-direct-browser-access"] == "true"
+
+
+def test_regular_key_passthrough_endpoint_headers():
+    """Test 10: Pass-through endpoint uses x-api-key for regular keys"""
+    from litellm.llms.anthropic.common_utils import (
+        optionally_handle_anthropic_oauth,
+        set_anthropic_headers,
+    )
+
+    # Simulate pass-through endpoint flow with no OAuth token in request
+    incoming_headers = {}
+    oauth_headers, oauth_api_key = optionally_handle_anthropic_oauth(
+        headers=incoming_headers, api_key=None
+    )
+
+    # No OAuth token found
+    assert oauth_api_key is None
+
+    # When no OAuth token, use regular x-api-key format
+    regular_key = "sk-ant-api03-regular-key"
+    custom_headers = set_anthropic_headers(regular_key)
+
+    # Should use x-api-key, not authorization
+    assert "authorization" not in custom_headers
+    assert "x-api-key" in custom_headers
+    assert custom_headers["x-api-key"] == regular_key
