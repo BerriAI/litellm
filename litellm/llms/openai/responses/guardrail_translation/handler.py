@@ -408,23 +408,24 @@ class OpenAIResponsesHandler(BaseTranslation):
                 handle_raw_dict_callback=None,
             )
 
-            tool_calls = model_response_choices[0].message.tool_calls
-            text = model_response_choices[0].message.content
-            guardrail_inputs = GenericGuardrailAPIInputs()
-            if text:
-                guardrail_inputs["texts"] = [text]
-            if tool_calls:
-                guardrail_inputs["tool_calls"] = cast(
-                    List[ChatCompletionToolCallChunk], tool_calls
-                )
-            if tool_calls:
-                _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                    inputs=guardrail_inputs,
-                    request_data={},
-                    input_type="response",
-                    logging_obj=litellm_logging_obj,
-                )
-                return responses_so_far
+            if model_response_choices:
+                tool_calls = model_response_choices[0].message.tool_calls
+                text = model_response_choices[0].message.content
+                guardrail_inputs = GenericGuardrailAPIInputs()
+                if text:
+                    guardrail_inputs["texts"] = [text]
+                if tool_calls:
+                    guardrail_inputs["tool_calls"] = cast(
+                        List[ChatCompletionToolCallChunk], tool_calls
+                    )
+                if tool_calls:
+                    _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
+                        inputs=guardrail_inputs,
+                        request_data={},
+                        input_type="response",
+                        logging_obj=litellm_logging_obj,
+                    )
+                    return responses_so_far
         # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
         # tool_calls = model_response_stream.choices[0].tool_calls
         # convert openai response to model response
