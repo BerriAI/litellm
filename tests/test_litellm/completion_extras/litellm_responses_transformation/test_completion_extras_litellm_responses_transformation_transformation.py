@@ -600,6 +600,9 @@ def test_transform_response_preserves_reasoning_encrypted_content_in_provider_sp
     provider_fields = result.choices[0].message.provider_specific_fields
     assert provider_fields is not None
     assert provider_fields["reasoning"]["encrypted_content"] == "encrypted-blob-abc123"
+    thinking_blocks = getattr(result.choices[0].message, "thinking_blocks", None)
+    assert thinking_blocks is not None
+    assert thinking_blocks[0]["encrypted_content"] == "encrypted-blob-abc123"
 
 
 def test_convert_chat_completion_messages_to_responses_api_includes_reasoning_item_from_provider_specific_fields():
@@ -621,6 +624,37 @@ def test_convert_chat_completion_messages_to_responses_api_includes_reasoning_it
                     "encrypted_content": "encrypted-blob-abc123",
                 }
             },
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, custom_llm_provider="openai"
+    )
+
+    assert input_items[0]["type"] == "reasoning"
+    assert input_items[0]["encrypted_content"] == "encrypted-blob-abc123"
+    assert input_items[1]["type"] == "message"
+    assert input_items[1]["role"] == "assistant"
+
+
+def test_convert_chat_completion_messages_to_responses_api_includes_reasoning_item_from_thinking_blocks():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "encrypted_content": "encrypted-blob-abc123",
+                }
+            ],
         },
         {"role": "user", "content": "continue"},
     ]
@@ -683,6 +717,9 @@ def test_streaming_response_completed_emits_reasoning_provider_specific_fields()
     provider_fields = getattr(result.choices[0].delta, "provider_specific_fields", None)
     assert provider_fields is not None
     assert provider_fields["reasoning"]["encrypted_content"] == "encrypted-blob-abc123"
+    thinking_blocks = getattr(result.choices[0].delta, "thinking_blocks", None)
+    assert thinking_blocks is not None
+    assert thinking_blocks[0]["encrypted_content"] == "encrypted-blob-abc123"
 
 
 def test_convert_tools_to_responses_format():
