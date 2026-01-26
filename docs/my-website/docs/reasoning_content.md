@@ -10,6 +10,7 @@ Requires LiteLLM v1.63.0+
 :::
 
 Supported Providers:
+- OpenAI (`openai/`) - via Responses API bridge
 - Deepseek (`deepseek/`)
 - Anthropic API (`anthropic/`)
 - Bedrock (Anthropic + Deepseek + GPT-OSS) (`bedrock/`)
@@ -28,7 +29,7 @@ LiteLLM will standardize the `reasoning_content` in the response and `thinking_b
 "message": {
     ...
     "reasoning_content": "The capital of France is Paris.",
-    "thinking_blocks": [ # only returned for Anthropic models
+    "thinking_blocks": [ # returned for Anthropic and OpenAI models
         {
             "type": "thinking",
             "thinking": "The capital of France is Paris.",
@@ -466,10 +467,11 @@ response = litellm.completion(
 These fields can be accessed via `response.choices[0].message.reasoning_content` and `response.choices[0].message.thinking_blocks`.
 
 - `reasoning_content` - str: The reasoning content from the model. Returned across all providers.
-- `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Only returned for Anthropic models.
+- `thinking_blocks` - Optional[List[Dict[str, str]]]: A list of thinking blocks from the model. Returned for Anthropic and OpenAI models.
   - `type` - str: The type of thinking block.
-  - `thinking` - str: The thinking from the model.
-  - `signature` - str: The signature delta from the model.
+  - `thinking` - str: The thinking from the model (Anthropic).
+  - `encrypted_content` - str: Encrypted reasoning content (OpenAI).
+  - `signature` - str: The signature delta from the model (Anthropic).
 
 
 
@@ -504,6 +506,126 @@ curl http://0.0.0.0:4000/v1/chat/completions \
 
 </TabItem>
 </Tabs>
+
+## Pass prior reasoning to OpenAI models
+
+For OpenAI models using the Responses API bridge, you can pass prior reasoning blocks in assistant messages using either `thinking_blocks` or `provider_specific_fields`, similar to Anthropic models. This is useful for multi-turn conversations where you want to maintain context from previous reasoning steps.
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python showLineNumbers
+from litellm import completion
+
+# First request with reasoning
+response = completion(
+  model="openai/gpt-5-mini",
+  messages=[{"role": "user", "content": "What is the capital of France?"}],
+  reasoning_effort="low",
+)
+
+# Extract reasoning from response
+assistant_message = response.choices[0].message
+
+# Second request - pass prior reasoning using thinking_blocks
+response = completion(
+  model="openai/gpt-5-mini",
+  messages=[
+    {"role": "user", "content": "What is the capital of France?"},
+    {
+      "role": "assistant",
+      "content": assistant_message.content,
+      "thinking_blocks": assistant_message.thinking_blocks  # Pass prior reasoning
+    },
+    {"role": "user", "content": "What about Germany?"}
+  ],
+  reasoning_effort="low",
+)
+
+# Alternative: pass via provider_specific_fields
+response = completion(
+  model="openai/gpt-5-mini",
+  messages=[
+    {"role": "user", "content": "What is the capital of France?"},
+    {
+      "role": "assistant",
+      "content": assistant_message.content,
+      "provider_specific_fields": {
+        "reasoning": assistant_message.provider_specific_fields.get("reasoning")
+      }
+    },
+    {"role": "user", "content": "What about Germany?"}
+  ],
+  reasoning_effort="low",
+)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+```bash
+# First request
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "gpt-5-mini",
+    "messages": [{"role": "user", "content": "What is the capital of France?"}],
+    "reasoning_effort": "low"
+  }'
+
+# Second request - pass prior reasoning in thinking_blocks
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "gpt-5-mini",
+    "messages": [
+      {"role": "user", "content": "What is the capital of France?"},
+      {
+        "role": "assistant",
+        "content": "The capital of France is Paris.",
+        "thinking_blocks": [
+          {
+            "type": "thinking",
+            "encrypted_content": "encrypted-reasoning-blob-from-first-response"
+          }
+        ]
+      },
+      {"role": "user", "content": "What about Germany?"}
+    ],
+    "reasoning_effort": "low"
+  }'
+
+# Alternative: pass via provider_specific_fields
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $LITELLM_KEY" \
+  -d '{
+    "model": "gpt-5-mini",
+    "messages": [
+      {"role": "user", "content": "What is the capital of France?"},
+      {
+        "role": "assistant",
+        "content": "The capital of France is Paris.",
+        "provider_specific_fields": {
+          "reasoning": {
+            "encrypted_content": "encrypted-reasoning-blob-from-first-response"
+          }
+        }
+      },
+      {"role": "user", "content": "What about Germany?"}
+    ],
+    "reasoning_effort": "low"
+  }'
+```
+
+</TabItem>
+</Tabs>
+
+:::info
+For OpenAI models, LiteLLM automatically converts these fields to the appropriate Responses API format (`reasoning.encrypted_content`) when making the backend request.
+:::
 
 ## Checking if a model supports reasoning
 
