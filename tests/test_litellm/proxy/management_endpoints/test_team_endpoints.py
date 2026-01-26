@@ -52,6 +52,13 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     BulkTeamMemberAddResponse,
     TeamMemberAddResult,
 )
+from litellm.proxy.management_endpoints.team_endpoints import (
+    team_info,
+    list_team,
+    list_team_v2,
+)
+from fastapi import Request
+from unittest.mock import Mock
 
 # Setup TestClient
 client = TestClient(app)
@@ -2329,6 +2336,194 @@ async def test_list_team_v2_with_invalid_status():
         assert exc_info.value.status_code == 400
         assert "Invalid status value" in str(exc_info.value.detail)
         assert "deleted" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role,user_id,is_team_admin,should_see_sensitive_fields",
+    [
+        (LitellmUserRoles.INTERNAL_USER, "regular_user_123", False, False),  # Regular user
+        (LitellmUserRoles.PROXY_ADMIN, "admin_user_123", False, True),  # Proxy admin
+        (LitellmUserRoles.INTERNAL_USER, "team_admin_user_123", True, True),  # Team admin
+    ],
+)
+async def test_team_info_authorization(user_role, user_id, is_team_admin, should_see_sensitive_fields):
+    """
+    Test that /team/info filters sensitive fields based on user authorization.
+    """
+    mock_request = Mock(spec=Request)
+    
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=user_role,
+        user_id=user_id,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        
+        # Mock team with sensitive data
+        mock_team = Mock(spec=LiteLLM_TeamTable)
+        members = [
+            {"user_id": "team_admin_user_123", "role": "admin"},
+            {"user_id": "regular_user_123", "role": "user"}
+        ]
+        mock_team.model_dump.return_value = {
+            "team_id": "test_team_id",
+            "team_alias": "test_team",
+            "members_with_roles": members,
+            "team_member_permissions": ["read", "write"],
+            "max_budget": 1000.0,
+            "spend": 0.0,
+        }
+        mock_db.litellm_teamtable.find_unique = AsyncMock(return_value=mock_team)
+        mock_prisma_client.get_data = AsyncMock(return_value=[])
+        
+        with patch("litellm.proxy.management_endpoints.team_endpoints.get_all_team_memberships", AsyncMock(return_value=[])):
+            with patch("litellm.proxy.management_endpoints.team_endpoints.validate_membership"):
+                result = await team_info(
+                    http_request=mock_request,
+                    team_id="test_team_id",
+                    user_api_key_dict=mock_user_api_key_dict,
+                )
+
+                if should_see_sensitive_fields:
+                    assert len(result["team_info"].members_with_roles) == 2
+                    assert result["team_info"].team_member_permissions == ["read", "write"]
+                else:
+                    assert result["team_info"].members_with_roles == []
+                    assert result["team_info"].team_member_permissions is None
+                    assert result["keys"] == []
+                    assert result["team_memberships"] == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role,user_id,is_team_admin,should_see_sensitive_fields",
+    [
+        (LitellmUserRoles.INTERNAL_USER, "regular_user_123", False, False),  # Regular user
+        (LitellmUserRoles.INTERNAL_USER, "team_admin_user_123", True, True),  # Team admin
+    ],
+)
+async def test_list_team_authorization(user_role, user_id, is_team_admin, should_see_sensitive_fields):
+    """
+    Test that /team/list filters sensitive fields based on user authorization.
+    """
+    mock_request = Mock(spec=Request)
+    
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=user_role,
+        user_id=user_id,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        
+        # Mock user lookup
+        mock_user_object = Mock()
+        mock_user_object.model_dump.return_value = {
+            "user_id": user_id,
+            "teams": ["team_1"],
+        }
+        mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_object)
+        
+        # Mock team with sensitive data
+        mock_team = Mock()
+        mock_team.team_id = "team_1"
+        members = [
+            {"user_id": "team_admin_user_123", "role": "admin"},
+            {"user_id": "regular_user_123", "role": "user"}
+        ]
+        mock_team.members_with_roles = members
+        mock_team.model_dump.return_value = {
+            "team_id": "team_1",
+            "team_alias": "Team 1",
+            "members_with_roles": members,
+            "team_member_permissions": ["read", "write"],
+        }
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+        mock_db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        mock_db.litellm_teammembership.find_many = AsyncMock(return_value=[])
+
+        result = await list_team(
+            http_request=mock_request,
+            user_id=user_id,
+            user_api_key_dict=mock_user_api_key_dict,
+        )
+
+        assert len(result) == 1
+        if should_see_sensitive_fields:
+            assert len(result[0].members_with_roles) == 2
+            assert result[0].team_member_permissions == ["read", "write"]
+        else:
+            assert result[0].members_with_roles == []
+            assert result[0].team_member_permissions is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "user_role,user_id,is_team_admin,should_see_sensitive_fields",
+    [
+        (LitellmUserRoles.INTERNAL_USER, "regular_user_123", False, False),  # Regular user
+        (LitellmUserRoles.INTERNAL_USER, "team_admin_user_123", True, True),  # Team admin
+    ],
+)
+async def test_list_team_v2_authorization(user_role, user_id, is_team_admin, should_see_sensitive_fields):
+    """
+    Test that /v2/team/list filters sensitive fields based on user authorization.
+    """
+    mock_request = Mock(spec=Request)
+    
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        user_role=user_role,
+        user_id=user_id,
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma_client:
+        mock_db = Mock()
+        mock_prisma_client.db = mock_db
+        
+        # Mock user lookup
+        mock_user_object = Mock()
+        mock_user_object.model_dump.return_value = {
+            "user_id": user_id,
+            "teams": ["team_1"],
+        }
+        mock_db.litellm_usertable.find_unique = AsyncMock(return_value=mock_user_object)
+        
+        # Mock team with sensitive data
+        mock_team = Mock()
+        members = [
+            {"user_id": "team_admin_user_123", "role": "admin"},
+            {"user_id": "regular_user_123", "role": "user"}
+        ]
+        mock_team.model_dump.return_value = {
+            "team_id": "team_1",
+            "team_alias": "Team 1",
+            "members_with_roles": members,
+            "team_member_permissions": ["read", "write"],
+        }
+        mock_db.litellm_teamtable.find_many = AsyncMock(return_value=[mock_team])
+        mock_db.litellm_teamtable.count = AsyncMock(return_value=1)
+
+        result = await list_team_v2(
+            http_request=mock_request,
+            user_id=user_id,
+            team_id=None,
+            user_api_key_dict=mock_user_api_key_dict,
+            page=1,
+            page_size=10,
+            status=None,
+        )
+
+        assert len(result["teams"]) == 1
+        if should_see_sensitive_fields:
+            assert len(result["teams"][0].members_with_roles) == 2
+            assert result["teams"][0].team_member_permissions == ["read", "write"]
+        else:
+            assert result["teams"][0].members_with_roles == []
+            assert result["teams"][0].team_member_permissions is None
 
 
 @pytest.mark.asyncio
