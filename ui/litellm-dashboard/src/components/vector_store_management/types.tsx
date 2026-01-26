@@ -41,3 +41,32 @@ export interface VectorStoreListResponse {
   current_page: number;
   total_pages: number;
 }
+
+// Document ingestion types
+export interface DocumentUpload {
+  uid: string;
+  name: string;
+  status: "uploading" | "done" | "error" | "removed";
+  size?: number;
+  type?: string;
+  originFileObj?: File;
+}
+
+export interface RAGIngestRequest {
+  file_url?: string;
+  file_id?: string;
+  ingest_options: {
+    vector_store: {
+      custom_llm_provider: string;
+      vector_store_id?: string;
+    };
+  };
+}
+
+export interface RAGIngestResponse {
+  id: string;
+  status: "completed" | "processing" | "failed";
+  vector_store_id: string;
+  file_id: string;
+  error?: string;
+}

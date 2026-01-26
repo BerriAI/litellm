@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Icon, Button as TremorButton, Col, Text, Grid } from "@tremor/react";
+import { Icon, Button as TremorButton, Col, Text, Grid, TabGroup, TabList, Tab, TabPanels, TabPanel } from "@tremor/react";
 import { RefreshIcon } from "@heroicons/react/outline";
 import { vectorStoreListCall, vectorStoreDeleteCall, credentialListCall, CredentialItem } from "../networking";
 import { VectorStore } from "./types";
@@ -7,6 +7,7 @@ import VectorStoreTable from "./VectorStoreTable";
 import VectorStoreForm from "./VectorStoreForm";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import VectorStoreInfoView from "./vector_store_info";
+import CreateVectorStore from "./CreateVectorStore";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -101,6 +102,12 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
     fetchVectorStores();
   };
 
+  const handleVectorStoreCreated = (vectorStoreId: string) => {
+    console.log("Vector store created:", vectorStoreId);
+    fetchVectorStores();
+    // Optionally switch to the manage tab
+  };
+
   useEffect(() => {
     fetchVectorStores();
     fetchCredentials();
@@ -134,18 +141,40 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
         </div>
 
         <Text className="mb-4">
-          <p>You can use vector stores to store and retrieve LLM embeddings..</p>
+          <p>You can use vector stores to store and retrieve LLM embeddings.</p>
         </Text>
 
-        <TremorButton className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
-          + Add Vector Store
-        </TremorButton>
+        <TabGroup>
+          <TabList className="mb-6">
+            <Tab>Create Vector Store</Tab>
+            <Tab>Manage Vector Stores</Tab>
+          </TabList>
 
-        <Grid numItems={1} className="gap-2 pt-2 pb-2 h-[75vh] w-full mt-2">
-          <Col numColSpan={1}>
-            <VectorStoreTable data={vectorStores} onView={handleView} onEdit={handleEdit} onDelete={handleDelete} />
-          </Col>
-        </Grid>
+          <TabPanels>
+            {/* Tab 1: Create Vector Store */}
+            <TabPanel>
+              <CreateVectorStore accessToken={accessToken} onSuccess={handleVectorStoreCreated} />
+            </TabPanel>
+
+            {/* Tab 2: Manage Vector Stores */}
+            <TabPanel>
+              <TremorButton className="mb-4" onClick={() => setIsCreateModalVisible(true)}>
+                + Add Vector Store
+              </TremorButton>
+
+              <Grid numItems={1} className="gap-2 pt-2 pb-2 w-full mt-2">
+                <Col numColSpan={1}>
+                  <VectorStoreTable
+                    data={vectorStores}
+                    onView={handleView}
+                    onEdit={handleEdit}
+                    onDelete={handleDelete}
+                  />
+                </Col>
+              </Grid>
+            </TabPanel>
+          </TabPanels>
+        </TabGroup>
 
         {/* Create Vector Store Modal */}
         <VectorStoreForm
