@@ -1045,3 +1045,44 @@ async def test_list_batches_from_managed_objects_table_filters_by_created_by():
         take=10,
         order={"created_at": "desc"},
     )
+
+
+@pytest.mark.asyncio
+async def test_return_unified_file_id_includes_expires_at():
+    from litellm.types.llms.openai import OpenAIFileObject
+
+    # Create a mock file object with expires_at set
+    file_object = OpenAIFileObject(
+        id="file-abc123",
+        object="file",
+        bytes=1234,
+        created_at=1234567890,
+        filename="test.jsonl",
+        purpose="batch",
+        status="uploaded",
+        expires_at=1234657890,  
+    )
+    file_object._hidden_params = {"model_id": "test-model-id"}
+
+    create_file_request = {
+        "file": ("test.jsonl", b"test content", "application/jsonl"),
+        "purpose": "batch",
+    }
+
+    internal_usage_cache = MagicMock()
+
+    result = await _PROXY_LiteLLMManagedFiles.return_unified_file_id(
+        file_objects=[file_object],
+        create_file_request=create_file_request,
+        internal_usage_cache=internal_usage_cache,
+        litellm_parent_otel_span=None,
+        target_model_names_list=["gpt-4o"],
+    )
+
+    # Verify expires_at is passed through
+    assert result.expires_at == 1234657890
+    assert result.purpose == "batch"
+    assert result.filename == "test.jsonl"
+    assert result.bytes == 1234
+    assert result.created_at == 1234567890
+    assert _is_base64_encoded_unified_file_id(result.id)
