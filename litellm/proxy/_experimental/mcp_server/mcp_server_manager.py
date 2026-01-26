@@ -42,7 +42,6 @@ from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_name,
     get_server_prefix,
     is_tool_name_prefixed,
-    merge_mcp_headers,
     normalize_server_name,
     split_server_prefix_from_name,
     validate_mcp_server_name,
@@ -373,7 +372,7 @@ class MCPServerManager:
             server_prefix = get_server_prefix(server)
 
             # Build headers from server configuration
-            headers: Dict[str, str] = {}
+            headers = {}
 
             # Add authentication headers if configured
             if server.authentication_token:
@@ -386,15 +385,10 @@ class MCPServerManager:
                 elif server.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {server.authentication_token}"
 
-            # Add any static headers from server config.
-            #
-            # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
-            # from the client request (not available in this OpenAPI tool generation step).
-            # `static_headers` is a dict of concrete headers to always send.
-            headers = merge_mcp_headers(
-                extra_headers=headers,
-                static_headers=server.static_headers,
-            ) or {}
+            # Add any extra headers from server config
+            # Note: extra_headers is a List[str] of header names to forward, not a dict
+            # For OpenAPI tools, we'll just use the authentication headers
+            # If extra_headers were needed, they would be processed separately
 
             verbose_logger.debug(
                 f"Using headers for OpenAPI tools (excluding sensitive values): "

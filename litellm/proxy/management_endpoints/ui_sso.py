@@ -712,13 +712,15 @@ async def get_user_info_from_db(
         )
 
         # Upsert SSO User to LiteLLM DB
-        user_info = await SSOAuthenticationHandler.upsert_sso_user(
-            result=result,
-            user_info=user_info,
-            user_email=user_email,
-            user_defined_values=user_defined_values,
-            prisma_client=prisma_client,
-        )
+
+        if user_info is None:
+            user_info = await SSOAuthenticationHandler.upsert_sso_user(
+                result=result,
+                user_info=user_info,
+                user_email=user_email,
+                user_defined_values=user_defined_values,
+                prisma_client=prisma_client,
+            )
 
         await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
             result=result,

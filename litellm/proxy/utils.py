@@ -7,7 +7,7 @@ import smtplib
 import threading
 import time
 import traceback
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import (
@@ -3891,15 +3891,11 @@ def _raise_failed_update_spend_exception(
     raise e
 
 
-def _get_month_end_date(today: date) -> date:
-    if today.month == 12:
-        return date(today.year + 1, 1, 1) - timedelta(days=1)
-    return date(today.year, today.month + 1, 1) - timedelta(days=1)
-
-
 def _is_projected_spend_over_limit(
     current_spend: float, soft_budget_limit: Optional[float]
 ):
+    from datetime import date
+
     if soft_budget_limit is None:
         # If there's no limit, we can't exceed it.
         return False
@@ -3907,7 +3903,10 @@ def _is_projected_spend_over_limit(
     today = date.today()
 
     # Finding the first day of the next month, then subtracting one day to get the end of the current month.
-    end_month = _get_month_end_date(today)
+    if today.month == 12:  # December edge case
+        end_month = date(today.year + 1, 1, 1) - timedelta(days=1)
+    else:
+        end_month = date(today.year, today.month + 1, 1) - timedelta(days=1)
 
     remaining_days = (end_month - today).days
 
@@ -3929,30 +3928,25 @@ def _is_projected_spend_over_limit(
 def _get_projected_spend_over_limit(
     current_spend: float, soft_budget_limit: Optional[float]
 ) -> Optional[tuple]:
+    import datetime
+
     if soft_budget_limit is None:
         return None
 
-    today = date.today()
-    end_month = _get_month_end_date(today)
+    today = datetime.date.today()
+    end_month = datetime.date(today.year, today.month + 1, 1) - datetime.timedelta(
+        days=1
+    )
     remaining_days = (end_month - today).days
 
-    # assuming the current spend till today (not including today)
-    if today.day == 1:
-        daily_spend = current_spend
-    else:
-        daily_spend = current_spend / (today.day - 1)
-    projected_spend = current_spend + (daily_spend * remaining_days)
+    daily_spend = current_spend / (
+        today.day - 1
+    )  # assuming the current spend till today (not including today)
+    projected_spend = daily_spend * remaining_days
 
     if projected_spend > soft_budget_limit:
-        if daily_spend <= 0:
-            limit_exceed_date = today
-        else:
-            remaining_budget = soft_budget_limit - current_spend
-            if remaining_budget <= 0:
-                limit_exceed_date = today
-            else:
-                approx_days = remaining_budget / daily_spend
-                limit_exceed_date = today + timedelta(days=approx_days)
+        approx_days = soft_budget_limit / daily_spend
+        limit_exceed_date = today + datetime.timedelta(days=approx_days)
 
         # return the projected spend and the date it will exceeded
         return projected_spend, limit_exceed_date

@@ -1527,7 +1527,7 @@ class AWSEventStreamDecoder:
                 ]
             ] = None
 
-            content_block_index = int(chunk_data.get("contentBlockIndex", 0))
+            index = int(chunk_data.get("contentBlockIndex", 0))
             if "start" in chunk_data:
                 start_obj = ContentBlockStartEvent(**chunk_data["start"])
                 (
@@ -1543,11 +1543,11 @@ class AWSEventStreamDecoder:
                     provider_specific_fields,
                     reasoning_content,
                     thinking_blocks,
-                ) = self._handle_converse_delta_event(delta_obj, content_block_index)
+                ) = self._handle_converse_delta_event(delta_obj, index)
             elif (
                 "contentBlockIndex" in chunk_data
             ):  # stop block, no 'start' or 'delta' object
-                tool_use = self._handle_converse_stop_event(content_block_index)
+                tool_use = self._handle_converse_stop_event(index)
             elif "stopReason" in chunk_data:
                 finish_reason = map_finish_reason(chunk_data.get("stopReason", "stop"))
             elif "usage" in chunk_data:
@@ -1561,7 +1561,7 @@ class AWSEventStreamDecoder:
                 choices=[
                     StreamingChoices(
                         finish_reason=finish_reason,
-                        index=0,  # Always 0 - Bedrock never returns multiple choices
+                        index=index,
                         delta=Delta(
                             content=text,
                             role="assistant",

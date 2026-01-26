@@ -73,7 +73,6 @@ class SupportedDBObjectType(str, enum.Enum):
     MODELS = "models"
     MCP = "mcp"
     GUARDRAILS = "guardrails"
-    POLICIES = "policies"
     VECTOR_STORES = "vector_stores"
     PASS_THROUGH_ENDPOINTS = "pass_through_endpoints"
     PROMPTS = "prompts"
@@ -845,7 +844,6 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
-    policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
@@ -1479,7 +1477,6 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
-    policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
@@ -1529,7 +1526,6 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
     guardrails: Optional[List[str]] = None
-    policies: Optional[List[str]] = None
     """
 
     team_id: str  # required
@@ -1545,7 +1541,6 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
-    policies: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
     team_member_budget_duration: Optional[str] = None
@@ -3504,7 +3499,6 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
-    "policies",
     "tags",
     "team_member_key_duration",
     "prompts",

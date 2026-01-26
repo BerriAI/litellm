@@ -1571,50 +1571,6 @@ class CustomStreamWrapper:
             )
             return chunk
 
-    def _add_mcp_list_tools_to_first_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
-        """
-        Add mcp_list_tools from _hidden_params to the first chunk's delta.provider_specific_fields.
-        
-        This method checks if MCP metadata with mcp_list_tools is stored in _hidden_params
-        and adds it to the first chunk's delta.provider_specific_fields.
-        """
-        try:
-            # Check if MCP metadata should be added to first chunk
-            if not hasattr(self, "_hidden_params") or not self._hidden_params:
-                return chunk
-            
-            mcp_metadata = self._hidden_params.get("mcp_metadata")
-            if not mcp_metadata or not isinstance(mcp_metadata, dict):
-                return chunk
-            
-            # Only add mcp_list_tools to first chunk (not tool_calls or tool_results)
-            mcp_list_tools = mcp_metadata.get("mcp_list_tools")
-            if not mcp_list_tools:
-                return chunk
-            
-            # Add mcp_list_tools to delta.provider_specific_fields
-            if hasattr(chunk, "choices") and chunk.choices:
-                for choice in chunk.choices:
-                    if isinstance(choice, StreamingChoices) and hasattr(choice, "delta") and choice.delta:
-                        # Get existing provider_specific_fields or create new dict
-                        provider_fields = (
-                            getattr(choice.delta, "provider_specific_fields", None) or {}
-                        )
-                        
-                        # Add only mcp_list_tools to first chunk
-                        provider_fields["mcp_list_tools"] = mcp_list_tools
-                        
-                        # Set the provider_specific_fields
-                        setattr(choice.delta, "provider_specific_fields", provider_fields)
-        
-        except Exception as e:
-            from litellm._logging import verbose_logger
-            verbose_logger.exception(
-                f"Error adding MCP list tools to first chunk: {str(e)}"
-            )
-        
-        return chunk
-
     def _add_mcp_metadata_to_final_chunk(self, chunk: ModelResponseStream) -> ModelResponseStream:
         """
         Add MCP metadata from _hidden_params to the final chunk's delta.provider_specific_fields.
@@ -1771,12 +1727,6 @@ class CustomStreamWrapper:
                     )
                     # HANDLE STREAM OPTIONS
                     self.chunks.append(response)
-                    
-                    # Add mcp_list_tools to first chunk if present
-                    if not self.sent_first_chunk:
-                        response = self._add_mcp_list_tools_to_first_chunk(response)
-                        self.sent_first_chunk = True
-                    
                     if hasattr(
                         response, "usage"
                     ):  # remove usage from chunk, only send on final chunk
@@ -1944,11 +1894,6 @@ class CustomStreamWrapper:
                         input=self.response_uptil_now, model=self.model
                     )
                     self.chunks.append(processed_chunk)
-                    
-                    # Add mcp_list_tools to first chunk if present
-                    if not self.sent_first_chunk:
-                        processed_chunk = self._add_mcp_list_tools_to_first_chunk(processed_chunk)
-                        self.sent_first_chunk = True
                     if hasattr(
                         processed_chunk, "usage"
                     ):  # remove usage from chunk, only send on final chunk

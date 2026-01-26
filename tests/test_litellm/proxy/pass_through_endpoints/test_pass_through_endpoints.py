@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 from fastapi import Request, UploadFile
+from fastapi.testclient import TestClient
 from starlette.datastructures import Headers, QueryParams
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -200,6 +201,7 @@ async def test_pass_through_request_failure_handler():
 
     Critical Test: When a users pass through endpoint request fails, we must log the failure code, exception in litellm spend logs.
     """
+    print("running test_pass_through_request_failure_handler")
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         with patch(
             "litellm.llms.custom_httpx.http_handler.get_async_httpx_client"
@@ -264,27 +266,27 @@ def test_is_langfuse_route():
     # Test positive cases
     assert (
         handler.is_langfuse_route("http://localhost:4000/langfuse/api/public/traces")
-        is True
+        == True
     )
     assert (
         handler.is_langfuse_route(
             "https://proxy.example.com/langfuse/api/public/sessions"
         )
-        is True
+        == True
     )
-    assert handler.is_langfuse_route("/langfuse/api/public/ingestion") is True
-    assert handler.is_langfuse_route("http://localhost:4000/langfuse/") is True
+    assert handler.is_langfuse_route("/langfuse/api/public/ingestion") == True
+    assert handler.is_langfuse_route("http://localhost:4000/langfuse/") == True
 
     # Test negative cases
     assert (
-        handler.is_langfuse_route("https://api.openai.com/v1/chat/completions") is False
+        handler.is_langfuse_route("https://api.openai.com/v1/chat/completions") == False
     )
     assert (
         handler.is_langfuse_route("http://localhost:4000/anthropic/v1/messages")
-        is False
+        == False
     )
-    assert handler.is_langfuse_route("https://example.com/other") is False
-    assert handler.is_langfuse_route("") is False
+    assert handler.is_langfuse_route("https://example.com/other") == False
+    assert handler.is_langfuse_route("") == False
 
 
 @pytest.mark.asyncio
@@ -574,6 +576,7 @@ def test_set_cost_per_request():
     """
     Test that _set_cost_per_request correctly sets the cost in logging object and kwargs
     """
+    from datetime import datetime
 
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.passthrough_endpoints.pass_through_endpoints import (
@@ -684,7 +687,7 @@ async def test_pass_through_success_handler_with_cost_per_request():
     end_time = datetime.now()
 
     # Call the success handler
-    await handler.pass_through_async_success_handler(
+    result = await handler.pass_through_async_success_handler(
         httpx_response=mock_response,
         response_body={"status": "success", "data": "test"},
         logging_obj=mock_logging_obj,
@@ -716,9 +719,8 @@ async def test_create_pass_through_route_with_cost_per_request():
     )
 
     # Create the endpoint function with cost_per_request
-    unique_path = "/test/path/unique/cost_per_request"
     endpoint_func = create_pass_through_route(
-        endpoint=unique_path,
+        endpoint="/test/path",
         target="http://example.com",
         custom_headers={},
         _forward_headers=True,
@@ -730,19 +732,11 @@ async def test_create_pass_through_route_with_cost_per_request():
     # Mock the pass_through_request function to capture its call
     with patch(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_request"
-    ) as mock_pass_through, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.is_registered_pass_through_route"
-    ) as mock_is_registered, patch(
-        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.InitPassThroughEndpointHelpers.get_registered_pass_through_route"
-    ) as mock_get_registered:
+    ) as mock_pass_through:
         mock_pass_through.return_value = MagicMock()
-        mock_is_registered.return_value = True
-        mock_get_registered.return_value = None
 
         # Create mock request
         mock_request = MagicMock(spec=Request)
-        mock_request.url = MagicMock()
-        mock_request.url.path = unique_path
         mock_request.path_params = {}
         mock_request.query_params = QueryParams({})
 
@@ -823,7 +817,7 @@ def test_initialize_pass_through_endpoints_with_cost_per_request():
 
 
 @pytest.mark.asyncio
-async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  # noqa: PLR0915
+async def test_pass_through_request_contains_proxy_server_request_in_kwargs():
     """
     Test that pass_through_request (parent method) correctly includes proxy_server_request
     in kwargs passed to the success handler.
@@ -831,6 +825,8 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
     Critical Test: Ensures that when pass_through_request is called, the kwargs passed to
     downstream methods contain the proxy server request details (url, method, body).
     """
+    print("running test_pass_through_request_contains_proxy_server_request_in_kwargs")
+
     with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
         with patch(
             "litellm.proxy.pass_through_endpoints.pass_through_endpoints.HttpPassThroughEndpointHelpers.non_streaming_http_request_handler"
@@ -895,7 +891,7 @@ async def test_pass_through_request_contains_proxy_server_request_in_kwargs():  
                         mock_user_api_key_dict.request_route = "/api/endpoint"
 
                         # Call pass_through_request (the parent method)
-                        await pass_through_request(
+                        result = await pass_through_request(
                             request=mock_request,
                             target="http://target-api.com/endpoint",
                             custom_headers={"X-Custom": "header"},
@@ -955,6 +951,7 @@ async def test_create_pass_through_endpoint():
     """
     from litellm.proxy._types import (
         ConfigFieldInfo,
+        ConfigFieldUpdate,
         PassThroughEndpointResponse,
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
@@ -989,9 +986,7 @@ async def test_create_pass_through_endpoint():
 
             # Call the create function
             result = await create_pass_through_endpoints(
-                data=test_endpoint,
-                request=MagicMock(spec=Request),
-                user_api_key_dict=mock_user_api_key_dict,
+                data=test_endpoint, user_api_key_dict=mock_user_api_key_dict
             )
 
             # Verify the result
@@ -1034,6 +1029,7 @@ async def test_update_pass_through_endpoint():
     """
     from litellm.proxy._types import (
         ConfigFieldInfo,
+        ConfigFieldUpdate,
         PassThroughEndpointResponse,
         PassThroughGenericEndpoint,
         UserAPIKeyAuth,
@@ -1086,7 +1082,6 @@ async def test_update_pass_through_endpoint():
             result = await update_pass_through_endpoints(
                 endpoint_id=existing_endpoint_id,
                 data=update_data,
-                request=MagicMock(spec=Request),
                 user_api_key_dict=mock_user_api_key_dict,
             )
 
@@ -1170,7 +1165,6 @@ async def test_update_pass_through_endpoint_not_found():
             await update_pass_through_endpoints(
                 endpoint_id="non-existent-endpoint-123",
                 data=update_data,
-                request=MagicMock(spec=Request),
                 user_api_key_dict=mock_user_api_key_dict,
             )
 
@@ -1191,6 +1185,7 @@ async def test_delete_pass_through_endpoint():
     """
     from litellm.proxy._types import (
         ConfigFieldInfo,
+        ConfigFieldUpdate,
         PassThroughEndpointResponse,
         UserAPIKeyAuth,
     )
@@ -1426,7 +1421,7 @@ async def test_pass_through_request_query_params_forwarding():
                         mock_user_api_key_dict.api_key = "sk-1234"
 
                         # Call pass_through_request
-                        await pass_through_request(
+                        result = await pass_through_request(
                             request=mock_request,
                             target="https://krris-m2f9a9i7-eastus2.openai.azure.com/openai/assistants",
                             custom_headers={"Authorization": "Bearer azure_token"},
@@ -1503,6 +1498,7 @@ async def test_pass_through_with_httpbin_redirect():
 
         # httpbin.org/get returns JSON with info about the request
         assert '"url": "https://httpbin.org/get"' in response_content
+        print("GOT A Response from HTTPBIN=", response_content)
     except Exception as e:
         # If httpbin.org is not accessible, skip the test
         import pytest

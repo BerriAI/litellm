@@ -16,7 +16,6 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     _get_enforced_params,
     _update_model_if_key_alias_exists,
-    add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
@@ -1478,73 +1477,3 @@ async def test_embedding_header_forwarding_without_model_group_config():
     finally:
         # Restore original model_group_settings
         litellm.model_group_settings = original_model_group_settings
-
-
-def test_add_guardrails_from_policy_engine():
-    """
-    Test that add_guardrails_from_policy_engine adds guardrails from matching policies
-    and tracks applied policies in metadata.
-    """
-    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
-    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-    from litellm.types.proxy.policy_engine import (
-        Policy,
-        PolicyAttachment,
-        PolicyGuardrails,
-    )
-
-    # Setup test data
-    data = {
-        "model": "gpt-4",
-        "messages": [{"role": "user", "content": "Hello"}],
-        "metadata": {},
-    }
-
-    user_api_key_dict = UserAPIKeyAuth(
-        api_key="test-key",
-        team_alias="healthcare-team",
-        key_alias="my-key",
-    )
-
-    # Setup mock policies in the registry (policies define WHAT guardrails to apply)
-    policy_registry = get_policy_registry()
-    policy_registry._policies = {
-        "global-baseline": Policy(
-            guardrails=PolicyGuardrails(add=["pii_blocker"]),
-        ),
-        "healthcare": Policy(
-            guardrails=PolicyGuardrails(add=["hipaa_audit"]),
-        ),
-    }
-    policy_registry._initialized = True
-
-    # Setup attachments in the attachment registry (attachments define WHERE policies apply)
-    attachment_registry = get_attachment_registry()
-    attachment_registry._attachments = [
-        PolicyAttachment(policy="global-baseline", scope="*"),  # applies to all
-        PolicyAttachment(policy="healthcare", teams=["healthcare-team"]),  # applies to healthcare team
-    ]
-    attachment_registry._initialized = True
-
-    # Call the function
-    add_guardrails_from_policy_engine(
-        data=data,
-        metadata_variable_name="metadata",
-        user_api_key_dict=user_api_key_dict,
-    )
-
-    # Verify guardrails were added
-    assert "guardrails" in data["metadata"]
-    assert "pii_blocker" in data["metadata"]["guardrails"]
-    assert "hipaa_audit" in data["metadata"]["guardrails"]
-
-    # Verify applied policies were tracked
-    assert "applied_policies" in data["metadata"]
-    assert "global-baseline" in data["metadata"]["applied_policies"]
-    assert "healthcare" in data["metadata"]["applied_policies"]
-
-    # Clean up registries
-    policy_registry._policies = {}
-    policy_registry._initialized = False
-    attachment_registry._attachments = []
-    attachment_registry._initialized = False

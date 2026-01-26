@@ -42,7 +42,6 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
-        "proxy/guardrails/guardrail_policies",
         "proxy/guardrails/guardrail_load_balancing",
         {
           type: "category",
@@ -1017,7 +1016,6 @@ const sidebars = {
       items: [
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
-        "troubleshoot/spend_queue_warnings",
       ],
     },
   ],

@@ -19,7 +19,6 @@ import {
   ExperimentOutlined,
   ToolOutlined,
   TagsOutlined,
-  AuditOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -103,8 +102,6 @@ const routeFor = (slug: string): string => {
       return "logs";
     case "guardrails":
       return "guardrails";
-    case "policies":
-      return "policies";
 
     // tools
     case "mcp-servers":
@@ -203,13 +200,6 @@ const menuItems: MenuItemCfg[] = [
       page: "guardrails",
       label: "Guardrails",
       icon: <SafetyOutlined style={{ fontSize: 18 }} />,
-      roles: all_admin_roles,
-    },
-    {
-      key: "28",
-      page: "policies",
-      label: "Policies",
-      icon: <AuditOutlined style={{ fontSize: 18 }} />,
       roles: all_admin_roles,
     },
     {

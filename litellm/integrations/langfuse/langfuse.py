@@ -25,10 +25,6 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
-from litellm.integrations.langfuse.langfuse_mock_client import (
-    create_mock_langfuse_client,
-    should_use_langfuse_mock,
-)
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
@@ -123,14 +119,8 @@ class LangFuseLogger:
         self.langfuse_flush_interval = LangFuseLogger._get_langfuse_flush_interval(
             flush_interval
         )
-        
-        if should_use_langfuse_mock():
-            self.langfuse_client = create_mock_langfuse_client()
-            self.is_mock_mode = True
-        else:
-            http_client = _get_httpx_client()
-            self.langfuse_client = http_client.client
-            self.is_mock_mode = False
+        http_client = _get_httpx_client()
+        self.langfuse_client = http_client.client
 
         parameters = {
             "public_key": self.public_key,
@@ -149,15 +139,11 @@ class LangFuseLogger:
 
         # set the current langfuse project id in the environ
         # this is used by Alerting to link to the correct project
-        if self.is_mock_mode:
-            os.environ["LANGFUSE_PROJECT_ID"] = "mock-project-id"
-            verbose_logger.debug("Langfuse Mock: Using mock project ID")
-        else:
-            try:
-                project_id = self.Langfuse.client.projects.get().data[0].id
-                os.environ["LANGFUSE_PROJECT_ID"] = project_id
-            except Exception:
-                project_id = None
+        try:
+            project_id = self.Langfuse.client.projects.get().data[0].id
+            os.environ["LANGFUSE_PROJECT_ID"] = project_id
+        except Exception:
+            project_id = None
 
         if os.getenv("UPSTREAM_LANGFUSE_SECRET_KEY") is not None:
             upstream_langfuse_debug = (
