@@ -215,28 +215,21 @@ class TestProxyInitializationHelpers:
             assert "pool_timeout=60" in modified_url
 
     @patch("uvicorn.run")
-    @patch("builtins.print")
-    def test_skip_server_startup(self, mock_print, mock_uvicorn_run):
-        """Test that the skip_server_startup flag prevents server startup when True"""
+    @patch("atexit.register")  # 🔥 critical
+    def test_skip_server_startup(self, mock_atexit_register, mock_uvicorn_run):
         from click.testing import CliRunner
-
         from litellm.proxy.proxy_cli import run_server
 
         runner = CliRunner()
-
-        mock_app = MagicMock()
-        mock_proxy_config = MagicMock()
-        mock_key_mgmt = MagicMock()
-        mock_save_worker_config = MagicMock()
 
         with patch.dict(
             "sys.modules",
             {
                 "proxy_server": MagicMock(
-                    app=mock_app,
-                    ProxyConfig=mock_proxy_config,
-                    KeyManagementSettings=mock_key_mgmt,
-                    save_worker_config=mock_save_worker_config,
+                    app=MagicMock(),
+                    ProxyConfig=MagicMock(),
+                    KeyManagementSettings=MagicMock(),
+                    save_worker_config=MagicMock(),
                 )
             },
         ), patch(
@@ -248,16 +241,15 @@ class TestProxyInitializationHelpers:
                 "port": 8000,
             }
 
+            # --- skip startup ---
             result = runner.invoke(run_server, ["--local", "--skip_server_startup"])
 
             assert result.exit_code == 0
+            assert "Skipping server startup" in result.output
             mock_uvicorn_run.assert_not_called()
-            mock_print.assert_any_call(
-                "LiteLLM: Setup complete. Skipping server startup as requested."
-            )
 
+            # --- normal startup ---
             mock_uvicorn_run.reset_mock()
-            mock_print.reset_mock()
 
             result = runner.invoke(run_server, ["--local"])
 
