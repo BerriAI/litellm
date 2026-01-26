@@ -8,6 +8,7 @@ import VectorStoreForm from "./VectorStoreForm";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import VectorStoreInfoView from "./vector_store_info";
 import CreateVectorStore from "./CreateVectorStore";
+import TestVectorStoreTab from "./TestVectorStoreTab";
 import { isAdminRole } from "@/utils/roles";
 import NotificationsManager from "../molecules/notifications_manager";
 
@@ -148,6 +149,7 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
           <TabList className="mb-6">
             <Tab>Create Vector Store</Tab>
             <Tab>Manage Vector Stores</Tab>
+            <Tab>Test Vector Store</Tab>
           </TabList>
 
           <TabPanels>
@@ -172,6 +174,11 @@ const VectorStoreManagement: React.FC<VectorStoreProps> = ({ accessToken, userID
                   />
                 </Col>
               </Grid>
+            </TabPanel>
+
+            {/* Tab 3: Test Vector Store */}
+            <TabPanel>
+              <TestVectorStoreTab accessToken={accessToken} vectorStores={vectorStores} />
             </TabPanel>
           </TabPanels>
         </TabGroup>

@@ -6952,7 +6952,9 @@ export const ragIngestCall = async (
   accessToken: string,
   file: File,
   customLlmProvider: string,
-  vectorStoreId?: string
+  vectorStoreId?: string,
+  vectorStoreName?: string,
+  vectorStoreDescription?: string
 ): Promise<any> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
@@ -6960,7 +6962,7 @@ export const ragIngestCall = async (
     const formData = new FormData();
     formData.append("file", file);
 
-    const ingestOptions = {
+    const ingestOptions: any = {
       ingest_options: {
         vector_store: {
           custom_llm_provider: customLlmProvider,
@@ -6968,6 +6970,17 @@ export const ragIngestCall = async (
         },
       },
     };
+
+    // Add litellm_vector_store_params if name or description provided
+    if (vectorStoreName || vectorStoreDescription) {
+      ingestOptions.ingest_options.litellm_vector_store_params = {};
+      if (vectorStoreName) {
+        ingestOptions.ingest_options.litellm_vector_store_params.vector_store_name = vectorStoreName;
+      }
+      if (vectorStoreDescription) {
+        ingestOptions.ingest_options.litellm_vector_store_params.vector_store_description = vectorStoreDescription;
+      }
+    }
 
     formData.append("request", JSON.stringify(ingestOptions));
 

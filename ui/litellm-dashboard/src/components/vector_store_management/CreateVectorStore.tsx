@@ -1,13 +1,16 @@
 import React, { useState } from "react";
 import { Card, Title, Text } from "@tremor/react";
-import { Upload, Button, Select, Form, message, Alert } from "antd";
-import { InboxOutlined } from "@ant-design/icons";
+import { Upload, Button, Select, Form, message, Alert, Tooltip, Input } from "antd";
+import { InboxOutlined, InfoCircleOutlined } from "@ant-design/icons";
 import type { UploadProps } from "antd";
 import { ragIngestCall } from "../networking";
 import { DocumentUpload, RAGIngestResponse } from "./types";
 import DocumentsTable from "./DocumentsTable";
-import { Providers, provider_map } from "../provider_info_helpers";
-import { ProviderLogo } from "../molecules/models/ProviderLogo";
+import {
+  VectorStoreProviders,
+  vectorStoreProviderLogoMap,
+  vectorStoreProviderMap,
+} from "../vector_store_providers";
 import NotificationsManager from "../molecules/notifications_manager";
 
 const { Dragger } = Upload;
@@ -21,7 +24,9 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
   const [form] = Form.useForm();
   const [documents, setDocuments] = useState<DocumentUpload[]>([]);
   const [isCreating, setIsCreating] = useState(false);
-  const [selectedProvider, setSelectedProvider] = useState<string>("openai");
+  const [selectedProvider, setSelectedProvider] = useState<string>("bedrock");
+  const [vectorStoreName, setVectorStoreName] = useState<string>("");
+  const [vectorStoreDescription, setVectorStoreDescription] = useState<string>("");
   const [ingestResults, setIngestResults] = useState<RAGIngestResponse[]>([]);
 
   const uploadProps: UploadProps = {
@@ -111,7 +116,9 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
             accessToken,
             doc.originFileObj,
             selectedProvider,
-            vectorStoreId // Use the same vector store ID for subsequent uploads
+            vectorStoreId, // Use the same vector store ID for subsequent uploads
+            vectorStoreName || undefined,
+            vectorStoreDescription || undefined
           );
 
           // Store the vector store ID from the first successful ingest
@@ -157,8 +164,6 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
     }
   };
 
-  const supportedProviders = ["openai", "bedrock"]; // Add more as needed
-
   return (
     <div className="space-y-6">
       <div>
@@ -197,18 +202,67 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
         </Card>
       )}
 
-      {/* Provider Selection and Create Button */}
+      {/* Provider Selection and Vector Store Details */}
       <Card>
         <div className="space-y-4">
           <div>
-            <Text className="font-medium">Step 2: Select Provider</Text>
+            <Text className="font-medium">Step 2: Configure Vector Store</Text>
             <Text className="text-sm text-gray-500 block mt-1">
-              Choose the LLM provider for embedding and vector store operations.
+              Choose the provider and optionally provide a name and description for your vector store.
             </Text>
           </div>
 
           <Form form={form} layout="vertical">
-            <Form.Item label="Provider" required>
+            <Form.Item
+              label={
+                <span>
+                  Vector Store Name{" "}
+                  <Tooltip title="Optional: Give your vector store a meaningful name">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              }
+            >
+              <Input
+                value={vectorStoreName}
+                onChange={(e) => setVectorStoreName(e.target.value)}
+                placeholder="e.g., Product Documentation, Customer Support KB"
+                size="large"
+                className="rounded-md"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span>
+                  Description{" "}
+                  <Tooltip title="Optional: Describe what this vector store contains">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              }
+            >
+              <Input.TextArea
+                value={vectorStoreDescription}
+                onChange={(e) => setVectorStoreDescription(e.target.value)}
+                placeholder="e.g., Contains all product documentation and user guides"
+                rows={2}
+                size="large"
+                className="rounded-md"
+              />
+            </Form.Item>
+
+            <Form.Item
+              label={
+                <span>
+                  Provider{" "}
+                  <Tooltip title="Select the provider for embedding and vector store operations">
+                    <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                  </Tooltip>
+                </span>
+              }
+              required
+            >
               <Select
                 value={selectedProvider}
                 onChange={setSelectedProvider}
@@ -216,19 +270,32 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 size="large"
                 style={{ width: "100%" }}
               >
-                {Object.entries(Providers)
-                  .filter(([providerEnum]) => supportedProviders.includes(provider_map[providerEnum]?.toLowerCase()))
-                  .map(([providerEnum, providerDisplayName]) => {
-                    const providerValue = provider_map[providerEnum]?.toLowerCase();
-                    return (
-                      <Select.Option key={providerEnum} value={providerValue}>
-                        <div className="flex items-center space-x-2">
-                          <ProviderLogo provider={providerEnum} className="w-5 h-5" />
-                          <span>{providerDisplayName}</span>
-                        </div>
-                      </Select.Option>
-                    );
-                  })}
+                {Object.entries(VectorStoreProviders).map(([providerEnum, providerDisplayName]) => {
+                  return (
+                    <Select.Option key={providerEnum} value={vectorStoreProviderMap[providerEnum]}>
+                      <div className="flex items-center space-x-2">
+                        <img
+                          src={vectorStoreProviderLogoMap[providerDisplayName]}
+                          alt={`${providerEnum} logo`}
+                          className="w-5 h-5"
+                          onError={(e) => {
+                            // Create a div with provider initial as fallback
+                            const target = e.target as HTMLImageElement;
+                            const parent = target.parentElement;
+                            if (parent) {
+                              const fallbackDiv = document.createElement("div");
+                              fallbackDiv.className =
+                                "w-5 h-5 rounded-full bg-gray-200 flex items-center justify-center text-xs";
+                              fallbackDiv.textContent = providerDisplayName.charAt(0);
+                              parent.replaceChild(fallbackDiv, target);
+                            }
+                          }}
+                        />
+                        <span>{providerDisplayName}</span>
+                      </div>
+                    </Select.Option>
+                  );
+                })}
               </Select>
             </Form.Item>
           </Form>

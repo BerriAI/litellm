@@ -1,9 +1,23 @@
+export interface IngestedFile {
+  file_id?: string;
+  filename?: string;
+  file_url?: string;
+  ingested_at: string;
+  file_size?: number;
+  content_type?: string;
+}
+
+export interface VectorStoreMetadata {
+  ingested_files?: IngestedFile[];
+  [key: string]: any;
+}
+
 export interface VectorStore {
   vector_store_id: string;
   custom_llm_provider: string;
   vector_store_name?: string;
   vector_store_description?: string;
-  vector_store_metadata?: Record<string, any>;
+  vector_store_metadata?: VectorStoreMetadata;
   created_at: string;
   updated_at: string;
   created_by?: string;

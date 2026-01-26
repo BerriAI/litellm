@@ -16,13 +16,23 @@ vi.mock("../molecules/notifications_manager", () => ({
   },
 }));
 
-// Mock ProviderLogo
-vi.mock("../molecules/models/ProviderLogo", () => ({
-  ProviderLogo: ({ provider, className }: { provider: string; className?: string }) => (
-    <div className={className} data-testid={`provider-logo-${provider}`}>
-      {provider}
-    </div>
-  ),
+// Mock vector_store_providers
+vi.mock("../vector_store_providers", () => ({
+  VectorStoreProviders: {
+    BEDROCK: "Amazon Bedrock",
+    OPENAI: "OpenAI",
+    AZURE_OPENAI: "Azure OpenAI",
+  },
+  vectorStoreProviderMap: {
+    BEDROCK: "bedrock",
+    OPENAI: "openai",
+    AZURE_OPENAI: "azure_openai",
+  },
+  vectorStoreProviderLogoMap: {
+    "Amazon Bedrock": "https://example.com/bedrock.png",
+    "OpenAI": "https://example.com/openai.png",
+    "Azure OpenAI": "https://example.com/azure.png",
+  },
 }));
 
 describe("CreateVectorStore", () => {
@@ -113,7 +123,7 @@ describe("CreateVectorStore", () => {
     });
 
     await waitFor(() => {
-      expect(mockRagIngestCall).toHaveBeenCalledWith("test-token", expect.any(File), "openai", undefined);
+      expect(mockRagIngestCall).toHaveBeenCalledWith("test-token", expect.any(File), "bedrock", undefined);
     });
   });
 
