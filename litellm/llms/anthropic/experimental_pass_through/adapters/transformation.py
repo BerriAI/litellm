@@ -168,15 +168,6 @@ class LiteLLMAnthropicMessagesAdapter:
             return provider_specific_fields.get("signature")
         return None
 
-    def _should_preserve_cache_control(
-        self, cache_control: Any, model: Optional[str]
-    ) -> bool:
-        """
-        Check if cache_control should be preserved for prompt caching.
-        Only preserves cache_control for Anthropic Claude models that support it.
-        """
-        return bool(cache_control and model and self.is_anthropic_claude_model(model))
-
     def _add_cache_control_if_applicable(
         self,
         source: Dict[str, Any],
