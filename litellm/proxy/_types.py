@@ -851,6 +851,13 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
+    @field_validator("max_budget", mode="before")
+    @classmethod
+    def check_max_budget(cls, v):
+        if v == "":
+            return None
+        return v
+
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_name: str
