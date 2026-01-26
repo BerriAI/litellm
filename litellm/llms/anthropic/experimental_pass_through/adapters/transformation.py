@@ -645,6 +645,41 @@ class LiteLLMAnthropicMessagesAdapter:
             },
         }
 
+    def _add_system_message_to_messages(
+        self,
+        new_messages: List[AllMessageValues],
+        anthropic_message_request: AnthropicMessagesRequest,
+    ) -> None:
+        """Add system message to messages list if present in request."""
+        if "system" not in anthropic_message_request:
+            return
+        system_content = anthropic_message_request["system"]
+        if not system_content:
+            return
+        # Handle system as string or array of content blocks
+        if isinstance(system_content, str):
+            new_messages.insert(
+                0,
+                ChatCompletionSystemMessage(role="system", content=system_content),
+            )
+        elif isinstance(system_content, list):
+            # Convert Anthropic system content blocks to OpenAI format
+            openai_system_content: List[Dict[str, Any]] = []
+            model_name = anthropic_message_request.get("model", "")
+            for block in system_content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_block: Dict[str, Any] = {
+                        "type": "text",
+                        "text": block.get("text", ""),
+                    }
+                    self._add_cache_control_if_applicable(block, text_block, model_name)
+                    openai_system_content.append(text_block)
+            if openai_system_content:
+                new_messages.insert(
+                    0,
+                    ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
+                )
+
     def translate_anthropic_to_openai(
         self, anthropic_message_request: AnthropicMessagesRequest
     ) -> ChatCompletionRequest:
@@ -673,32 +708,7 @@ class LiteLLMAnthropicMessagesAdapter:
             model=anthropic_message_request.get("model"),
         )
         ## ADD SYSTEM MESSAGE TO MESSAGES
-        if "system" in anthropic_message_request:
-            system_content = anthropic_message_request["system"]
-            if system_content:
-                # Handle system as string or array of content blocks
-                if isinstance(system_content, str):
-                    new_messages.insert(
-                        0,
-                        ChatCompletionSystemMessage(role="system", content=system_content),
-                    )
-                elif isinstance(system_content, list):
-                    # Convert Anthropic system content blocks to OpenAI format
-                    openai_system_content: List[Dict[str, Any]] = []
-                    model_name = anthropic_message_request.get("model", "")
-                    for block in system_content:
-                        if isinstance(block, dict) and block.get("type") == "text":
-                            text_block: Dict[str, Any] = {
-                                "type": "text",
-                                "text": block.get("text", ""),
-                            }
-                            self._add_cache_control_if_applicable(block, text_block, model_name)
-                            openai_system_content.append(text_block)
-                    if openai_system_content:
-                        new_messages.insert(
-                            0,
-                            ChatCompletionSystemMessage(role="system", content=openai_system_content),  # type: ignore
-                        )
+        self._add_system_message_to_messages(new_messages, anthropic_message_request)
 
         new_kwargs: ChatCompletionRequest = {
             "model": anthropic_message_request["model"],
