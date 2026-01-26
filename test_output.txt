@@ -1,0 +1,169 @@
+============================= test session starts ==============================
+platform linux -- Python 3.12.3, pytest-7.4.4, pluggy-1.6.0 -- /home/lucky_2004/.cache/pypoetry/virtualenvs/litellm-gd7OQ2ia-py3.12/bin/python
+cachedir: .pytest_cache
+rootdir: /home/lucky_2004/repos/litellm
+configfile: pyproject.toml
+plugins: asyncio-0.21.2, respx-0.22.0, anyio-4.11.0, retry-1.6.3, xdist-3.8.0, requests-mock-1.12.1, mock-3.15.1
+asyncio: mode=Mode.AUTO
+collecting ... collected 2 items
+
+tests/test_litellm/llms/gigachat/test_gigachat_serialization.py::test_gigachat_serialization_utf8 PASSED [ 50%]
+tests/test_litellm/llms/gigachat/test_gigachat_serialization.py::test_make_common_async_call_serialization FAILED [100%]
+
+=================================== FAILURES ===================================
+__________________ test_make_common_async_call_serialization ___________________
+
+self = <litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler object at 0x70b4909d5040>
+async_httpx_client = <MagicMock name='get_async_httpx_client()' id='123920822658224'>
+provider_config = <litellm.llms.gigachat.chat.transformation.GigaChatConfig object at 0x70b49489fb00>
+api_base = 'https://api.example.com', headers = {}
+data = {'messages': [{'content': 'Привет', 'role': 'user'}]}, timeout = 10
+litellm_params = {}, logging_obj = <Mock id='123920888494992'>, stream = False
+signed_json_body = None
+
+    async def _make_common_async_call(
+        self,
+        async_httpx_client: AsyncHTTPHandler,
+        provider_config: BaseConfig,
+        api_base: str,
+        headers: dict,
+        data: dict,
+        timeout: Union[float, httpx.Timeout],
+        litellm_params: dict,
+        logging_obj: LiteLLMLoggingObj,
+        stream: bool = False,
+        signed_json_body: Optional[bytes] = None,
+    ) -> httpx.Response:
+        """Common implementation across stream + non-stream calls. Meant to ensure consistent error-handling."""
+        max_retry_on_unprocessable_entity_error = (
+            provider_config.max_retry_on_unprocessable_entity_error
+        )
+    
+        response: Optional[httpx.Response] = None
+        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+            try:
+>               response = await async_httpx_client.post(
+                    url=api_base,
+                    headers=headers,
+                    data=(
+                        signed_json_body
+                        if signed_json_body is not None
+                        else json.dumps(
+                            data, **provider_config.get_json_dumps_params()
+                        )
+                    ),
+                    timeout=timeout,
+                    stream=stream,
+                    logging_obj=logging_obj,
+                )
+E               TypeError: object MagicMock can't be used in 'await' expression
+
+litellm/llms/custom_httpx/llm_http_handler.py:161: TypeError
+
+During handling of the above exception, another exception occurred:
+
+mock_get_client = <MagicMock name='get_async_httpx_client' id='123920826895776'>
+
+    @patch("litellm.llms.custom_httpx.llm_http_handler.get_async_httpx_client")
+    @pytest.mark.asyncio
+    async def test_make_common_async_call_serialization(mock_get_client):
+        """
+        Verify that BaseLLMHTTPHandler uses the provider's json_dumps_params.
+        """
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+        import httpx
+    
+        handler = BaseLLMHTTPHandler()
+        mock_client = MagicMock()
+        mock_get_client.return_value = mock_client
+    
+        # Mock response
+        mock_response = MagicMock(spec=httpx.Response)
+        mock_response.status_code = 200
+        mock_client.post.return_value = mock_response
+    
+        provider_config = GigaChatConfig()
+        data = {"messages": [{"role": "user", "content": "Привет"}]}
+    
+        # We need to mock a few more things or provide valid arguments for litellm_params and logging_obj
+>       await handler._make_common_async_call(
+            async_httpx_client=mock_client,
+            provider_config=provider_config,
+            api_base="https://api.example.com",
+            headers={},
+            data=data,
+            timeout=10,
+            litellm_params={},
+            logging_obj=Mock()
+        )
+
+tests/test_litellm/llms/gigachat/test_gigachat_serialization.py:46: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+litellm/llms/custom_httpx/llm_http_handler.py:190: in _make_common_async_call
+    raise self._handle_error(e=e, provider_config=provider_config)
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+self = <litellm.llms.custom_httpx.llm_http_handler.BaseLLMHTTPHandler object at 0x70b4909d5040>
+e = TypeError("object MagicMock can't be used in 'await' expression")
+provider_config = <litellm.llms.gigachat.chat.transformation.GigaChatConfig object at 0x70b49489fb00>
+
+    def _handle_error(
+        self,
+        e: Exception,
+        provider_config: Union[
+            BaseConfig,
+            BaseRerankConfig,
+            BaseResponsesAPIConfig,
+            BaseImageEditConfig,
+            BaseImageGenerationConfig,
+            BaseVectorStoreConfig,
+            BaseVectorStoreFilesConfig,
+            BaseGoogleGenAIGenerateContentConfig,
+            BaseAnthropicMessagesConfig,
+            BaseBatchesConfig,
+            BaseOCRConfig,
+            BaseVideoConfig,
+            BaseSearchConfig,
+            BaseTextToSpeechConfig,
+            BaseSkillsAPIConfig,
+            "BasePassthroughConfig",
+            "BaseContainerConfig",
+        ],
+    ):
+        status_code = getattr(e, "status_code", 500)
+        error_headers = getattr(e, "headers", None)
+        if isinstance(e, httpx.HTTPStatusError):
+            error_text = e.response.text
+            status_code = e.response.status_code
+        else:
+            error_text = getattr(e, "text", str(e))
+        error_response = getattr(e, "response", None)
+        if error_headers is None and error_response:
+            error_headers = getattr(error_response, "headers", None)
+        if error_response and hasattr(error_response, "text"):
+            error_text = getattr(error_response, "text", error_text)
+        if error_headers:
+            error_headers = dict(error_headers)
+        else:
+            error_headers = {}
+    
+        if provider_config is None:
+            from litellm.llms.base_llm.chat.transformation import BaseLLMException
+    
+            raise BaseLLMException(
+                status_code=status_code,
+                message=error_text,
+                headers=error_headers,
+            )
+    
+>       raise provider_config.get_error_class(
+            error_message=error_text,
+            status_code=status_code,
+            headers=error_headers,
+        )
+E       litellm.llms.gigachat.chat.transformation.GigaChatError: object MagicMock can't be used in 'await' expression
+
+litellm/llms/custom_httpx/llm_http_handler.py:4511: GigaChatError
+=========================== short test summary info ============================
+FAILED tests/test_litellm/llms/gigachat/test_gigachat_serialization.py::test_make_common_async_call_serialization
+========================= 1 failed, 1 passed in 0.49s ==========================

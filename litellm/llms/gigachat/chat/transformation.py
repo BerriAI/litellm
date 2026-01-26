@@ -74,6 +74,9 @@ class GigaChatConfig(BaseConfig):
         self._current_credentials: Optional[str] = None
         self._current_api_base: Optional[str] = None
 
+    def get_json_dumps_params(self) -> dict:
+        return {"ensure_ascii": False}
+
     def get_complete_url(
         self,
         api_base: Optional[str],
@@ -101,7 +104,11 @@ class GigaChatConfig(BaseConfig):
         Set up headers with OAuth token.
         """
         # Get access token
-        credentials = api_key or get_secret_str("GIGACHAT_CREDENTIALS") or get_secret_str("GIGACHAT_API_KEY")
+        credentials = (
+            api_key
+            or get_secret_str("GIGACHAT_CREDENTIALS")
+            or get_secret_str("GIGACHAT_API_KEY")
+        )
         access_token = get_access_token(credentials=credentials)
 
         # Store credentials for image uploads
@@ -193,11 +200,13 @@ class GigaChatConfig(BaseConfig):
         for tool in tools:
             if tool.get("type") == "function":
                 func = tool.get("function", {})
-                functions.append({
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": func.get("parameters", {}),
-                })
+                functions.append(
+                    {
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {}),
+                    }
+                )
         return functions
 
     def _map_tool_choice(
@@ -238,7 +247,7 @@ class GigaChatConfig(BaseConfig):
                 func_name = tool_choice.get("function", {}).get("name")
                 if func_name:
                     return {"name": func_name}
-        
+
         # Default to None (don't set function_call)
         return None
 
@@ -281,8 +290,14 @@ class GigaChatConfig(BaseConfig):
         }
 
         # Add optional params
-        for key in ["temperature", "top_p", "max_tokens", "stream",
-                    "repetition_penalty", "profanity_check"]:
+        for key in [
+            "temperature",
+            "top_p",
+            "max_tokens",
+            "stream",
+            "repetition_penalty",
+            "profanity_check",
+        ]:
             if key in optional_params:
                 request_data[key] = optional_params[key]
 
@@ -441,14 +456,16 @@ class GigaChatConfig(BaseConfig):
                     # Convert to tool_calls format
                     if isinstance(args, dict):
                         args = json.dumps(args, ensure_ascii=False)
-                    message_data["tool_calls"] = [{
-                        "id": f"call_{uuid.uuid4().hex[:24]}",
-                        "type": "function",
-                        "function": {
-                            "name": func_call.get("name", ""),
-                            "arguments": args,
+                    message_data["tool_calls"] = [
+                        {
+                            "id": f"call_{uuid.uuid4().hex[:24]}",
+                            "type": "function",
+                            "function": {
+                                "name": func_call.get("name", ""),
+                                "arguments": args,
+                            },
                         }
-                    }]
+                    ]
                     message_data.pop("function_call", None)
                     finish_reason = "tool_calls"
 
