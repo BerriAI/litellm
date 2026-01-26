@@ -51,7 +51,17 @@ async def _save_vector_store_to_db_from_rag_ingest(
         create_vector_store_in_db,
     )
 
-    vector_store_id = response.get("vector_store_id")
+    # Handle both dict and object responses
+    if hasattr(response, "get"):
+        vector_store_id = response.get("vector_store_id")
+    elif hasattr(response, "vector_store_id"):
+        vector_store_id = response.vector_store_id
+    else:
+        verbose_proxy_logger.warning(
+            f"Unable to extract vector_store_id from response type: {type(response)}"
+        )
+        return
+
     if vector_store_id is None or not isinstance(vector_store_id, str):
         verbose_proxy_logger.warning(
             "Vector store ID is None or not a string, skipping database save"
@@ -81,16 +91,18 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 prisma_client=prisma_client,
                 vector_store_name=f"RAG Vector Store - {vector_store_id[:8]}",
                 vector_store_description="Created via RAG ingest endpoint",
-                created_by=user_api_key_dict.user_id,
-                updated_by=user_api_key_dict.user_id,
             )
 
             verbose_proxy_logger.info(
                 f"Vector store {vector_store_id} saved to database successfully"
             )
+        else:
+            verbose_proxy_logger.info(
+                f"Vector store {vector_store_id} already exists in database, skipping creation"
+            )
     except Exception as db_error:
         # Log the error but don't fail the request since ingestion succeeded
-        verbose_proxy_logger.warning(
+        verbose_proxy_logger.exception(
             f"Failed to save vector store {vector_store_id} to database: {db_error}"
         )
 
@@ -261,17 +273,20 @@ async def rag_ingest(
         )
 
         # Save vector store to database if it was newly created and prisma_client is available
-        if (
-            prisma_client is not None
-            and response is not None
-            and isinstance(response, dict)
-            and response.get("vector_store_id")
-        ):
+        verbose_proxy_logger.debug(
+            f"RAG Ingest - Checking database save conditions: prisma_client={prisma_client is not None}, response={response is not None}, response_type={type(response)}"
+        )
+        
+        if prisma_client is not None and response is not None:
             await _save_vector_store_to_db_from_rag_ingest(
                 response=response,
                 ingest_options=ingest_options,
                 prisma_client=prisma_client,
                 user_api_key_dict=user_api_key_dict,
+            )
+        else:
+            verbose_proxy_logger.warning(
+                f"Skipping database save: prisma_client={prisma_client is not None}, response={response is not None}"
             )
 
         return response

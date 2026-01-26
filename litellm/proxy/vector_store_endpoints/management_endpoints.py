@@ -144,8 +144,7 @@ async def create_vector_store_in_db(
     vector_store_description: Optional[str] = None,
     vector_store_metadata: Optional[Dict] = None,
     litellm_params: Optional[Dict] = None,
-    created_by: Optional[str] = None,
-    updated_by: Optional[str] = None,
+    litellm_credential_name: Optional[str] = None,
 ) -> LiteLLM_ManagedVectorStore:
     """
     Helper function to create a vector store in the database.
@@ -190,13 +189,10 @@ async def create_vector_store_in_db(
         data_to_create["vector_store_description"] = vector_store_description
     if vector_store_metadata is not None:
         data_to_create["vector_store_metadata"] = safe_dumps(vector_store_metadata)
-    if created_by is not None:
-        data_to_create["created_by"] = created_by
-    if updated_by is not None:
-        data_to_create["updated_by"] = updated_by
+    if litellm_credential_name is not None:
+        data_to_create["litellm_credential_name"] = litellm_credential_name
     
-    # Handle litellm_params
-    litellm_params_json: Optional[str] = None
+    # Handle litellm_params - always provide at least an empty dict
     if litellm_params:
         # Auto-resolve embedding config if embedding model is provided but config is not
         embedding_model = litellm_params.get("litellm_embedding_model")
@@ -214,9 +210,10 @@ async def create_vector_store_in_db(
         litellm_params_dict = GenericLiteLLMParams(
             **litellm_params
         ).model_dump(exclude_none=True)
-        litellm_params_json = safe_dumps(litellm_params_dict)
-    
-    data_to_create["litellm_params"] = litellm_params_json
+        data_to_create["litellm_params"] = safe_dumps(litellm_params_dict)
+    else:
+        # Provide empty dict if no litellm_params provided
+        data_to_create["litellm_params"] = safe_dumps({})
     
     # Create in database
     _new_vector_store = (
@@ -290,8 +287,7 @@ async def new_vector_store(
             vector_store_description=vector_store.get("vector_store_description"),
             vector_store_metadata=validated_metadata,
             litellm_params=vector_store.get("litellm_params"),
-            created_by=user_api_key_dict.user_id,
-            updated_by=user_api_key_dict.user_id,
+            litellm_credential_name=vector_store.get("litellm_credential_name"),
         )
 
         return {
