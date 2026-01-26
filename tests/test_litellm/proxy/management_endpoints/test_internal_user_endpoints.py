@@ -1096,3 +1096,57 @@ async def test_get_users_user_id_partial_match(mocker):
     assert "user_id" in captured_where_conditions
     assert "in" in captured_where_conditions["user_id"]
     assert captured_where_conditions["user_id"]["in"] == ["user1", "user2", "user3"]
+
+
+def test_update_internal_user_params_reset_max_budget_with_none():
+    """
+    Test that _update_internal_user_params allows setting max_budget to None.
+    This verifies the fix for unsetting/resetting the budget to unlimited.
+    """
+    
+    # Case 1: max_budget is explicitly None in the input dictionary
+    data_json = {"max_budget": None, "user_id": "test_user"}
+    data = UpdateUserRequest(max_budget=None, user_id="test_user")
+
+    # Call the function
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    # Assertions
+    assert "max_budget" in non_default_values
+    assert non_default_values["max_budget"] is None
+    assert non_default_values["user_id"] == "test_user"
+
+
+def test_update_internal_user_params_ignores_other_nones():
+    """
+    Test that other fields are still filtered out if None
+    """
+    # Create test data with other None fields
+    data_json = {"user_alias": None, "user_id": "test_user", "max_budget": 100.0}
+    data = UpdateUserRequest(user_alias=None, user_id="test_user", max_budget=100.0)
+
+    # Call the function
+    non_default_values = _update_internal_user_params(data_json=data_json, data=data)
+
+    # Assertions
+    assert "user_alias" not in non_default_values
+    assert non_default_values["max_budget"] == 100.0
+
+
+def test_generate_request_base_validator():
+    """
+    Test that GenerateRequestBase validator converts empty string to None for max_budget
+    """
+    from litellm.proxy._types import GenerateRequestBase
+    
+    # Test with empty string
+    req = GenerateRequestBase(max_budget="")
+    assert req.max_budget is None
+
+    # Test with actual float
+    req = GenerateRequestBase(max_budget=100.0)
+    assert req.max_budget == 100.0
+
+    # Test with None
+    req = GenerateRequestBase(max_budget=None)
+    assert req.max_budget is None
