@@ -8,8 +8,7 @@ import contextlib
 from datetime import datetime
 import traceback
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
-
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast, Callable
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.types import Receive, Scope, Send
@@ -124,8 +123,8 @@ if MCP_AVAILABLE:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
-        json_response=True,  # Use JSON responses instead of SSE by default
-        stateless=True,
+        json_response=False, # enables SSE streaming
+        stateless=False, # enables session state
     )
 
     # Create SSE session manager
@@ -278,6 +277,30 @@ if MCP_AVAILABLE:
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
         )
+        host_progress_callback = None
+        try:
+            host_ctx = server.request_context
+            if host_ctx and hasattr(host_ctx, 'meta') and host_ctx.meta:
+                host_token = getattr(host_ctx.meta, 'progressToken', None)
+                if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
+                    host_session = host_ctx.session
+                    
+                    async def forward_progress(progress: float, total: float | None):
+                        """Forward progress notifications from external MCP to Host"""
+                        try:
+                            await host_session.send_progress_notification(
+                                progress_token=host_token,
+                                progress=progress,
+                                total=total
+                            )
+                            verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                        except Exception as e:
+                            verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                    
+                    host_progress_callback = forward_progress
+                    verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        except Exception as e:
+            verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
             # Create a body date for logging
             body_data = {"name": name, "arguments": arguments}
@@ -307,6 +330,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                host_progress_callback=host_progress_callback,
                 **data,  # for logging
             )
         except BlockedPiiEntityError as e:
@@ -1341,6 +1365,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        host_progress_callback: Optional[Callable] = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
@@ -1438,6 +1463,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
+                    host_progress_callback=host_progress_callback,
                 )
 
             # Fall back to local tool registry with original name (legacy support)
@@ -1685,6 +1711,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
+        host_progress_callback: Optional[Callable] = None, 
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -1700,6 +1727,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
+            host_progress_callback=host_progress_callback,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
