@@ -918,25 +918,12 @@ class LiteLLMAnthropicMessagesAdapter:
             input_tokens=usage.prompt_tokens or 0,
             output_tokens=usage.completion_tokens or 0,
         )
-        
-        # Add cache token fields if available
-        # Check private attributes first (set by Bedrock/Anthropic responses)
-        cache_creation = getattr(usage, "_cache_creation_input_tokens", 0)
-        cache_read = getattr(usage, "_cache_read_input_tokens", 0)
-        
-        # Also check prompt_tokens_details for cache info
-        if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details:
-            if hasattr(usage.prompt_tokens_details, "cache_creation_tokens") and usage.prompt_tokens_details.cache_creation_tokens:
-                cache_creation = cache_creation or usage.prompt_tokens_details.cache_creation_tokens
-            if hasattr(usage.prompt_tokens_details, "cached_tokens") and usage.prompt_tokens_details.cached_tokens:
-                cache_read = cache_read or usage.prompt_tokens_details.cached_tokens
-        
-        # Only add cache fields if they have values
-        if cache_creation:
-            anthropic_usage["cache_creation_input_tokens"] = cache_creation
-        if cache_read:
-            anthropic_usage["cache_read_input_tokens"] = cache_read
-            
+        # Add cache tokens if available (for prompt caching support)
+        if hasattr(usage, "_cache_creation_input_tokens") and usage._cache_creation_input_tokens > 0:
+            anthropic_usage["cache_creation_input_tokens"] = usage._cache_creation_input_tokens
+        if hasattr(usage, "_cache_read_input_tokens") and usage._cache_read_input_tokens > 0:
+            anthropic_usage["cache_read_input_tokens"] = usage._cache_read_input_tokens
+
         translated_obj = AnthropicMessagesResponse(
             id=response.id,
             type="message",
@@ -1084,21 +1071,11 @@ class LiteLLMAnthropicMessagesAdapter:
                     input_tokens=litellm_usage_chunk.prompt_tokens or 0,
                     output_tokens=litellm_usage_chunk.completion_tokens or 0,
                 )
-                # Add cache token fields if available
-                cache_creation = getattr(litellm_usage_chunk, "_cache_creation_input_tokens", 0)
-                cache_read = getattr(litellm_usage_chunk, "_cache_read_input_tokens", 0)
-                
-                # Also check prompt_tokens_details for cache info
-                if hasattr(litellm_usage_chunk, "prompt_tokens_details") and litellm_usage_chunk.prompt_tokens_details:
-                    if hasattr(litellm_usage_chunk.prompt_tokens_details, "cache_creation_tokens") and litellm_usage_chunk.prompt_tokens_details.cache_creation_tokens:
-                        cache_creation = cache_creation or litellm_usage_chunk.prompt_tokens_details.cache_creation_tokens
-                    if hasattr(litellm_usage_chunk.prompt_tokens_details, "cached_tokens") and litellm_usage_chunk.prompt_tokens_details.cached_tokens:
-                        cache_read = cache_read or litellm_usage_chunk.prompt_tokens_details.cached_tokens
-                
-                if cache_creation:
-                    usage_delta["cache_creation_input_tokens"] = cache_creation
-                if cache_read:
-                    usage_delta["cache_read_input_tokens"] = cache_read
+                # Add cache tokens if available (for prompt caching support)
+                if hasattr(litellm_usage_chunk, "_cache_creation_input_tokens") and litellm_usage_chunk._cache_creation_input_tokens > 0:
+                    usage_delta["cache_creation_input_tokens"] = litellm_usage_chunk._cache_creation_input_tokens
+                if hasattr(litellm_usage_chunk, "_cache_read_input_tokens") and litellm_usage_chunk._cache_read_input_tokens > 0:
+                    usage_delta["cache_read_input_tokens"] = litellm_usage_chunk._cache_read_input_tokens
             else:
                 usage_delta = UsageDelta(input_tokens=0, output_tokens=0)
             return MessageBlockDelta(
