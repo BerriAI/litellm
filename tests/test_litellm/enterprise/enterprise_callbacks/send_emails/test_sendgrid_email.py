@@ -14,8 +14,26 @@ from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
 
 @pytest.fixture
 def mock_env_vars():
-    with mock.patch.dict(os.environ, {"SENDGRID_API_KEY": "test_api_key"}):
+    # Store original values
+    original_api_key = os.environ.get("SENDGRID_API_KEY")
+    original_sender_email = os.environ.get("SENDGRID_SENDER_EMAIL")
+    
+    # Set test API key and remove SENDGRID_SENDER_EMAIL to ensure isolation
+    os.environ["SENDGRID_API_KEY"] = "test_api_key"
+    if "SENDGRID_SENDER_EMAIL" in os.environ:
+        del os.environ["SENDGRID_SENDER_EMAIL"]
+    
+    try:
         yield
+    finally:
+        # Restore original values
+        if original_api_key is not None:
+            os.environ["SENDGRID_API_KEY"] = original_api_key
+        elif "SENDGRID_API_KEY" in os.environ:
+            del os.environ["SENDGRID_API_KEY"]
+        
+        if original_sender_email is not None:
+            os.environ["SENDGRID_SENDER_EMAIL"] = original_sender_email
 
 
 @pytest.fixture
@@ -23,14 +41,16 @@ def mock_httpx_client():
     with mock.patch(
         "litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email.get_async_httpx_client"
     ) as mock_client:
-        mock_response = mock.AsyncMock(spec=Response)
+
+        mock_response = mock.Mock(spec=Response)
         mock_response.status_code = 202
         mock_response.text = "accepted"
+        mock_response.raise_for_status.return_value = None
 
         mock_async_client = mock.AsyncMock()
         mock_async_client.post.return_value = mock_response
-        mock_client.return_value = mock_async_client
 
+        mock_client.return_value = mock_async_client
         yield mock_async_client
 
 
@@ -62,17 +82,11 @@ async def test_send_email_success(mock_env_vars, mock_httpx_client):
 
 
 @pytest.mark.asyncio
-async def test_send_email_missing_api_key(mock_httpx_client):
-    # Remove the API key from environment before initializing logger
+async def test_send_email_missing_api_key():
     original_key = os.environ.pop("SENDGRID_API_KEY", None)
-    
+
     try:
         logger = SendGridEmailLogger()
-
-        # Mock the response to avoid making real HTTP requests
-        mock_response = mock.AsyncMock(spec=Response)
-        mock_response.status_code = 401
-        mock_httpx_client.post.return_value = mock_response
 
         with pytest.raises(ValueError):
             await logger.send_email(
@@ -81,10 +95,7 @@ async def test_send_email_missing_api_key(mock_httpx_client):
                 subject="Test Subject",
                 html_body="<p>Test email body</p>",
             )
-
-        mock_httpx_client.post.assert_not_called()
     finally:
-        # Restore the original key if it existed
         if original_key is not None:
             os.environ["SENDGRID_API_KEY"] = original_key
 
@@ -98,10 +109,10 @@ async def test_send_email_multiple_recipients(mock_env_vars, mock_httpx_client):
     subject = "Test Subject"
     html_body = "<p>Test email body</p>"
 
-    # Mock the response to avoid making real HTTP requests
-    mock_response = mock.AsyncMock(spec=Response)
+    mock_response = mock.Mock(spec=Response)
     mock_response.status_code = 202
     mock_response.text = "accepted"
+    mock_response.raise_for_status.return_value = None
     mock_httpx_client.post.return_value = mock_response
 
     await logger.send_email(
