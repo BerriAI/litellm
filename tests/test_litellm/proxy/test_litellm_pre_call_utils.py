@@ -1347,7 +1347,8 @@ async def test_embedding_header_forwarding_with_model_group():
     This test verifies the fix for embedding endpoints not forwarding headers
     similar to how chat completion endpoints do.
     """
-    import litellm
+    # Import the module that add_litellm_data_to_request uses to access litellm
+    import litellm.proxy.litellm_pre_call_utils as pre_call_utils_module
 
     # Setup mock request for embeddings
     request_mock = MagicMock(spec=Request)
@@ -1379,11 +1380,10 @@ async def test_embedding_header_forwarding_with_model_group():
     )
 
     # Mock model_group_settings to enable header forwarding for the model
+    # Use patch to ensure we modify the litellm reference that pre_call_utils actually uses
+    # This avoids issues with module reloading during parallel test execution
     mock_settings = MagicMock(forward_client_headers_to_llm_api=["local-openai/*"])
-    original_model_group_settings = getattr(litellm, "model_group_settings", None)
-    litellm.model_group_settings = mock_settings
-
-    try:
+    with patch.object(pre_call_utils_module.litellm, "model_group_settings", mock_settings):
         # Call add_litellm_data_to_request which includes header forwarding logic
         updated_data = await add_litellm_data_to_request(
             data=data,
@@ -1396,27 +1396,23 @@ async def test_embedding_header_forwarding_with_model_group():
 
         # Verify that headers were added to the request data
         assert "headers" in updated_data, "Headers should be added to embedding request"
-        
+
         # Verify that only x- prefixed headers (except x-stainless) were forwarded
         forwarded_headers = updated_data["headers"]
         assert "X-Custom-Header" in forwarded_headers, "X-Custom-Header should be forwarded"
         assert forwarded_headers["X-Custom-Header"] == "custom-value"
         assert "X-Request-ID" in forwarded_headers, "X-Request-ID should be forwarded"
         assert forwarded_headers["X-Request-ID"] == "test-request-123"
-        
+
         # Verify that authorization header was NOT forwarded (sensitive header)
         assert "Authorization" not in forwarded_headers, "Authorization header should not be forwarded"
-        
+
         # Verify that Content-Type was NOT forwarded (doesn't start with x-)
         assert "Content-Type" not in forwarded_headers, "Content-Type should not be forwarded"
 
         # Verify original data fields are preserved
         assert updated_data["model"] == "local-openai/text-embedding-3-small"
         assert updated_data["input"] == ["Text to embed"]
-
-    finally:
-        # Restore original model_group_settings
-        litellm.model_group_settings = original_model_group_settings
 
 
 @pytest.mark.asyncio
