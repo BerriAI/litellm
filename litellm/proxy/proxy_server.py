@@ -3173,17 +3173,18 @@ class ProxyConfig:
                 _model_list: list = self.decrypt_model_list_from_db(
                     new_models=models_list
                 )
-                if len(_model_list) > 0:
-                    verbose_proxy_logger.debug(f"_model_list: {_model_list}")
-                    llm_router = litellm.Router(
-                        model_list=_model_list,
-                        router_general_settings=RouterGeneralSettings(
-                            async_only_mode=True  # only init async clients
-                        ),
-                        search_tools=search_tools,
-                        ignore_invalid_deployments=True,
-                    )
-                    verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
+                # Create router even with empty model list to support search_tools
+                # Router can function with model_list=[] and only search_tools
+                verbose_proxy_logger.debug(f"_model_list: {_model_list}")
+                llm_router = litellm.Router(
+                    model_list=_model_list,
+                    router_general_settings=RouterGeneralSettings(
+                        async_only_mode=True  # only init async clients
+                    ),
+                    search_tools=search_tools,
+                    ignore_invalid_deployments=True,
+                )
+                verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
                 ## DELETE MODEL LOGIC
