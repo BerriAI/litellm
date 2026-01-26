@@ -4,22 +4,22 @@ LiteLLM Proxy uses this MCP Client to connnect to other MCP servers.
 
 import asyncio
 import base64
-from typing import Awaitable, Callable, Dict, List, Optional, TypeVar, Union
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Tuple, TypeVar, Union
 
 import httpx
 from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
+from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
-    CallToolRequestParams as MCPCallToolRequestParams,
     GetPromptRequestParams,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
+    TextContent,
 )
-from mcp.types import CallToolResult as MCPCallToolResult
-from mcp.types import TextContent
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl
 
@@ -74,57 +74,91 @@ class MCPClient:
         if auth_value:
             self.update_auth_value(auth_value)
 
+    def _create_transport_context(
+        self,
+    ) -> Tuple[Any, Optional[httpx.AsyncClient]]:
+        """
+        Create the appropriate transport context based on transport type.
+
+        Returns:
+            Tuple of (transport_context, http_client).
+            http_client is only set for HTTP transport and needs cleanup.
+        """
+        http_client: Optional[httpx.AsyncClient] = None
+
+        if self.transport_type == MCPTransport.stdio:
+            if not self.stdio_config:
+                raise ValueError("stdio_config is required for stdio transport")
+            server_params = StdioServerParameters(
+                command=self.stdio_config.get("command", ""),
+                args=self.stdio_config.get("args", []),
+                env=self.stdio_config.get("env", {}),
+            )
+            return stdio_client(server_params), None
+
+        if self.transport_type == MCPTransport.sse:
+            headers = self._get_auth_headers()
+            httpx_client_factory = self._create_httpx_client_factory()
+            return sse_client(
+                url=self.server_url,
+                timeout=self.timeout,
+                headers=headers,
+                httpx_client_factory=httpx_client_factory,
+            ), None
+
+        # HTTP transport (default)
+        headers = self._get_auth_headers()
+        httpx_client_factory = self._create_httpx_client_factory()
+        verbose_logger.debug(
+            "litellm headers for streamable_http_client: %s", headers
+        )
+        http_client = httpx_client_factory(
+            headers=headers,
+            timeout=httpx.Timeout(self.timeout),
+        )
+        transport_ctx = streamable_http_client(
+            url=self.server_url,
+            http_client=http_client,
+        )
+        return transport_ctx, http_client
+
+    async def _execute_session_operation(
+        self,
+        transport_ctx: Any,
+        operation: Callable[[ClientSession], Awaitable[TSessionResult]],
+    ) -> TSessionResult:
+        """
+        Execute an operation within a transport and session context.
+
+        Handles entering/exiting contexts and running the operation.
+        """
+        transport = await transport_ctx.__aenter__()
+        try:
+            read_stream, write_stream = transport[0], transport[1]
+            session_ctx = ClientSession(read_stream, write_stream)
+            session = await session_ctx.__aenter__()
+            try:
+                await session.initialize()
+                return await operation(session)
+            finally:
+                try:
+                    await session_ctx.__aexit__(None, None, None)
+                except BaseException as e:
+                    verbose_logger.debug(f"Error during session context exit: {e}")
+        finally:
+            try:
+                await transport_ctx.__aexit__(None, None, None)
+            except BaseException as e:
+                verbose_logger.debug(f"Error during transport context exit: {e}")
+
     async def run_with_session(
         self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up."""
-        transport_ctx = None
         http_client: Optional[httpx.AsyncClient] = None
-
         try:
-            if self.transport_type == MCPTransport.stdio:
-                if not self.stdio_config:
-                    raise ValueError("stdio_config is required for stdio transport")
-
-                server_params = StdioServerParameters(
-                    command=self.stdio_config.get("command", ""),
-                    args=self.stdio_config.get("args", []),
-                    env=self.stdio_config.get("env", {}),
-                )
-                transport_ctx = stdio_client(server_params)
-            elif self.transport_type == MCPTransport.sse:
-                headers = self._get_auth_headers()
-                httpx_client_factory = self._create_httpx_client_factory()
-                transport_ctx = sse_client(
-                    url=self.server_url,
-                    timeout=self.timeout,
-                    headers=headers,
-                    httpx_client_factory=httpx_client_factory,
-                )
-            else:
-                headers = self._get_auth_headers()
-                httpx_client_factory = self._create_httpx_client_factory()
-                verbose_logger.debug(
-                    "litellm headers for streamable_http_client: %s", headers
-                )
-                http_client = httpx_client_factory(
-                    headers=headers,
-                    timeout=httpx.Timeout(self.timeout),
-                )
-                transport_ctx = streamable_http_client(
-                    url=self.server_url,
-                    http_client=http_client,
-                )
-
-            if transport_ctx is None:
-                raise RuntimeError("Failed to create transport context")
-
-            async with transport_ctx as transport:
-                read_stream, write_stream = transport[0], transport[1]
-                session_ctx = ClientSession(read_stream, write_stream)
-                async with session_ctx as session:
-                    await session.initialize()
-                    return await operation(session)
+            transport_ctx, http_client = self._create_transport_context()
+            return await self._execute_session_operation(transport_ctx, operation)
         except Exception:
             verbose_logger.warning(
                 "MCP client run_with_session failed for %s", self.server_url or "stdio"
@@ -132,7 +166,10 @@ class MCPClient:
             raise
         finally:
             if http_client is not None:
-                await http_client.aclose()
+                try:
+                    await http_client.aclose()
+                except BaseException as e:
+                    verbose_logger.debug(f"Error during http_client cleanup: {e}")
 
     def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """

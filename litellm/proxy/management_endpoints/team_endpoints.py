@@ -497,14 +497,18 @@ async def _check_org_team_limits(
 
     # Validate team models against organization's allowed models
     if data.models is not None and len(org_table.models) > 0:
-        for m in data.models:
-            if m not in org_table.models:
-                raise HTTPException(
-                    status_code=400,
-                    detail={
-                        "error": f"Model '{m}' not in organization's allowed models. Organization allowed models={org_table.models}. Organization: {org_table.organization_id}"
-                    },
-                )
+        # If organization has 'all-proxy-models', skip validation as it allows all models
+        if SpecialModelNames.all_proxy_models.value in org_table.models:
+            pass
+        else:
+            for m in data.models:
+                if m not in org_table.models:
+                    raise HTTPException(
+                        status_code=400,
+                        detail={
+                            "error": f"Model '{m}' not in organization's allowed models. Organization allowed models={org_table.models}. Organization: {org_table.organization_id}"
+                        },
+                    )
 
     # Validate team TPM/RPM against organization's TPM/RPM limits (direct comparison)
     if (
