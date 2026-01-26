@@ -19,6 +19,7 @@ export async function makeOpenAIChatCompletionRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
+  policies?: string[],
   selectedMCPServers?: string[],
   onImageGenerated?: (imageUrl: string, model?: string) => void,
   onSearchResults?: (searchResults: VectorStoreSearchResponse[]) => void,
@@ -59,12 +60,13 @@ export async function makeOpenAIChatCompletionRequest(
     let fullResponseContent = "";
     let fullReasoningContent = "";
 
-    // Track MCP metadata from final chunk
+    // Track MCP metadata cumulatively across chunks
     let mcpMetadata: {
       mcp_list_tools?: any[];
       mcp_tool_calls?: any[];
       mcp_call_results?: any[];
-    } | null = null;
+    } = {};
+    let mcpListToolsProcessed = false;
 
     // Build tools array
     const tools: any[] = [];
@@ -109,6 +111,7 @@ export async function makeOpenAIChatCompletionRequest(
         messages: chatHistory as ChatCompletionMessageParam[],
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
+        ...(policies ? { policies } : {}),
         ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
         ...(temperature !== undefined ? { temperature } : {}),
         ...(max_tokens !== undefined ? { max_tokens } : {}),
@@ -167,16 +170,48 @@ export async function makeOpenAIChatCompletionRequest(
         onSearchResults(delta.provider_specific_fields.search_results);
       }
 
-      // Check for MCP metadata in provider_specific_fields (typically in final chunk)
+      // Check for MCP metadata in provider_specific_fields
       if (delta && delta.provider_specific_fields) {
         const providerFields = delta.provider_specific_fields;
+        
+        // Merge MCP metadata cumulatively (don't overwrite)
+        if (providerFields.mcp_list_tools && !mcpMetadata.mcp_list_tools) {
+          mcpMetadata.mcp_list_tools = providerFields.mcp_list_tools;
+          // Process mcp_list_tools immediately when found (typically in first chunk)
+          if (onMCPEvent && !mcpListToolsProcessed) {
+            mcpListToolsProcessed = true;
+            const toolsEvent: MCPEvent = {
+              type: "response.output_item.done",
+              item_id: "mcp_list_tools", // Add item_id to prevent duplicate detection issues
+              item: {
+                type: "mcp_list_tools",
+                tools: providerFields.mcp_list_tools.map((tool: any) => ({
+                  name: tool.function?.name || tool.name || "",
+                  description: tool.function?.description || tool.description || "",
+                  input_schema: tool.function?.parameters || tool.input_schema || {},
+                })),
+              },
+              timestamp: Date.now(),
+            };
+            onMCPEvent(toolsEvent);
+            console.log("MCP list_tools event sent:", toolsEvent);
+          }
+        }
+        
+        if (providerFields.mcp_tool_calls) {
+          mcpMetadata.mcp_tool_calls = providerFields.mcp_tool_calls;
+        }
+        
+        if (providerFields.mcp_call_results) {
+          mcpMetadata.mcp_call_results = providerFields.mcp_call_results;
+        }
+        
         if (providerFields.mcp_list_tools || providerFields.mcp_tool_calls || providerFields.mcp_call_results) {
-          mcpMetadata = {
-            mcp_list_tools: providerFields.mcp_list_tools,
-            mcp_tool_calls: providerFields.mcp_tool_calls,
-            mcp_call_results: providerFields.mcp_call_results,
-          };
-          console.log("MCP metadata found in chunk:", mcpMetadata);
+          console.log("MCP metadata found in chunk:", {
+            mcp_list_tools: providerFields.mcp_list_tools ? "present" : "absent",
+            mcp_tool_calls: providerFields.mcp_tool_calls ? "present" : "absent",
+            mcp_call_results: providerFields.mcp_call_results ? "present" : "absent",
+          });
         }
       }
 
@@ -204,35 +239,19 @@ export async function makeOpenAIChatCompletionRequest(
       }
     }
 
-    // Process MCP metadata from final chunk and convert to MCPEvent format
-    if (mcpMetadata && onMCPEvent) {
-      // Convert mcp_list_tools to MCPEvent
-      if (mcpMetadata.mcp_list_tools && mcpMetadata.mcp_list_tools.length > 0) {
-        const toolsEvent: MCPEvent = {
-          type: "response.output_item.done",
-          item: {
-            type: "mcp_list_tools",
-            tools: mcpMetadata.mcp_list_tools.map((tool: any) => ({
-              name: tool.function?.name || tool.name || "",
-              description: tool.function?.description || tool.description || "",
-              input_schema: tool.function?.parameters || tool.input_schema || {},
-            })),
-          },
-          timestamp: Date.now(),
-        };
-        onMCPEvent(toolsEvent);
-      }
-
+    // Process remaining MCP metadata (mcp_tool_calls and mcp_call_results) after stream completes
+    // Note: mcp_list_tools is already processed when found in the first chunk
+    if (onMCPEvent && (mcpMetadata.mcp_tool_calls || mcpMetadata.mcp_call_results)) {
       // Convert mcp_tool_calls and mcp_call_results to MCPEvent[]
-      if (mcpMetadata?.mcp_tool_calls && mcpMetadata?.mcp_tool_calls.length > 0) {
-        mcpMetadata?.mcp_tool_calls.forEach((toolCall: any, index: number) => {
+      if (mcpMetadata.mcp_tool_calls && mcpMetadata.mcp_tool_calls.length > 0) {
+        mcpMetadata.mcp_tool_calls.forEach((toolCall: any, index: number) => {
           const functionName = toolCall.function?.name || toolCall.name || "";
           const functionArgs = toolCall.function?.arguments || toolCall.arguments || "{}";
 
           // Find corresponding result
-          const result = mcpMetadata?.mcp_call_results?.find(
+          const result = mcpMetadata.mcp_call_results?.find(
             (r: any) => r.tool_call_id === toolCall.id || r.tool_call_id === toolCall.call_id
-          ) || mcpMetadata?.mcp_call_results?.[index];
+          ) || mcpMetadata.mcp_call_results?.[index];
 
           const callEvent: MCPEvent = {
             type: "response.output_item.done",
@@ -246,6 +265,7 @@ export async function makeOpenAIChatCompletionRequest(
             timestamp: Date.now(),
           };
           onMCPEvent(callEvent);
+          console.log("MCP call event sent:", callEvent);
         });
       }
     }
