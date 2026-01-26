@@ -35,6 +35,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     GenericGuardrailAPIInputs,
+    ModelResponse,
 )
 
 if TYPE_CHECKING:
@@ -349,22 +350,24 @@ class AnthropicMessagesHandler(BaseTranslation):
         has_ended = self._check_streaming_has_ended(responses_so_far)
         if has_ended:
             # build the model response from the responses_so_far
-            model_response = (
-                AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
-                    all_chunks=responses_so_far,
-                    litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
-                    model="",
-                )
+            built_response = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+                all_chunks=responses_so_far,
+                litellm_logging_obj=cast("LiteLLMLoggingObj", litellm_logging_obj),
+                model="",
             )
 
             # Check if model_response is valid and has choices before accessing
             if (
-                model_response is not None
-                and hasattr(model_response, "choices")
-                and model_response.choices
+                built_response is not None
+                and hasattr(built_response, "choices")
+                and built_response.choices
             ):
-                tool_calls_list = cast(Optional[List[ChatCompletionMessageToolCall]], model_response.choices[0].message.tool_calls)  # type: ignore
-                string_so_far = model_response.choices[0].message.content  # type: ignore
+                model_response = cast(ModelResponse, built_response)
+                tool_calls_list = cast(
+                    Optional[List[ChatCompletionMessageToolCall]],
+                    model_response.choices[0].message.tool_calls,
+                )
+                string_so_far = model_response.choices[0].message.content
                 guardrail_inputs = GenericGuardrailAPIInputs()
                 if string_so_far:
                     guardrail_inputs["texts"] = [string_so_far]
