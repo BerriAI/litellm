@@ -270,8 +270,11 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
         updateData.litellm_params.pii_entities_config = newPiiEntitiesConfig;
       }
 
-      // Always include Content Filter patterns to ensure they persist when other fields change
-      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter") {
+      // Only add Content Filter patterns if there are changes
+      if (guardrailData.litellm_params?.guardrail === "litellm_content_filter" && hasUnsavedContentFilterChanges) {
+        const originalPatterns = guardrailData.litellm_params?.patterns || [];
+        const originalBlockedWords = guardrailData.litellm_params?.blocked_words || [];
+
         const formattedData = formatContentFilterDataForAPI(
           contentFilterDataRef.current.patterns || [],
           contentFilterDataRef.current.blockedWords || [],
@@ -349,6 +352,9 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
 
         console.log("allowedParams: ", allowedParams);
         allowedParams.forEach((paramName) => {
+          if (paramName === "patterns" || paramName === "blocked_words") {
+            return;
+          }
           // Check for both direct parameter name and nested optional_params object
           let paramValue = values[paramName];
           if (paramValue === undefined || paramValue === null || paramValue === "") {
