@@ -194,14 +194,17 @@ class LiteLLM_Proxy_MCP_Handler:
                     tool_server_map[tool_name] = allowed_mcp_servers[0]
                 else:
                     _, tool_server_map[tool_name] = split_server_prefix_from_name(
-                        tool_name
+                        tool_name,
+                        known_server_prefixes=allowed_mcp_servers,
                     )
 
         return deduplicated_tools, tool_server_map
 
     @staticmethod
     def _filter_mcp_tools_by_allowed_tools(
-        mcp_tools: List[MCPTool], mcp_tools_with_litellm_proxy: List[ToolParam]
+        mcp_tools: List[MCPTool],
+        mcp_tools_with_litellm_proxy: List[ToolParam],
+        allowed_server_names: Optional[List[str]] = None,
     ) -> List[MCPTool]:
         """Filter MCP tools based on allowed_tools parameter from the original tool configs."""
         # Collect all allowed tool names from all MCP tool configs
@@ -231,7 +234,10 @@ class LiteLLM_Proxy_MCP_Handler:
                 filtered_tools.append(mcp_tool)
                 continue
 
-            unprefixed_name, _ = split_server_prefix_from_name(tool_name)
+            unprefixed_name, _ = split_server_prefix_from_name(
+                tool_name,
+                known_server_prefixes=allowed_server_names,
+            )
             if unprefixed_name in allowed_tool_names:
                 filtered_tools.append(mcp_tool)
 
@@ -298,6 +304,7 @@ class LiteLLM_Proxy_MCP_Handler:
             LiteLLM_Proxy_MCP_Handler._filter_mcp_tools_by_allowed_tools(
                 mcp_tools=mcp_tools_fetched,
                 mcp_tools_with_litellm_proxy=mcp_tools_with_litellm_proxy,
+                allowed_server_names=allowed_mcp_servers,
             )
         )
 
@@ -532,7 +539,8 @@ class LiteLLM_Proxy_MCP_Handler:
                 # Remove the server name prefix if the tool name includes it.
                 sanitized_tool_name = tool_name
                 unprefixed_name, prefixed_server_name = split_server_prefix_from_name(
-                    tool_name
+                    tool_name,
+                    known_server_prefixes=[server_name],
                 )
                 if (
                     prefixed_server_name

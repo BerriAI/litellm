@@ -95,6 +95,7 @@ if MCP_AVAILABLE:
         global_mcp_tool_registry,
     )
     from litellm.proxy._experimental.mcp_server.utils import (
+        get_possible_server_name_prefixes,
         split_server_prefix_from_name,
     )
 
@@ -608,9 +609,14 @@ if MCP_AVAILABLE:
         if filtered_server:
             return list(filtered_server.values())
 
+        if mcp_servers is not None:
+            return []
+
         return allowed_mcp_servers
 
-    def _tool_name_matches(tool_name: str, filter_list: List[str]) -> bool:
+    def _tool_name_matches(
+        tool_name: str, filter_list: List[str], server: MCPServer
+    ) -> bool:
         """
         Check if a tool name matches any name in the filter list.
 
@@ -625,6 +631,7 @@ if MCP_AVAILABLE:
             True if the tool name (prefixed or unprefixed) is in the filter list
         """
         from litellm.proxy._experimental.mcp_server.utils import (
+            get_possible_server_name_prefixes,
             split_server_prefix_from_name,
         )
 
@@ -633,7 +640,10 @@ if MCP_AVAILABLE:
             return True
 
         # Check if the unprefixed name is in the list
-        unprefixed_name, _ = split_server_prefix_from_name(tool_name)
+        unprefixed_name, _ = split_server_prefix_from_name(
+            tool_name,
+            known_server_prefixes=get_possible_server_name_prefixes(server),
+        )
         return unprefixed_name in filter_list
 
     def filter_tools_by_allowed_tools(
@@ -661,7 +671,7 @@ if MCP_AVAILABLE:
             tools_to_return = [
                 tool
                 for tool in tools
-                if _tool_name_matches(tool.name, mcp_server.allowed_tools)
+                if _tool_name_matches(tool.name, mcp_server.allowed_tools, mcp_server)
             ]
 
         # Filter by disallowed_tools (blacklist)
@@ -669,7 +679,9 @@ if MCP_AVAILABLE:
             tools_to_return = [
                 tool
                 for tool in tools_to_return
-                if not _tool_name_matches(tool.name, mcp_server.disallowed_tools)
+                if not _tool_name_matches(
+                    tool.name, mcp_server.disallowed_tools, mcp_server
+                )
             ]
 
         return tools_to_return
@@ -1156,13 +1168,21 @@ if MCP_AVAILABLE:
             server_id=server_id,
             user_api_key_auth=user_api_key_auth,
         )
+        server_prefixes: Optional[List[str]] = None
+        if server_id:
+            server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+            if server:
+                server_prefixes = get_possible_server_name_prefixes(server)
         if allowed_tool_names is not None:
             # Strip prefix from tool names before comparing
             # Tools are stored in DB without prefix, but come from MCP server with prefix
             filtered_tools = []
             for t in tools:
                 # Get tool name without server prefix
-                unprefixed_tool_name, _ = split_server_prefix_from_name(t.name)
+                unprefixed_tool_name, _ = split_server_prefix_from_name(
+                    t.name,
+                    known_server_prefixes=server_prefixes,
+                )
                 if unprefixed_tool_name in allowed_tool_names:
                     filtered_tools.append(t)
         else:
@@ -1367,7 +1387,17 @@ if MCP_AVAILABLE:
         mcp_server: Optional[MCPServer] = None
 
         # Remove prefix from tool name for logging and processing
-        original_tool_name, server_name = split_server_prefix_from_name(name)
+        allowed_prefixes: List[str] = []
+        for server in allowed_mcp_servers:
+            allowed_prefixes.extend(get_possible_server_name_prefixes(server))
+        split_kwargs = (
+            {"known_server_prefixes": allowed_prefixes}
+            if allowed_prefixes
+            else {}
+        )
+        original_tool_name, server_name = split_server_prefix_from_name(
+            name, **split_kwargs
+        )
 
         # If tool name is unprefixed, resolve its server so we can enforce permissions
         if not server_name:
@@ -1574,8 +1604,15 @@ if MCP_AVAILABLE:
         # Decide whether to add prefix based on number of allowed servers
         add_prefix = not (len(allowed_mcp_servers) == 1)
 
+        allowed_prefixes: List[str] = []
+        for server in allowed_mcp_servers:
+            allowed_prefixes.extend(get_possible_server_name_prefixes(server))
+
         if add_prefix:
-            original_prompt_name, server_name = split_server_prefix_from_name(name)
+            original_prompt_name, server_name = split_server_prefix_from_name(
+                name,
+                known_server_prefixes=allowed_prefixes,
+            )
         else:
             original_prompt_name = name
             server_name = allowed_mcp_servers[0].name

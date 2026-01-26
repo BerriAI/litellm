@@ -40,6 +40,7 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     add_server_prefix_to_name,
+    get_possible_server_name_prefixes,
     get_server_prefix,
     is_tool_name_prefixed,
     merge_mcp_headers,
@@ -1554,7 +1555,10 @@ class MCPServerManager:
             return
 
         # Get the unprefixed tool name to match against config
-        unprefixed_tool_name, _ = split_server_prefix_from_name(tool_name)
+        unprefixed_tool_name, _ = split_server_prefix_from_name(
+            tool_name,
+            known_server_prefixes=get_possible_server_name_prefixes(server),
+        )
 
         # Check both prefixed and unprefixed tool names
         allowed_params_list = server.allowed_params.get(
@@ -2075,7 +2079,10 @@ class MCPServerManager:
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
-                original_name, _ = split_server_prefix_from_name(tool.name)
+                original_name, _ = split_server_prefix_from_name(
+                    tool.name,
+                    known_server_prefixes=get_possible_server_name_prefixes(server),
+                )
                 self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
 
@@ -2089,31 +2096,45 @@ class MCPServerManager:
         Returns:
             MCPServer if found, None otherwise
         """
+        registry_servers = list(self.get_registry().values())
+
         # First try with the original tool name
         if tool_name in self.tool_name_to_mcp_server_name_mapping:
             server_name = self.tool_name_to_mcp_server_name_mapping[tool_name]
-            for server in self.get_registry().values():
-                if normalize_server_name(server.name) == normalize_server_name(
-                    server_name
-                ):
+            for server in registry_servers:
+                candidate_name = server.server_name or server.alias or server.name
+                if candidate_name and normalize_server_name(
+                    candidate_name
+                ) == normalize_server_name(server_name):
                     return server
 
         # If not found and tool name is prefixed, try extracting server name from prefix
+        prefix_candidates: List[str] = []
+        for server in registry_servers:
+            prefix_candidates.extend(get_possible_server_name_prefixes(server))
+
         if is_tool_name_prefixed(tool_name):
+            split_kwargs = (
+                {"known_server_prefixes": prefix_candidates}
+                if prefix_candidates
+                else {}
+            )
             (
                 original_tool_name,
                 server_name_from_prefix,
-            ) = split_server_prefix_from_name(tool_name)
-            if original_tool_name in self.tool_name_to_mcp_server_name_mapping:
-                for server in self.get_registry().values():
-                    if server.server_name is None:
-                        if normalize_server_name(server.name) == normalize_server_name(
-                            server_name_from_prefix
-                        ):
-                            return server
-                    elif normalize_server_name(
-                        server.server_name
-                    ) == normalize_server_name(server_name_from_prefix):
+            ) = split_server_prefix_from_name(tool_name, **split_kwargs)
+            if (
+                original_tool_name
+                and original_tool_name in self.tool_name_to_mcp_server_name_mapping
+            ):
+                mapped_server_name = self.tool_name_to_mcp_server_name_mapping[
+                    original_tool_name
+                ]
+                for server in registry_servers:
+                    candidate_name = server.server_name or server.alias or server.name
+                    if candidate_name and normalize_server_name(
+                        candidate_name
+                    ) == normalize_server_name(mapped_server_name):
                         return server
 
         return None

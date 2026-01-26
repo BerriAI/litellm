@@ -1,7 +1,7 @@
 """
 MCP Server Utilities
 """
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
 import os
 import importlib
@@ -91,8 +91,47 @@ def get_server_prefix(server: Any) -> str:
     return ""
 
 
-def split_server_prefix_from_name(prefixed_name: str) -> Tuple[str, str]:
-    """Return the unprefixed name plus the server name used as prefix."""
+def get_possible_server_name_prefixes(server: Any) -> List[str]:
+    """Return possible prefix values for a server for safe comparisons."""
+    prefixes: List[str] = []
+    for attr in ("alias", "server_name", "server_id"):
+        value = getattr(server, attr, None)
+        if isinstance(value, str) and value:
+            prefixes.append(value)
+    return prefixes
+
+
+def _normalized_prefixes(prefixes: Iterable[str]) -> List[str]:
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for prefix in prefixes:
+        if not prefix:
+            continue
+        formatted = normalize_server_name(prefix)
+        if not formatted or formatted in seen:
+            continue
+        seen.add(formatted)
+        normalized.append(formatted)
+    return normalized
+
+
+def split_server_prefix_from_name(
+    prefixed_name: str,
+    known_server_prefixes: Optional[Iterable[str]] = None,
+) -> Tuple[str, str]:
+    """Return the unprefixed name plus the server name used as prefix.
+
+    If ``known_server_prefixes`` is provided, only split when the prefixed name
+    starts with one of the allowed server prefixes. This prevents accidental
+    splits when tool names contain the separator but no server prefix.
+    """
+    if known_server_prefixes:
+        for prefix in _normalized_prefixes(known_server_prefixes):
+            separator = f"{prefix}{MCP_TOOL_PREFIX_SEPARATOR}"
+            if prefixed_name.startswith(separator):
+                return prefixed_name[len(separator) :], prefix
+        return prefixed_name, ""
+
     if MCP_TOOL_PREFIX_SEPARATOR in prefixed_name:
         parts = prefixed_name.split(MCP_TOOL_PREFIX_SEPARATOR, 1)
         if len(parts) == 2:
