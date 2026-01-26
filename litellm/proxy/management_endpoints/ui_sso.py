@@ -1156,7 +1156,7 @@ async def cli_poll_key(key_id: str, team_id: Optional[str] = None):
                 max_budget=litellm.max_ui_session_budget,
             )
 
-            # Generate CLI JWT on-demand (24hr expiration)
+            # Generate CLI JWT on-demand (expiration configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS)
             # Pass selected team_id to ensure JWT has correct team
             jwt_token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(
                 user_info=user_info, team_id=team_id
