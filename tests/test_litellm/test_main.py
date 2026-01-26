@@ -593,6 +593,43 @@ def test_responses_api_bridge_check_handles_exception():
         assert model_info["mode"] == "responses"
 
 
+def test_responses_api_bridge_passes_additional_drop_params():
+    """Test that additional_drop_params is passed through responses API bridge to drop metadata."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Create mock litellm_params with additional_drop_params
+    litellm_params = {
+        "api_key": "test-key",
+        "api_base": "https://api.example.com",
+        "additional_drop_params": ["metadata"],
+    }
+
+    optional_params = {
+        "temperature": 0.7,
+        "metadata": {"key": "value"},  # This should be dropped
+    }
+
+    # Create a mock logging object
+    mock_logging_obj = MagicMock()
+
+    request_data = handler.transform_request(
+        model="test-model",
+        messages=[{"role": "user", "content": "Hello"}],
+        optional_params=optional_params,
+        litellm_params=litellm_params,
+        headers={},
+        litellm_logging_obj=mock_logging_obj,
+    )
+
+    # Verify additional_drop_params is included in request_data
+    assert "additional_drop_params" in request_data
+    assert request_data["additional_drop_params"] == ["metadata"]
+
+
 @pytest.mark.asyncio
 async def test_async_mock_delay():
     """Use asyncio await for mock delay on acompletion"""
