@@ -26,6 +26,75 @@ from litellm.proxy.common_utils.http_parsing_utils import (
 router = APIRouter()
 
 
+async def _save_vector_store_to_db_from_rag_ingest(
+    response: Any,
+    ingest_options: Dict[str, Any],
+    prisma_client,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    """
+    Helper function to save a newly created vector store from RAG ingest to the database.
+    
+    This function:
+    - Extracts vector store ID and config from the ingest response
+    - Checks if the vector store already exists in the database
+    - Creates a new database entry if it doesn't exist
+    - Adds the vector store to the registry
+    
+    Args:
+        response: The response from litellm.aingest()
+        ingest_options: The ingest options containing vector store config
+        prisma_client: The Prisma database client
+        user_api_key_dict: User API key authentication info
+    """
+    from litellm.proxy.vector_store_endpoints.management_endpoints import (
+        create_vector_store_in_db,
+    )
+
+    vector_store_id = response.get("vector_store_id")
+    if vector_store_id is None or not isinstance(vector_store_id, str):
+        verbose_proxy_logger.warning(
+            "Vector store ID is None or not a string, skipping database save"
+        )
+        return
+
+    vector_store_config = ingest_options.get("vector_store", {})
+    custom_llm_provider = vector_store_config.get("custom_llm_provider")
+
+    try:
+        # Check if vector store already exists in database
+        existing_vector_store = (
+            await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+                where={"vector_store_id": vector_store_id}
+            )
+        )
+
+        # Only create if it doesn't exist
+        if existing_vector_store is None:
+            verbose_proxy_logger.info(
+                f"Saving newly created vector store {vector_store_id} to database"
+            )
+
+            await create_vector_store_in_db(
+                vector_store_id=vector_store_id,
+                custom_llm_provider=custom_llm_provider or "openai",
+                prisma_client=prisma_client,
+                vector_store_name=f"RAG Vector Store - {vector_store_id[:8]}",
+                vector_store_description="Created via RAG ingest endpoint",
+                created_by=user_api_key_dict.user_id,
+                updated_by=user_api_key_dict.user_id,
+            )
+
+            verbose_proxy_logger.info(
+                f"Vector store {vector_store_id} saved to database successfully"
+            )
+    except Exception as db_error:
+        # Log the error but don't fail the request since ingestion succeeded
+        verbose_proxy_logger.warning(
+            f"Failed to save vector store {vector_store_id} to database: {db_error}"
+        )
+
+
 async def parse_rag_ingest_request(
     request: Request,
 ) -> Tuple[Dict[str, Any], Optional[Tuple[str, bytes, str]], Optional[str], Optional[str]]:
@@ -158,9 +227,11 @@ async def rag_ingest(
         add_litellm_data_to_request,
         general_settings,
         llm_router,
+        prisma_client,
         proxy_config,
         version,
     )
+    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     try:
         # Parse request
@@ -188,6 +259,20 @@ async def rag_ingest(
             router=llm_router,
             **request_data,
         )
+
+        # Save vector store to database if it was newly created and prisma_client is available
+        if (
+            prisma_client is not None
+            and response is not None
+            and isinstance(response, dict)
+            and response.get("vector_store_id")
+        ):
+            await _save_vector_store_to_db_from_rag_ingest(
+                response=response,
+                ingest_options=ingest_options,
+                prisma_client=prisma_client,
+                user_api_key_dict=user_api_key_dict,
+            )
 
         return response
 
