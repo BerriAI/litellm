@@ -527,11 +527,13 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
                 tool_message = messages[msg_i]
-                tool_call_id = (
-                    tool_message.get("tool_call_id")
-                    if isinstance(tool_message, dict)
-                    else None
-                )
+                tool_call_id: Optional[str] = None
+                if isinstance(tool_message, dict):
+                    tool_call_id_raw = tool_message.get("tool_call_id")
+                    if isinstance(tool_call_id_raw, str):
+                        tool_call_id = tool_call_id_raw
+                    elif tool_call_id_raw is not None:
+                        tool_call_id = str(tool_call_id_raw)
                 matching_tool_call_message = last_message_with_tool_calls
                 if matching_tool_call_message is None or not _message_has_tool_call_id(
                     matching_tool_call_message, tool_call_id
@@ -540,7 +542,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         tool_call_id, tool_call_history
                     )
 
-                _part = None
+                tool_call_part = None
                 if matching_tool_call_message is None:
                     if litellm.modify_params:
                         normalized_tool_call_id = _normalize_tool_call_id(tool_call_id)
@@ -550,20 +552,20 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                             normalized_tool_call_id or tool_call_id,
                         )
                     else:
-                        _part = convert_to_gemini_tool_call_result(
+                        tool_call_part = convert_to_gemini_tool_call_result(
                             tool_message, last_message_with_tool_calls  # type: ignore
                         )
                 else:
-                    _part = convert_to_gemini_tool_call_result(
+                    tool_call_part = convert_to_gemini_tool_call_result(
                         tool_message, matching_tool_call_message  # type: ignore
                     )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
-                if _part is not None:
-                    if isinstance(_part, list):
-                        tool_call_responses.extend(_part)
+                if tool_call_part is not None:
+                    if isinstance(tool_call_part, list):
+                        tool_call_responses.extend(tool_call_part)
                     else:
-                        tool_call_responses.append(_part)
+                        tool_call_responses.append(tool_call_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):

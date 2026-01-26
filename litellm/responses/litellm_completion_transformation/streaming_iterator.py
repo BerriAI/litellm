@@ -610,7 +610,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         response_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
             annotations=annotations
         )
-        part: Optional[PART_UNION_TYPES] = ContentPartDonePartOutputText(
+        part: PART_UNION_TYPES = ContentPartDonePartOutputText(
             type="output_text",
             text=text,
             annotations=response_annotations,  # type: ignore
@@ -707,23 +707,23 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
     ) -> Optional[BaseLiteLLMOpenAIResponseObject]:
         if self.sent_output_text_done_event is False:
             self.sent_output_text_done_event = True
-            event = self.create_output_text_done_event(litellm_complete_object)
-            self._set_event_attr(event, "sequence_number", self._next_sequence_number())
-            if getattr(event, "logprobs", None) is None:
-                self._set_event_attr(event, "logprobs", [])
-            return event
+            output_text_event = self.create_output_text_done_event(litellm_complete_object)
+            self._set_event_attr(output_text_event, "sequence_number", self._next_sequence_number())
+            if getattr(output_text_event, "logprobs", None) is None:
+                self._set_event_attr(output_text_event, "logprobs", [])
+            return output_text_event
         if self.sent_output_content_part_done_event is False:
             self.sent_output_content_part_done_event = True
-            event = self.create_output_content_part_done_event(litellm_complete_object)
-            self._set_event_attr(event, "sequence_number", self._next_sequence_number())
-            return event
+            content_part_event = self.create_output_content_part_done_event(litellm_complete_object)
+            self._set_event_attr(content_part_event, "sequence_number", self._next_sequence_number())
+            return content_part_event
         if self.sent_output_item_done_event is False:
             self.sent_output_item_done_event = True
-            event = self.create_output_item_done_event(
+            output_item_event = self.create_output_item_done_event(
                 litellm_complete_object=litellm_complete_object,
                 sequence_number=self._next_sequence_number(),
             )
-            return event
+            return output_item_event
         return None
 
     def return_default_initial_events(
@@ -990,7 +990,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                     self._pending_annotation_events = []
                     for idx, annotation in enumerate(response_annotations):
                         annotation_dict = annotation.model_dump() if hasattr(annotation, 'model_dump') else dict(annotation)
-                        event = OutputTextAnnotationAddedEvent(
+                        annotation_event = OutputTextAnnotationAddedEvent(
                             type=ResponsesAPIStreamEvents.OUTPUT_TEXT_ANNOTATION_ADDED,
                             item_id=item_id,
                             output_index=message_output_index,
@@ -998,7 +998,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                             annotation_index=idx,
                             annotation=annotation_dict,
                         )
-                        self._pending_annotation_events.append(event)        
+                        self._pending_annotation_events.append(annotation_event)        
         # Priority 1: Handle reasoning content (highest priority)
         if (
             chunk.choices
@@ -1011,15 +1011,15 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 source_id=chunk.id,
             )
             seq = self._next_sequence_number()
-            event = ReasoningSummaryTextDeltaEvent(
+            reasoning_event = ReasoningSummaryTextDeltaEvent(
                 type=ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA,
                 item_id=reasoning_item_id,
                 output_index=0,
                 delta=reasoning_content,
             )
-            self._set_event_attr(event, "sequence_number", seq)
-            self._set_event_attr(event, "summary_index", 0)
-            return event
+            self._set_event_attr(reasoning_event, "sequence_number", seq)
+            self._set_event_attr(reasoning_event, "summary_index", 0)
+            return reasoning_event
         
         # Priority 2: Handle text deltas
         delta_content = self._get_delta_string_from_streaming_choices(chunk.choices)

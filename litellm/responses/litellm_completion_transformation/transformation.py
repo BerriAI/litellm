@@ -10,6 +10,7 @@ from openai.types.responses import (
     ResponseOutputMessage,
     ResponseReasoningItem,
 )
+from openai.types.responses.response import ResponseOutputItem
 from openai.types.responses.response_output_item import ImageGenerationCall
 from openai.types.responses.tool_param import FunctionToolParam
 from typing_extensions import TypedDict
@@ -272,29 +273,29 @@ class LiteLLMCompletionResponsesConfig:
                 thinking_val = block.get("thinking")
                 if not isinstance(thinking_val, str):
                     continue
-                typed_block: ChatCompletionThinkingBlock = {
+                typed_thinking_block: ChatCompletionThinkingBlock = {
                     "type": "thinking",
                     "thinking": thinking_val,
                 }
                 signature = block.get("signature")
                 if isinstance(signature, str):
-                    typed_block["signature"] = signature
+                    typed_thinking_block["signature"] = signature
                 cache_control = block.get("cache_control")
                 if isinstance(cache_control, dict):
-                    typed_block["cache_control"] = cache_control
-                typed_blocks.append(typed_block)
+                    typed_thinking_block["cache_control"] = cache_control
+                typed_blocks.append(typed_thinking_block)
             elif block_type == "redacted_thinking":
                 data_val = block.get("data")
                 if not isinstance(data_val, str):
                     continue
-                typed_block: ChatCompletionRedactedThinkingBlock = {
+                typed_redacted_block: ChatCompletionRedactedThinkingBlock = {
                     "type": "redacted_thinking",
                     "data": data_val,
                 }
                 cache_control = block.get("cache_control")
                 if isinstance(cache_control, dict):
-                    typed_block["cache_control"] = cache_control
-                typed_blocks.append(typed_block)
+                    typed_redacted_block["cache_control"] = cache_control
+                typed_blocks.append(typed_redacted_block)
         return typed_blocks
 
     @staticmethod
@@ -802,22 +803,22 @@ class LiteLLMCompletionResponsesConfig:
                             content_blocks: List[
                                 Union[ChatCompletionTextObject, ChatCompletionThinkingBlock]
                             ] = []
-                            assistant_msg: ChatCompletionAssistantMessage = {
+                            assistant_msg_thinking: ChatCompletionAssistantMessage = {
                                 "role": "assistant",
                                 "content": content_blocks,
                                 "thinking_blocks": typed_thinking_blocks,
                             }
-                            messages.append(assistant_msg)
+                            messages.append(assistant_msg_thinking)
                     else:
                         reasoning_text = LiteLLMCompletionResponsesConfig._extract_reasoning_text_from_input_item(
                             _input
                         )
                         if reasoning_text:
-                            assistant_msg: ChatCompletionAssistantMessage = {
+                            assistant_msg_text: ChatCompletionAssistantMessage = {
                                 "role": "assistant",
                                 "content": reasoning_text,
                             }
-                            messages.append(assistant_msg)
+                            messages.append(assistant_msg_text)
                     continue
 
                 chat_completion_messages = LiteLLMCompletionResponsesConfig._transform_responses_api_input_item_to_chat_completion_message(
@@ -1309,12 +1310,11 @@ class LiteLLMCompletionResponsesConfig:
                 input_item
             )
             if reasoning_text:
-                return [
-                    {
-                        "role": "assistant",
-                        "content": reasoning_text,
-                    }
-                ]
+                assistant_msg_text: ChatCompletionAssistantMessage = {
+                    "role": "assistant",
+                    "content": reasoning_text,
+                }
+                return [assistant_msg_text]
             return []
         if LiteLLMCompletionResponsesConfig._is_input_item_tool_call_output(input_item):
             # handle executed tool call results
@@ -1323,13 +1323,24 @@ class LiteLLMCompletionResponsesConfig:
             )
         elif LiteLLMCompletionResponsesConfig._is_input_item_function_call(input_item):
             # handle function call input items
+            thinking_blocks: Optional[
+                List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+            ] = None
+            if anthropic_like and reasoning_enabled:
+                raw_thinking_blocks = (
+                    LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_input_item(
+                        input_item, require_signature=require_thinking_signature
+                    )
+                )
+                if raw_thinking_blocks:
+                    thinking_blocks = (
+                        LiteLLMCompletionResponsesConfig._coerce_thinking_blocks_to_openai_types(
+                            raw_thinking_blocks
+                        )
+                    )
             return LiteLLMCompletionResponsesConfig._transform_responses_api_function_call_to_chat_completion_message(
                 function_call=input_item,
-                thinking_blocks=LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_input_item(
-                    input_item, require_signature=require_thinking_signature
-                )
-                if (anthropic_like and reasoning_enabled)
-                else None,
+                thinking_blocks=thinking_blocks,
             )
         else:
             content = input_item.get("content")
@@ -1337,27 +1348,42 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
-            thinking_blocks: Optional[List[Dict[str, Any]]] = None
+            role = input_item.get("role") or "user"
             if (
                 anthropic_like
                 and reasoning_enabled
-                and input_item.get("role") == "assistant"
+                and role == "assistant"
             ):
                 (
-                    thinking_blocks,
+                    raw_thinking_blocks,
                     content,
                 ) = LiteLLMCompletionResponsesConfig._extract_thinking_blocks_from_content(
                     content, require_signature=require_thinking_signature
                 )
-            return [
-                {
-                    "role": input_item.get("role") or "user",
-                    "content": LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
-                    ),
-                    **({"thinking_blocks": thinking_blocks} if thinking_blocks else {}),
-                }
-            ]
+                if raw_thinking_blocks:
+                    typed_thinking_blocks = (
+                        LiteLLMCompletionResponsesConfig._coerce_thinking_blocks_to_openai_types(
+                            raw_thinking_blocks
+                        )
+                    )
+                    if typed_thinking_blocks:
+                        transformed_content = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                            content
+                        )
+                        assistant_msg_with_thinking: ChatCompletionAssistantMessage = {
+                            "role": "assistant",
+                            "content": cast(Any, transformed_content),
+                            "thinking_blocks": typed_thinking_blocks,
+                        }
+                        return [assistant_msg_with_thinking]
+            transformed_content = LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                content
+            )
+            generic_msg: GenericChatCompletionMessage = {
+                "role": str(role),
+                "content": transformed_content,
+            }
+            return [generic_msg]
 
     @staticmethod
     def _is_input_item_tool_call_output(input_item: Any) -> bool:
@@ -1483,7 +1509,9 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _transform_responses_api_function_call_to_chat_completion_message(
         function_call: Dict[str, Any],
-        thinking_blocks: Optional[List[Dict[str, Any]]] = None,
+        thinking_blocks: Optional[
+            List[Union[ChatCompletionThinkingBlock, ChatCompletionRedactedThinkingBlock]]
+        ] = None,
     ) -> List[
         Union[
             AllMessageValues,
@@ -1527,20 +1555,13 @@ class LiteLLMCompletionResponsesConfig:
                 TOOL_CALLS_CACHE.set_cache(key=normalized_tool_call_id, value=tool_call)
 
         # Create an assistant message with the tool call
-        chat_completion_response_message: Union[
-            ChatCompletionResponseMessage, Dict[str, Any]
-        ] = ChatCompletionResponseMessage(
-            tool_calls=[tool_call],
-            role="assistant",
-            content=None,  # Function calls don't have content
-        )
+        chat_completion_response_message: ChatCompletionResponseMessage = {
+            "tool_calls": [tool_call],
+            "role": "assistant",
+            "content": None,  # Function calls don't have content
+        }
         if thinking_blocks:
-            chat_completion_response_message = {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [tool_call],
-                "thinking_blocks": thinking_blocks,
-            }
+            chat_completion_response_message["thinking_blocks"] = thinking_blocks
 
         return [chat_completion_response_message]
 
@@ -1914,9 +1935,12 @@ class LiteLLMCompletionResponsesConfig:
             ),
             instructions=getattr(chat_completion_response, "instructions", None),
             metadata=getattr(chat_completion_response, "metadata", {}),
-            output=LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
-                chat_completion_response=chat_completion_response,
-                choices=getattr(chat_completion_response, "choices", []),
+            output=cast(
+                Any,
+                LiteLLMCompletionResponsesConfig._transform_chat_completion_choices_to_responses_output(
+                    chat_completion_response=chat_completion_response,
+                    choices=getattr(chat_completion_response, "choices", []),
+                ),
             ),
             parallel_tool_calls=getattr(
                 chat_completion_response, "parallel_tool_calls", False
@@ -1948,22 +1972,8 @@ class LiteLLMCompletionResponsesConfig:
     def _transform_chat_completion_choices_to_responses_output(
         chat_completion_response: ModelResponse,
         choices: List[Choices],
-    ) -> List[
-        Union[
-            GenericResponseOutputItem,
-            OutputImageGenerationCall,
-            ResponseFunctionToolCall,
-            ResponseReasoningItem,
-        ]
-    ]:
-        responses_output: List[
-            Union[
-                GenericResponseOutputItem,
-                OutputImageGenerationCall,
-                ResponseFunctionToolCall,
-                ResponseReasoningItem,
-            ]
-        ] = []
+    ) -> List[ResponseOutputItem]:
+        responses_output: List[ResponseOutputItem] = []
 
         responses_output.extend(
             LiteLLMCompletionResponsesConfig._extract_reasoning_output_items(
@@ -2013,15 +2023,21 @@ class LiteLLMCompletionResponsesConfig:
                         ResponseReasoningItem(
                             type="reasoning",
                             id=reasoning_item_id,
-                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                                choice.finish_reason
+                            status=cast(
+                                Literal["in_progress", "completed", "incomplete"],
+                                LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                    choice.finish_reason
+                                ),
                             ),
-                            summary=[
-                                {
-                                    "type": "summary_text",
-                                    "text": message.reasoning_content,
-                                }
-                            ],
+                            summary=cast(
+                                List[Any],
+                                [
+                                    {
+                                        "type": "summary_text",
+                                        "text": message.reasoning_content,
+                                    }
+                                ],
+                            ),
                         )
                     ]
         return []
@@ -2221,17 +2237,10 @@ class LiteLLMCompletionResponsesConfig:
         transformed_annotations = LiteLLMCompletionResponsesConfig._transform_chat_completion_annotations_to_response_output_annotations(
             annotations=annotations
         )
-        annotation_dicts = [
-            annotation.model_dump()
-            if hasattr(annotation, "model_dump")
-            else dict(annotation)
-            for annotation in transformed_annotations
-        ]
-
         return OutputText(
             type="output_text",
             text=message.content or "",
-            annotations=annotation_dicts,
+            annotations=transformed_annotations,
         )
 
     @staticmethod
