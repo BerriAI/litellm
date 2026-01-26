@@ -55,7 +55,7 @@ async def test_make_common_async_call_serialization(mock_get_client):
         logging_obj=Mock()
     )
     
-    # Check that post was called with correctly serialized data
+    # Check that post was called with serialized data
     args, kwargs = mock_client.post.call_args
     sent_data = kwargs["data"]
     # Should contain literal "Привет" because ensure_ascii=False
