@@ -825,6 +825,7 @@ app = FastAPI(
     title=_title,
     description=_description,
     version=version,
+    root_path=server_root_path,
     lifespan=proxy_startup_event,  # type: ignore[reportGeneralTypeIssues]
 )
 
