@@ -982,7 +982,9 @@ class ProxyLogging:
 
         try:
             # Check if load balancing should be used
-            if guardrail_name and self._should_use_guardrail_load_balancing(guardrail_name):
+            if guardrail_name and self._should_use_guardrail_load_balancing(
+                guardrail_name
+            ):
                 response = await self._execute_guardrail_with_load_balancing(
                     guardrail_name=guardrail_name,
                     hook_type="pre_call",
@@ -1017,7 +1019,11 @@ class ProxyLogging:
             latency_seconds = guardrail_end_time - guardrail_start_time
 
             # Get guardrail name for metrics (fallback if not set)
-            metrics_guardrail_name = guardrail_name or getattr(callback, "guardrail_name", callback.__class__.__name__) or "unknown"
+            metrics_guardrail_name = (
+                guardrail_name
+                or getattr(callback, "guardrail_name", callback.__class__.__name__)
+                or "unknown"
+            )
 
             # Find PrometheusLogger in callbacks and record metrics
             for prom_callback in litellm.callbacks:
@@ -1793,9 +1799,11 @@ class ProxyLogging:
             #################################################################
 
             for callback in other_callbacks:
-                await callback.async_post_call_success_hook(
+                callback_response = await callback.async_post_call_success_hook(
                     user_api_key_dict=user_api_key_dict, data=data, response=response
                 )
+                if callback_response is not None:
+                    response = callback_response
         except Exception as e:
             raise e
         return response
@@ -1852,16 +1860,14 @@ class ProxyLogging:
                             complete_response = str_so_far + response_str
                         else:
                             complete_response = response_str
-                        potential_error_response = (
+                        callback_response = (
                             await _callback.async_post_call_streaming_hook(
                                 user_api_key_dict=user_api_key_dict,
                                 response=complete_response,
                             )
                         )
-                        if isinstance(
-                            potential_error_response, str
-                        ) and potential_error_response.startswith("data: "):
-                            return potential_error_response
+                        if callback_response is not None:
+                            response = callback_response
                 except Exception as e:
                     raise e
         return response
@@ -2218,17 +2224,17 @@ class PrismaClient:
     ) -> Optional[dict]:
         """
         Execute a query with automatic fallback for PostgreSQL cached plan errors.
-        
+
         This handles the "cached plan must not change result type" error that occurs
         during rolling deployments when schema changes are applied while old pods
         still have cached query plans expecting the old schema.
-        
+
         Args:
             sql_query: SQL query string to execute
-            
+
         Returns:
             Query result or None
-            
+
         Raises:
             Original exception if not a cached plan error
         """
@@ -2241,7 +2247,7 @@ class PrismaClient:
                 # Add a unique comment to make the query different
                 sql_query_retry = sql_query.replace(
                     "SELECT",
-                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */"
+                    f"SELECT /* cache_invalidated_{int(time.time() * 1000)} */",
                 )
                 verbose_proxy_logger.warning(
                     "PostgreSQL cached plan error detected for token lookup, "
@@ -2583,7 +2589,9 @@ class PrismaClient:
                         WHERE v.token = '{token}'
                     """
 
-                    response = await self._query_first_with_cached_plan_fallback(sql_query)
+                    response = await self._query_first_with_cached_plan_fallback(
+                        sql_query
+                    )
 
                     if response is not None:
                         if response["team_models"] is None:
@@ -4227,7 +4235,7 @@ def get_server_root_path() -> str:
     - If SERVER_ROOT_PATH is set, return it.
     - Otherwise, default to "/".
     """
-    return os.getenv("SERVER_ROOT_PATH", "/")
+    return os.getenv("SERVER_ROOT_PATH", "")
 
 
 def get_prisma_client_or_throw(message: str):

@@ -2169,3 +2169,32 @@ def test_resolve_model_name_from_model_id():
 
     result = router.resolve_model_name_from_model_id("gpt-3.5-turbo")
     assert result == "gpt-3.5-turbo"
+
+
+def test_get_valid_args():
+    """Test get_valid_args static method returns valid Router.__init__ arguments"""
+    # Call the static method
+    valid_args = Router.get_valid_args()
+    
+    # Verify it returns a list
+    assert isinstance(valid_args, list)
+    assert len(valid_args) > 0
+    
+    # Verify it contains expected Router.__init__ arguments
+    expected_args = [
+        "model_list",
+        "routing_strategy",
+        "cache_responses",
+        "num_retries",
+        "timeout",
+        "fallbacks",
+    ]
+    for arg in expected_args:
+        assert arg in valid_args, f"Expected argument '{arg}' not found in valid_args"
+    
+    # Verify "self" is not in the list (since it's removed)
+    assert "self" not in valid_args
+    
+    # Verify it contains keyword-only arguments too
+    # These are common Router.__init__ parameters
+    assert "assistants_config" in valid_args or "search_tools" in valid_args
