@@ -355,6 +355,90 @@ def test_azure_realtime_cost_calculator():
     assert cost > 0
 
 
+def test_azure_audio_output_cost_calculation():
+    """
+    Test that Azure audio models correctly calculate costs for audio output tokens.
+
+    Reproduces issue: https://github.com/BerriAI/litellm/issues/19764
+    Audio tokens should be charged at output_cost_per_audio_token rate,
+    not at the text token rate (output_cost_per_token).
+    """
+    from litellm.types.utils import (
+        Choices,
+        CompletionTokensDetailsWrapper,
+        Message,
+    )
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    # Scenario from issue #19764:
+    # Input: 17 text tokens, 0 audio tokens
+    # Output: 110 text tokens, 482 audio tokens
+    usage_object = Usage(
+        prompt_tokens=17,
+        completion_tokens=592,  # 110 text + 482 audio
+        total_tokens=609,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            audio_tokens=0,
+            cached_tokens=0,
+            text_tokens=17,
+            image_tokens=0,
+        ),
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            audio_tokens=482,
+            reasoning_tokens=0,
+            text_tokens=110,
+        ),
+    )
+
+    completion = ModelResponse(
+        id="test-azure-audio-cost",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(
+                    content="Test response",
+                    role="assistant",
+                ),
+            )
+        ],
+        created=1729282652,
+        model="azure/gpt-audio-2025-08-28",
+        object="chat.completion",
+        usage=usage_object,
+    )
+
+    cost = completion_cost(completion, model="azure/gpt-audio-2025-08-28")
+
+    model_info = litellm.get_model_info("azure/gpt-audio-2025-08-28")
+
+    # Calculate expected cost
+    expected_input_cost = (
+        model_info["input_cost_per_token"] * 17  # text tokens
+    )
+    expected_output_cost = (
+        model_info["output_cost_per_token"] * 110  # text tokens
+        + model_info["output_cost_per_audio_token"] * 482  # audio tokens
+    )
+    expected_total_cost = expected_input_cost + expected_output_cost
+
+    # The bug was: all output tokens charged at text rate
+    wrong_output_cost = model_info["output_cost_per_token"] * 592
+    wrong_total_cost = expected_input_cost + wrong_output_cost
+
+    # Verify audio tokens are NOT charged at text rate (the bug)
+    assert abs(cost - wrong_total_cost) > 0.001, (
+        "Bug: Audio tokens are being charged at text token rate"
+    )
+
+    # Verify cost matches
+    assert abs(cost - expected_total_cost) < 0.0000001, (
+        f"Expected cost {expected_total_cost}, got {cost}"
+    )
+
+
 def test_default_image_cost_calculator(monkeypatch):
     from litellm.cost_calculator import default_image_cost_calculator
 
