@@ -63,7 +63,20 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
 )
-from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name
+
+try:
+    from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name  # type: ignore
+except ImportError:
+    SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
+
+    def validate_tool_name(name: str):
+        from pydantic import BaseModel
+
+        class MockResult(BaseModel):
+            is_valid: bool = True
+            warnings: list = []
+
+        return MockResult()
 
 
 # Probe includes characters on both sides of the separator to mimic real prefixed tool names.
@@ -90,7 +103,9 @@ def _warn_on_server_name_fields(
         if result.is_valid:
             return
 
-        warning_text = "; ".join(result.warnings) if result.warnings else "Validation failed"
+        warning_text = (
+            "; ".join(result.warnings) if result.warnings else "Validation failed"
+        )
         verbose_logger.warning(
             "MCP server '%s' has invalid %s '%s': %s",
             server_id,
@@ -101,7 +116,6 @@ def _warn_on_server_name_fields(
 
     _warn("alias", alias)
     _warn("server_name", server_name)
-
 
 
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
@@ -391,10 +405,13 @@ class MCPServerManager:
             # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
             # from the client request (not available in this OpenAPI tool generation step).
             # `static_headers` is a dict of concrete headers to always send.
-            headers = merge_mcp_headers(
-                extra_headers=headers,
-                static_headers=server.static_headers,
-            ) or {}
+            headers = (
+                merge_mcp_headers(
+                    extra_headers=headers,
+                    static_headers=server.static_headers,
+                )
+                or {}
+            )
 
             verbose_logger.debug(
                 f"Using headers for OpenAPI tools (excluding sensitive values): "
