@@ -312,6 +312,18 @@ class PrometheusLogger(CustomLogger):
                 labelnames=self.get_labels_for_metric("litellm_deployment_state"),
             )
 
+            self.litellm_deployment_tpm_limit = self._gauge_factory(
+                "litellm_deployment_tpm_limit",
+                "Deployment TPM limit found in config",
+                labelnames=self.get_labels_for_metric("litellm_deployment_tpm_limit"),
+            )
+
+            self.litellm_deployment_rpm_limit = self._gauge_factory(
+                "litellm_deployment_rpm_limit",
+                "Deployment RPM limit found in config",
+                labelnames=self.get_labels_for_metric("litellm_deployment_rpm_limit"),
+            )
+
             self.litellm_deployment_cooled_down = self._counter_factory(
                 "litellm_deployment_cooled_down",
                 "LLM Deployment Analytics - Number of times a deployment has been cooled down by LiteLLM load balancing logic. exception_status is the status of the exception that caused the deployment to be cooled down",
@@ -1753,6 +1765,49 @@ class PrometheusLogger(CustomLogger):
                 )
             )
 
+    def _set_deployment_tpm_rpm_limit_metrics(
+        self,
+        model_info: dict,
+        litellm_params: dict,
+        litellm_model_name: Optional[str],
+        model_id: Optional[str],
+        api_base: Optional[str],
+        llm_provider: Optional[str],
+    ):
+        """
+        Set the deployment TPM and RPM limits metrics
+        """
+        tpm = model_info.get("tpm") or litellm_params.get("tpm")
+        rpm = model_info.get("rpm") or litellm_params.get("rpm")
+
+        if tpm is not None:
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_deployment_tpm_limit"
+                ),
+                enum_values=UserAPIKeyLabelValues(
+                    litellm_model_name=litellm_model_name,
+                    model_id=model_id,
+                    api_base=api_base,
+                    api_provider=llm_provider,
+                ),
+            )
+            self.litellm_deployment_tpm_limit.labels(**_labels).set(tpm)
+
+        if rpm is not None:
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_deployment_rpm_limit"
+                ),
+                enum_values=UserAPIKeyLabelValues(
+                    litellm_model_name=litellm_model_name,
+                    model_id=model_id,
+                    api_base=api_base,
+                    api_provider=llm_provider,
+                ),
+            )
+            self.litellm_deployment_rpm_limit.labels(**_labels).set(rpm)
+
     def set_llm_deployment_success_metrics(
         self,
         request_kwargs: dict,
@@ -1785,6 +1840,16 @@ class PrometheusLogger(CustomLogger):
             llm_provider = _litellm_params.get("custom_llm_provider", None)
             _model_info = _metadata.get("model_info") or {}
             model_id = _model_info.get("id", None)
+
+            if _model_info or _litellm_params:
+                self._set_deployment_tpm_rpm_limit_metrics(
+                    model_info=_model_info,
+                    litellm_params=_litellm_params,
+                    litellm_model_name=litellm_model_name,
+                    model_id=model_id,
+                    api_base=api_base,
+                    llm_provider=llm_provider,
+                )
 
             remaining_requests: Optional[int] = None
             remaining_tokens: Optional[int] = None
