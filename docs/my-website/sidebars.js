@@ -843,6 +843,7 @@ const sidebars = {
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
+        "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
         "completion/model_alias",
@@ -879,6 +880,7 @@ const sidebars = {
         "scheduler",
         "proxy/auto_routing",
         "proxy/load_balancing",
+        "proxy/keys_teams_router_settings",
         "proxy/provider_budget_routing",
         "proxy/reliability",
         "proxy/fallback_management",
@@ -1017,6 +1019,7 @@ const sidebars = {
       items: [
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
+        "troubleshoot/spend_queue_warnings",
       ],
     },
   ],
