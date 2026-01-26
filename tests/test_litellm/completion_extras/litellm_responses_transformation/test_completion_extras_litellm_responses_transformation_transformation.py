@@ -1278,3 +1278,189 @@ def test_transform_response_preserves_annotations():
     assert result.usage.total_tokens == 30
 
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+
+
+# =============================================================================
+# Tests for file type to input_file conversion
+# See: https://docs.litellm.ai/docs/completion/document_understanding
+# =============================================================================
+
+
+def test_convert_file_type_to_input_file_with_file_id():
+    """
+    Test that 'file' type content is correctly converted to 'input_file' for Responses API.
+
+    This is a regression test for the inconsistency between documentation and implementation.
+    The documentation specifies using:
+        {"type": "file", "file": {"file_id": "https://example.com/doc.pdf"}}
+
+    But the Responses API expects:
+        {"type": "input_file", "file_url": "https://example.com/doc.pdf"}
+
+    See: https://docs.litellm.ai/docs/completion/document_understanding
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Summarize this document"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+                    },
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    # Find the message content
+    assert len(response) == 1
+    assert response[0]["type"] == "message"
+    content = response[0]["content"]
+
+    # Should have 2 items: text and converted file
+    assert len(content) == 2
+
+    # Check text item
+    assert content[0]["type"] == "input_text"
+    assert content[0]["text"] == "Summarize this document"
+
+    # Check file item - should be converted to input_file format
+    file_item = content[1]
+    assert file_item["type"] == "input_file", f"Expected 'input_file', got '{file_item.get('type')}'"
+    assert file_item["file_url"] == "https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf"
+    assert "file_data" not in file_item, "file_data should not be present when only file_id is provided"
+
+    print("✓ file type with file_id correctly converted to input_file format")
+
+
+def test_convert_file_type_to_input_file_with_file_data():
+    """
+    Test that 'file' type content with base64 file_data is correctly converted.
+
+    The documentation allows:
+        {"type": "file", "file": {"file_data": "data:application/pdf;base64,..."}}
+
+    Should convert to:
+        {"type": "input_file", "file_data": "data:application/pdf;base64,..."}
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    test_base64_data = "data:application/pdf;base64,JVBERi0xLjQKJeLjz9MKMyAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDIgMCBSPj4KZW5kb2JqCg=="
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is in this PDF?"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_data": test_base64_data,
+                    },
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = response[0]["content"]
+    file_item = content[1]
+
+    assert file_item["type"] == "input_file"
+    assert file_item["file_data"] == test_base64_data
+    assert "file_url" not in file_item, "file_url should not be present when only file_data is provided"
+
+    print("✓ file type with file_data correctly converted to input_file format")
+
+
+def test_convert_file_type_to_input_file_with_both_fields():
+    """
+    Test that 'file' type content with both file_id and file_data is correctly converted.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    test_file_id = "https://example.com/document.pdf"
+    test_base64_data = "data:application/pdf;base64,JVBERi0xLjQ="
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": test_file_id,
+                        "file_data": test_base64_data,
+                    },
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = response[0]["content"]
+    file_item = content[0]
+
+    assert file_item["type"] == "input_file"
+    assert file_item["file_url"] == test_file_id
+    assert file_item["file_data"] == test_base64_data
+
+    print("✓ file type with both file_id and file_data correctly converted to input_file format")
+
+
+def test_convert_file_type_filters_none_values():
+    """
+    Test that None values are filtered out from the converted input_file.
+    """
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    # Only provide file_id, file_data should be None and filtered out
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/doc.pdf",
+                        # file_data is not provided
+                    },
+                },
+            ],
+        },
+    ]
+
+    response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
+
+    content = response[0]["content"]
+    file_item = content[0]
+
+    # Verify None values are not included
+    assert "file_data" not in file_item, "None values should be filtered out"
+    assert set(file_item.keys()) == {"type", "file_url"}, f"Unexpected keys: {file_item.keys()}"
+
+    print("✓ None values are correctly filtered from converted input_file")
