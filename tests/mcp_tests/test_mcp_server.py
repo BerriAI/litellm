@@ -1105,9 +1105,16 @@ async def test_mcp_server_manager_config_integration_with_database():
 
     test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
 
-    # Test the method (this tests our second fix)
-    import asyncio
+    # Mock _create_mcp_client to return a client that completes immediately
+    # This avoids network calls while preserving the actual conversion logic
+    def mock_create_mcp_client(*args, **kwargs):
+        mock_client = MagicMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        return mock_client
+    
+    test_manager._create_mcp_client = mock_create_mcp_client
 
+    # Test the method (this tests our second fix)
     servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
         user_api_key_auth=mock_user_auth
     )
