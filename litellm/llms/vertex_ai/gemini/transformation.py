@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
+    THOUGHT_SIGNATURE_SEPARATOR,
     convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_gemini_tool_call_invoke,
@@ -176,6 +177,57 @@ def _process_gemini_media(
         raise e
 
 
+def _normalize_tool_call_id(tool_call_id: Optional[str]) -> Optional[str]:
+    if not tool_call_id or not isinstance(tool_call_id, str):
+        return None
+    if THOUGHT_SIGNATURE_SEPARATOR in tool_call_id:
+        return tool_call_id.split(THOUGHT_SIGNATURE_SEPARATOR, 1)[0]
+    return tool_call_id
+
+
+def _tool_call_ids_match(lhs: Optional[str], rhs: Optional[str]) -> bool:
+    if not lhs or not rhs:
+        return False
+    if lhs == rhs:
+        return True
+    lhs_normalized = _normalize_tool_call_id(lhs)
+    rhs_normalized = _normalize_tool_call_id(rhs)
+    return (
+        lhs_normalized is not None
+        and rhs_normalized is not None
+        and lhs_normalized == rhs_normalized
+    )
+
+
+def _message_has_tool_call_id(
+    message: ChatCompletionAssistantMessage, tool_call_id: Optional[str]
+) -> bool:
+    if tool_call_id is None or not isinstance(message, dict):
+        return False
+    tool_calls = message.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return False
+    for tool in tool_calls:
+        if not isinstance(tool, dict):
+            continue
+        tool_id = tool.get("id")
+        if _tool_call_ids_match(tool_id, tool_call_id):
+            return True
+    return False
+
+
+def _find_matching_tool_call_message(
+    tool_call_id: Optional[str],
+    tool_call_history: List[ChatCompletionAssistantMessage],
+) -> Optional[ChatCompletionAssistantMessage]:
+    if tool_call_id is None:
+        return None
+    for message in reversed(tool_call_history):
+        if _message_has_tool_call_id(message, tool_call_id):
+            return message
+    return None
+
+
 def _snake_to_camel(snake_str: str) -> str:
     """Convert snake_case to camelCase"""
     components = snake_str.split("_")
@@ -249,6 +301,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
     contents: List[ContentType] = []
 
     last_message_with_tool_calls = None
+    tool_call_history: List[ChatCompletionAssistantMessage] = []
 
     msg_i = 0
     tool_call_responses = []
@@ -460,6 +513,7 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                         ):
                             assistant_content.append(gemini_tool_call_part)
                     last_message_with_tool_calls = assistant_msg
+                    tool_call_history.append(assistant_msg)
 
                 msg_i += 1
 
@@ -472,15 +526,44 @@ def _gemini_convert_messages_with_history(  # noqa: PLR0915
                 msg_i < len(messages)
                 and messages[msg_i]["role"] in tool_call_message_roles
             ):
-                _part = convert_to_gemini_tool_call_result(
-                    messages[msg_i], last_message_with_tool_calls  # type: ignore
+                tool_message = messages[msg_i]
+                tool_call_id = (
+                    tool_message.get("tool_call_id")
+                    if isinstance(tool_message, dict)
+                    else None
                 )
+                matching_tool_call_message = last_message_with_tool_calls
+                if matching_tool_call_message is None or not _message_has_tool_call_id(
+                    matching_tool_call_message, tool_call_id
+                ):
+                    matching_tool_call_message = _find_matching_tool_call_message(
+                        tool_call_id, tool_call_history
+                    )
+
+                _part = None
+                if matching_tool_call_message is None:
+                    if litellm.modify_params:
+                        normalized_tool_call_id = _normalize_tool_call_id(tool_call_id)
+                        verbose_logger.warning(
+                            "Dropping tool response without matching tool call. "
+                            "tool_call_id=%s",
+                            normalized_tool_call_id or tool_call_id,
+                        )
+                    else:
+                        _part = convert_to_gemini_tool_call_result(
+                            tool_message, last_message_with_tool_calls  # type: ignore
+                        )
+                else:
+                    _part = convert_to_gemini_tool_call_result(
+                        tool_message, matching_tool_call_message  # type: ignore
+                    )
                 msg_i += 1
                 # Handle both single part and list of parts (for Computer Use with images)
-                if isinstance(_part, list):
-                    tool_call_responses.extend(_part)
-                else:
-                    tool_call_responses.append(_part)
+                if _part is not None:
+                    if isinstance(_part, list):
+                        tool_call_responses.extend(_part)
+                    else:
+                        tool_call_responses.append(_part)
             if msg_i < len(messages) and (
                 messages[msg_i]["role"] not in tool_call_message_roles
             ):

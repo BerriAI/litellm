@@ -1,3 +1,5 @@
+import litellm
+
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -743,6 +745,67 @@ def test_convert_tool_response_with_thought_signature_id():
 
     assert "function_response" in result
     assert result["function_response"]["name"] == "memory"
+
+
+def test_gemini_tool_response_matches_earlier_tool_call():
+    messages = [
+        {"role": "user", "content": "Hi"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_alpha",
+                    "type": "function",
+                    "function": {"name": "alpha", "arguments": "{}"},
+                }
+            ],
+        },
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_beta",
+                    "type": "function",
+                    "function": {"name": "beta", "arguments": "{}"},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "call_alpha", "content": "{\"ok\": true}"},
+    ]
+
+    contents = _gemini_convert_messages_with_history(messages=messages)
+
+    function_response_names = []
+    for content in contents:
+        for part in content.get("parts", []):
+            if "function_response" in part:
+                function_response_names.append(part["function_response"]["name"])
+
+    assert "alpha" in function_response_names
+
+
+def test_gemini_drops_unmatched_tool_response_with_modify_params():
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {
+                "role": "tool",
+                "tool_call_id": "call_missing",
+                "content": "{\"ok\": true}",
+            },
+        ]
+
+        contents = _gemini_convert_messages_with_history(messages=messages)
+
+        for content in contents:
+            for part in content.get("parts", []):
+                assert "function_response" not in part
+    finally:
+        litellm.modify_params = original_modify_params
 
 
 def test_file_data_field_order():
