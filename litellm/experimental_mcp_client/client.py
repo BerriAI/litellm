@@ -126,7 +126,7 @@ class MCPClient:
             try:
                 read_stream, write_stream = transport[0], transport[1]
                 session_ctx = ClientSession(read_stream, write_stream)
-                
+
                 # Enter session context
                 session = await session_ctx.__aenter__()
                 try:
@@ -162,9 +162,7 @@ class MCPClient:
                 try:
                     await http_client.aclose()
                 except Exception as e:
-                    verbose_logger.debug(
-                        f"Error during http_client cleanup: {e}"
-                    )
+                    verbose_logger.debug(f"Error during http_client cleanup: {e}")
 
     def update_auth_value(self, mcp_auth_value: Union[str, Dict[str, str]]):
         """
