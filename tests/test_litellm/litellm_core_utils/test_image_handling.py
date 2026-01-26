@@ -1,17 +1,14 @@
-from unittest.mock import patch
-
 import pytest
 from httpx import Request, Response
 
 import litellm
-from litellm import constants
 from litellm.litellm_core_utils.prompt_templates.image_handling import (
     convert_url_to_base64,
 )
 
 
 class DummyClient:
-    def get(self, url, follow_redirects=True):
+    def get(self, url, headers=None, follow_redirects=True):
         return Response(status_code=404, request=Request("GET", url))
 
 
@@ -53,14 +50,14 @@ class LargeImageClient:
         self.size_mb = size_mb
         self.include_content_length = include_content_length
 
-    def get(self, url, follow_redirects=True):
+    def get(self, url, headers=None, follow_redirects=True):
         size_bytes = int(self.size_mb * 1024 * 1024)
-        headers = {"Content-Type": "image/jpeg"}
+        response_headers = {"Content-Type": "image/jpeg"}
         if self.include_content_length:
-            headers["Content-Length"] = str(size_bytes)
+            response_headers["Content-Length"] = str(size_bytes)
         return Response(
             status_code=200,
-            headers=headers,
+            headers=response_headers,
             content=b"x" * size_bytes,
             request=Request("GET", url),
         )
@@ -99,15 +96,15 @@ class SmallImageClient:
     Client that returns a small valid image.
     """
 
-    def get(self, url, follow_redirects=True):
+    def get(self, url, headers=None, follow_redirects=True):
         size_bytes = 1024
-        headers = {
+        response_headers = {
             "Content-Type": "image/jpeg",
             "Content-Length": str(size_bytes),
         }
         return Response(
             status_code=200,
-            headers=headers,
+            headers=response_headers,
             content=b"x" * size_bytes,
             request=Request("GET", url),
         )
@@ -135,6 +132,38 @@ def test_image_size_limit_disabled(monkeypatch):
 
     with pytest.raises(litellm.ImageFetchError) as excinfo:
         convert_url_to_base64("https://example.com/image.jpg")
-    
+
     assert "Image URL download is disabled" in str(excinfo.value)
     assert "MAX_IMAGE_URL_DOWNLOAD_SIZE_MB=0" in str(excinfo.value)
+
+
+class HeaderCapturingClient:
+    """
+    Client that captures the headers passed to the request.
+    """
+
+    def __init__(self):
+        self.received_headers = None
+
+    def get(self, url, headers=None, follow_redirects=True):
+        self.received_headers = headers
+        return Response(
+            status_code=200,
+            headers={"Content-Type": "image/jpeg", "Content-Length": "1024"},
+            content=b"x" * 1024,
+            request=Request("GET", url),
+        )
+
+
+def test_user_agent_header_is_sent(monkeypatch):
+    """
+    Test that User-Agent header is included in image fetch requests.
+    """
+    client = HeaderCapturingClient()
+    monkeypatch.setattr(litellm, "module_level_client", client)
+
+    convert_url_to_base64("https://example.com/image.jpg")
+
+    assert client.received_headers is not None
+    assert "User-Agent" in client.received_headers
+    assert client.received_headers["User-Agent"].startswith("litellm/")

@@ -11,7 +11,17 @@ from litellm import verbose_logger
 from litellm.caching.caching import InMemoryCache
 from litellm.constants import MAX_IMAGE_URL_DOWNLOAD_SIZE_MB
 
+try:
+    from litellm._version import version
+except Exception:
+    version = "0.0.0"
+
 MAX_IMGS_IN_MEMORY = 10
+
+# Headers for image fetch requests - some CDNs (e.g., Wikimedia) require a User-Agent
+IMAGE_FETCH_HEADERS = {
+    "User-Agent": f"litellm/{version}",
+}
 
 in_memory_cache = InMemoryCache(max_size_in_memory=MAX_IMGS_IN_MEMORY)
 
@@ -80,7 +90,7 @@ async def async_convert_url_to_base64(url: str) -> str:
     client = litellm.module_level_aclient
     for _ in range(3):
         try:
-            response = await client.get(url, follow_redirects=True)
+            response = await client.get(url, headers=IMAGE_FETCH_HEADERS, follow_redirects=True)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
@@ -105,7 +115,7 @@ def convert_url_to_base64(url: str) -> str:
     client = litellm.module_level_client
     for _ in range(3):
         try:
-            response = client.get(url, follow_redirects=True)
+            response = client.get(url, headers=IMAGE_FETCH_HEADERS, follow_redirects=True)
             return _process_image_response(response, url)
         except litellm.ImageFetchError:
             raise
