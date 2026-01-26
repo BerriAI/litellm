@@ -476,11 +476,22 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         if pending_reasoning_item is not None
                         else None
                     )
+                    thinking_blocks = None
+                    if pending_reasoning_item is not None:
+                        encrypted_content = pending_reasoning_item.get("encrypted_content")
+                        if isinstance(encrypted_content, str) and encrypted_content:
+                            thinking_blocks = [
+                                {
+                                    "type": "thinking",
+                                    "encrypted_content": encrypted_content,
+                                }
+                            ]
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
                         annotations=annotations,
+                        thinking_blocks=thinking_blocks,
                         provider_specific_fields=provider_specific_fields,
                     )
 
@@ -527,6 +538,20 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     merged_fields = {}
                 merged_fields["reasoning"] = pending_reasoning_item
                 setattr(last_message, "provider_specific_fields", merged_fields)
+                encrypted_content = pending_reasoning_item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    existing_thinking_blocks = getattr(last_message, "thinking_blocks", None)
+                    if isinstance(existing_thinking_blocks, list):
+                        merged_thinking_blocks = list(existing_thinking_blocks)
+                    else:
+                        merged_thinking_blocks = []
+                    merged_thinking_blocks.append(
+                        {
+                            "type": "thinking",
+                            "encrypted_content": encrypted_content,
+                        }
+                    )
+                    setattr(last_message, "thinking_blocks", merged_thinking_blocks)
                 pending_reasoning_item = None
             except Exception:
                 pass
@@ -538,10 +563,21 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 if pending_reasoning_item is not None
                 else None
             )
+            thinking_blocks = None
+            if pending_reasoning_item is not None:
+                encrypted_content = pending_reasoning_item.get("encrypted_content")
+                if isinstance(encrypted_content, str) and encrypted_content:
+                    thinking_blocks = [
+                        {
+                            "type": "thinking",
+                            "encrypted_content": encrypted_content,
+                        }
+                    ]
             msg = Message(
                 content=None,
                 tool_calls=accumulated_tool_calls,
                 reasoning_content=reasoning_content,
+                thinking_blocks=thinking_blocks,
                 provider_specific_fields=provider_specific_fields,
             )
             choices.append(
@@ -1188,6 +1224,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # Response is fully complete - now we can signal is_finished=True
             # This ensures we don't prematurely end the stream before tool_calls arrive
             provider_specific_fields = None
+            thinking_blocks = None
             try:
                 response_obj = parsed_chunk.get("response")
                 if isinstance(response_obj, dict):
@@ -1200,6 +1237,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                 and isinstance(out_item.get("encrypted_content"), str)
                                 and out_item.get("encrypted_content")
                             ):
+                                encrypted_content = out_item.get("encrypted_content")
                                 provider_specific_fields = {
                                     "reasoning": {
                                         k: v
@@ -1207,9 +1245,21 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                                         if v is not None
                                     }
                                 }
+                                thinking_blocks = (
+                                    [
+                                        {
+                                            "type": "thinking",
+                                            "encrypted_content": encrypted_content,
+                                        }
+                                    ]
+                                    if isinstance(encrypted_content, str)
+                                    and encrypted_content
+                                    else None
+                                )
                                 break
             except Exception:
                 provider_specific_fields = None
+                thinking_blocks = None
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
@@ -1217,8 +1267,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         delta=Delta(
                             content="",
                             provider_specific_fields=provider_specific_fields,
+                            thinking_blocks=thinking_blocks,
                         )
-                        if provider_specific_fields is not None
+                        if provider_specific_fields is not None or thinking_blocks is not None
                         else Delta(content=""),
                         finish_reason="stop",
                     )
