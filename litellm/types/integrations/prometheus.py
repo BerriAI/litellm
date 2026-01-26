@@ -150,6 +150,7 @@ class UserAPIKeyLabelNames(Enum):
     FALLBACK_MODEL = "fallback_model"
     ROUTE = "route"
     MODEL_GROUP = "model_group"
+    CALLBACK_NAME = "callback_name"
 
 
 DEFINED_PROMETHEUS_METRICS = Literal[
@@ -196,6 +197,9 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
     "litellm_cached_tokens_metric",
+    "litellm_remaining_api_key_requests_for_model",
+    "litellm_remaining_api_key_tokens_for_model",
+    "litellm_callback_logging_failures_metric",
 ]
 
 
@@ -434,6 +438,26 @@ class PrometheusMetricLabels:
 
     litellm_user_budget_remaining_hours_metric = [
         UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_user_budget_remaining_hours_metric = [
+        UserAPIKeyLabelNames.USER.value,
+    ]
+
+    litellm_remaining_api_key_requests_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_remaining_api_key_tokens_for_model = [
+        UserAPIKeyLabelNames.API_KEY_HASH.value,
+        UserAPIKeyLabelNames.API_KEY_ALIAS.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+    ]
+
+    litellm_callback_logging_failures_metric = [
+        UserAPIKeyLabelNames.CALLBACK_NAME.value,
     ]
 
     # Add deployment metrics
