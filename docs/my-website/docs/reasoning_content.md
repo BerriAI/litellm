@@ -29,11 +29,14 @@ LiteLLM will standardize the `reasoning_content` in the response and `thinking_b
 "message": {
     ...
     "reasoning_content": "The capital of France is Paris.",
-    "thinking_blocks": [ # returned for Anthropic and OpenAI models
+    "thinking_blocks": [ # shape varies by provider
         {
             "type": "thinking",
+            # Anthropic
             "thinking": "The capital of France is Paris.",
-            "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+..."
+            "signature": "EqoBCkgIARABGAIiQL2UoU0b1OHYi+...",
+            # OpenAI (Responses API bridge)
+            "encrypted_content": "encrypted-blob-abc123",
         }
     ]
 }
