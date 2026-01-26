@@ -7,6 +7,7 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 from typing import Any, Dict, List
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
+from litellm.llms.anthropic.common_utils import set_anthropic_headers
 
 
 class AnthropicCountTokensConfig:
@@ -63,12 +64,11 @@ class AnthropicCountTokensConfig:
         Returns:
             Dictionary of required headers
         """
-        return {
+        return set_anthropic_headers(api_key, {
             "Content-Type": "application/json",
-            "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
             "anthropic-beta": ANTHROPIC_TOKEN_COUNTING_BETA_VERSION,
-        }
+        })
 
     def validate_request(
         self, model: str, messages: List[Dict[str, Any]]

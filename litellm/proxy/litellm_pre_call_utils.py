@@ -26,6 +26,7 @@ _SPECIAL_HEADERS_CACHE = frozenset(
 )
 from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.router import Router
+from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -320,6 +321,7 @@ class LiteLLMProxyRequestSetup:
         Looks for any `x-` headers and sends them to the LLM Provider.
 
         [07/09/2025] - Support 'anthropic-beta' header as well.
+        [01/26/2026] - Support 'authorization' header for Anthropic OAuth tokens.
         """
         forwarded_headers = {}
         for header, value in headers.items():
@@ -328,6 +330,9 @@ class LiteLLMProxyRequestSetup:
             ):  # causes openai sdk to fail
                 forwarded_headers[header] = value
             elif header.lower().startswith("anthropic-beta"):
+                forwarded_headers[header] = value
+            elif header.lower() == "authorization" and is_anthropic_oauth_key(value):
+                # Forward Authorization header for Anthropic OAuth tokens (sk-ant-oat*)
                 forwarded_headers[header] = value
 
         return forwarded_headers

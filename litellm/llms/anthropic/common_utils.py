@@ -22,14 +22,55 @@ from litellm.types.llms.anthropic import (
 from litellm.types.llms.openai import AllMessageValues
 
 
+def is_anthropic_oauth_key(value: Optional[str]) -> bool:
+    """
+    Check if a value is an Anthropic OAuth token.
+
+    Handles both formats:
+    - "Bearer sk-ant-oat01-xxx" (Authorization header format)
+    - "sk-ant-oat01-xxx" (raw API key format)
+    """
+    if not value:
+        return False
+
+    # Handle "Bearer sk-ant-oat01-xxx" format
+    scheme, _, token = value.partition(" ")
+    if scheme.lower() == "bearer" and token.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+        return True
+
+    # Handle raw token "sk-ant-oat01-xxx" format
+    return value.startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX)
+
+
+def set_anthropic_headers(api_key: str, headers: Optional[dict] = None) -> dict:
+    """
+    Create headers dict with appropriate auth header for Anthropic API requests.
+
+    OAuth tokens use the Authorization header, regular API keys use x-api-key.
+
+    Args:
+        api_key: The API key or OAuth token
+        headers: Optional base headers to merge with auth header
+
+    Returns:
+        New dict with auth header and any base headers merged
+    """
+    result = dict(headers) if headers else {}
+    if is_anthropic_oauth_key(api_key):
+        result["authorization"] = f"Bearer {api_key}"
+    else:
+        result["x-api-key"] = api_key
+    return result
+
+
 def optionally_handle_anthropic_oauth(
     headers: dict, api_key: Optional[str]
 ) -> tuple[dict, Optional[str]]:
     """
     Handle Anthropic OAuth token detection and header setup.
 
-    If an OAuth token is detected in the Authorization header, extracts it
-    and sets the required OAuth headers.
+    Checks both the Authorization header and the api_key parameter for OAuth tokens.
+    If found, sets the required OAuth beta headers.
 
     Args:
         headers: Request headers dict
@@ -38,13 +79,21 @@ def optionally_handle_anthropic_oauth(
     Returns:
         Tuple of (updated headers, api_key)
     """
-    auth_header = headers.get("authorization", "")
-    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+    # Check Authorization header first (case-insensitive lookup)
+    auth_header = ""
+    for key, value in headers.items():
+        if key.lower() == "authorization":
+            auth_header = value
+            break
+    if auth_header and is_anthropic_oauth_key(auth_header):
         api_key = auth_header.replace("Bearer ", "")
         headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
         headers["anthropic-dangerous-direct-browser-access"] = "true"
+    # Also check if api_key is directly an OAuth token
+    elif api_key and is_anthropic_oauth_key(api_key):
+        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-dangerous-direct-browser-access"] = "true"
     return headers, api_key
-
 
 class AnthropicError(BaseLLMException):
     def __init__(
@@ -366,12 +415,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if container_with_skills_used:
             betas.add("skills-2025-10-02")
 
-        headers = {
+        headers = set_anthropic_headers(api_key, {
             "anthropic-version": anthropic_version or "2023-06-01",
-            "x-api-key": api_key,
             "accept": "application/json",
             "content-type": "application/json",
-        }
+        })
 
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
@@ -475,9 +523,10 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             raise ValueError(
                 "ANTHROPIC_API_BASE or ANTHROPIC_API_KEY is not set. Please set the environment variable, to query Anthropic's `/models` endpoint."
             )
+        headers = set_anthropic_headers(api_key, {"anthropic-version": "2023-06-01"})
         response = litellm.module_level_client.get(
             url=f"{api_base}/v1/models",
-            headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"},
+            headers=headers,
         )
 
         try:
