@@ -251,14 +251,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         after: Optional[str] = None,
         provider: Optional[str] = None,
         target_model_names: Optional[str] = None,
+        llm_router: Optional[Router] = None,
     ) -> Dict[str, Any]:
         # Provider filtering is not supported for managed batches
         # This is because the encoded object ids stored in the managed objects table do not contain the provider information
         # To support provider filtering, we would need to store the provider information in the encoded object ids
         if provider:
             raise Exception(
-                "Filtering by 'provider' is not supported when using managed batches. "
-                "Use 'target_model_names' to filter by specific model names instead."
+                "Filtering by 'provider' is not supported when using managed batches."
+            )
+
+        # Model name filtering is not supported for managed batches
+        # This is because the encoded object ids stored in the managed objects table do not contain the model name
+        # A hash of the model name + litellm_params for the model name is encoded as the model id. This is not sufficient to reliably map the target model names to the model ids.
+        if target_model_names:
+            raise Exception(
+                "Filtering by 'target_model_names' is not supported when using managed batches."
             )
         
         where_clause: Dict[str, Any] = {"file_purpose": "batch"}
@@ -281,12 +289,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             take=fetch_limit,
             order={"created_at": "desc"},
         )
-        
-        # Parse target_model_names filter
-        target_models_filter: List[str] = []
-        if target_model_names:
-            target_models_filter = [m.strip() for m in target_model_names.split(",") if m.strip()]
-        
+                
         batch_objects: List[LiteLLMBatch] = []
         for batch in batches:
             try:
@@ -297,26 +300,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 batch_data = json.loads(batch.file_object) if isinstance(batch.file_object, str) else batch.file_object
                 batch_obj = LiteLLMBatch(**batch_data)
                 batch_obj.id = batch.unified_object_id
+                batch_objects.append(batch_obj)
 
-                # If no target_model_names filter, add the batch to the list
-                if not target_models_filter:
-                    batch_objects.append(batch_obj)
-                    continue
-                
-                # Filter by target_model_names
-                decoded_id = _is_base64_encoded_unified_file_id(batch.unified_object_id)
-                model_id = None
-                if decoded_id:
-                    model_id = get_model_id_from_unified_batch_id(decoded_id)
-
-                # Skip batches without decodable IDs if filtering is requested
-                if not model_id:
-                    continue
-
-                if any(target.lower() in model_id.lower() for target in target_models_filter):
-                    batch_objects.append(batch_obj)
-                    continue
-                   
             except Exception as e:
                 verbose_logger.warning(
                     f"Failed to parse batch object {batch.unified_object_id}: {e}"
@@ -760,6 +745,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             bytes=file_objects[0].bytes,
             filename=file_objects[0].filename,
             status="uploaded",
+            expires_at=file_objects[0].expires_at,
         )
 
         return response
