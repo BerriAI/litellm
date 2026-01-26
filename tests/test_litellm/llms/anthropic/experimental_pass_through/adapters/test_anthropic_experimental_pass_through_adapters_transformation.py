@@ -1119,43 +1119,53 @@ CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = "bedrock/converse/global.anthropic.claude
 CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
 
 
-def test_should_preserve_cache_control_with_anthropic_model():
-    """Should return True for Anthropic Claude models with cache_control."""
+def test_should_add_cache_control_for_anthropic_model():
+    """Should add cache_control to target for Anthropic Claude models."""
     adapter = LiteLLMAnthropicMessagesAdapter()
     cache_control = {"type": "ephemeral"}
 
-    assert adapter._should_preserve_cache_control(cache_control, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL) is True
-    assert adapter._should_preserve_cache_control(cache_control, "anthropic/claude-sonnet-4-5") is True
-    assert adapter._should_preserve_cache_control(cache_control, "claude-opus-4-5-20251101") is True
-    assert adapter._should_preserve_cache_control(cache_control, "vertex_ai/claude-3-sonnet@20240229") is True
+    for model in [
+        CACHE_CONTROL_BEDROCK_CONVERSE_MODEL,
+        "anthropic/claude-sonnet-4-5",
+        "claude-opus-4-5-20251101",
+        "vertex_ai/claude-3-sonnet@20240229",
+    ]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" in target
+        assert target["cache_control"] == cache_control
 
 
-def test_should_not_preserve_cache_control_for_non_anthropic_model():
-    """Should return False for non-Anthropic models even with cache_control."""
+def test_should_not_add_cache_control_for_non_anthropic_model():
+    """Should not add cache_control for non-Anthropic models."""
     adapter = LiteLLMAnthropicMessagesAdapter()
     cache_control = {"type": "ephemeral"}
 
-    assert adapter._should_preserve_cache_control(cache_control, CACHE_CONTROL_NON_ANTHROPIC_MODEL) is False
-    assert adapter._should_preserve_cache_control(cache_control, "openai/gpt-4-turbo") is False
-    assert adapter._should_preserve_cache_control(cache_control, "gemini-pro") is False
+    for model in [CACHE_CONTROL_NON_ANTHROPIC_MODEL, "openai/gpt-4-turbo", "gemini-pro"]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" not in target
 
 
-def test_should_not_preserve_cache_control_when_none():
-    """Should return False when cache_control is None or empty."""
+def test_should_not_add_cache_control_when_none():
+    """Should not add cache_control when source has None or empty cache_control."""
     adapter = LiteLLMAnthropicMessagesAdapter()
 
-    assert adapter._should_preserve_cache_control(None, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL) is False
-    assert adapter._should_preserve_cache_control({}, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL) is False
-    assert adapter._should_preserve_cache_control("", CACHE_CONTROL_BEDROCK_CONVERSE_MODEL) is False
+    for source in [{"cache_control": None}, {"cache_control": {}}, {"cache_control": ""}, {}]:
+        target = {}
+        adapter._add_cache_control_if_applicable(source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL)
+        assert "cache_control" not in target
 
 
-def test_should_not_preserve_cache_control_when_model_none():
-    """Should return False when model is None."""
+def test_should_not_add_cache_control_when_model_none():
+    """Should not add cache_control when model is None or empty."""
     adapter = LiteLLMAnthropicMessagesAdapter()
     cache_control = {"type": "ephemeral"}
 
-    assert adapter._should_preserve_cache_control(cache_control, None) is False
-    assert adapter._should_preserve_cache_control(cache_control, "") is False
+    for model in [None, ""]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" not in target
 
 
 def test_cache_control_preserved_in_text_content_for_claude():
