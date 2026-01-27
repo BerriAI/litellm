@@ -34,6 +34,7 @@ from litellm.types.llms.openai import (
 )
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
+    Choices,
     GenericGuardrailAPIInputs,
     ModelResponse,
 )
@@ -376,11 +377,12 @@ class AnthropicMessagesHandler(BaseTranslation):
                 and built_response.choices
             ):
                 model_response = cast(ModelResponse, built_response)
+                first_choice = cast(Choices, model_response.choices[0])
                 tool_calls_list = cast(
                     Optional[List[ChatCompletionMessageToolCall]],
-                    model_response.choices[0].message.tool_calls,
+                    first_choice.message.tool_calls,
                 )
-                string_so_far = model_response.choices[0].message.content
+                string_so_far = first_choice.message.content
                 guardrail_inputs = GenericGuardrailAPIInputs()
                 if string_so_far:
                     guardrail_inputs["texts"] = [string_so_far]
