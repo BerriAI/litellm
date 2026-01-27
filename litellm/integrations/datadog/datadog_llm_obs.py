@@ -18,6 +18,10 @@ import httpx
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.datadog.datadog_mock_client import (
+    should_use_datadog_mock,
+    create_mock_datadog_client,
+)
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_service,
     get_datadog_tags,
@@ -43,6 +47,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
+            
+            self.is_mock_mode = should_use_datadog_mock()
+            
+            if self.is_mock_mode:
+                create_mock_datadog_client()
+                verbose_logger.debug("[DATADOG MOCK] DataDogLLMObs logger initialized in mock mode")
+            
             if os.getenv("DD_API_KEY", None) is None:
                 raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
             if os.getenv("DD_SITE", None) is None:
@@ -139,6 +150,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"DataDogLLMObs: Flushing {len(self.log_queue)} events"
             )
+            
+            if self.is_mock_mode:
+                verbose_logger.debug("[DATADOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             # Prepare the payload
             payload = {
@@ -178,9 +192,14 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                     f"DataDogLLMObs: Unexpected response - status_code: {response.status_code}, text: {response.text}"
                 )
 
-            verbose_logger.debug(
-                f"DataDogLLMObs: Successfully sent batch - status_code: {response.status_code}"
-            )
+            if self.is_mock_mode:
+                verbose_logger.debug(
+                    f"[DATADOG MOCK] Batch of {len(self.log_queue)} events successfully mocked"
+                )
+            else:
+                verbose_logger.debug(
+                    f"DataDogLLMObs: Successfully sent batch - status_code: {response.status_code}"
+                )
             self.log_queue.clear()
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(
