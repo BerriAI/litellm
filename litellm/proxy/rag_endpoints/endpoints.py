@@ -340,7 +340,6 @@ async def rag_ingest(
         proxy_config,
         version,
     )
-    from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 
     try:
         # Parse request
