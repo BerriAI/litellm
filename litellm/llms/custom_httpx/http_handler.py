@@ -53,23 +53,17 @@ except Exception:
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
-    
-    Respects litellm.disable_default_user_agent flag to allow users to disable
-    the automatic User-Agent header injection or override it completely.
-    
-    Returns:
-        dict: Default headers (may be empty if user disabled defaults)
-    """
-    import litellm
-    
-    if getattr(litellm, "disable_default_user_agent", False):
-        return {}
-    
-    return {
-        "User-Agent": f"litellm/{version}",
-    }
 
-# Initialize headers - will be empty if disable_default_user_agent is True
+    - Default: `User-Agent: litellm/{version}`
+    - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+    """
+    user_agent = os.environ.get("LITELLM_USER_AGENT")
+    if user_agent is not None:
+        return {"User-Agent": user_agent}
+
+    return {"User-Agent": f"litellm/{version}"}
+
+# Initialize headers (User-Agent)
 headers = get_default_headers()
 
 # https://www.python-httpx.org/advanced/timeouts
@@ -389,7 +383,7 @@ class AsyncHTTPHandler:
             shared_session=shared_session,
         )
 
-        # Get default headers - will be empty if disable_default_user_agent is True
+        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers()
 
         return httpx.AsyncClient(
@@ -920,7 +914,7 @@ class HTTPHandler:
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
-        # Get default headers - will be empty if disable_default_user_agent is True
+        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
         default_headers = get_default_headers() if not disable_default_headers else None
 
         if client is None:

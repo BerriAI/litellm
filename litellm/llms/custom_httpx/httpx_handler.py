@@ -1,3 +1,4 @@
+import os
 from typing import Optional, Union
 
 import httpx
@@ -10,28 +11,19 @@ except Exception:
 def get_default_headers() -> dict:
     """
     Get default headers for HTTP requests.
-    
-    Respects litellm.disable_default_user_agent flag to allow users to disable
-    the automatic User-Agent header injection or override it completely.
-    
-    Returns:
-        dict: Default headers (may be empty if user disabled defaults)
+
+    - Default: `User-Agent: litellm/{version}`
+    - Override: set `LITELLM_USER_AGENT` to fully override the header value.
     """
-    import litellm
-    
-    if getattr(litellm, "disable_default_user_agent", False):
-        return {}
-    
-    return {
-        "User-Agent": f"litellm/{version}",
-    }
+    user_agent = os.environ.get("LITELLM_USER_AGENT")
+    if user_agent is not None:
+        return {"User-Agent": user_agent}
 
-# Initialize headers - will be empty if disable_default_user_agent is True
-headers = get_default_headers()
-
+    return {"User-Agent": f"litellm/{version}"}
 
 class HTTPHandler:
     def __init__(self, concurrent_limit=1000):
+        headers = get_default_headers()
         # Create a client with a connection pool
         self.client = httpx.AsyncClient(
             limits=httpx.Limits(
