@@ -8,6 +8,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_utils import (
     _get_customer_id_from_standard_headers,
     get_end_user_id_from_request_body,
+    get_model_from_request,
     get_key_model_rpm_limit,
     get_key_model_tpm_limit,
 )
@@ -186,3 +187,25 @@ class TestGetEndUserIdFromRequestBodyWithStandardHeaders:
                 request_body=request_body, request_headers=headers
             )
         assert result == "body-user"
+
+
+def test_get_model_from_request_supports_google_model_names_with_slashes():
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
+        )
+        == "bedrock/claude-sonnet-3.7"
+    )
+    assert (
+        get_model_from_request(
+            request_data={},
+            route="/models/hosted_vllm/gpt-oss-20b:generateContent",
+        )
+        == "hosted_vllm/gpt-oss-20b"
+    )
+
+
+def test_get_model_from_request_vertex_passthrough_still_works():
+    route = "/vertex_ai/v1/projects/p/locations/l/publishers/google/models/gemini-1.5-pro:generateContent"
+    assert get_model_from_request(request_data={}, route=route) == "gemini-1.5-pro"
