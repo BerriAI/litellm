@@ -271,3 +271,130 @@ def test_cleanup_batch_size_env_var(monkeypatch):
     monkeypatch.delenv("SPEND_LOG_CLEANUP_BATCH_SIZE", raising=False)
     importlib.reload(constants_module)
     importlib.reload(cleanup_module)
+
+
+@pytest.mark.asyncio
+async def test_lock_not_released_when_acquisition_fails():
+    """
+    Test that the lock is NOT released when lock acquisition fails.
+    This prevents releasing a lock held by another pod.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_spendlogs = MagicMock()
+    mock_spendlogs.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_spendlogs = mock_spendlogs
+    mock_prisma_client.db = mock_db
+
+    # Mock Redis cache and pod_lock_manager - lock acquisition FAILS
+    mock_redis_cache = MagicMock()
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = mock_redis_cache
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=False)  # Lock acquisition fails
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    test_settings = {"maximum_spend_logs_retention_period": "7d"}
+    cleaner = SpendLogCleanup(general_settings=test_settings)
+    cleaner.pod_lock_manager = mock_pod_lock_manager
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    # Verify lock acquisition was attempted
+    mock_pod_lock_manager.acquire_lock.assert_called_once()
+    # Verify lock was NOT released (since we never acquired it)
+    mock_pod_lock_manager.release_lock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lock_not_released_on_early_return_no_retention():
+    """
+    Test that the lock is NOT released when cleanup exits early
+    due to missing retention settings (before lock acquisition).
+    """
+    mock_prisma_client = MagicMock()
+
+    # Mock Redis cache and pod_lock_manager
+    mock_redis_cache = MagicMock()
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = mock_redis_cache
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    # No retention period - will cause early return
+    cleaner = SpendLogCleanup(general_settings={})
+    cleaner.pod_lock_manager = mock_pod_lock_manager
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    # Lock acquisition should NOT be attempted (early return before that)
+    mock_pod_lock_manager.acquire_lock.assert_not_called()
+    # Lock should NOT be released
+    mock_pod_lock_manager.release_lock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_lock_released_after_successful_cleanup():
+    """
+    Test that the lock IS released after successful cleanup when lock was acquired.
+    """
+    from types import SimpleNamespace
+
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_spendlogs = MagicMock()
+    mock_spendlogs.find_many = AsyncMock(return_value=[])  # No logs to delete
+    mock_spendlogs.delete_many = AsyncMock()
+    mock_db.litellm_spendlogs = mock_spendlogs
+    mock_prisma_client.db = mock_db
+
+    # Mock Redis cache and pod_lock_manager - lock acquisition SUCCEEDS
+    mock_redis_cache = MagicMock()
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = mock_redis_cache
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)  # Lock acquired
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    test_settings = {"maximum_spend_logs_retention_period": "7d"}
+    cleaner = SpendLogCleanup(general_settings=test_settings)
+    cleaner.pod_lock_manager = mock_pod_lock_manager
+
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    # Verify lock was acquired
+    mock_pod_lock_manager.acquire_lock.assert_called_once()
+    # Verify lock WAS released after successful cleanup
+    mock_pod_lock_manager.release_lock.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_lock_released_after_exception():
+    """
+    Test that the lock IS released even when an exception occurs during cleanup,
+    but only if the lock was actually acquired.
+    """
+    mock_prisma_client = MagicMock()
+    mock_db = MagicMock()
+    mock_spendlogs = MagicMock()
+    # Simulate an exception during find_many
+    mock_spendlogs.find_many = AsyncMock(side_effect=Exception("Database error"))
+    mock_db.litellm_spendlogs = mock_spendlogs
+    mock_prisma_client.db = mock_db
+
+    # Mock Redis cache and pod_lock_manager - lock acquisition SUCCEEDS
+    mock_redis_cache = MagicMock()
+    mock_pod_lock_manager = MagicMock()
+    mock_pod_lock_manager.redis_cache = mock_redis_cache
+    mock_pod_lock_manager.acquire_lock = AsyncMock(return_value=True)  # Lock acquired
+    mock_pod_lock_manager.release_lock = AsyncMock()
+
+    test_settings = {"maximum_spend_logs_retention_period": "7d"}
+    cleaner = SpendLogCleanup(general_settings=test_settings)
+    cleaner.pod_lock_manager = mock_pod_lock_manager
+
+    # Should not raise, error is caught internally
+    await cleaner.cleanup_old_spend_logs(mock_prisma_client)
+
+    # Verify lock was acquired
+    mock_pod_lock_manager.acquire_lock.assert_called_once()
+    # Verify lock WAS released even after exception (since we acquired it)
+    mock_pod_lock_manager.release_lock.assert_called_once()

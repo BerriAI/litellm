@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching import RedisCache
 from litellm.constants import (
     SPEND_LOG_CLEANUP_BATCH_SIZE,
     SPEND_LOG_CLEANUP_JOB_NAME,
@@ -20,7 +19,7 @@ class SpendLogCleanup:
     Uses PodLockManager to ensure only one pod runs cleanup in multi-pod deployments.
     """
 
-    def __init__(self, general_settings=None, redis_cache: Optional[RedisCache] = None):
+    def __init__(self, general_settings=None):
         self.batch_size = SPEND_LOG_CLEANUP_BATCH_SIZE
         self.retention_seconds: Optional[int] = None
         from litellm.proxy.proxy_server import general_settings as default_settings
@@ -71,9 +70,9 @@ class SpendLogCleanup:
         total_deleted = 0
         run_count = 0
         while True:
-            if run_count > SPEND_LOG_RUN_LOOPS:
+            if run_count >= SPEND_LOG_RUN_LOOPS:
                 verbose_proxy_logger.info(
-                    "Max logs deleted - 1,00,000, rest of the logs will be deleted in next run"
+                    "Max logs deleted - 5,00,000, rest of the logs will be deleted in next run"
                 )
                 break
             # Step 1: Find logs to delete
@@ -110,6 +109,7 @@ class SpendLogCleanup:
         If pod_lock_manager is available, ensures only one pod runs cleanup.
         If no pod_lock_manager, runs cleanup without distributed locking.
         """
+        lock_acquired = False
         try:
             verbose_proxy_logger.info(f"Cleanup job triggered at {datetime.now()}")
 
@@ -153,8 +153,8 @@ class SpendLogCleanup:
             verbose_proxy_logger.error(f"Error during cleanup: {str(e)}")
             return  # Return after error handling
         finally:
-            # Always release the lock if we have a pod lock manager
-            if self.pod_lock_manager and self.pod_lock_manager.redis_cache:
+            # Only release the lock if we actually acquired it
+            if lock_acquired and self.pod_lock_manager and self.pod_lock_manager.redis_cache:
                 await self.pod_lock_manager.release_lock(
                     cronjob_id=SPEND_LOG_CLEANUP_JOB_NAME
                 )
