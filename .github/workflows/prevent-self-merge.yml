@@ -1,0 +1,76 @@
+name: Check CI Quality Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+jobs:
+  check-ci-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CI job status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { data: checks } = await github.rest.checks.listForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.payload.pull_request.head.sha,
+            });
+            
+            // Define required CI jobs that must pass
+            const requiredJobs = [
+              'test',  // from test-litellm.yml
+              'lint',  // from test-linting.yml (if exists)
+            ];
+            
+            console.log('=== CI Status Check ===');
+            console.log(`Total checks: ${checks.check_runs.length}`);
+            
+            let failedJobs = [];
+            let pendingJobs = [];
+            let passedJobs = [];
+            
+            checks.check_runs.forEach(check => {
+              console.log(`- ${check.name}: ${check.status} / ${check.conclusion}`);
+              
+              if (check.status === 'completed' && check.conclusion === 'failure') {
+                failedJobs.push(check.name);
+              } else if (check.status !== 'completed') {
+                pendingJobs.push(check.name);
+              } else if (check.status === 'completed' && check.conclusion === 'success') {
+                passedJobs.push(check.name);
+              }
+            });
+            
+            console.log('\n=== Summary ===');
+            console.log(`✅ Passed: ${passedJobs.length}`);
+            console.log(`⏳ Pending: ${pendingJobs.length}`);
+            console.log(`❌ Failed: ${failedJobs.length}`);
+            
+            if (failedJobs.length > 0) {
+              core.setFailed(`❌ Cannot merge: ${failedJobs.length} CI job(s) failing:\n${failedJobs.join('\n')}`);
+              return;
+            }
+            
+            if (pendingJobs.length > 0) {
+              console.log(`⏳ Warning: ${pendingJobs.length} job(s) still running. Wait for completion.`);
+            }
+            
+            // Calculate pass/fail rates
+            const totalCompleted = passedJobs.length + failedJobs.length;
+            const passRate = totalCompleted > 0 ? (passedJobs.length / totalCompleted * 100).toFixed(1) : 0;
+            const failRate = totalCompleted > 0 ? (failedJobs.length / totalCompleted * 100).toFixed(1) : 0;
+            
+            console.log(`\n📊 Pass Rate: ${passRate}%`);
+            console.log(`📊 Fail Rate: ${failRate}%`);
+            
+            // Block if 10% or more jobs fail
+            const maxFailRate = 10;
+            if (parseFloat(failRate) >= maxFailRate) {
+              core.setFailed(`❌ CI fail rate (${failRate}%) exceeds maximum threshold (${maxFailRate}%)`);
+              return;
+            }
+            
+            console.log('✅ All CI quality checks passed!');
