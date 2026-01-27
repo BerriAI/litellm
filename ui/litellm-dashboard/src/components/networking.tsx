@@ -6954,7 +6954,8 @@ export const ragIngestCall = async (
   customLlmProvider: string,
   vectorStoreId?: string,
   vectorStoreName?: string,
-  vectorStoreDescription?: string
+  vectorStoreDescription?: string,
+  providerSpecificParams?: Record<string, any>
 ): Promise<any> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
@@ -6967,6 +6968,7 @@ export const ragIngestCall = async (
         vector_store: {
           custom_llm_provider: customLlmProvider,
           ...(vectorStoreId && { vector_store_id: vectorStoreId }),
+          ...(providerSpecificParams && providerSpecificParams),
         },
       },
     };

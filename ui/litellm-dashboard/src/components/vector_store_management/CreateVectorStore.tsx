@@ -10,8 +10,11 @@ import {
   VectorStoreProviders,
   vectorStoreProviderLogoMap,
   vectorStoreProviderMap,
+  getProviderSpecificFields,
+  VectorStoreFieldConfig,
 } from "../vector_store_providers";
 import NotificationsManager from "../molecules/notifications_manager";
+import S3VectorsConfig from "./S3VectorsConfig";
 
 const { Dragger } = Upload;
 
@@ -28,6 +31,7 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
   const [vectorStoreName, setVectorStoreName] = useState<string>("");
   const [vectorStoreDescription, setVectorStoreDescription] = useState<string>("");
   const [ingestResults, setIngestResults] = useState<RAGIngestResponse[]>([]);
+  const [providerParams, setProviderParams] = useState<Record<string, any>>({});
 
   const uploadProps: UploadProps = {
     name: "file",
@@ -92,6 +96,15 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       return;
     }
 
+    // Validate provider-specific required fields
+    const requiredFields = getProviderSpecificFields(selectedProvider).filter((field) => field.required);
+    for (const field of requiredFields) {
+      if (!providerParams[field.name]) {
+        message.warning(`Please provide ${field.label}`);
+        return;
+      }
+    }
+
     if (!accessToken) {
       message.error("No access token available");
       return;
@@ -118,7 +131,8 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
             selectedProvider,
             vectorStoreId, // Use the same vector store ID for subsequent uploads
             vectorStoreName || undefined,
-            vectorStoreDescription || undefined
+            vectorStoreDescription || undefined,
+            providerParams
           );
 
           // Store the vector store ID from the first successful ingest
@@ -298,6 +312,74 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
                 })}
               </Select>
             </Form.Item>
+
+            {/* S3 Vectors Configuration */}
+            {selectedProvider === "s3_vectors" && (
+              <S3VectorsConfig
+                accessToken={accessToken}
+                providerParams={providerParams}
+                onParamsChange={setProviderParams}
+              />
+            )}
+
+            {/* Other Provider-specific fields */}
+            {selectedProvider !== "s3_vectors" &&
+              getProviderSpecificFields(selectedProvider).map((field: VectorStoreFieldConfig) => {
+                if (field.type === "select") {
+                  // For embedding model selection, we'd need to fetch available models
+                  // For now, provide a text input as fallback
+                  return (
+                    <Form.Item
+                      key={field.name}
+                      label={
+                        <span>
+                          {field.label}{" "}
+                          <Tooltip title={field.tooltip}>
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </Tooltip>
+                        </span>
+                      }
+                      required={field.required}
+                    >
+                      <Input
+                        value={providerParams[field.name] || ""}
+                        onChange={(e) =>
+                          setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
+                        }
+                        placeholder={field.placeholder}
+                        size="large"
+                        className="rounded-md"
+                      />
+                    </Form.Item>
+                  );
+                }
+
+                return (
+                  <Form.Item
+                    key={field.name}
+                    label={
+                      <span>
+                        {field.label}{" "}
+                        <Tooltip title={field.tooltip}>
+                          <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                        </Tooltip>
+                      </span>
+                    }
+                    required={field.required}
+                  >
+                    <Input
+                      type={field.type === "password" ? "password" : "text"}
+                      value={providerParams[field.name] || ""}
+                      onChange={(e) =>
+                        setProviderParams((prev) => ({ ...prev, [field.name]: e.target.value }))
+                      }
+                      placeholder={field.placeholder}
+                      size="large"
+                      className="rounded-md"
+                    />
+                  </Form.Item>
+                );
+              })}
           </Form>
 
           <div className="flex justify-end">
