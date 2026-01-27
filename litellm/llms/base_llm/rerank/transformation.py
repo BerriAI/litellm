@@ -52,8 +52,8 @@ class BaseRerankConfig(ABC):
 
     @abstractmethod
     def get_complete_url(
-        self, 
-        api_base: Optional[str], 
+        self,
+        api_base: Optional[str],
         model: str,
         optional_params: Optional[dict] = None,
     ) -> str:
@@ -132,3 +132,12 @@ class BaseRerankConfig(ABC):
         prompt_cost = model_info["input_cost_per_query"] * search_units
 
         return prompt_cost, 0.0
+
+    def get_json_dumps_params(self) -> dict:
+        """
+        Get the parameters to pass to json.dumps() when serializing the request body.
+
+        Returns:
+            dict - the parameters to pass to json.dumps()
+        """
+        return {}
