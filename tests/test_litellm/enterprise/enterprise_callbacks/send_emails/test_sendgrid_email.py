@@ -2,7 +2,9 @@ import os
 import sys
 import unittest.mock as mock
 
+import httpx
 import pytest
+import respx
 from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../../.."))
@@ -101,7 +103,13 @@ async def test_send_email_missing_api_key():
 
 
 @pytest.mark.asyncio
+@respx.mock
 async def test_send_email_multiple_recipients(mock_env_vars, mock_httpx_client):
+    # Block all HTTP requests at network level to prevent real API calls
+    respx.post("https://api.sendgrid.com/v3/mail/send").mock(
+        return_value=httpx.Response(202, text="accepted")
+    )
+    
     logger = SendGridEmailLogger()
 
     from_email = "test@example.com"
