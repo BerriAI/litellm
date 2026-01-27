@@ -119,8 +119,12 @@ def test_add_vector_store_to_registry():
 
 
 
+@respx.mock
 def test_search_uses_registry_credentials():
     """search() should pull credentials from vector_store_registry when available"""
+    # Block all HTTP requests at the network level to prevent real API calls
+    respx.route().mock(return_value=httpx.Response(200, json={"object": "list", "data": []}))
+    
     vector_store = LiteLLM_ManagedVectorStore(
         vector_store_id="vs1",
         custom_llm_provider="bedrock",
