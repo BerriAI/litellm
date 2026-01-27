@@ -73,7 +73,11 @@ if MCP_AVAILABLE:
         AuthContextMiddleware,
         auth_context_var,
     )
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    try:
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    except ImportError:
+        StreamableHTTPSessionManager = None  # type: ignore
     from mcp.types import (
         CallToolResult,
         EmbeddedResource,
