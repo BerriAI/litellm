@@ -1580,5 +1580,6 @@ async def test_rag_ingest_updates_existing_vector_store_metadata():
     assert "file_old_456" in file_ids
     assert "file_new_789" in file_ids
     
-    # Verify registry was updated
-    mock_registry.update_vector_store_in_registry.assert_called_once()
+    # Note: Registry is NOT updated for existing vector stores - only the database is updated
+    # The vector store already exists in the registry, so we only need to update the DB
+    mock_registry.update_vector_store_in_registry.assert_not_called()
