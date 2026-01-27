@@ -708,10 +708,11 @@ def responses(
             )
         except Exception as e:
             status_code = getattr(e, "status_code", None)
-            if (
-                custom_llm_provider == litellm.LlmProviders.HOSTED_VLLM.value
+            should_fallback = (
+                getattr(responses_api_provider_config, "supports_fallback_to_chat", False)
                 and status_code in {404, 405, 501}
-            ):
+            )
+            if should_fallback:
                 return litellm_completion_transformation_handler.response_api_handler(
                     model=model,
                     input=input,
