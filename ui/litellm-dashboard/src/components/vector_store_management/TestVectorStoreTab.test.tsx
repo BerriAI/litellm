@@ -83,7 +83,8 @@ describe("TestVectorStoreTab", () => {
     const selectElement = screen.getByRole("combobox");
     fireEvent.mouseDown(selectElement);
 
-    expect(screen.getByText("Test Store 1")).toBeInTheDocument();
+    // Use getAllByText since the selected value also shows the name
+    expect(screen.getAllByText("Test Store 1").length).toBeGreaterThan(0);
     expect(screen.getByText("Test Store 2")).toBeInTheDocument();
   });
 });

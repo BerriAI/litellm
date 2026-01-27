@@ -70,7 +70,7 @@ describe("DocumentsTable", () => {
     const onRemove = vi.fn();
     render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
 
-    const deleteButtons = screen.getAllByLabelText(/remove/i);
+    const deleteButtons = screen.getAllByLabelText(/delete/i);
 
     act(() => {
       fireEvent.click(deleteButtons[0]);
@@ -91,9 +91,9 @@ describe("DocumentsTable", () => {
     render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
 
     // Each document should have 3 action buttons (view, copy, delete)
-    const viewButtons = screen.getAllByLabelText(/view details/i);
-    const copyButtons = screen.getAllByLabelText(/copy id/i);
-    const deleteButtons = screen.getAllByLabelText(/remove/i);
+    const viewButtons = screen.getAllByLabelText(/eye/i);
+    const copyButtons = screen.getAllByLabelText(/copy/i);
+    const deleteButtons = screen.getAllByLabelText(/delete/i);
 
     expect(viewButtons).toHaveLength(3);
     expect(copyButtons).toHaveLength(3);
