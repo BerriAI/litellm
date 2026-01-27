@@ -771,7 +771,9 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## LAZY LOAD COROUTINE CHECKER ##
-        get_coroutine_checker_fn = getattr(sys.modules[__name__], "get_coroutine_checker")
+        get_coroutine_checker_fn = getattr(
+            sys.modules[__name__], "get_coroutine_checker"
+        )
         coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
@@ -1670,8 +1672,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1716,8 +1718,8 @@ def client(original_function):  # noqa: PLR0915
                     None  # set retries to None to prevent infinite loops
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
                 if (
                     num_retries and not _is_litellm_router_call
@@ -1966,8 +1968,8 @@ def client(original_function):  # noqa: PLR0915
                     "context_window_fallback_dict", {}
                 )
 
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -2000,8 +2002,8 @@ def client(original_function):  # noqa: PLR0915
                         kwargs["model"] = context_window_fallback_dict[model]
                     return await original_function(*args, **kwargs)
             elif call_type == CallTypes.aresponses.value:
-                _is_litellm_router_call = "model_group" in kwargs.get(
-                    "metadata", {}
+                _is_litellm_router_call = "model_group" in (
+                    kwargs.get("metadata") or {}
                 )  # check if call from litellm.router/proxy
 
                 if (
@@ -7714,25 +7716,29 @@ def validate_chat_completion_tool_choice(
         f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
     )
 
-def validate_openai_optional_params(  
-    stop: Optional[Union[str, List[str]]] = None,  
-    **kwargs  
-) -> Optional[Union[str, List[str]]]:  
-    """  
-    Validates and fixes OpenAI optional parameters.  
-      
-    Args:  
-        stop: Stop sequences (string or list of strings)  
-        **kwargs: Additional optional parameters  
-          
-    Returns:  
-        Validated stop parameter (truncated to 4 elements if needed)  
-    """  
-    if stop is not None and isinstance(stop, list) and not litellm.disable_stop_sequence_limit:  
+
+def validate_openai_optional_params(
+    stop: Optional[Union[str, List[str]]] = None, **kwargs
+) -> Optional[Union[str, List[str]]]:
+    """
+    Validates and fixes OpenAI optional parameters.
+
+    Args:
+        stop: Stop sequences (string or list of strings)
+        **kwargs: Additional optional parameters
+
+    Returns:
+        Validated stop parameter (truncated to 4 elements if needed)
+    """
+    if (
+        stop is not None
+        and isinstance(stop, list)
+        and not litellm.disable_stop_sequence_limit
+    ):
         # Truncate to 4 elements if more are provided as openai only supports up to 4 stop sequences
-        if len(stop) > 4:  
-            stop = stop[:4]  
-      
+        if len(stop) > 4:
+            stop = stop[:4]
+
     return stop
 
 
