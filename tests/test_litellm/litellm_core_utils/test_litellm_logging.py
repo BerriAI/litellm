@@ -1132,3 +1132,80 @@ def test_per_callback_redaction_proceeds_when_global_redaction_not_applied():
 
     # Result should be different (redacted), not the same object
     assert result is not original_result
+
+
+def test_method_override_detection_walks_full_mro():
+    """
+    Test that method override detection correctly walks the full Method Resolution Order (MRO),
+    not just the immediate class's __dict__.
+
+    This tests the fix for a bug where:
+    - `method_name in type(self).__dict__` only checks the immediate class
+    - `getattr(type(self), method_name) is not getattr(CustomLogger, method_name)` walks the full MRO
+
+    The bug caused incorrect behavior when:
+    - ClassA(CustomLogger) overrides a method
+    - ClassB(ClassA) does NOT override the method
+    - ClassB instance should still detect the override from ClassA
+    """
+    from litellm.integrations.custom_logger import CustomLogger
+
+    # Case 1: Direct override - should be detected
+    class DirectOverrideLogger(CustomLogger):
+        def redact_standard_logging_payload_from_model_call_details(
+            self, model_call_details, global_redaction_applied=False
+        ):
+            # Custom implementation
+            return {"custom": "redacted"}
+
+    direct_logger = DirectOverrideLogger()
+    method_name = "redact_standard_logging_payload_from_model_call_details"
+
+    # Using the correct MRO-aware check
+    is_overridden_mro = getattr(type(direct_logger), method_name) is not getattr(
+        CustomLogger, method_name
+    )
+    assert is_overridden_mro is True, "Direct override should be detected"
+
+    # Case 2: Inherited override (the bug case) - should also be detected
+    class InheritedOverrideLogger(DirectOverrideLogger):
+        # Does NOT override the method - inherits from DirectOverrideLogger
+        pass
+
+    inherited_logger = InheritedOverrideLogger()
+
+    # The buggy check (only checks immediate class __dict__) would return False
+    buggy_check = method_name in type(inherited_logger).__dict__
+    assert buggy_check is False, "Buggy check incorrectly misses inherited override"
+
+    # The correct MRO-aware check should return True
+    is_overridden_mro = getattr(type(inherited_logger), method_name) is not getattr(
+        CustomLogger, method_name
+    )
+    assert is_overridden_mro is True, "MRO check should detect inherited override"
+
+    # Case 3: No override - should NOT be detected as overridden
+    class NoOverrideLogger(CustomLogger):
+        # Does NOT override the method
+        pass
+
+    no_override_logger = NoOverrideLogger()
+    is_overridden_mro = getattr(type(no_override_logger), method_name) is not getattr(
+        CustomLogger, method_name
+    )
+    assert is_overridden_mro is False, "No override should not be detected"
+
+    # Case 4: Verify actual behavior - inherited override should NOT skip redaction
+    model_call_details = {
+        "messages": [{"content": "secret"}],
+        "standard_logging_object": {"response": "sensitive"},
+    }
+
+    # With global_redaction_applied=True and an inherited override,
+    # the method should NOT early-return (should proceed to custom implementation)
+    result = inherited_logger.redact_standard_logging_payload_from_model_call_details(
+        model_call_details=model_call_details,
+        global_redaction_applied=True,
+    )
+    # DirectOverrideLogger returns {"custom": "redacted"}
+    assert result == {"custom": "redacted"}, "Inherited override should execute custom logic"
