@@ -8,6 +8,26 @@ def test_provider_config_manager_returns_responses_config_for_hosted_vllm():
         model="gpt-oss-120b",
     )
     assert cfg is not None
+    assert cfg.__class__.__name__ == "HostedVLLMResponsesAPIConfig"
+    assert getattr(cfg, "supports_fallback_to_chat", False) is True
+
+
+def test_hosted_vllm_responses_config_does_not_require_api_key(monkeypatch):
+    from litellm.llms.hosted_vllm.responses.transformation import (
+        HostedVLLMResponsesAPIConfig,
+    )
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+
+    cfg = HostedVLLMResponsesAPIConfig()
+    headers = cfg.validate_environment(
+        headers={},
+        model="gpt-oss-120b",
+        litellm_params=GenericLiteLLMParams(),
+    )
+
+    assert headers.get("Authorization") == "Bearer fake-api-key"
 
 
 def test_hosted_vllm_responses_uses_native_http_handler(monkeypatch):
