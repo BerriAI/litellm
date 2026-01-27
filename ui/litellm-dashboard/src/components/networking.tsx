@@ -6994,6 +6994,73 @@ export const leaderboardCall = async (
   }
 };
 
+// User-count based analytics (not broken down by user-agent tag)
+export const userDauCall = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string,
+  custom_llm_provider?: string,
+) => {
+  /**
+   * Get daily unique user count (not broken down by user-agent)
+   */
+  try {
+    return await apiClient.get(`/user/dau`, {
+      accessToken,
+      query: {
+        start_date: startDate || undefined,
+        end_date: endDate || undefined,
+        custom_llm_provider: custom_llm_provider || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch user DAU:", error);
+    throw error;
+  }
+};
+
+export const userWauCall = async (
+  accessToken: string,
+  custom_llm_provider?: string,
+) => {
+  /**
+   * Get weekly unique user count for the last 7 weeks (not broken down by user-agent)
+   */
+  try {
+    return await apiClient.get(`/user/wau`, {
+      accessToken,
+      query: {
+        custom_llm_provider: custom_llm_provider || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch user WAU:", error);
+    throw error;
+  }
+};
+
+export const userMauCall = async (
+  accessToken: string,
+  months: number = 7,
+  custom_llm_provider?: string,
+) => {
+  /**
+   * Get monthly unique user count for the last N months (not broken down by user-agent)
+   */
+  try {
+    return await apiClient.get(`/user/mau`, {
+      accessToken,
+      query: {
+        months: months.toString(),
+        custom_llm_provider: custom_llm_provider || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch user MAU:", error);
+    throw error;
+  }
+};
+
 export interface LoginRequest {
   username: string;
   password: string;
