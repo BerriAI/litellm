@@ -351,9 +351,9 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     # Skip callable objects (functions, methods, lambdas) but not classes (type objects)
     if callable(data) and not isinstance(data, type):
         return None
-    # Skip known non-serializable object types (Logging, etc.)
+    # Skip known non-serializable object types (Logging, Router, etc.)
     obj_type_name = type(data).__name__
-    if obj_type_name in ["Logging", "LiteLLMLoggingObj"]:
+    if obj_type_name in ["Logging", "LiteLLMLoggingObj", "Router"]:
         return None
 
     if isinstance(data, dict):

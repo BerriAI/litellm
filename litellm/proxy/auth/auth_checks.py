@@ -21,6 +21,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.dual_cache import LimitedSizeOrderedDict
 from litellm.constants import (
+    CLI_JWT_EXPIRATION_HOURS,
+    CLI_JWT_TOKEN_NAME,
     DEFAULT_IN_MEMORY_TTL,
     DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL,
     DEFAULT_MAX_RECURSE_DEPTH,
@@ -1602,7 +1604,10 @@ class ExperimentalUIJWTToken:
         user_info: LiteLLM_UserTable, team_id: Optional[str] = None
     ) -> str:
         """
-        Generate a JWT token for CLI authentication with 24-hour expiration.
+        Generate a JWT token for CLI authentication with configurable expiration.
+
+        The expiration time can be controlled via the LITELLM_CLI_JWT_EXPIRATION_HOURS
+        environment variable (defaults to 24 hours).
 
         Args:
             user_info: User information from the database
@@ -1613,7 +1618,6 @@ class ExperimentalUIJWTToken:
         """
         from datetime import timedelta
 
-        from litellm.constants import CLI_JWT_TOKEN_NAME
         from litellm.proxy.common_utils.encrypt_decrypt_utils import (
             encrypt_value_helper,
         )
@@ -1621,8 +1625,8 @@ class ExperimentalUIJWTToken:
         if user_info.user_role is None:
             raise Exception("User role is required for CLI JWT login")
 
-        # Calculate expiration time (24 hours from now - matching old CLI key behavior)
-        expiration_time = get_utc_datetime() + timedelta(hours=24)
+        # Calculate expiration time (configurable via LITELLM_CLI_JWT_EXPIRATION_HOURS env var)
+        expiration_time = get_utc_datetime() + timedelta(hours=CLI_JWT_EXPIRATION_HOURS)
 
         # Format the expiration time as ISO 8601 string
         expires = expiration_time.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "+00:00"
