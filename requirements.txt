@@ -32,7 +32,7 @@ polars==1.31.0 # for data processing
 apscheduler==3.10.4 # for resetting budget in background
 fastapi-sso==0.19.0 # admin UI, SSO
 pyjwt[crypto]==2.10.1 ; python_version >= "3.9"
-python-multipart==0.0.18 # admin UI
+python-multipart==0.0.22 # admin UI
 Pillow==11.0.0
 jaraco.context>=6.1.0
 azure-ai-contentsafety==1.0.0 # for azure content safety
