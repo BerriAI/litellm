@@ -18,7 +18,7 @@ jobs:
               let previousCount = 0;
               let stableCount = 0;
               const expectedJobCount = 55; // Expected number of CI jobs
-              const maxWaitMinutes = 5;
+              const maxWaitMinutes = 15;
               const checkIntervalSeconds = 30;
               const checksNeeded = 3; // Jobs must remain stable for 3 checks
               
