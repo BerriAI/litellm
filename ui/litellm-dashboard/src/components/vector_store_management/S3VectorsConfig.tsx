@@ -79,17 +79,27 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
         label={
           <span>
             Vector Bucket Name{" "}
-            <Tooltip title="S3 bucket name for vector storage (will be auto-created if it doesn't exist)">
+            <Tooltip title="S3 bucket name for vector storage (must be at least 3 characters, lowercase letters, numbers, hyphens, and periods only)">
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
         }
         required
+        validateStatus={
+          providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3
+            ? "error"
+            : undefined
+        }
+        help={
+          providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3
+            ? "Bucket name must be at least 3 characters"
+            : undefined
+        }
       >
         <Input
           value={providerParams.vector_bucket_name || ""}
           onChange={(e) => handleFieldChange("vector_bucket_name", e.target.value)}
-          placeholder="my-vector-bucket"
+          placeholder="my-vector-bucket (min 3 chars)"
           size="large"
           className="rounded-md"
         />
@@ -100,16 +110,26 @@ const S3VectorsConfig: React.FC<S3VectorsConfigProps> = ({
         label={
           <span>
             Index Name{" "}
-            <Tooltip title="Name for the vector index (optional, will be auto-generated if not provided)">
+            <Tooltip title="Name for the vector index (optional, will be auto-generated if not provided). If provided, must be at least 3 characters.">
               <InfoCircleOutlined style={{ marginLeft: "4px" }} />
             </Tooltip>
           </span>
+        }
+        validateStatus={
+          providerParams.index_name && providerParams.index_name.length > 0 && providerParams.index_name.length < 3
+            ? "error"
+            : undefined
+        }
+        help={
+          providerParams.index_name && providerParams.index_name.length > 0 && providerParams.index_name.length < 3
+            ? "Index name must be at least 3 characters if provided"
+            : undefined
         }
       >
         <Input
           value={providerParams.index_name || ""}
           onChange={(e) => handleFieldChange("index_name", e.target.value)}
-          placeholder="my-vector-index"
+          placeholder="my-vector-index (optional, min 3 chars)"
           size="large"
           className="rounded-md"
         />

@@ -105,6 +105,18 @@ const CreateVectorStore: React.FC<CreateVectorStoreProps> = ({ accessToken, onSu
       }
     }
 
+    // S3 Vectors specific validation
+    if (selectedProvider === "s3_vectors") {
+      if (providerParams.vector_bucket_name && providerParams.vector_bucket_name.length < 3) {
+        message.warning("Vector bucket name must be at least 3 characters");
+        return;
+      }
+      if (providerParams.index_name && providerParams.index_name.length > 0 && providerParams.index_name.length < 3) {
+        message.warning("Index name must be at least 3 characters if provided");
+        return;
+      }
+    }
+
     if (!accessToken) {
       message.error("No access token available");
       return;
