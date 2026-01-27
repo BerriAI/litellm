@@ -1707,8 +1707,11 @@ class Router:
 
         litellm_params = deployment.get("litellm_params", {})
         dep_num_retries = litellm_params.get("num_retries")
-        if dep_num_retries is not None and isinstance(dep_num_retries, int):
-            exception.num_retries = dep_num_retries  # type: ignore
+        if dep_num_retries is not None:
+            try:
+                exception.num_retries = int(dep_num_retries)  # type: ignore  # Handle both int and str
+            except (ValueError, TypeError):
+                pass  # Skip if value can't be converted to int
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"

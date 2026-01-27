@@ -279,3 +279,188 @@ def test_output_format_with_no_schema():
     # Content should remain as string (not converted to list)
     assert isinstance(last_user_message["content"], str)
     assert last_user_message["content"] == "Hello"
+
+
+def test_advanced_tool_use_header_translation_for_opus_4_5():
+    """
+    Test that advanced-tool-use-2025-11-20 header is translated to Bedrock-specific headers
+    for Claude Opus 4.5.
+    
+    Regression test for: Claude Code sends advanced-tool-use header which needs to be
+    translated to tool-search-tool-2025-10-19 and tool-examples-2025-10-29 for Bedrock
+    Invoke API on Claude Opus 4.5.
+    
+    Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    
+    config = AmazonAnthropicClaudeMessagesConfig()
+    
+    messages = [
+        {"role": "user", "content": "What's the weather like?"}
+    ]
+    
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 100,
+    }
+    
+    # Simulate advanced-tool-use header from Claude Code
+    headers = {
+        "anthropic-beta": "advanced-tool-use-2025-11-20"
+    }
+    
+    # Test with Claude Opus 4.5
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-5-20250514-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers=headers,
+    )
+    
+    # Verify advanced-tool-use header was removed
+    assert "anthropic_beta" in result
+    beta_headers = result["anthropic_beta"]
+    assert "advanced-tool-use-2025-11-20" not in beta_headers, \
+        "advanced-tool-use header should be removed for Bedrock"
+    
+    # Verify Bedrock-specific headers were added
+    assert "tool-search-tool-2025-10-19" in beta_headers, \
+        "tool-search-tool-2025-10-19 should be added for Opus 4.5"
+    assert "tool-examples-2025-10-29" in beta_headers, \
+        "tool-examples-2025-10-29 should be added for Opus 4.5"
+
+
+def test_advanced_tool_use_header_filtered_for_non_opus_4_5():
+    """
+    Test that advanced-tool-use-2025-11-20 header is filtered out for non-Opus 4.5 models
+    without adding Bedrock-specific headers.
+    
+    The translation to tool-search-tool-2025-10-19 and tool-examples-2025-10-29 should
+    only happen for Claude Opus 4.5.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    
+    config = AmazonAnthropicClaudeMessagesConfig()
+    
+    messages = [
+        {"role": "user", "content": "What's the weather like?"}
+    ]
+    
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 100,
+    }
+    
+    # Simulate advanced-tool-use header from Claude Code
+    headers = {
+        "anthropic-beta": "advanced-tool-use-2025-11-20"
+    }
+    
+    # Test with Claude Sonnet 4.5 (not Opus 4.5)
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers=headers,
+    )
+    
+    # Verify advanced-tool-use header was removed
+    beta_headers = result.get("anthropic_beta", [])
+    assert "advanced-tool-use-2025-11-20" not in beta_headers, \
+        "advanced-tool-use header should be removed for Bedrock"
+    
+    # Verify Bedrock-specific headers were NOT added (only for Opus 4.5)
+    assert "tool-search-tool-2025-10-19" not in beta_headers, \
+        "tool-search-tool should not be added for non-Opus 4.5 models"
+    assert "tool-examples-2025-10-29" not in beta_headers, \
+        "tool-examples should not be added for non-Opus 4.5 models"
+
+
+def test_advanced_tool_use_header_translation_with_multiple_beta_headers():
+    """
+    Test that advanced-tool-use header translation works correctly when multiple
+    beta headers are present.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    
+    config = AmazonAnthropicClaudeMessagesConfig()
+    
+    messages = [
+        {"role": "user", "content": "What's the weather like?"}
+    ]
+    
+    anthropic_messages_optional_request_params = {
+        "max_tokens": 100,
+    }
+    
+    # Multiple beta headers including advanced-tool-use
+    headers = {
+        "anthropic-beta": "claude-code-20250219,advanced-tool-use-2025-11-20,interleaved-thinking-2025-05-14"
+    }
+    
+    # Test with Claude Opus 4.5
+    result = config.transform_anthropic_messages_request(
+        model="anthropic.claude-opus-4-5-20250514-v1:0",
+        messages=messages,
+        anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
+        litellm_params={},
+        headers=headers,
+    )
+    
+    beta_headers = result.get("anthropic_beta", [])
+    
+    # Verify advanced-tool-use was removed
+    assert "advanced-tool-use-2025-11-20" not in beta_headers
+    
+    # Verify Bedrock-specific headers were added
+    assert "tool-search-tool-2025-10-19" in beta_headers
+    assert "tool-examples-2025-10-29" in beta_headers
+    
+    # Verify other beta headers are preserved
+    assert "claude-code-20250219" in beta_headers
+    assert "interleaved-thinking-2025-05-14" in beta_headers
+
+
+def test_opus_4_5_model_detection():
+    """
+    Test that the _is_claude_opus_4_5 method correctly identifies Opus 4.5 models
+    with various naming conventions.
+    """
+    from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
+        AmazonAnthropicClaudeMessagesConfig,
+    )
+    
+    config = AmazonAnthropicClaudeMessagesConfig()
+    
+    # Test various Opus 4.5 naming patterns
+    opus_4_5_models = [
+        "anthropic.claude-opus-4-5-20250514-v1:0",
+        "anthropic.claude-opus-4.5-20250514-v1:0",
+        "anthropic.claude-opus_4_5-20250514-v1:0",
+        "anthropic.claude-opus_4.5-20250514-v1:0",
+        "us.anthropic.claude-opus-4-5-20250514-v1:0",
+        "ANTHROPIC.CLAUDE-OPUS-4-5-20250514-V1:0",  # Case insensitive
+    ]
+    
+    for model in opus_4_5_models:
+        assert config._is_claude_opus_4_5(model), \
+            f"Should detect {model} as Opus 4.5"
+    
+    # Test non-Opus 4.5 models
+    non_opus_4_5_models = [
+        "anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "anthropic.claude-opus-4-20250514-v1:0",  # Opus 4, not 4.5
+        "anthropic.claude-opus-4-1-20250514-v1:0",  # Opus 4.1, not 4.5
+        "anthropic.claude-haiku-4-5-20251001-v1:0",
+    ]
+    
+    for model in non_opus_4_5_models:
+        assert not config._is_claude_opus_4_5(model), \
+            f"Should not detect {model} as Opus 4.5"
