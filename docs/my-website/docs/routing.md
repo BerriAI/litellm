@@ -828,7 +828,12 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
-</Tabs>
+
+## Traffic Mirroring / Silent Experiments
+
+Traffic mirroring allows you to "mimic" production traffic to a secondary (silent) model for evaluation purposes. The silent model's response is gathered in the background and does not affect the latency or result of the primary request.
+
+[**See detailed guide on A/B Testing - Traffic Mirroring here**](./traffic_mirroring.md)
 
 ## Basic Reliability
 
