@@ -57,9 +57,13 @@ def set_anthropic_headers(api_key: str, headers: Optional[dict] = None) -> dict:
     """
     result = dict(headers) if headers else {}
     if is_anthropic_oauth_key(api_key):
-        result["authorization"] = f"Bearer {api_key}"
+        if api_key.lower().startswith("bearer "):
+            result["authorization"] = api_key
+        else:
+            result["authorization"] = f"Bearer {api_key}"
     else:
         result["x-api-key"] = api_key
+        
     return result
 
 
