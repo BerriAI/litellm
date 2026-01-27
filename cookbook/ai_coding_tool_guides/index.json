@@ -131,4 +131,19 @@
         "Claude Code",
         "LiteLLM"
     ]
+}, 
+{
+    "title": "Stream OpenAI/Anthropic/Gemini/etc. in Ruby",
+    "description": "This is a guide to streaming OpenAI/Anthropic/Gemini/etc. in Ruby or other single-threaded frameworks.",
+    "url": "https://docs.litellm.ai/docs/guides/anthropic_background_mode",
+    "date": "2026-01-22",
+    "version": "1.0.0",
+    "tags": [
+        "OpenAI",
+        "Anthropic",
+        "Gemini",
+        "Ruby",
+        "Responses API", 
+        "Streaming"
+    ]
 }]

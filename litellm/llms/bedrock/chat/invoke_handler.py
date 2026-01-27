@@ -6,15 +6,7 @@ import copy
 import time
 import types
 from functools import partial
-from typing import (
-    AsyncIterator,
-    Callable,
-    Iterator,
-    Optional,
-    Tuple,
-    cast,
-    get_args,
-)
+from typing import AsyncIterator, Callable, Iterator, Optional, Tuple, cast, get_args
 
 import httpx  # type: ignore
 
@@ -22,6 +14,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import InMemoryCache
+from litellm.constants import LITELLM_CONSTANT_STREAM_CHUNK_SIZE
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
@@ -51,11 +44,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
     ChatCompletionUsageBlock,
 )
-from litellm.types.utils import (
-    ChatCompletionMessageToolCall,
-    Choices,
-    Delta,
-)
+from litellm.types.utils import ChatCompletionMessageToolCall, Choices, Delta
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import (
     ModelResponse,
@@ -192,17 +181,19 @@ async def make_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: int = LITELLM_CONSTANT_STREAM_CHUNK_SIZE,
 ):
     try:
         if client is None:
             client = get_async_httpx_client(
                 llm_provider=litellm.LlmProviders.BEDROCK,
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None,
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                ),
             )  # Create a new client if none provided
 
         response = await client.post(
@@ -287,16 +278,18 @@ def make_sync_call(
     fake_stream: bool = False,
     json_mode: Optional[bool] = False,
     bedrock_invoke_provider: Optional[litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL] = None,
-    stream_chunk_size: int = 1024,
+    stream_chunk_size: int = LITELLM_CONSTANT_STREAM_CHUNK_SIZE,
 ):
     try:
         if client is None:
             client = _get_httpx_client(
-                params={"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
-                if logging_obj
-                and logging_obj.litellm_params
-                and logging_obj.litellm_params.get("ssl_verify")
-                else None
+                params=(
+                    {"ssl_verify": logging_obj.litellm_params.get("ssl_verify")}
+                    if logging_obj
+                    and logging_obj.litellm_params
+                    and logging_obj.litellm_params.get("ssl_verify")
+                    else None
+                )
             )
 
         response = client.post(
@@ -406,9 +399,9 @@ class BedrockLLM(BaseAWSLLM):
 
         # Claude 3+ indicators (all use Messages API)
         messages_api_indicators = [
-            "claude-3",      # Claude 3.x models
-            "claude-opus-4", # Claude Opus 4
-            "claude-sonnet-4", # Claude Sonnet 4
+            "claude-3",  # Claude 3.x models
+            "claude-opus-4",  # Claude Opus 4
+            "claude-sonnet-4",  # Claude Sonnet 4
             "claude-haiku-4",  # Claude Haiku 4
         ]
 
@@ -546,9 +539,9 @@ class BedrockLLM(BaseAWSLLM):
                             content=None,
                         )
                         model_response.choices[0].message = _message  # type: ignore
-                        model_response._hidden_params[
-                            "original_response"
-                        ] = outputText  # allow user to access raw anthropic tool calling response
+                        model_response._hidden_params["original_response"] = (
+                            outputText  # allow user to access raw anthropic tool calling response
+                        )
                     if (
                         _is_function_call is True
                         and stream is not None
@@ -559,8 +552,10 @@ class BedrockLLM(BaseAWSLLM):
                         )
                         # return an iterator
                         streaming_model_response = ModelResponse(stream=True)
-                        streaming_model_response.choices[0].finish_reason = getattr(
-                            model_response.choices[0], "finish_reason", "stop"
+                        cast(
+                            Choices, streaming_model_response.choices[0]
+                        ).finish_reason = map_finish_reason(
+                            getattr(model_response.choices[0], "finish_reason", "stop")
                         )
                         # streaming_model_response.choices = [litellm.utils.StreamingChoices()]
                         streaming_choice = litellm.utils.StreamingChoices()
@@ -605,8 +600,8 @@ class BedrockLLM(BaseAWSLLM):
                                 logging_obj=logging_obj,
                             )
 
-                    model_response.choices[0].finish_reason = map_finish_reason(
-                        completion_response.get("stop_reason", "")
+                    cast(Choices, model_response.choices[0]).finish_reason = (
+                        map_finish_reason(completion_response.get("stop_reason", ""))
                     )
                     _usage = litellm.Usage(
                         prompt_tokens=completion_response["usage"]["input_tokens"],
@@ -641,8 +636,8 @@ class BedrockLLM(BaseAWSLLM):
 
                     # Set finish reason
                     if "finish_reason" in choice:
-                        model_response.choices[0].finish_reason = map_finish_reason(
-                            choice["finish_reason"]
+                        cast(Choices, model_response.choices[0]).finish_reason = (
+                            map_finish_reason(choice["finish_reason"])
                         )
 
                     # Set usage if available
@@ -781,7 +776,9 @@ class BedrockLLM(BaseAWSLLM):
 
         ## SETUP ##
         stream = optional_params.pop("stream", None)
-        stream_chunk_size = optional_params.pop("stream_chunk_size", 1024)
+        stream_chunk_size = optional_params.pop(
+            "stream_chunk_size", LITELLM_CONSTANT_STREAM_CHUNK_SIZE
+        )
 
         provider = self.get_bedrock_invoke_provider(model)
         modelId = self.get_bedrock_model_id(
@@ -881,9 +878,9 @@ class BedrockLLM(BaseAWSLLM):
                     ):  # completion(top_k=3) > anthropic_config(top_k=3) <- allows for dynamic variables to be passed in
                         inference_params[k] = v
                 if stream is True:
-                    inference_params[
-                        "stream"
-                    ] = True  # cohere requires stream = True in inference params
+                    inference_params["stream"] = (
+                        True  # cohere requires stream = True in inference params
+                    )
                 data = json.dumps({"prompt": prompt, **inference_params})
         elif provider == "anthropic":
             if self.is_claude_messages_api_model(model):
@@ -1222,7 +1219,7 @@ class BedrockLLM(BaseAWSLLM):
         logger_fn=None,
         headers={},
         client: Optional[AsyncHTTPHandler] = None,
-        stream_chunk_size: int = 1024,
+        stream_chunk_size: int = LITELLM_CONSTANT_STREAM_CHUNK_SIZE,
     ) -> CustomStreamWrapper:
         # The call is not made here; instead, we prepare the necessary objects for the stream.
 

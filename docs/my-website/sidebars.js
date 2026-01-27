@@ -860,6 +860,7 @@ const sidebars = {
         "completion/batching",
         "guides/finetuned_models",
         "guides/security_settings",
+        "guides/anthropic_background_mode",
         "proxy/veo_video_generation",
         "reasoning_content",
         "extras/creating_adapters",

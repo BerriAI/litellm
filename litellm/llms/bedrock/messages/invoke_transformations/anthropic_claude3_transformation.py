@@ -12,6 +12,7 @@ from typing import (
 
 import httpx
 
+from litellm.constants import LITELLM_CONSTANT_STREAM_CHUNK_SIZE
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
     AnthropicMessagesConfig,
@@ -114,9 +115,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             stream=stream,
         )
 
-    def _remove_ttl_from_cache_control(
-        self, anthropic_messages_request: Dict
-    ) -> None:
+    def _remove_ttl_from_cache_control(self, anthropic_messages_request: Dict) -> None:
         """
         Remove `ttl` field from cache_control in messages.
         Bedrock doesn't support the ttl field in cache_control.
@@ -132,7 +131,10 @@ class AmazonAnthropicClaudeMessagesConfig(
                         for item in content:
                             if isinstance(item, dict) and "cache_control" in item:
                                 cache_control = item["cache_control"]
-                                if isinstance(cache_control, dict) and "ttl" in cache_control:
+                                if (
+                                    isinstance(cache_control, dict)
+                                    and "ttl" in cache_control
+                                ):
                                     cache_control.pop("ttl", None)
 
     def _supports_extended_thinking_on_bedrock(self, model: str) -> bool:
@@ -154,10 +156,18 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         # Supported models on Bedrock for extended thinking
         supported_patterns = [
-            "opus-4.5", "opus_4.5", "opus-4-5", "opus_4_5",  # Opus 4.5
-            "opus-4.1", "opus_4.1", "opus-4-1", "opus_4_1",  # Opus 4.1
-            "opus-4", "opus_4",                               # Opus 4
-            "sonnet-4", "sonnet_4",                           # Sonnet 4
+            "opus-4.5",
+            "opus_4.5",
+            "opus-4-5",
+            "opus_4_5",  # Opus 4.5
+            "opus-4.1",
+            "opus_4.1",
+            "opus-4-1",
+            "opus_4_1",  # Opus 4.1
+            "opus-4",
+            "opus_4",  # Opus 4
+            "sonnet-4",
+            "sonnet_4",  # Sonnet 4
         ]
 
         return any(pattern in model_lower for pattern in supported_patterns)
@@ -230,7 +240,9 @@ class AmazonAnthropicClaudeMessagesConfig(
             input_examples_used: Whether input examples are used
             beta_set: The set of beta headers to modify in-place
         """
-        if tool_search_used and not (programmatic_tool_calling_used or input_examples_used):
+        if tool_search_used and not (
+            programmatic_tool_calling_used or input_examples_used
+        ):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
@@ -242,13 +254,13 @@ class AmazonAnthropicClaudeMessagesConfig(
     ) -> None:
         """
         Convert Anthropic output_format to inline schema in message content.
-        
+
         Bedrock Invoke doesn't support the output_format parameter, so we embed
         the schema directly into the user message content as text instructions.
-        
+
         This approach adds the schema to the last user message, instructing the model
         to respond in the specified JSON format.
-        
+
         Args:
             output_format: The output_format dict with 'type' and 'schema'
             anthropic_messages_request: The request dict to modify in-place
@@ -256,40 +268,37 @@ class AmazonAnthropicClaudeMessagesConfig(
         Ref: https://aws.amazon.com/blogs/machine-learning/structured-data-response-with-amazon-bedrock-prompt-engineering-and-tool-use/
         """
         import json
-        
+
         # Extract schema from output_format
         schema = output_format.get("schema")
         if not schema:
             return
-        
+
         # Get messages from the request
         messages = anthropic_messages_request.get("messages", [])
         if not messages:
             return
-        
+
         # Find the last user message
         last_user_message_idx = None
         for idx in range(len(messages) - 1, -1, -1):
             if messages[idx].get("role") == "user":
                 last_user_message_idx = idx
                 break
-        
+
         if last_user_message_idx is None:
             return
-        
+
         last_user_message = messages[last_user_message_idx]
         content = last_user_message.get("content", [])
-        
+
         # Ensure content is a list
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
             last_user_message["content"] = content
-        
+
         # Add schema as text content to the message
-        schema_text = {
-            "type": "text",
-            "text": json.dumps(schema)
-        }
+        schema_text = {"type": "text", "text": json.dumps(schema)}
         content.append(schema_text)
 
     def transform_anthropic_messages_request(
@@ -336,14 +345,14 @@ class AmazonAnthropicClaudeMessagesConfig(
                 output_format=output_format,
                 anthropic_messages_request=anthropic_messages_request,
             )
-            
+
         # 6. AUTO-INJECT beta headers based on features used
         anthropic_model_info = AnthropicModelInfo()
         tools = anthropic_messages_optional_request_params.get("tools")
         messages_typed = cast(List[AllMessageValues], messages)
         tool_search_used = anthropic_model_info.is_tool_search_used(tools)
-        programmatic_tool_calling_used = anthropic_model_info.is_programmatic_tool_calling_used(
-            tools
+        programmatic_tool_calling_used = (
+            anthropic_model_info.is_programmatic_tool_calling_used(tools)
         )
         input_examples_used = anthropic_model_info.is_input_examples_used(tools)
 
@@ -376,8 +385,7 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         if beta_set:
             anthropic_messages_request["anthropic_beta"] = list(beta_set)
-        
-            
+
         return anthropic_messages_request
 
     def get_async_streaming_response_iterator(
@@ -395,7 +403,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
-            completion_stream=completion_stream, 
+            completion_stream=completion_stream,
             litellm_logging_obj=litellm_logging_obj,
             request_body=request_body,
         )
@@ -414,14 +422,14 @@ class AmazonAnthropicClaudeMessagesConfig(
         from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
         )
+
         handler = BaseAnthropicMessagesStreamingIterator(
             litellm_logging_obj=litellm_logging_obj,
             request_body=request_body,
         )
-        
+
         async for chunk in handler.async_sse_wrapper(completion_stream):
             yield chunk
-        
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
@@ -433,7 +441,7 @@ class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
         Iterator to return Bedrock invoke response in anthropic /messages format
         """
         super().__init__(model=model)
-        self.DEFAULT_CHUNK_SIZE = 1024
+        self.DEFAULT_CHUNK_SIZE = LITELLM_CONSTANT_STREAM_CHUNK_SIZE
 
     def _chunk_parser(
         self, chunk_data: dict

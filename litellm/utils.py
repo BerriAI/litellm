@@ -14,6 +14,7 @@ import io
 import itertools
 import json
 import logging
+import mimetypes
 import os
 import random  # type: ignore
 import re
@@ -771,13 +772,15 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## LAZY LOAD COROUTINE CHECKER ##
-        get_coroutine_checker_fn = getattr(sys.modules[__name__], "get_coroutine_checker")
+        get_coroutine_checker_fn = getattr(
+            sys.modules[__name__], "get_coroutine_checker"
+        )
         coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, "CustomLogger"]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1395,6 +1398,10 @@ def client(original_function):  # noqa: PLR0915
 
     @wraps(original_function)
     def wrapper(*args, **kwargs):  # noqa: PLR0915
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObject,
+        )
+
         # DO NOT MOVE THIS. It always needs to run first
         # Check if this is an async function. If so only execute the async function
         call_type = original_function.__name__
@@ -1449,6 +1456,7 @@ def client(original_function):  # noqa: PLR0915
                 logging_obj, kwargs = function_setup(
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
+            logging_obj = cast(LiteLLMLoggingObject, logging_obj)
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
             kwargs["litellm_logging_obj"] = logging_obj
@@ -1660,9 +1668,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1709,9 +1717,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1741,6 +1749,10 @@ def client(original_function):  # noqa: PLR0915
 
     @wraps(original_function)
     async def wrapper_async(*args, **kwargs):  # noqa: PLR0915
+        from litellm.litellm_core_utils.litellm_logging import (
+            Logging as LiteLLMLoggingObject,
+        )
+
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
@@ -1767,6 +1779,7 @@ def client(original_function):  # noqa: PLR0915
                     original_function.__name__, rules_obj, start_time, *args, **kwargs
                 )
 
+            logging_obj = cast(LiteLLMLoggingObject, logging_obj)
             modified_kwargs = await async_pre_call_deployment_hook(kwargs, call_type)
             if modified_kwargs is not None:
                 kwargs = modified_kwargs
@@ -3640,10 +3653,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3772,16 +3785,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4937,9 +4950,9 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     # Use list accumulation to avoid O(n^2) string concatenation across choices
     response_parts: List[str] = []
@@ -7592,11 +7605,82 @@ def convert_list_message_to_dict(messages: List):
     return new_messages
 
 
+def format_base64_as_data_uri(
+    base64_data: str, filename: Optional[str] = None, format: Optional[str] = None
+) -> str:
+    """
+    Convert raw base64 data to a properly formatted data URI for OpenAI.
+
+    Args:
+        base64_data: Raw base64 encoded string (without data URI prefix)
+        filename: Optional filename to infer MIME type from extension
+        format: Optional explicit format/MIME type (e.g., "image/jpeg", "application/pdf")
+
+    Returns:
+        Formatted data URI string like "data:image/jpeg;base64,{base64_data}"
+
+    Examples:
+        >>> format_base64_as_data_uri("iVBORw0KG...", filename="image.png")
+        "data:image/png;base64,iVBORw0KG..."
+
+        >>> format_base64_as_data_uri("JVBERi0xL...", format="application/pdf")
+        "data:application/pdf;base64,JVBERi0xL..."
+    """
+    # Strip any existing data URI prefix if present
+    if base64_data.startswith("data:"):
+        # Already formatted, return as-is
+        return base64_data
+
+    # Remove any whitespace from base64 data
+    base64_data = base64_data.strip()
+
+    # Determine MIME type
+    mime_type = None
+
+    # Priority 1: Use explicit format if provided
+    if format:
+        # If format is already a MIME type (contains /), use it directly
+        if "/" in format:
+            mime_type = format
+        else:
+            # Otherwise treat it as a file extension
+            mime_type = mimetypes.guess_type(f"file.{format}")[0]
+
+    # Priority 2: Infer from filename extension
+    if not mime_type and filename:
+        guessed_type = mimetypes.guess_type(filename)[0]
+        if guessed_type:
+            mime_type = guessed_type
+
+    # Priority 3: Try to infer from base64 header (magic bytes)
+    if not mime_type:
+        # Check common file signatures in base64
+        if base64_data.startswith("iVBORw0KG"):
+            mime_type = "image/png"
+        elif base64_data.startswith("/9j/"):
+            mime_type = "image/jpeg"
+        elif base64_data.startswith("JVBERi0"):
+            mime_type = "application/pdf"
+        elif base64_data.startswith("R0lGOD"):
+            mime_type = "image/gif"
+        elif base64_data.startswith("UklGR"):
+            mime_type = "image/webp"
+
+    # Default fallback
+    if not mime_type:
+        # Default to application/octet-stream for unknown types
+        mime_type = "application/octet-stream"
+
+    # Return formatted data URI
+    return f"data:{mime_type};base64,{base64_data}"
+
+
 def validate_and_fix_openai_messages(messages: List):
     """
     Ensures all messages are valid OpenAI chat completion messages.
 
     Handles missing role for assistant messages.
+    Converts raw base64 file data to proper data URI format.
     """
     new_messages = []
     for message in messages:
@@ -7604,6 +7688,24 @@ def validate_and_fix_openai_messages(messages: List):
             message["role"] = "assistant"
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
+
+        # Handle file content with raw base64 data
+        content = message.get("content")
+        if isinstance(content, list):
+            for element in content:
+                if isinstance(element, dict) and element.get("type") == "file":
+                    file_obj = element.get("file", {})
+                    file_data = file_obj.get("file_data")
+
+                    # Check if file_data exists and doesn't already have data URI prefix
+                    if file_data and not file_data.startswith("data:"):
+                        filename = file_obj.get("filename")
+                        file_format = file_obj.get("format")
+
+                        # Convert raw base64 to properly formatted data URI
+                        file_obj["file_data"] = format_base64_as_data_uri(
+                            base64_data=file_data, filename=filename, format=file_format
+                        )
 
         convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
@@ -7714,25 +7816,29 @@ def validate_chat_completion_tool_choice(
         f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
     )
 
-def validate_openai_optional_params(  
-    stop: Optional[Union[str, List[str]]] = None,  
-    **kwargs  
-) -> Optional[Union[str, List[str]]]:  
-    """  
-    Validates and fixes OpenAI optional parameters.  
-      
-    Args:  
-        stop: Stop sequences (string or list of strings)  
-        **kwargs: Additional optional parameters  
-          
-    Returns:  
-        Validated stop parameter (truncated to 4 elements if needed)  
-    """  
-    if stop is not None and isinstance(stop, list) and not litellm.disable_stop_sequence_limit:  
+
+def validate_openai_optional_params(
+    stop: Optional[Union[str, List[str]]] = None, **kwargs
+) -> Optional[Union[str, List[str]]]:
+    """
+    Validates and fixes OpenAI optional parameters.
+
+    Args:
+        stop: Stop sequences (string or list of strings)
+        **kwargs: Additional optional parameters
+
+    Returns:
+        Validated stop parameter (truncated to 4 elements if needed)
+    """
+    if (
+        stop is not None
+        and isinstance(stop, list)
+        and not litellm.disable_stop_sequence_limit
+    ):
         # Truncate to 4 elements if more are provided as openai only supports up to 4 stop sequences
-        if len(stop) > 4:  
-            stop = stop[:4]  
-      
+        if len(stop) > 4:
+            stop = stop[:4]
+
     return stop
 
 
@@ -8693,9 +8799,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
-        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig

@@ -1572,6 +1572,10 @@ class Usage(SafeAttributeModel, CompletionUsage):
 
 
 class StreamingChoices(OpenAIObject):
+    finish_reason: Optional[OpenAIChatCompletionFinishReason] = None
+    index: int = 0
+    delta: Optional[Delta] = None
+
     def __init__(
         self,
         finish_reason=None,

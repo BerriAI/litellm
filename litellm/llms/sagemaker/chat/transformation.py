@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union, cast
 import httpx
 from httpx._models import Headers
 
+from litellm.constants import LITELLM_CONSTANT_STREAM_CHUNK_SIZE
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
@@ -154,7 +155,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
 
         custom_stream_decoder = AWSEventStreamDecoder(model="", is_messages_api=True)
         completion_stream = custom_stream_decoder.iter_bytes(
-            response.iter_bytes(chunk_size=1024)
+            response.iter_bytes(chunk_size=LITELLM_CONSTANT_STREAM_CHUNK_SIZE)
         )
 
         streaming_response = CustomStreamWrapper(
@@ -204,7 +205,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
 
         custom_stream_decoder = AWSEventStreamDecoder(model="", is_messages_api=True)
         completion_stream = custom_stream_decoder.aiter_bytes(
-            response.aiter_bytes(chunk_size=1024)
+            response.aiter_bytes(chunk_size=LITELLM_CONSTANT_STREAM_CHUNK_SIZE)
         )
 
         streaming_response = CustomStreamWrapper(
