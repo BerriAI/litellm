@@ -1568,7 +1568,7 @@ async def _process_single_key_update(
             check_db_only=True,
         )
         
-        if team_obj is not None:
+        if team_obj is not None and prisma_client is not None:
             await _check_team_key_limits(
                 team_table=team_obj,
                 data=update_key_request,
@@ -1606,6 +1606,12 @@ async def _process_single_key_update(
     )
     
     # Update key in database
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected"},
+        )
+    
     _data = {**non_default_values, "token": key_update_item.key}
     response = await prisma_client.update_data(
         token=key_update_item.key, data=_data
