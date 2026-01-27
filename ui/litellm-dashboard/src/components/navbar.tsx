@@ -1,4 +1,5 @@
 import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
@@ -51,9 +52,9 @@ const Navbar: React.FC<NavbarProps> = ({
   onToggleSidebar,
 }) => {
   const baseUrl = getProxyBaseUrl();
-  console.log("baseUrl", baseUrl);
   const [logoutUrl, setLogoutUrl] = useState("");
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
+  const disableShowPrompts = useDisableShowPrompts();
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadiness();
   const version = healthData?.litellm_version;
@@ -150,6 +151,27 @@ const Navbar: React.FC<NavbarProps> = ({
                   }
                 }}
                 aria-label="Toggle hide new feature indicators"
+              />
+            </div>
+            <div
+              className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-gray-500 text-xs">Hide All Prompts</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={disableShowPrompts}
+                onChange={(checked) => {
+                  if (checked) {
+                    setLocalStorageItem("disableShowPrompts", "true");
+                    emitLocalStorageChange("disableShowPrompts");
+                  } else {
+                    removeLocalStorageItem("disableShowPrompts");
+                    emitLocalStorageChange("disableShowPrompts");
+                  }
+                }}
+                aria-label="Toggle hide all prompts"
               />
             </div>
           </div>
