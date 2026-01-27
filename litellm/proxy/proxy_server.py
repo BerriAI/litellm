@@ -5420,6 +5420,24 @@ async def chat_completion(  # noqa: PLR0915
     global general_settings, user_debug, proxy_logging_obj, llm_model_list
     global user_temperature, user_request_timeout, user_max_tokens, user_api_base
     data = await _read_request_body(request=request)
+    if user_api_key_dict is not None:
+        if data.get("metadata") is None:
+            data["metadata"] = {}
+        if (
+            hasattr(user_api_key_dict, "user_id")
+            and user_api_key_dict.user_id is not None
+        ):
+            data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+        if (
+            hasattr(user_api_key_dict, "team_id")
+            and user_api_key_dict.team_id is not None
+        ):
+            data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+        if (
+            hasattr(user_api_key_dict, "org_id")
+            and user_api_key_dict.org_id is not None
+        ):
+            data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
     base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
         result = await base_llm_response_processor.base_process_llm_request(
@@ -5571,6 +5589,24 @@ async def completion(  # noqa: PLR0915
     data = {}
     try:
         data = await _read_request_body(request=request)
+        if user_api_key_dict is not None:
+            if data.get("metadata") is None:
+                data["metadata"] = {}
+            if (
+                hasattr(user_api_key_dict, "user_id")
+                and user_api_key_dict.user_id is not None
+            ):
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            if (
+                hasattr(user_api_key_dict, "team_id")
+                and user_api_key_dict.team_id is not None
+            ):
+                data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+            if (
+                hasattr(user_api_key_dict, "org_id")
+                and user_api_key_dict.org_id is not None
+            ):
+                data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
         return await base_llm_response_processor.base_process_llm_request(
             request=request,
@@ -5789,6 +5825,25 @@ async def embeddings(  # noqa: PLR0915
                                 litellm.decode(model="gpt-3.5-turbo", tokens=i)
                             )
                         data["input"] = input_list
+
+        if user_api_key_dict is not None:
+            if data.get("metadata") is None:
+                data["metadata"] = {}
+            if (
+                hasattr(user_api_key_dict, "user_id")
+                and user_api_key_dict.user_id is not None
+            ):
+                data["metadata"]["user_api_key_user_id"] = user_api_key_dict.user_id
+            if (
+                hasattr(user_api_key_dict, "team_id")
+                and user_api_key_dict.team_id is not None
+            ):
+                data["metadata"]["user_api_key_team_id"] = user_api_key_dict.team_id
+            if (
+                hasattr(user_api_key_dict, "org_id")
+                and user_api_key_dict.org_id is not None
+            ):
+                data["metadata"]["user_api_key_org_id"] = user_api_key_dict.org_id
 
         # Use unified request processor (same as chat/completions and responses)
         base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -9645,7 +9700,7 @@ def get_logo_url():
 
 
 @app.get("/get_image", include_in_schema=False)
-def get_image():
+async def get_image():
     """Get logo to show on admin UI"""
 
     # get current_dir
@@ -9664,25 +9719,37 @@ def get_image():
     if is_non_root and not os.path.exists(default_logo):
         default_logo = default_site_logo
 
+    cache_dir = assets_dir if is_non_root else current_dir
+    cache_path = os.path.join(cache_dir, "cached_logo.jpg")
+
+    # [OPTIMIZATION] Check if the cached image exists first
+    if os.path.exists(cache_path):
+        return FileResponse(cache_path, media_type="image/jpeg")
+
     logo_path = os.getenv("UI_LOGO_PATH", default_logo)
     verbose_proxy_logger.debug("Reading logo from path: %s", logo_path)
 
     # Check if the logo path is an HTTP/HTTPS URL
     if logo_path.startswith(("http://", "https://")):
-        # Download the image and cache it
-        client = HTTPHandler()
-        response = client.get(logo_path)
-        if response.status_code == 200:
-            # Save the image to a local file
-            cache_dir = assets_dir if is_non_root else current_dir
-            cache_path = os.path.join(cache_dir, "cached_logo.jpg")
-            with open(cache_path, "wb") as f:
-                f.write(response.content)
+        try:
+            # Download the image and cache it
+            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
-            # Return the cached image as a FileResponse
-            return FileResponse(cache_path, media_type="image/jpeg")
-        else:
-            # Handle the case when the image cannot be downloaded
+            async_client = AsyncHTTPHandler(timeout=5.0)
+            response = await async_client.get(logo_path)
+            if response.status_code == 200:
+                # Save the image to a local file
+                with open(cache_path, "wb") as f:
+                    f.write(response.content)
+
+                # Return the cached image as a FileResponse
+                return FileResponse(cache_path, media_type="image/jpeg")
+            else:
+                # Handle the case when the image cannot be downloaded
+                return FileResponse(default_logo, media_type="image/jpeg")
+        except Exception as e:
+            # Handle any exceptions during the download (e.g., timeout, connection error)
+            verbose_proxy_logger.debug(f"Error downloading logo from {logo_path}: {e}")
             return FileResponse(default_logo, media_type="image/jpeg")
     else:
         # Return the local image file if the logo path is not an HTTP/HTTPS URL

@@ -185,6 +185,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         tools = inputs.get("tools")
         structured_messages = inputs.get("structured_messages")
         tool_calls = inputs.get("tool_calls")
+        model = inputs.get("model")
 
         # Use provided request_data or create an empty dict
         if request_data is None:
@@ -215,6 +216,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             tool_calls=tool_calls,
             additional_provider_specific_params=additional_params,
             input_type=input_type,
+            model=model,
         )
 
         # Prepare headers
