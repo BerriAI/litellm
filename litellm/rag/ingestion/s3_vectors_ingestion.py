@@ -127,33 +127,18 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
                 "Missing botocore to call S3 Vectors. Run 'pip install boto3'."
             )
 
-        from litellm.litellm_core_utils.asyncify import asyncify
-
-        # Get AWS credentials
-        asyncified_get_credentials = asyncify(self.get_credentials)
-        
-        # Extract AWS config values
-        aws_access_key_id = self.vector_store_config.get("aws_access_key_id")
-        aws_secret_access_key = self.vector_store_config.get("aws_secret_access_key")
-        aws_session_token = self.vector_store_config.get("aws_session_token")
-        aws_session_name = self.vector_store_config.get("aws_session_name")
-        aws_profile_name = self.vector_store_config.get("aws_profile_name")
-        aws_role_name = self.vector_store_config.get("aws_role_name")
-        aws_web_identity_token = self.vector_store_config.get("aws_web_identity_token")
-        aws_sts_endpoint = self.vector_store_config.get("aws_sts_endpoint")
-        aws_external_id = self.vector_store_config.get("aws_external_id")
-        
-        credentials = await asyncified_get_credentials(
-            aws_access_key_id=str(aws_access_key_id) if aws_access_key_id is not None else None,
-            aws_secret_access_key=str(aws_secret_access_key) if aws_secret_access_key is not None else None,
-            aws_session_token=str(aws_session_token) if aws_session_token is not None else None,
+        # Get AWS credentials using BaseAWSLLM's get_credentials method
+        credentials = self.get_credentials(
+            aws_access_key_id=self.vector_store_config.get("aws_access_key_id"),
+            aws_secret_access_key=self.vector_store_config.get("aws_secret_access_key"),
+            aws_session_token=self.vector_store_config.get("aws_session_token"),
             aws_region_name=self.aws_region_name,
-            aws_session_name=str(aws_session_name) if aws_session_name is not None else None,
-            aws_profile_name=str(aws_profile_name) if aws_profile_name is not None else None,
-            aws_role_name=str(aws_role_name) if aws_role_name is not None else None,
-            aws_web_identity_token=str(aws_web_identity_token) if aws_web_identity_token is not None else None,
-            aws_sts_endpoint=str(aws_sts_endpoint) if aws_sts_endpoint is not None else None,
-            aws_external_id=str(aws_external_id) if aws_external_id is not None else None,
+            aws_session_name=self.vector_store_config.get("aws_session_name"),
+            aws_profile_name=self.vector_store_config.get("aws_profile_name"),
+            aws_role_name=self.vector_store_config.get("aws_role_name"),
+            aws_web_identity_token=self.vector_store_config.get("aws_web_identity_token"),
+            aws_sts_endpoint=self.vector_store_config.get("aws_sts_endpoint"),
+            aws_external_id=self.vector_store_config.get("aws_external_id"),
         )
 
         # Prepare headers
