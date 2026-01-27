@@ -2565,7 +2565,7 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  e2e_ruby_sdk_responses_api:
+  e2e_responses_api_proxy_tests:
     machine:
       image: ubuntu-2204:2023.10.1
     resource_class: xlarge
@@ -4103,7 +4103,7 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
-      - e2e_ruby_sdk_responses_api:
+      - e2e_responses_api_proxy_tests:
           requires:
             - build_docker_database_image
           filters:
@@ -4348,7 +4348,7 @@ workflows:
             - local_testing_part2
             - build_and_test
             - e2e_openai_endpoints
-            - e2e_ruby_sdk_responses_api
+            - e2e_responses_api_proxy_tests
             - test_bad_database_url
             - llm_translation_testing
             - mcp_testing
