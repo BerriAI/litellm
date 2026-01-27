@@ -321,9 +321,9 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
         formValues.rotation_interval = rotationInterval;
       }
 
-      // Handle duration field for key expiry
-      if (formValues.duration) {
-        formValues.duration = formValues.duration;
+      // Handle duration field for key expiry - convert empty string to null
+      if (!formValues.duration || formValues.duration.trim() === "") {
+        formValues.duration = null;
       }
 
       // Update the formValues with the final metadata
@@ -1270,6 +1270,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                           onAutoRotationChange={setAutoRotationEnabled}
                           rotationInterval={rotationInterval}
                           onRotationIntervalChange={setRotationInterval}
+                          isCreateMode={true}
                         />
                       </div>
                     </AccordionBody>
