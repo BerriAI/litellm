@@ -1501,7 +1501,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
-    def _transform_response(
+    def _transform_response( # noqa: PLR0915
         self,
         model: str,
         response: httpx.Response,
