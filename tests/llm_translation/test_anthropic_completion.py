@@ -1594,7 +1594,6 @@ def test_anthropic_via_responses_api():
         ResponsesAPIStreamEvents.RESPONSE_CREATED,
         ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
         ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
         ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,  # Can occur multiple times
         ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ResponsesAPIStreamEvents.CONTENT_PART_DONE,

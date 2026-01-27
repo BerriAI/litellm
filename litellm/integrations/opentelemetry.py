@@ -17,6 +17,10 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes,
+)
 
 # OpenTelemetry imports moved to individual functions to avoid import errors when not installed
 
@@ -660,6 +664,9 @@ class OpenTelemetry(CustomLogger):
             self._maybe_log_raw_request(
                 kwargs, response_obj, start_time, end_time, span
             )
+            # Ensure proxy-request parent span is annotated with the actual operation kind
+            if parent_span is not None and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME:
+                self.set_attributes(parent_span, kwargs, response_obj)
         else:
             # Do not create primary span (keep hierarchy shallow when parent exists)
             from opentelemetry.trace import Status, StatusCode
@@ -987,7 +994,10 @@ class OpenTelemetry(CustomLogger):
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
-        from opentelemetry.sdk._logs import LogRecord as SdkLogRecord
+        try:
+            from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore[attr-defined]  # OTEL < 1.39.0
+        except ImportError:
+            from opentelemetry.sdk._logs._internal import LogRecord as SdkLogRecord  # OTEL >= 1.39.0
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
@@ -1101,6 +1111,12 @@ class OpenTelemetry(CustomLogger):
                 name="guardrail",
                 start_time=self._to_ns(start_time_datetime),
                 context=context,
+            )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                value=OpenInferenceSpanKindValues.GUARDRAIL.value,
             )
 
             self.safe_set_attribute(
@@ -1826,12 +1842,6 @@ class OpenTelemetry(CustomLogger):
         return None, None
 
     def _get_span_processor(self, dynamic_headers: Optional[dict] = None):
-        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-            OTLPSpanExporter as OTLPSpanExporterGRPC,
-        )
-        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-            OTLPSpanExporter as OTLPSpanExporterHTTP,
-        )
         from opentelemetry.sdk.trace.export import (
             BatchSpanProcessor,
             ConsoleSpanExporter,
@@ -1869,6 +1879,16 @@ class OpenTelemetry(CustomLogger):
             or self.OTEL_EXPORTER == "http/protobuf"
             or self.OTEL_EXPORTER == "http/json"
         ):
+            try:
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter as OTLPSpanExporterHTTP,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP HTTP exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` to enable OTLP HTTP."
+                ) from exc
+
             verbose_logger.debug(
                 "OpenTelemetry: intiializing http exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
@@ -1882,6 +1902,16 @@ class OpenTelemetry(CustomLogger):
                 ),
             )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+                    OTLPSpanExporter as OTLPSpanExporterGRPC,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP gRPC exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+                ) from exc
+
             verbose_logger.debug(
                 "OpenTelemetry: intiializing grpc exporter. Value of OTEL_EXPORTER: %s",
                 self.OTEL_EXPORTER,
@@ -1958,9 +1988,15 @@ class OpenTelemetry(CustomLogger):
                 endpoint=normalized_endpoint, headers=_split_otel_headers
             )
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
-            from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
-                OTLPLogExporter,
-            )
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc._log_exporter import (
+                    OTLPLogExporter,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP gRPC log exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+                ) from exc
 
             verbose_logger.debug(
                 "OpenTelemetry: Using gRPC log exporter. Value of OTEL_EXPORTER: %s, endpoint: %s",
@@ -2023,9 +2059,15 @@ class OpenTelemetry(CustomLogger):
             return PeriodicExportingMetricReader(exporter, export_interval_millis=5000)
 
         elif self.OTEL_EXPORTER == "otlp_grpc" or self.OTEL_EXPORTER == "grpc":
-            from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-                OTLPMetricExporter,
-            )
+            try:
+                from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+                    OTLPMetricExporter,
+                )
+            except ImportError as exc:
+                raise ImportError(
+                    "OpenTelemetry OTLP gRPC metric exporter is not available. Install "
+                    "`opentelemetry-exporter-otlp` and `grpcio` (or `litellm[grpc]`)."
+                ) from exc
 
             exporter = OTLPMetricExporter(
                 endpoint=normalized_endpoint,

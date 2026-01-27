@@ -759,6 +759,23 @@
         "search": true
       }
     },
+    "brave": {
+      "display_name": "Brave Search (`brave`)",
+      "url": "https://docs.litellm.ai/docs/search/brave",
+      "endpoints": {
+        "chat_completions": false,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "search": true
+      }
+    },
     "empower": {
       "display_name": "Empower (`empower`)",
       "url": "https://docs.litellm.ai/docs/providers/empower",
@@ -919,9 +936,45 @@
         "interactions": true
       }
     },
+    "chatgpt": {
+      "display_name": "ChatGPT Subscription (`chatgpt`)",
+      "url": "https://docs.litellm.ai/docs/providers/chatgpt",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "github": {
       "display_name": "GitHub Models (`github`)",
       "url": "https://docs.litellm.ai/docs/providers/github",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
+    "gmi": {
+      "display_name": "GMI Cloud (`gmi`)",
+      "url": "https://docs.litellm.ai/docs/providers/gmi_cloud",
       "endpoints": {
         "chat_completions": true,
         "messages": true,
@@ -2339,6 +2392,15 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "sarvam": {
+      "display_name": "Sarvam (`sarvam`)",
+      "url": "https://docs.litellm.ai/docs/providers/sarvam",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true
       }
     }
   },
