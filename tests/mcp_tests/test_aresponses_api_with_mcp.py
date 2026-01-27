@@ -683,8 +683,8 @@ async def test_streaming_responses_api_with_mcp_tools(
 
     Return the user the result of request 2
     """
-    # Skip test if ANTHROPIC_API_KEY is not set for anthropic models
-    if "anthropic" in model.lower() and not os.getenv("ANTHROPIC_API_KEY"):
+    # Skip test if ANTHROPIC_API_KEY is not set for anthropic/claude models
+    if ("anthropic" in model.lower() or "claude" in model.lower()) and not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY not set, skipping anthropic model test")
     
     from unittest.mock import AsyncMock, patch
