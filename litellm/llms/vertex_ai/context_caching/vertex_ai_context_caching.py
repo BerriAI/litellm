@@ -27,6 +27,8 @@ local_cache_obj = Cache(type=LiteLLMCacheType.LOCAL)  # only used for calling 'g
 
 MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
 
+MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
+
 
 class ContextCachingEndpoints(VertexBase):
     """
