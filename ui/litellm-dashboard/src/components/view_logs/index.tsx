@@ -30,6 +30,7 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
+import NewBadge from "../common_components/NewBadge";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -504,8 +505,8 @@ export default function SpendLogsTable({
         <TabList>
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
-          <Tab>Deleted Keys</Tab>
-          <Tab>Deleted Teams</Tab>
+          <Tab><>Deleted Keys <NewBadge /></></Tab>
+          <Tab><>Deleted Teams <NewBadge /></></Tab>
         </TabList>
         <TabPanels>
           <TabPanel>

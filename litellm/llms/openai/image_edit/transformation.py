@@ -80,7 +80,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         self,
         model: str,
         prompt: Optional[str],
-        image: FileTypes,
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -91,15 +91,17 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         Handles multipart/form-data for images. Uses "image[]" field name
         to support multiple images (e.g., for gpt-image-1).
         """
-        if prompt is None:
-            raise ValueError("OpenAI image edit requires a prompt.")
-        
-        request = ImageEditRequestParams(
-            model=model,
-            image=image,
-            prompt=prompt,
+        # Build request params, only including non-None values
+        request_params = {
+            "model": model,
             **image_edit_optional_request_params,
-        )
+        }
+        if image is not None:
+            request_params["image"] = image
+        if prompt is not None:
+            request_params["prompt"] = prompt
+            
+        request = ImageEditRequestParams(**request_params)
         request_dict = cast(Dict, request)
 
         #########################################################

@@ -74,13 +74,16 @@ async def test_standard_logging_payload_includes_guardrail_information():
     
     class MockClientSession:
         def __init__(self):
-            pass
+            self.closed = False
             
         async def __aenter__(self):
             return self
             
         async def __aexit__(self, exc_type, exc_val, exc_tb):
             pass
+            
+        async def close(self):
+            self.closed = True
             
         def post(self, url, json=None):
             class MockResponse:

@@ -15,6 +15,7 @@ USER root
 RUN for i in 1 2 3; do \
     apk add --no-cache \
     python3 \
+    python3-dev \
     py3-pip \
     clang \
     llvm \

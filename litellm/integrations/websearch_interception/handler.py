@@ -12,7 +12,12 @@ from typing import Any, Dict, List, Optional, Tuple, Union, cast
 import litellm
 from litellm._logging import verbose_logger
 from litellm.anthropic_interface import messages as anthropic_messages
+from litellm.constants import LITELLM_WEB_SEARCH_TOOL_NAME
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.websearch_interception.tools import (
+    get_litellm_web_search_tool,
+    is_web_search_tool,
+)
 from litellm.integrations.websearch_interception.transformation import (
     WebSearchTransformation,
 )
@@ -57,6 +62,55 @@ class WebSearchInterceptionLogger(CustomLogger):
                 for p in enabled_providers
             ]
         self.search_tool_name = search_tool_name
+        self._request_has_websearch = False  # Track if current request has web search
+
+    async def async_pre_call_deployment_hook(
+        self, kwargs: Dict[str, Any], call_type: Optional[Any]
+    ) -> Optional[dict]:
+        """
+        Pre-call hook to convert native Anthropic web_search tools to regular tools.
+
+        This prevents Bedrock from trying to execute web search server-side (which fails).
+        Instead, we convert it to a regular tool so the model returns tool_use blocks
+        that we can intercept and execute ourselves.
+        """
+        # Check if this is for an enabled provider
+        custom_llm_provider = kwargs.get("litellm_params", {}).get("custom_llm_provider", "")
+        if custom_llm_provider not in self.enabled_providers:
+            return None
+
+        # Check if request has tools with native web_search
+        tools = kwargs.get("tools")
+        if not tools:
+            return None
+
+        # Check if any tool is a web search tool (native or already LiteLLM standard)
+        has_websearch = any(is_web_search_tool(t) for t in tools)
+
+        if not has_websearch:
+            return None
+
+        verbose_logger.debug(
+            "WebSearchInterception: Converting native web_search tools to LiteLLM standard"
+        )
+
+        # Convert native/custom web_search tools to LiteLLM standard
+        converted_tools = []
+        for tool in tools:
+            if is_web_search_tool(tool):
+                # Convert to LiteLLM standard web search tool
+                converted_tool = get_litellm_web_search_tool()
+                converted_tools.append(converted_tool)
+                verbose_logger.debug(
+                    f"WebSearchInterception: Converted {tool.get('name', 'unknown')} "
+                    f"(type={tool.get('type', 'none')}) to {LITELLM_WEB_SEARCH_TOOL_NAME}"
+                )
+            else:
+                # Keep other tools as-is
+                converted_tools.append(tool)
+
+        # Return modified kwargs with converted tools
+        return {"tools": converted_tools}
 
     @classmethod
     def from_config_yaml(
@@ -104,6 +158,83 @@ class WebSearchInterceptionLogger(CustomLogger):
             search_tool_name=search_tool_name,
         )
 
+    async def async_pre_request_hook(
+        self, model: str, messages: List[Dict], kwargs: Dict
+    ) -> Optional[Dict]:
+        """
+        Pre-request hook to convert native web search tools to LiteLLM standard.
+
+        This hook is called before the API request is made, allowing us to:
+        1. Detect native web search tools (web_search_20250305, etc.)
+        2. Convert them to LiteLLM standard format (litellm_web_search)
+        3. Convert stream=True to stream=False for interception
+
+        This prevents providers like Bedrock from trying to execute web search
+        natively (which fails), and ensures our agentic loop can intercept tool_use.
+
+        Returns:
+            Modified kwargs dict with converted tools, or None if no modifications needed
+        """
+        # Check if this request is for an enabled provider
+        custom_llm_provider = kwargs.get("litellm_params", {}).get(
+            "custom_llm_provider", ""
+        )
+
+        verbose_logger.debug(
+            f"WebSearchInterception: Pre-request hook called"
+            f" - custom_llm_provider={custom_llm_provider}"
+            f" - enabled_providers={self.enabled_providers}"
+        )
+
+        if custom_llm_provider not in self.enabled_providers:
+            verbose_logger.debug(
+                f"WebSearchInterception: Skipping - provider {custom_llm_provider} not in {self.enabled_providers}"
+            )
+            return None
+
+        # Check if request has tools
+        tools = kwargs.get("tools")
+        if not tools:
+            return None
+
+        # Check if any tool is a web search tool
+        has_websearch = any(is_web_search_tool(t) for t in tools)
+        if not has_websearch:
+            return None
+
+        verbose_logger.debug(
+            f"WebSearchInterception: Pre-request hook triggered for provider={custom_llm_provider}"
+        )
+
+        # Convert native web search tools to LiteLLM standard
+        converted_tools = []
+        for tool in tools:
+            if is_web_search_tool(tool):
+                standard_tool = get_litellm_web_search_tool()
+                converted_tools.append(standard_tool)
+                verbose_logger.debug(
+                    f"WebSearchInterception: Converted {tool.get('name', 'unknown')} "
+                    f"(type={tool.get('type', 'none')}) to {LITELLM_WEB_SEARCH_TOOL_NAME}"
+                )
+            else:
+                converted_tools.append(tool)
+
+        # Update kwargs with converted tools
+        kwargs["tools"] = converted_tools
+        verbose_logger.debug(
+            f"WebSearchInterception: Tools after conversion: {[t.get('name') for t in converted_tools]}"
+        )
+
+        # Convert stream=True to stream=False for WebSearch interception
+        if kwargs.get("stream"):
+            verbose_logger.debug(
+                "WebSearchInterception: Converting stream=True to stream=False"
+            )
+            kwargs["stream"] = False
+            kwargs["_websearch_interception_converted_stream"] = True
+
+        return kwargs
+
     async def async_should_run_agentic_loop(
         self,
         response: Any,
@@ -128,11 +259,11 @@ class WebSearchInterceptionLogger(CustomLogger):
             )
             return False, {}
 
-        # Check if tools include WebSearch
-        has_websearch_tool = any(t.get("name") == "WebSearch" for t in (tools or []))
+        # Check if tools include any web search tool (LiteLLM standard or native)
+        has_websearch_tool = any(is_web_search_tool(t) for t in (tools or []))
         if not has_websearch_tool:
             verbose_logger.debug(
-                "WebSearchInterception: No WebSearch tool in request"
+                "WebSearchInterception: No web search tool in request"
             )
             return False, {}
 
@@ -282,6 +413,13 @@ class WebSearchInterceptionLogger(CustomLogger):
                 if k != 'max_tokens'
             }
 
+            # Remove internal websearch interception flags from kwargs before follow-up request
+            # These flags are used internally and should not be passed to the LLM provider
+            kwargs_for_followup = {
+                k: v for k, v in kwargs.items()
+                if not k.startswith('_websearch_interception')
+            }
+
             # Get model from logging_obj.model_call_details["agentic_loop_params"]
             # This preserves the full model name with provider prefix (e.g., "bedrock/invoke/...")
             full_model_name = model
@@ -297,7 +435,7 @@ class WebSearchInterceptionLogger(CustomLogger):
                 messages=follow_up_messages,
                 model=full_model_name,
                 **optional_params_without_max_tokens,
-                **kwargs,
+                **kwargs_for_followup,
             )
             verbose_logger.debug(
                 f"WebSearchInterception: Follow-up request completed, response type: {type(final_response)}"

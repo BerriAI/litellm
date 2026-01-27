@@ -735,13 +735,13 @@ def test_file_data_field_order():
     Related issue: Gemini API returns 400 INVALID_ARGUMENT when fields are in wrong order.
     """
     import json
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     
     # Test with HTTPS URL and explicit format (audio file)
     file_url = "https://generativelanguage.googleapis.com/v1beta/files/test123"
     format = "audio/mpeg"
     
-    result = _process_gemini_image(image_url=file_url, format=format)
+    result = _process_gemini_media(image_url=file_url, format=format)
     
     # Verify the result has file_data
     assert "file_data" in result
@@ -770,12 +770,12 @@ def test_file_data_field_order():
 def test_file_data_field_order_gcs_urls():
     """Test that GCS URLs also maintain correct field order."""
     import json
-    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_image
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
     
     # Test with GCS URL
     gcs_url = "gs://bucket/audio.mp3"
     
-    result = _process_gemini_image(image_url=gcs_url)
+    result = _process_gemini_media(image_url=gcs_url)
     
     # Verify the result has file_data
     assert "file_data" in result
@@ -903,7 +903,186 @@ def test_extract_file_data_fallback_to_octet_stream():
         # Verify MIME type falls back to octet-stream
         assert extracted["content_type"] == "application/octet-stream", \
             f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
-        
+
     finally:
         # Clean up temporary file
         os.unlink(tmp_path)
+
+
+def test_convert_tool_response_with_pdf_file():
+    """Test tool response with PDF file content using file_data field."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with file
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_pdf_test",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"status": "success", "pages": 1}'
+            },
+            {
+                "type": "file",
+                "file_data": file_data_uri
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_pdf_test",
+                "function": {
+                    "name": "analyze_document",
+                    "arguments": '{"path": "/tmp/doc.pdf"}'
+                }
+            }
+        ]
+    }
+
+    # Convert tool response (returns list when file is present)
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results - should be a list with 2 parts (function_response + inline_data)
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find function_response part and inline_data part
+    function_response_part = None
+    inline_data_part = None
+    for part in result:
+        if "function_response" in part:
+            function_response_part = part
+        elif "inline_data" in part:
+            inline_data_part = part
+
+    # Check function_response exists
+    assert function_response_part is not None, "Missing function_response part"
+    function_response = function_response_part["function_response"]
+    assert function_response["name"] == "analyze_document"
+    assert "response" in function_response
+    # Verify JSON response is parsed correctly
+    assert "status" in function_response["response"]
+    assert function_response["response"]["status"] == "success"
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "application/pdf"
+    assert inline_data["data"] == test_pdf_base64
+
+
+def test_convert_tool_response_with_input_file_type():
+    """Test tool response with input_file content type (Responses API format)."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with input_file type
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_input_file_test",
+        "content": [
+            {
+                "type": "input_file",
+                "file_data": file_data_uri
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_input_file_test",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+
+    # Convert tool response
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find inline_data part
+    inline_data_part = None
+    for part in result:
+        if "inline_data" in part:
+            inline_data_part = part
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    assert inline_data_part["inline_data"]["mime_type"] == "application/pdf"
+
+
+def test_convert_tool_response_with_nested_file_object():
+    """Test tool response with file content using nested file object format."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with nested file object (OpenAI Agents SDK format)
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_nested_test",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": file_data_uri
+                }
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_nested_test",
+                "function": {
+                    "name": "process_document",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+
+    # Convert tool response
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results - should be a list with 2 parts
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find inline_data part
+    inline_data_part = None
+    for part in result:
+        if "inline_data" in part:
+            inline_data_part = part
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "application/pdf"
+    assert inline_data["data"] == test_pdf_base64
