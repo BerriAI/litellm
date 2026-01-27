@@ -17,6 +17,10 @@ class TestBedrockFilesIntegration:
     """Test integration of Bedrock files with main litellm API"""
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.environ.get("AWS_ACCESS_KEY_ID"),
+        reason="AWS credentials not configured"
+    )
     async def test_litellm_afile_content_bedrock_provider_with_s3_uri(self):
         """Test litellm.afile_content with bedrock provider using direct S3 URI"""
         file_id = "s3://test-bucket/test-file.jsonl"
