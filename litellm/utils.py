@@ -2644,7 +2644,14 @@ def get_supported_regions(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        supported_regions = model_info.get("supported_regions", None)
+        # Get the key used in model_cost to look up supported_regions
+        # since ModelInfoBase doesn't include this field
+        model_key = model_info.get("key")
+        if model_key is None:
+            return None
+
+        model_cost_data = litellm.model_cost.get(model_key, {})
+        supported_regions = model_cost_data.get("supported_regions", None)
         if supported_regions is None:
             return None
 
