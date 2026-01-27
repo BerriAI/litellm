@@ -82,6 +82,10 @@ class TestHuggingFaceEmbedding:
         assert "source_sentence" not in str(request_data)
         assert "sentences" not in str(request_data)
 
+    @pytest.mark.skipif(
+        not os.environ.get("HUGGINGFACE_API_KEY") and not os.environ.get("HF_TOKEN"),
+        reason="HuggingFace API key not configured"
+    )
     def test_embedding_with_sentence_similarity_task(self):
         """Test embedding when task type is sentence-similarity (requires 2+ sentences)"""
 

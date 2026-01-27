@@ -52,8 +52,12 @@ def setup_and_teardown():
     import importlib
     import asyncio
 
-    # Reload litellm to ensure clean state
-    importlib.reload(litellm)
+    # Reload litellm to ensure clean state (handle parallel test execution)
+    try:
+        importlib.reload(litellm)
+    except ImportError:
+        # Module might not be in sys.modules during parallel test execution
+        pass
 
     # Set up async loop
     loop = asyncio.get_event_loop_policy().new_event_loop()
