@@ -138,7 +138,7 @@ export function NudgePrompt({
             onClick={handleDontAskAgain}
             className="text-xs"
           >
-            Don't ask me again
+            Don&apos;t ask me again
           </Button>
         </div>
       </div>
