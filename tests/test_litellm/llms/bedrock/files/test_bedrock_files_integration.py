@@ -3,6 +3,7 @@ Test Bedrock files integration with main files API
 """
 
 import base64
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -60,6 +61,10 @@ class TestBedrockFilesIntegration:
             assert call_kwargs["file_content_request"]["file_id"] == file_id
 
     @pytest.mark.asyncio
+    @pytest.mark.skipif(
+        not os.environ.get("AWS_ACCESS_KEY_ID"),
+        reason="AWS credentials not configured"
+    )
     async def test_litellm_afile_content_bedrock_provider_with_unified_file_id(self):
         """Test litellm.afile_content with bedrock provider using unified file ID"""
         # Create a unified file ID
