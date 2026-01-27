@@ -59,7 +59,7 @@ class TestRAGS3Vectors(BaseRAGTest):
                 "custom_llm_provider": "s3_vectors",
                 "vector_bucket_name": vector_bucket_name,
                 "index_name": "test-index",
-                "dimension": 1536,  # text-embedding-3-small dimension
+                # dimension is auto-detected from embedding model (text-embedding-3-small = 1536)
                 "distance_metric": "cosine",
                 "non_filterable_metadata_keys": ["source_text"],
                 "aws_region_name": aws_region,
