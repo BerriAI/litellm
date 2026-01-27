@@ -478,7 +478,9 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Call PutVectors API
         await self._put_vectors(vectors)
 
-        return self.index_name, filename
+        # Return vector_store_id in format bucket_name:index_name for S3 Vectors search compatibility
+        vector_store_id = f"{self.vector_bucket_name}:{self.index_name}"
+        return vector_store_id, filename
 
     async def query_vector_store(
         self, vector_store_id: str, query: str, top_k: int = 5
