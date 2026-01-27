@@ -48,7 +48,8 @@ def mock_env():
 
 @patch("litellm.secret_managers.main.oidc_cache")
 @patch("litellm.secret_managers.main._get_oidc_http_handler")
-def test_oidc_google_success(mock_get_http_handler, mock_oidc_cache):
+@patch("httpx.Client")  # Prevent any real HTTP connections
+def test_oidc_google_success(mock_httpx_client, mock_get_http_handler, mock_oidc_cache):
     mock_oidc_cache.get_cache.return_value = None
     mock_handler = MockHTTPHandler(timeout=600.0)
     mock_get_http_handler.return_value = mock_handler
@@ -144,7 +145,7 @@ def test_oidc_azure_file_success(mock_env, tmp_path):
     mock_env["AZURE_FEDERATED_TOKEN_FILE"] = str(token_file)
 
     secret_name = "oidc/azure/azure-audience"
-    result = get_secret(secret_name)
+    result = get_secret(secret_name)    
 
     assert result == "azure_token"
 
@@ -156,16 +157,22 @@ def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider):
     if "AZURE_FEDERATED_TOKEN_FILE" in os.environ:
         del os.environ["AZURE_FEDERATED_TOKEN_FILE"]
     
+    # Mock the token provider function that gets returned and called
     mock_token_provider = Mock(return_value="azure_ad_token")
     mock_get_azure_ad_token_provider.return_value = mock_token_provider
-    secret_name = "oidc/azure/api://azure-audience"
-    result = get_secret(secret_name)
+    
+    # Also mock the Azure Identity SDK to prevent any real Azure calls
+    with patch("azure.identity.get_bearer_token_provider") as mock_bearer:
+        mock_bearer.return_value = mock_token_provider
+        
+        secret_name = "oidc/azure/api://azure-audience"
+        result = get_secret(secret_name)
 
-    assert result == "azure_ad_token"
-    mock_get_azure_ad_token_provider.assert_called_once_with(
-        azure_scope="api://azure-audience"
-    )
-    mock_token_provider.assert_called_once_with()
+        assert result == "azure_ad_token"
+        mock_get_azure_ad_token_provider.assert_called_once_with(
+            azure_scope="api://azure-audience"
+        )
+        mock_token_provider.assert_called_once_with()
 
 
 def test_oidc_file_success(tmp_path):
