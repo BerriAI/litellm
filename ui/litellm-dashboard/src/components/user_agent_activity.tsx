@@ -17,7 +17,6 @@ import { Select, Tooltip, Switch, Table, Pagination, Input } from "antd";
 const { Option } = Select;
 const { Search } = Input;
 import { userAgentSummaryCall, tagDauCall, tagWauCall, tagMauCall, tagDistinctCall, leaderboardCall, userDauCall, userWauCall, userMauCall } from "./networking";
-import PerUserUsage from "./per_user_usage";
 import { DateRangePickerValue } from "@tremor/react";
 import { ChartLoader } from "./shared/chart_loader";
 import { formatDate } from "./networking";
