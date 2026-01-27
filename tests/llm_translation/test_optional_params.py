@@ -24,6 +24,7 @@ from litellm.utils import (
     get_optional_params_embeddings,
     get_optional_params_image_gen,
     get_requester_metadata,
+    validate_openai_optional_params,
 )
 
 ## get_optional_params_embeddings
@@ -1881,3 +1882,102 @@ def test_optional_params_responses_api_allowed_openai_params():
         request_body = mock_post.call_args.kwargs
         print("request_body: ", request_body)
         assert "top_logprobs" in request_body["json"]
+
+
+def test_validate_openai_optional_params_stop_truncation():
+    """
+    Test that validate_openai_optional_params truncates stop sequences to 4 elements
+    when more than 4 are provided, as OpenAI only supports up to 4 stop sequences.
+    """
+    # Test with more than 4 stop sequences - should truncate to 4
+    stop_sequences = ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+    result = validate_openai_optional_params(stop=stop_sequences)
+    assert result == ["stop1", "stop2", "stop3", "stop4"]
+    assert len(result) == 4
+    
+    # Test with exactly 4 stop sequences - should not truncate
+    stop_sequences_4 = ["stop1", "stop2", "stop3", "stop4"]
+    result = validate_openai_optional_params(stop=stop_sequences_4)
+    assert result == ["stop1", "stop2", "stop3", "stop4"]
+    assert len(result) == 4
+    
+    # Test with less than 4 stop sequences - should not truncate
+    stop_sequences_2 = ["stop1", "stop2"]
+    result = validate_openai_optional_params(stop=stop_sequences_2)
+    assert result == ["stop1", "stop2"]
+    assert len(result) == 2
+    
+    # Test with single stop sequence as string - should return as is
+    stop_string = "stop1"
+    result = validate_openai_optional_params(stop=stop_string)
+    assert result == "stop1"
+    
+    # Test with None - should return None
+    result = validate_openai_optional_params(stop=None)
+    assert result is None
+    
+    # Test with empty list - should return empty list
+    result = validate_openai_optional_params(stop=[])
+    assert result == []
+
+
+def test_validate_openai_optional_params_disable_stop_sequence_limit():
+    """
+    Test that validate_openai_optional_params respects the disable_stop_sequence_limit flag.
+    When litellm.disable_stop_sequence_limit is True, stop sequences should not be truncated.
+    """
+    # Save original value
+    original_value = litellm.disable_stop_sequence_limit
+    
+    try:
+        # Test with disable_stop_sequence_limit = True - should NOT truncate
+        litellm.disable_stop_sequence_limit = True
+        stop_sequences = ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+        result = validate_openai_optional_params(stop=stop_sequences)
+        assert result == ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+        assert len(result) == 6
+        
+        # Test with disable_stop_sequence_limit = False - should truncate to 4
+        litellm.disable_stop_sequence_limit = False
+        stop_sequences = ["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"]
+        result = validate_openai_optional_params(stop=stop_sequences)
+        assert result == ["stop1", "stop2", "stop3", "stop4"]
+        assert len(result) == 4
+    finally:
+        # Restore original value
+        litellm.disable_stop_sequence_limit = original_value
+
+
+def test_validate_openai_optional_params_integration():
+    """
+    Test that validate_openai_optional_params is properly integrated in the completion flow.
+    """
+    # Test that completion with more than 4 stop sequences works without error
+    try:
+        with patch("litellm.llms.openai.openai.OpenAI") as mock_client:
+            mock_response = MagicMock()
+            mock_response.choices = [MagicMock()]
+            mock_response.choices[0].message.content = "Test response"
+            mock_response.model = "gpt-3.5-turbo"
+            mock_response.id = "test-id"
+            mock_response.created = 1234567890
+            mock_response.usage = MagicMock()
+            mock_response.usage.prompt_tokens = 10
+            mock_response.usage.completion_tokens = 5
+            mock_response.usage.total_tokens = 15
+            
+            mock_client.return_value.chat.completions.create.return_value = mock_response
+            
+            # Call completion with more than 4 stop sequences
+            response = litellm.completion(
+                model="gpt-3.5-turbo",
+                messages=[{"role": "user", "content": "Hello"}],
+                stop=["stop1", "stop2", "stop3", "stop4", "stop5", "stop6"],
+                mock_response="Test response"  # This will use mock
+            )
+            
+            # Verify the call was made (stop sequences should be truncated internally)
+            assert response is not None
+    except Exception as e:
+        # Should not raise an exception
+        pytest.fail(f"validate_openai_optional_params integration failed: {e}")

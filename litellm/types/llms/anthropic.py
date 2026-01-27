@@ -359,6 +359,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
     container: Optional[Dict[str, Any]]  # Container config with skills for code execution
+    output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):

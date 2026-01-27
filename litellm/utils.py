@@ -771,7 +771,8 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## LAZY LOAD COROUTINE CHECKER ##
-        get_coroutine_checker = getattr(sys.modules[__name__], "get_coroutine_checker")
+        get_coroutine_checker_fn = getattr(sys.modules[__name__], "get_coroutine_checker")
+        coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
         dynamic_callbacks: Optional[
@@ -825,7 +826,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.input_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):  # type: ignore
-                if get_coroutine_checker().is_async_callable(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
@@ -835,7 +836,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.success_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.success_callback):  # type: ignore
-                if get_coroutine_checker().is_async_callable(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_success_callback(
                         callback
                     )
@@ -860,7 +861,7 @@ def function_setup(  # noqa: PLR0915
         if len(litellm.failure_callback) > 0:
             removed_async_items = []
             for index, callback in enumerate(litellm.failure_callback):  # type: ignore
-                if get_coroutine_checker().is_async_callable(callback):
+                if coroutine_checker.is_async_callable(callback):
                     litellm.logging_callback_manager.add_litellm_async_failure_callback(
                         callback
                     )
@@ -893,7 +894,7 @@ def function_setup(  # noqa: PLR0915
             removed_async_items = []
             for index, callback in enumerate(kwargs["success_callback"]):
                 if (
-                    get_coroutine_checker().is_async_callable(callback)
+                    coroutine_checker.is_async_callable(callback)
                     or callback == "dynamodb"
                     or callback == "s3"
                 ):
@@ -4648,7 +4649,9 @@ def add_provider_specific_params_to_optional_params(
     else:
         for k in passed_params.keys():
             if k not in openai_params and passed_params[k] is not None:
-                if _should_drop_param(k=k, additional_drop_params=additional_drop_params):
+                if _should_drop_param(
+                    k=k, additional_drop_params=additional_drop_params
+                ):
                     continue
                 optional_params[k] = passed_params[k]
     return optional_params
@@ -4719,7 +4722,7 @@ def calculate_max_parallel_requests(
     elif rpm is not None:
         return rpm
     elif tpm is not None:
-        calculated_rpm = int(tpm / 1000 / 6)
+        calculated_rpm = int(tpm / 1000 * 6)
         if calculated_rpm == 0:
             calculated_rpm = 1
         return calculated_rpm
@@ -5132,9 +5135,14 @@ def _invalidate_model_cost_lowercase_map() -> None:
     """Invalidate the case-insensitive lookup map for model_cost.
 
     Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
+    Also clears related LRU caches that depend on model_cost data.
     """
     global _model_cost_lowercase_map
     _model_cost_lowercase_map = None
+
+    # Clear LRU caches that depend on model_cost data
+    get_model_info.cache_clear()
+    _cached_get_model_info_helper.cache_clear()
 
 
 def _rebuild_model_cost_lowercase_map() -> Dict[str, str]:
@@ -5349,6 +5357,7 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _cached_get_model_info_helper(
     model: str, custom_llm_provider: Optional[str]
 ) -> ModelInfoBase:
@@ -5696,6 +5705,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         )
 
 
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
@@ -5775,6 +5785,14 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
         model=model,
         custom_llm_provider=custom_llm_provider,
     )
+
+    provider_info = get_provider_info(
+        model=model, custom_llm_provider=custom_llm_provider
+    )
+    if provider_info:
+        for key, value in provider_info.items():
+            if value is not None:
+                _model_info[key] = value  # type: ignore
 
     verbose_logger.debug(f"model_info: {_model_info}")
 
@@ -7696,6 +7714,27 @@ def validate_chat_completion_tool_choice(
         f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
     )
 
+def validate_openai_optional_params(  
+    stop: Optional[Union[str, List[str]]] = None,  
+    **kwargs  
+) -> Optional[Union[str, List[str]]]:  
+    """  
+    Validates and fixes OpenAI optional parameters.  
+      
+    Args:  
+        stop: Stop sequences (string or list of strings)  
+        **kwargs: Additional optional parameters  
+          
+    Returns:  
+        Validated stop parameter (truncated to 4 elements if needed)  
+    """  
+    if stop is not None and isinstance(stop, list) and not litellm.disable_stop_sequence_limit:  
+        # Truncate to 4 elements if more are provided as openai only supports up to 4 stop sequences
+        if len(stop) > 4:  
+            stop = stop[:4]  
+      
+    return stop
+
 
 class ProviderConfigManager:
     # Dictionary mapping for O(1) provider lookup
@@ -8152,7 +8191,10 @@ class ProviderConfigManager:
             # Note: GPT models (gpt-3.5, gpt-4, gpt-5, etc.) support temperature parameter
             # O-series models (o1, o3) do not contain "gpt" and have different parameter restrictions
             is_gpt_model = model and "gpt" in model.lower()
-            is_o_series = model and ("o_series" in model.lower() or (supports_reasoning(model) and not is_gpt_model))
+            is_o_series = model and (
+                "o_series" in model.lower()
+                or (supports_reasoning(model) and not is_gpt_model)
+            )
 
             is_o_series = model and (
                 "o_series" in model.lower()
@@ -8653,6 +8695,7 @@ class ProviderConfigManager:
         """
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
+        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
@@ -8668,6 +8711,7 @@ class ProviderConfigManager:
             SearchProviders.TAVILY: TavilySearchConfig,
             SearchProviders.PARALLEL_AI: ParallelAISearchConfig,
             SearchProviders.EXA_AI: ExaAISearchConfig,
+            SearchProviders.BRAVE: BraveSearchConfig,
             SearchProviders.GOOGLE_PSE: GooglePSESearchConfig,
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,

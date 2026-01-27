@@ -46,6 +46,7 @@ from .llms.openai import (
     FineTuningJob,
     ImageURLListItem,
     OpenAIChatCompletionChunk,
+    OpenAIChatCompletionFinishReason,
     OpenAIFileObject,
     OpenAIRealtimeStreamList,
     ResponsesAPIResponse,
@@ -63,11 +64,11 @@ def _generate_id():  # private helper function
     return "chatcmpl-" + str(uuid.uuid4())
 
 
-
 class SafeAttributeModel:
     """
     A base model that provides safe attribute access.
     """
+
     def __delattr__(self, name):
         try:
             super().__delattr__(name)
@@ -125,13 +126,14 @@ class SearchContextCostPerQuery(TypedDict, total=False):
 class AgenticLoopParams(TypedDict, total=False):
     """
     Parameters passed to agentic loop hooks (e.g., WebSearch interception).
-    
+
     Stored in logging_obj.model_call_details["agentic_loop_params"] to provide
     agentic hooks with the original request context needed for follow-up calls.
     """
+
     model: str
     """The model string with provider prefix (e.g., 'bedrock/invoke/...')"""
-    
+
     custom_llm_provider: str
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
@@ -384,6 +386,7 @@ class CallTypes(str, Enum):
     # MCP Call Types
     #########################################################
     call_mcp_tool = "call_mcp_tool"
+    list_mcp_tools = "list_mcp_tools"
 
     #########################################################
     # A2A Call Types
@@ -448,6 +451,7 @@ CallTypesLiteral = Literal[
     "vector_store_file_delete",
     "avector_store_file_delete",
     "call_mcp_tool",
+    "list_mcp_tools",
     "asend_message",
     "send_message",
     "aresponses",
@@ -1251,7 +1255,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
 
 
 class Choices(SafeAttributeModel, OpenAIObject):
-    finish_reason: str
+    finish_reason: OpenAIChatCompletionFinishReason
     index: int
     message: Message
     logprobs: Optional[Union[ChoiceLogprobs, Any]] = None
@@ -1343,8 +1347,7 @@ class CacheCreationTokenDetails(BaseModel):
 
 
 class PromptTokensDetailsWrapper(
-    SafeAttributeModel,
-    PromptTokensDetails
+    SafeAttributeModel, PromptTokensDetails
 ):  # extends with image generation fields (text_tokens, image_tokens)
     text_tokens: Optional[int] = None
     """Text tokens sent to the model."""
@@ -3117,6 +3120,7 @@ class SearchProviders(str, Enum):
     TAVILY = "tavily"
     PARALLEL_AI = "parallel_ai"
     EXA_AI = "exa_ai"
+    BRAVE = "brave"
     GOOGLE_PSE = "google_pse"
     DATAFORSEO = "dataforseo"
     FIRECRAWL = "firecrawl"
