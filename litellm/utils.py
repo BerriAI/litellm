@@ -968,28 +968,12 @@ def function_setup(  # noqa: PLR0915
             # signatures to ensure compatibility.
             if isinstance(messages, list) and len(messages) > 0:
                 try:
-                    from litellm.litellm_core_utils.get_llm_provider_logic import (
-                        get_llm_provider,
-                    )
                     from litellm.litellm_core_utils.prompt_templates.factory import (
                         THOUGHT_SIGNATURE_SEPARATOR,
                     )
 
-                    # Get custom_llm_provider to determine target provider
                     custom_llm_provider = kwargs.get("custom_llm_provider")
-                    
-                    # If custom_llm_provider not in kwargs, try to determine it from the model
-                    if not custom_llm_provider and model:
-                        try:
-                            _, custom_llm_provider, _, _ = get_llm_provider(
-                                model=model,
-                                custom_llm_provider=custom_llm_provider,
-                            )
-                        except Exception:
-                            # If we can't determine the provider, skip this processing
-                            pass
-                    
-                    # Only process if target is NOT a Gemini model
+
                     if not _is_gemini_model(model, custom_llm_provider):
                         verbose_logger.debug(
                             "Removing thought signatures from tool call IDs for non-Gemini model"
