@@ -153,7 +153,7 @@ class S3VectorsVectorStoreOptions(TypedDict, total=False):
     index_name: Optional[str]  # Vector index name (auto-creates if not provided)
 
     # Index configuration (for auto-creation)
-    dimension: Optional[int]  # Vector dimension (default: 1024)
+    dimension: Optional[int]  # Vector dimension (auto-detected from embedding model, or default: 1024)
     distance_metric: Optional[Literal["cosine", "euclidean"]]  # Default: cosine
     non_filterable_metadata_keys: Optional[List[str]]  # Keys excluded from filtering (e.g., ["source_text"])
 

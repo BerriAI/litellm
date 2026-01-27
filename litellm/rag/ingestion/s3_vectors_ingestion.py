@@ -64,11 +64,13 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Extract config
         self.vector_bucket_name = self.vector_store_config["vector_bucket_name"]
         self.index_name = self.vector_store_config.get("index_name")
-        self.dimension = int(self.vector_store_config.get("dimension", 1024))
         self.distance_metric = self.vector_store_config.get("distance_metric", "cosine")
         self.non_filterable_metadata_keys = self.vector_store_config.get(
             "non_filterable_metadata_keys", ["source_text"]
         )
+        
+        # Get dimension from config (will be auto-detected on first use if not provided)
+        self.dimension = self._get_dimension_from_config()
 
         # Get AWS region using BaseAWSLLM method
         _aws_region = self.vector_store_config.get("aws_region_name")
@@ -88,10 +90,62 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Track if infrastructure is initialized
         self._config_initialized = False
 
+    async def _get_dimension_from_embedding_request(self) -> int:
+        """
+        Auto-detect dimension by making a test embedding request.
+        
+        Makes a single embedding request with a test string to determine
+        the output dimension of the embedding model.
+        """
+        if not self.embedding_config or "model" not in self.embedding_config:
+            return 1024
+        
+        try:
+            model_name = self.embedding_config["model"]
+            verbose_logger.debug(
+                f"Auto-detecting dimension by making test embedding request to {model_name}"
+            )
+            
+            # Make a test embedding request
+            test_input = "test"
+            if self.router:
+                response = await self.router.aembedding(model=model_name, input=[test_input])
+            else:
+                response = await litellm.aembedding(model=model_name, input=[test_input])
+            
+            # Get dimension from the response
+            if response.data and len(response.data) > 0:
+                dimension = len(response.data[0]["embedding"])
+                verbose_logger.debug(
+                    f"Auto-detected dimension {dimension} for embedding model {model_name}"
+                )
+                return dimension
+        except Exception as e:
+            verbose_logger.warning(
+                f"Could not auto-detect dimension from embedding model: {e}. "
+                "Using default dimension of 1024."
+            )
+        
+        return 1024
+    
+    def _get_dimension_from_config(self) -> Optional[int]:
+        """
+        Get vector dimension from config if explicitly provided.
+        
+        Returns None if dimension should be auto-detected.
+        """
+        if "dimension" in self.vector_store_config:
+            return int(self.vector_store_config["dimension"])
+        return None
+
     async def _ensure_config_initialized(self):
         """Lazily initialize S3 Vectors infrastructure."""
         if self._config_initialized:
             return
+
+        # Auto-detect dimension if not provided
+        if self.dimension is None:
+            self.dimension = await self._get_dimension_from_embedding_request()
 
         # Ensure vector bucket exists
         await self._ensure_vector_bucket_exists()
