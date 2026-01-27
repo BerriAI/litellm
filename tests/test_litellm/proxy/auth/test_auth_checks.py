@@ -166,9 +166,12 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     import importlib
 
     from litellm import constants
+    from litellm.proxy.auth import auth_checks
     importlib.reload(constants)
+    # Also reload auth_checks to pick up the new constant value
+    importlib.reload(auth_checks)
     
-    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
     decrypted_token = decrypt_value_helper(
