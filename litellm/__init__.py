@@ -254,6 +254,7 @@ disable_streaming_logging: bool = False
 disable_token_counter: bool = False
 disable_add_transform_inline_image_block: bool = False
 disable_add_user_agent_to_request_tags: bool = False
+disable_default_user_agent: bool = False  # Option to disable automatic User-Agent header injection
 extra_spend_tag_headers: Optional[List[str]] = None
 in_memory_llm_clients_cache: "LLMClientCache"
 safe_memory_mode: bool = False
