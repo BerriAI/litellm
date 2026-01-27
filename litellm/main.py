@@ -28,6 +28,7 @@ from typing import (
     Callable,
     Coroutine,
     Dict,
+    Iterable,
     List,
     Literal,
     Mapping,
@@ -147,6 +148,7 @@ from litellm.utils import (
     validate_and_fix_openai_messages,
     validate_and_fix_openai_tools,
     validate_chat_completion_tool_choice,
+    validate_openai_optional_params,
 )
 
 from ._logging import verbose_logger
@@ -366,7 +368,7 @@ class AsyncCompletions:
 
 @tracer.wrap()
 @client
-async def acompletion(
+async def acompletion(  # noqa: PLR0915
     model: str,
     # Optional OpenAI params: see https://platform.openai.com/docs/api-reference/chat/create
     messages: List = [],
@@ -598,7 +600,14 @@ async def acompletion(
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
 
-        init_response = await loop.run_in_executor(None, func_with_context)
+        if timeout is not None and isinstance(timeout, (int, float)):
+            timeout_value = float(timeout)
+            init_response = await asyncio.wait_for(
+                loop.run_in_executor(None, func_with_context), timeout=timeout_value
+            )
+        else:
+            init_response = await loop.run_in_executor(None, func_with_context)
+
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
         ):  ## CACHING SCENARIO
@@ -606,7 +615,11 @@ async def acompletion(
                 response = ModelResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            response = await init_response
+            if timeout is not None and isinstance(timeout, (int, float)):
+                timeout_value = float(timeout)
+                response = await asyncio.wait_for(init_response, timeout=timeout_value)
+            else:
+                response = await init_response
         else:
             response = init_response  # type: ignore
 
@@ -623,6 +636,15 @@ async def acompletion(
                 loop=loop
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
+    except asyncio.TimeoutError:
+        custom_llm_provider = custom_llm_provider or "openai"
+        from litellm.exceptions import Timeout
+
+        raise Timeout(
+            message=f"Request timed out after {timeout} seconds",
+            model=model,
+            llm_provider=custom_llm_provider,
+        )
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(
@@ -1093,24 +1115,73 @@ def completion(  # type: ignore # noqa: PLR0915
     tools = validate_and_fix_openai_tools(tools=tools)
     # validate tool_choice
     tool_choice = validate_chat_completion_tool_choice(tool_choice=tool_choice)
+    # validate optional params
+    stop = validate_openai_optional_params(stop=stop)
+
+    ######### unpacking kwargs #####################
+    args = locals()
 
     skip_mcp_handler = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import (
-            handle_chat_completion_with_mcp,
+            acompletion_with_mcp,
         )
+        from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+            LiteLLM_Proxy_MCP_Handler,
+        )
+        from litellm.types.llms.openai import ToolParam
 
-        mcp_handler_context = locals().copy()
-        completion_callable = globals().get("acompletion")
-        mcp_result = run_async_function(
-            handle_chat_completion_with_mcp,
-            mcp_handler_context,
-            completion_callable,
-        )
-        if mcp_result is not None:
-            return mcp_result
-    ######### unpacking kwargs #####################
-    args = locals()
+        # Check if MCP tools are present (following responses pattern)
+        # Cast tools to Optional[Iterable[ToolParam]] for type checking
+        tools_for_mcp = cast(Optional[Iterable[ToolParam]], tools)
+        if LiteLLM_Proxy_MCP_Handler._should_use_litellm_mcp_gateway(
+            tools=tools_for_mcp
+        ):
+            # Return coroutine - acompletion will await it
+            # completion() can return a coroutine when MCP tools are present, which acompletion() awaits
+            return acompletion_with_mcp(  # type: ignore[return-value]
+                model=model,
+                messages=messages,
+                functions=functions,
+                function_call=function_call,
+                timeout=timeout,
+                temperature=temperature,
+                top_p=top_p,
+                n=n,
+                stream=stream,
+                stream_options=stream_options,
+                stop=stop,
+                max_tokens=max_tokens,
+                max_completion_tokens=max_completion_tokens,
+                modalities=modalities,
+                prediction=prediction,
+                audio=audio,
+                presence_penalty=presence_penalty,
+                frequency_penalty=frequency_penalty,
+                logit_bias=logit_bias,
+                user=user,
+                response_format=response_format,
+                seed=seed,
+                tools=tools,
+                tool_choice=tool_choice,
+                parallel_tool_calls=parallel_tool_calls,
+                logprobs=logprobs,
+                top_logprobs=top_logprobs,
+                deployment_id=deployment_id,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
+                safety_identifier=safety_identifier,
+                service_tier=service_tier,
+                base_url=base_url,
+                api_version=api_version,
+                api_key=api_key,
+                model_list=model_list,
+                extra_headers=extra_headers,
+                thinking=thinking,
+                web_search_options=web_search_options,
+                shared_session=shared_session,
+                **kwargs,
+            )
     api_base = kwargs.get("api_base", None)
     mock_response: Optional[MOCK_RESPONSE_TYPE] = kwargs.get("mock_response", None)
     mock_tool_calls = kwargs.get("mock_tool_calls", None)
@@ -1466,6 +1537,8 @@ def completion(  # type: ignore # noqa: PLR0915
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
+            tpm=kwargs.get("tpm"),
+            rpm=kwargs.get("rpm"),
         )
         cast(LiteLLMLoggingObj, logging).update_environment_variables(
             model=model,
@@ -2291,11 +2364,7 @@ def completion(  # type: ignore # noqa: PLR0915
                 input=messages, api_key=api_key, original_response=response
             )
         elif custom_llm_provider == "minimax":
-            api_key = (
-                api_key
-                or get_secret_str("MINIMAX_API_KEY")
-                or litellm.api_key
-            )
+            api_key = api_key or get_secret_str("MINIMAX_API_KEY") or litellm.api_key
 
             api_base = (
                 api_base
@@ -2343,7 +2412,9 @@ def completion(  # type: ignore # noqa: PLR0915
             or custom_llm_provider == "wandb"
             or custom_llm_provider == "clarifai"
             or custom_llm_provider in litellm.openai_compatible_providers
-            or JSONProviderRegistry.exists(custom_llm_provider)  # JSON-configured providers
+            or JSONProviderRegistry.exists(
+                custom_llm_provider
+            )  # JSON-configured providers
             or "ft:gpt-3.5-turbo" in model  # finetune gpt-3.5-turbo
         ):  # allow user to make an openai call with a custom base
             # note: if a user sets a custom base - we should ensure this works
@@ -4227,6 +4298,71 @@ async def acompletion_with_retries(*args, **kwargs):
     return await retryer(original_function, *args, **kwargs)
 
 
+def responses_with_retries(*args, **kwargs):
+    """
+    Executes a litellm.responses() with retries
+    """
+    try:
+        import tenacity
+    except Exception as e:
+        raise Exception(
+            f"tenacity import failed please run `pip install tenacity`. Error{e}"
+        )
+
+    from litellm.responses.main import responses
+
+    num_retries = kwargs.pop("num_retries", 3)
+    # reset retries in .responses()
+    kwargs["max_retries"] = 0
+    kwargs["num_retries"] = 0
+    retry_strategy: Literal["exponential_backoff_retry", "constant_retry"] = kwargs.pop(
+        "retry_strategy", "constant_retry"
+    )  # type: ignore
+    original_function = kwargs.pop("original_function", responses)
+    if retry_strategy == "exponential_backoff_retry":
+        retryer = tenacity.Retrying(
+            wait=tenacity.wait_exponential(multiplier=1, max=10),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
+    else:
+        retryer = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(num_retries), reraise=True
+        )
+    return retryer(original_function, *args, **kwargs)
+
+
+async def aresponses_with_retries(*args, **kwargs):
+    """
+    Executes a litellm.aresponses() with retries
+    """
+    try:
+        import tenacity
+    except Exception as e:
+        raise Exception(
+            f"tenacity import failed please run `pip install tenacity`. Error{e}"
+        )
+
+    from litellm.responses.main import aresponses
+
+    num_retries = kwargs.pop("num_retries", 3)
+    kwargs["max_retries"] = 0
+    kwargs["num_retries"] = 0
+    retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
+    original_function = kwargs.pop("original_function", aresponses)
+    if retry_strategy == "exponential_backoff_retry":
+        retryer = tenacity.AsyncRetrying(
+            wait=tenacity.wait_exponential(multiplier=1, max=10),
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+        )
+    else:
+        retryer = tenacity.AsyncRetrying(
+            stop=tenacity.stop_after_attempt(num_retries), reraise=True
+        )
+    return await retryer(original_function, *args, **kwargs)
+
+
 ### EMBEDDING ENDPOINTS ####################
 @client
 async def aembedding(*args, **kwargs) -> EmbeddingResponse:
@@ -4587,9 +4723,9 @@ def embedding(  # noqa: PLR0915
                 or get_secret_str("OPENAI_API_KEY")
             )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
-            
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
+
             if encoding_format is not None:
                 optional_params["encoding_format"] = encoding_format
             else:
@@ -4656,8 +4792,8 @@ def embedding(  # noqa: PLR0915
                     or get_secret_str("OPENAI_LIKE_API_KEY")
                 )
 
-            if extra_headers is not None:
-                optional_params["extra_headers"] = extra_headers
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
 
             ## EMBEDDING CALL
             response = openai_like_embedding.embedding(
@@ -4681,9 +4817,9 @@ def embedding(  # noqa: PLR0915
                 or litellm.api_key
             )
 
-            if extra_headers is not None and isinstance(extra_headers, dict):
-                headers = extra_headers
-            else:
+            # Use the merged headers variable (already merged at the top of the function)
+            # Don't overwrite it with just extra_headers
+            if headers is None:
                 headers = {}
 
             response = base_llm_http_handler.embedding(
@@ -4692,6 +4828,81 @@ def embedding(  # noqa: PLR0915
                 custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
                 api_key=cohere_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
+        elif custom_llm_provider == "openrouter":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("OPENROUTER_API_BASE")
+                or "https://openrouter.ai/api/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or litellm.openrouter_key
+                or get_secret("OPENROUTER_API_KEY")
+                or get_secret("OR_API_KEY")
+            )
+
+            openrouter_site_url = get_secret("OR_SITE_URL") or "https://litellm.ai"
+            openrouter_app_name = get_secret("OR_APP_NAME") or "liteLLM"
+
+            openrouter_headers = {
+                "HTTP-Referer": openrouter_site_url,
+                "X-Title": openrouter_app_name,
+            }
+
+            _headers = headers or litellm.headers
+            if _headers:
+                openrouter_headers.update(_headers)
+
+            headers = openrouter_headers
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                litellm_params=litellm_params_dict,
+                headers=headers,
+            )
+        elif custom_llm_provider == "vercel_ai_gateway":
+            api_base = (
+                api_base
+                or litellm.api_base
+                or get_secret_str("VERCEL_AI_GATEWAY_API_BASE")
+                or "https://ai-gateway.vercel.sh/v1"
+            )
+
+            api_key = (
+                api_key
+                or litellm.api_key
+                or get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                or get_secret_str("VERCEL_OIDC_TOKEN")
+            )
+
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                api_key=api_key,
                 logging_obj=logging,
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
@@ -5602,11 +5813,9 @@ def text_completion(  # noqa: PLR0915
         )
         and isinstance(prompt, list)
         and len(prompt) > 0
-        and isinstance(prompt[0], list)
+        and (isinstance(prompt[0], list) or isinstance(prompt[0], int))
     ):
-        verbose_logger.warning(
-            msg="List of lists being passed. If this is for tokens, then it might not work across all models."
-        )
+        # Support for token IDs as prompt (list of integers or list of lists of integers)
         messages = [{"role": "user", "content": prompt}]  # type: ignore
     else:
         raise Exception(
@@ -6581,9 +6790,7 @@ def speech(  # noqa: PLR0915
         if text_to_speech_provider_config is None:
             text_to_speech_provider_config = MinimaxTextToSpeechConfig()
 
-        minimax_config = cast(
-            MinimaxTextToSpeechConfig, text_to_speech_provider_config
-        )
+        minimax_config = cast(MinimaxTextToSpeechConfig, text_to_speech_provider_config)
 
         if api_base is not None:
             litellm_params_dict["api_base"] = api_base
@@ -6723,7 +6930,7 @@ async def ahealth_check(
         custom_llm_provider_from_params = model_params.get("custom_llm_provider", None)
         api_base_from_params = model_params.get("api_base", None)
         api_key_from_params = model_params.get("api_key", None)
-        
+
         model, custom_llm_provider, _, _ = get_llm_provider(
             model=model,
             custom_llm_provider=custom_llm_provider_from_params,
@@ -7097,6 +7304,7 @@ def __getattr__(name: str) -> Any:
         _encoding = tiktoken.get_encoding("cl100k_base")
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
+
         sys.modules[__name__].__dict__["encoding"] = _encoding
         global _encoding_cache
         _encoding_cache = _encoding

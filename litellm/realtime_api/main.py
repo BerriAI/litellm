@@ -61,6 +61,10 @@ async def _arealtime(
         api_key=api_key,
     )
 
+    # Ensure query params use the normalized provider model (no proxy aliases).
+    if query_params is not None:
+        query_params = {**query_params, "model": model}
+
     litellm_logging_obj.update_environment_variables(
         model=model,
         user=user,

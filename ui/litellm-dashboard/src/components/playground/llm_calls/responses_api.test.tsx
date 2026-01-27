@@ -72,8 +72,25 @@ describe("responses_api", () => {
   it("should configure MCP tools per server with restrictions", async () => {
     const selectedMCPServers = ["server-1", "server-2"];
     const mcpServers = [
-      { server_id: "server-1", alias: "alpha", server_name: "Alpha" },
-      { server_id: "server-2", server_name: "Beta" },
+      {
+        server_id: "server-1",
+        alias: "alpha",
+        server_name: "Alpha",
+        url: "http://example.com",
+        created_at: "2024-01-01",
+        created_by: "test",
+        updated_at: "2024-01-01",
+        updated_by: "test",
+      },
+      {
+        server_id: "server-2",
+        server_name: "Beta",
+        url: "http://example.com",
+        created_at: "2024-01-01",
+        created_by: "test",
+        updated_at: "2024-01-01",
+        updated_by: "test",
+      },
     ];
     const mcpServerToolRestrictions: Record<string, string[]> = {
       "server-1": ["toolA"],
@@ -85,20 +102,22 @@ describe("responses_api", () => {
       mockUpdateTextUI,
       "gpt-4",
       "test-token",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      undefined, // onUsageData
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
       selectedMCPServers,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      undefined, // previousResponseId
+      undefined, // onResponseId
+      undefined, // onMCPEvent
+      undefined, // codeInterpreterEnabled
+      undefined, // onCodeInterpreterResult
+      undefined, // customBaseUrl
       mcpServers,
       mcpServerToolRestrictions,
     );

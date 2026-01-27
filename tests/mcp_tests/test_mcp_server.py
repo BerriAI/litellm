@@ -1,6 +1,7 @@
 # Create server parameters for stdio connection
 import os
 import sys
+from litellm.proxy.proxy_server import LiteLLM_ObjectPermissionTable
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager
@@ -630,8 +631,15 @@ async def test_list_tools_rest_api_server_not_found():
     from fastapi import Query
     from litellm.proxy._types import UserAPIKeyAuth
 
-    # Mock UserAPIKeyAuth
-    mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
+    # Mock UserAPIKeyAuth with explicit permission to access the requested server id
+    mock_user_auth = UserAPIKeyAuth(
+        api_key="test",
+        user_id="test",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="dummy",
+            mcp_servers=["non_existent_server_id"],
+        ),
+    )
 
     # Mock request
     mock_request = MagicMock()
@@ -704,7 +712,16 @@ async def test_list_tools_rest_api_success():
             )
 
             # Mock UserAPIKeyAuth
-            mock_user_auth = UserAPIKeyAuth(api_key="test", user_id="test")
+            mock_user_auth = UserAPIKeyAuth(
+                api_key="test",
+                user_id="test",
+                object_permission=LiteLLM_ObjectPermissionTable(
+                    object_permission_id="dummy",
+                    mcp_servers=list(
+                        global_mcp_server_manager.get_all_mcp_server_ids()
+                    ),
+                ),
+            )
 
             # Get the server ID
             server_id = list(global_mcp_server_manager.get_registry().keys())[0]
@@ -984,34 +1001,39 @@ async def test_mcp_server_manager_access_groups_from_config():
         MCPRequestHandler,
     )
 
-    # Patch global_mcp_server_manager for this test
+    # Patch global_mcp_server_manager for this test and restore afterwards to
+    # avoid leaking state into other tests (e.g. the proxy MCP e2e suite).
     import litellm.proxy._experimental.mcp_server.mcp_server_manager as mcp_server_manager_mod
 
+    original_manager = mcp_server_manager_mod.global_mcp_server_manager
     mcp_server_manager_mod.global_mcp_server_manager = test_manager
-    # Should find config_server for group-a, both for group-b, other_server for group-c
-    import asyncio
+    try:
+        # Should find config_server for group-a, both for group-b, other_server for group-c
+        import asyncio
 
-    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-a"
-    ])
-    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-b"
-    ])
-    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-        "group-c"
-    ])
-    assert any(config_server.server_id == sid for sid in server_ids_a)
-    assert set(server_ids_b) == set(
-        [
-            s.server_id
+        server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-a"
+        ])
+        server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-b"
+        ])
+        server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+            "group-c"
+        ])
+        assert any(config_server.server_id == sid for sid in server_ids_a)
+        assert set(server_ids_b) == set(
+            [
+                s.server_id
+                for s in test_manager.config_mcp_servers.values()
+                if "group-b" in s.access_groups
+            ]
+        )
+        assert any(
+            s.name == "other_server" and s.server_id in server_ids_c
             for s in test_manager.config_mcp_servers.values()
-            if "group-b" in s.access_groups
-        ]
-    )
-    assert any(
-        s.name == "other_server" and s.server_id in server_ids_c
-        for s in test_manager.config_mcp_servers.values()
-    )
+        )
+    finally:
+        mcp_server_manager_mod.global_mcp_server_manager = original_manager
 
 
 async def test_mcp_server_manager_config_integration_with_database():
@@ -1083,9 +1105,26 @@ async def test_mcp_server_manager_config_integration_with_database():
 
     test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
 
-    # Test the method (this tests our second fix)
-    import asyncio
+    # Mock health_check_server to avoid real network calls that timeout
+    async def mock_health_check(server_id: str, mcp_auth_header=None):
+        server = test_manager.get_mcp_server_by_id(server_id)
+        if not server:
+            return None
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            server_name=server.name,
+            url=server.url,
+            transport=server.transport,
+            description=server.mcp_info.get("description") if server.mcp_info else None,
+            mcp_access_groups=server.access_groups,
+            status="healthy",
+            last_health_check=datetime.datetime.now(),
+            mcp_info=server.mcp_info,
+        )
 
+    test_manager.health_check_server = mock_health_check
+
+    # Test the method (this tests our second fix)
     servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
         user_api_key_auth=mock_user_auth
     )
@@ -1718,6 +1757,7 @@ async def test_list_tool_rest_api_with_server_specific_auth():
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Create mock request with server-specific auth headers
     mock_request = MagicMock()
@@ -1726,10 +1766,6 @@ async def test_list_tool_rest_api_with_server_specific_auth():
         "x-mcp-zapier-authorization": "Bearer zapier_token",
         "x-mcp-slack-authorization": "Bearer slack_token",
     }
-
-    # Create mock user_api_key_dict
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.user_id = "test_user"
 
     # Mock the MCPRequestHandler methods
     with patch.object(
@@ -1748,6 +1784,9 @@ async def test_list_tool_rest_api_with_server_specific_auth():
             with patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
             ) as mock_manager:
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["test-server-123"]
+                )
                 # Create a mock server
                 mock_server = MagicMock()
                 mock_server.server_id = "test-server-123"
@@ -1756,6 +1795,15 @@ async def test_list_tool_rest_api_with_server_specific_auth():
                 mock_server.mcp_info = {"server_name": "zapier"}
 
                 mock_manager.get_mcp_server_by_id.return_value = mock_server
+
+                mock_user_api_key_dict = UserAPIKeyAuth(
+                    api_key="test",
+                    user_id="test_user",
+                    object_permission=LiteLLM_ObjectPermissionTable(
+                        object_permission_id="dummy",
+                        mcp_servers=[mock_server.server_id],
+                    ),
+                )
 
                 # Mock the _get_tools_for_single_server function
                 with patch(
@@ -1803,6 +1851,7 @@ async def test_list_tool_rest_api_with_default_auth():
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Create mock request with default auth header only
     mock_request = MagicMock()
@@ -1810,10 +1859,6 @@ async def test_list_tool_rest_api_with_default_auth():
         "authorization": "Bearer user_token",
         "x-mcp-authorization": "Bearer default_token",
     }
-
-    # Create mock user_api_key_dict
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.user_id = "test_user"
 
     # Mock the MCPRequestHandler methods
     with patch.object(
@@ -1829,6 +1874,9 @@ async def test_list_tool_rest_api_with_default_auth():
             with patch(
                 "litellm.proxy._experimental.mcp_server.rest_endpoints.global_mcp_server_manager"
             ) as mock_manager:
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["test-server-123"]
+                )
                 # Create a mock server
                 mock_server = MagicMock()
                 mock_server.server_id = "test-server-123"
@@ -1837,6 +1885,15 @@ async def test_list_tool_rest_api_with_default_auth():
                 mock_server.mcp_info = {"server_name": "unknown_server"}
 
                 mock_manager.get_mcp_server_by_id.return_value = mock_server
+
+                mock_user_api_key_dict = UserAPIKeyAuth(
+                    api_key="test",
+                    user_id="test_user",
+                    object_permission=LiteLLM_ObjectPermissionTable(
+                        object_permission_id="dummy",
+                        mcp_servers=[mock_server.server_id],
+                    ),
+                )
 
                 # Mock the _get_tools_for_single_server function
                 with patch(
@@ -1884,6 +1941,7 @@ async def test_list_tool_rest_api_all_servers_with_auth():
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
         MCPRequestHandler,
     )
+    from litellm.proxy._types import UserAPIKeyAuth
 
     # Create mock request with server-specific auth headers
     mock_request = MagicMock()
@@ -1892,10 +1950,6 @@ async def test_list_tool_rest_api_all_servers_with_auth():
         "x-mcp-zapier-authorization": "Bearer zapier_token",
         "x-mcp-slack-authorization": "Bearer slack_token",
     }
-
-    # Create mock user_api_key_dict
-    mock_user_api_key_dict = MagicMock()
-    mock_user_api_key_dict.user_id = "test_user"
 
     # Mock the MCPRequestHandler methods
     with patch.object(
@@ -1929,6 +1983,23 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     "zapier": mock_zapier_server,
                     "slack": mock_slack_server,
                 }
+                mock_manager.get_allowed_mcp_servers = AsyncMock(
+                    return_value=["zapier", "slack"]
+                )
+                mock_manager.get_mcp_server_by_id.side_effect = (
+                    lambda server_id: mock_manager.get_registry.return_value.get(
+                        server_id
+                    )
+                )
+
+                mock_user_api_key_dict = UserAPIKeyAuth(
+                    api_key="test",
+                    user_id="test_user",
+                    object_permission=LiteLLM_ObjectPermissionTable(
+                        object_permission_id="dummy",
+                        mcp_servers=["zapier", "slack"],
+                    ),
+                )
 
                 # Mock the _get_tools_for_single_server function
                 with patch(
@@ -1971,17 +2042,15 @@ async def test_list_tool_rest_api_all_servers_with_auth():
                     assert result["tools"][0].name == "send_email"
                     assert result["tools"][1].name == "send_message"
 
-                    # Verify that _get_tools_for_single_server was called for both servers with correct auth headers
+                    # Verify that _get_tools_for_single_server was called for both servers
                     assert mock_get_tools.call_count == 2
-                    calls = mock_get_tools.call_args_list
+                    server_auth_map = {
+                        call_args[0][0]: call_args[0][1]
+                        for call_args in mock_get_tools.call_args_list
+                    }
 
-                    # First call should be for zapier server with zapier auth
-                    assert calls[0][0][0] == mock_zapier_server  # server
-                    assert calls[0][0][1] == "Bearer zapier_token"  # server_auth_header
-
-                    # Second call should be for slack server with slack auth
-                    assert calls[1][0][0] == mock_slack_server  # server
-                    assert calls[1][0][1] == "Bearer slack_token"  # server_auth_header
+                    assert server_auth_map.get(mock_zapier_server) == "Bearer zapier_token"
+                    assert server_auth_map.get(mock_slack_server) == "Bearer slack_token"
 
 
 @pytest.mark.asyncio

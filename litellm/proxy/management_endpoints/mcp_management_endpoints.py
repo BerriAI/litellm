@@ -32,16 +32,23 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 
 import litellm
-from litellm._uuid import uuid
 from litellm._logging import verbose_logger, verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
-    validate_and_normalize_mcp_server_payload,
+    get_server_prefix,
+    validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
+
 MCP_AVAILABLE: bool = True
+
 TEMPORARY_MCP_SERVER_TTL_SECONDS = 300
+DEFAULT_MCP_REGISTRY_VERSION = "1.0.0"
+LITELLM_MCP_SERVER_NAME = "litellm-mcp-server"
+LITELLM_MCP_SERVER_DESCRIPTION = "MCP Server for LiteLLM"
+
 try:
     importlib.import_module("mcp")
 except ImportError as e:
@@ -49,6 +56,19 @@ except ImportError as e:
     MCP_AVAILABLE = False
 
 if MCP_AVAILABLE:
+    try:
+        from mcp.shared.tool_name_validation import validate_tool_name  # type: ignore
+    except ImportError:
+
+        def validate_tool_name(name: str):
+            from pydantic import BaseModel
+
+            class MockResult(BaseModel):
+                is_valid: bool = True
+                warnings: list = []
+
+            return MockResult()
+
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
@@ -57,6 +77,7 @@ if MCP_AVAILABLE:
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
+        get_request_base_url,
         authorize_with_server,
         exchange_token_with_server,
         register_client_with_server,
@@ -67,7 +88,6 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         build_effective_auth_contexts,
     )
-    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy._types import (
         LiteLLM_MCPServerTable,
         LitellmUserRoles,
@@ -79,6 +99,7 @@ if MCP_AVAILABLE:
         UserMCPManagementMode,
     )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
     from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
     from litellm.types.mcp import MCPCredentials
@@ -88,6 +109,101 @@ if MCP_AVAILABLE:
     class _TemporaryMCPServerEntry:
         server: MCPServer
         expires_at: datetime
+
+    def _validate_mcp_server_name_fields(payload: Any) -> None:
+        candidates: List[tuple[str, Optional[str]]] = []
+
+        server_name = getattr(payload, "server_name", None)
+        alias = getattr(payload, "alias", None)
+
+        if server_name:
+            candidates.append(("server_name", server_name))
+        if alias:
+            candidates.append(("alias", alias))
+
+        for field_name, value in candidates:
+            if not value:
+                continue
+
+            validation_result = validate_tool_name(value)
+            if validation_result.is_valid:
+                continue
+
+            error_messages_text = (
+                f"Invalid MCP tool prefix '{value}' provided via {field_name}"
+            )
+            if validation_result.warnings:
+                error_messages_text = (
+                    error_messages_text + "\n" + "\n".join(validation_result.warnings)
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": error_messages_text},
+            )
+
+    def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
+        _base_validate_and_normalize_mcp_server_payload(payload)
+        _validate_mcp_server_name_fields(payload)
+
+    def _is_public_registry_enabled() -> bool:
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
+
+        return bool(proxy_general_settings.get("enable_mcp_registry"))
+
+    def _build_registry_remote_url(base_url: str, path: str) -> str:
+        normalized_base = base_url.rstrip("/")
+        normalized_path = path if path.startswith("/") else f"/{path}"
+        return f"{normalized_base}{normalized_path}"
+
+    def _build_mcp_registry_server_name(server: MCPServer) -> str:
+        if server.alias:
+            return server.alias
+        if server.server_name:
+            return server.server_name
+        return server.server_id
+
+    def _build_mcp_registry_entry_for_server(
+        server: MCPServer, base_url: str
+    ) -> Dict[str, Any]:
+        server_name = _build_mcp_registry_server_name(server)
+        title = server_name
+        description = server_name
+        version = DEFAULT_MCP_REGISTRY_VERSION
+
+        server_prefix = get_server_prefix(server)
+        if not server_prefix:
+            raise ValueError("MCP server prefix is missing")
+        remote_url = _build_registry_remote_url(base_url, f"/{server_prefix}/mcp")
+
+        return {
+            "name": server_name,
+            "title": title,
+            "description": description,
+            "version": version,
+            "remotes": [
+                {
+                    "type": "streamable-http",
+                    "url": remote_url,
+                }
+            ],
+        }
+
+    def _build_builtin_registry_entry(base_url: str) -> Dict[str, Any]:
+        remote_url = _build_registry_remote_url(base_url, "/mcp")
+        return {
+            "name": LITELLM_MCP_SERVER_NAME,
+            "title": LITELLM_MCP_SERVER_NAME,
+            "description": LITELLM_MCP_SERVER_DESCRIPTION,
+            "version": DEFAULT_MCP_REGISTRY_VERSION,
+            "remotes": [
+                {
+                    "type": "streamable-http",
+                    "url": remote_url,
+                }
+            ],
+        }
 
     _temporary_mcp_servers: Dict[str, _TemporaryMCPServerEntry] = {}
 
@@ -302,16 +418,44 @@ if MCP_AVAILABLE:
         access_groups_list = sorted(list(access_groups))
         return {"access_groups": access_groups_list}
 
+    @router.get(
+        "/registry.json",
+        tags=["mcp"],
+        description="MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry",
+    )
+    async def get_mcp_registry(request: Request):
+        if not _is_public_registry_enabled():
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="MCP registry is not enabled",
+            )
+
+        base_url = get_request_base_url(request)
+        registry_servers: List[Dict[str, Any]] = []
+        registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
+
+        registered_servers = list(global_mcp_server_manager.get_registry().values())
+        registered_servers.sort(key=_build_mcp_registry_server_name)
+
+        for server in registered_servers:
+            try:
+                entry = _build_mcp_registry_entry_for_server(server, base_url)
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Skipping MCP server {getattr(server, 'server_id', 'unknown')} in registry: {e}"
+                )
+                continue
+            registry_servers.append({"server": entry})
+
+        return {"servers": registry_servers}
+
     ## FastAPI Routes
     def _get_user_mcp_management_mode() -> UserMCPManagementMode:
-        try:
-            from litellm.proxy.proxy_server import (
-                general_settings as proxy_general_settings,
-            )
-        except Exception:
-            proxy_general_settings = None
+        from litellm.proxy.proxy_server import (
+            general_settings as proxy_general_settings,
+        )
 
-        mode = (proxy_general_settings or {}).get("user_mcp_management_mode")
+        mode = proxy_general_settings.get("user_mcp_management_mode")
         if mode == "view_all":
             return "view_all"
         return "restricted"

@@ -27,12 +27,14 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
+  policies?: string[],
   selectedMCPServers?: string[],
   previousResponseId?: string | null,
   onResponseId?: (responseId: string) => void,
   onMCPEvent?: (event: MCPEvent) => void,
   codeInterpreterEnabled?: boolean,
   onCodeInterpreterResult?: (result: CodeInterpreterResult) => void,
+  customBaseUrl?: string,
   mcpServers?: MCPServer[],
   mcpServerToolRestrictions?: Record<string, string[]>,
 ) {
@@ -50,7 +52,7 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
@@ -136,6 +138,7 @@ export async function makeOpenAIResponsesRequest(
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
+        ...(policies ? { policies } : {}),
         ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       },
       { signal },

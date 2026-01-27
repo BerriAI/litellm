@@ -422,6 +422,10 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "azure_ai":
+        return generic_cost_per_token(
+            model=model, usage=usage_block, custom_llm_provider=custom_llm_provider
+        )
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
@@ -585,6 +589,24 @@ def _model_contains_known_llm_provider(model: str) -> bool:
     """
     _provider_prefix = model.split("/")[0]
     return _provider_prefix in LlmProvidersSet
+
+
+def _get_response_model(completion_response: Any) -> Optional[str]:
+    """
+    Extract the model name from a completion response object.
+
+    Used as a fallback for cost calculation when the input model name
+    doesn't exist in model_cost (e.g., Azure Model Router).
+    """
+    if completion_response is None:
+        return None
+
+    if isinstance(completion_response, BaseModel):
+        return getattr(completion_response, "model", None)
+    elif isinstance(completion_response, dict):
+        return completion_response.get("model", None)
+
+    return None
 
 
 def _get_usage_object(
@@ -933,7 +955,7 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
-        potential_model_names = [selected_model]
+        potential_model_names = [selected_model, _get_response_model(completion_response)]
         if model is not None:
             potential_model_names.append(model)
 

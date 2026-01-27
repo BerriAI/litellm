@@ -221,14 +221,14 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
 
   if (providerKey && typeof modelMap === "object") {
     Object.entries(modelMap).forEach(([key, value]) => {
-      if (
-        value !== null &&
-        typeof value === "object" &&
-        "litellm_provider" in (value as object) &&
-        ((value as any)["litellm_provider"] === custom_llm_provider ||
-          (value as any)["litellm_provider"].includes(custom_llm_provider))
-      ) {
-        providerModels.push(key);
+      if (value !== null && typeof value === "object" && "litellm_provider" in (value as object)) {
+        const litellmProvider = (value as any)["litellm_provider"];
+        if (
+          litellmProvider === custom_llm_provider ||
+          (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
+        ) {
+          providerModels.push(key);
+        }
       }
     });
     // Special case for cohere

@@ -28,6 +28,8 @@ const { Title, Paragraph } = Typography;
 
 import FormItem from "antd/es/form/FormItem";
 import AlertingSettings from "./alerting/alerting_settings";
+import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
+import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import {
   deleteCallback,
   getCallbackConfigsCall,
@@ -38,9 +40,6 @@ import {
 import { LoggingCallbacksTable } from "./Settings/LoggingAndAlerts/LoggingCallbacks/LoggingCallbacksTable";
 import { AlertingObject } from "./Settings/LoggingAndAlerts/LoggingCallbacks/types";
 import { parseErrorMessage } from "./shared/errorUtils";
-import DeleteResourceModal from "./common_components/DeleteResourceModal";
-import CloudZeroCostTracking from "./CloudZeroCostTracking/CloudZeroCostTracking";
-import NewBadge from "./common_components/NewBadge";
 interface SettingsPageProps {
   accessToken: string | null;
   userRole: string | null;
@@ -570,9 +569,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
         <TabGroup>
           <TabList variant="line" defaultValue="1">
             <Tab value="1">Logging Callbacks</Tab>
-            <Tab value="2">
-              CloudZero Cost Tracking <NewBadge />
-            </Tab>
+            <Tab value="2">CloudZero Cost Tracking</Tab>
             <Tab value="2">Alerting Types</Tab>
             <Tab value="3">Alerting Settings</Tab>
             <Tab value="4">Email Alerts</Tab>

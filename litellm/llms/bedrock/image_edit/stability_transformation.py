@@ -21,18 +21,18 @@ Supported models:
 API Reference: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters.html
 """
 
-import json
 import base64
+import json
 from typing import TYPE_CHECKING, Any, Dict, Optional, Tuple
 
 import httpx
 
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
-from litellm.types.router import GenericLiteLLMParams
 from litellm.types.llms.stability import (
     OPENAI_SIZE_TO_STABILITY_ASPECT_RATIO,
 )
+from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import FileTypes, ImageObject, ImageResponse
 from litellm.utils import get_model_info
 
@@ -150,11 +150,11 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
 
         return mapped_params
 
-    def transform_image_edit_request(
+    def transform_image_edit_request(  #noqa: PLR0915
         self,
         model: str,
-        prompt: str,
-        image: FileTypes,
+        prompt: Optional[str],
+        image: Optional[FileTypes],
         image_edit_optional_request_params: Dict,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
@@ -166,27 +166,36 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
         """
         # Build Bedrock Stability request
         data: Dict[str, Any] = {
-            "prompt": prompt,
             "output_format": "png",  # Default to PNG
         }
         
-        # Convert image to base64
-        image_b64: str
-        if hasattr(image, 'read') and callable(getattr(image, 'read', None)):
-            # File-like object (e.g., BufferedReader from open())
-            image_bytes = image.read()  # type: ignore
-            image_b64 = base64.b64encode(image_bytes).decode('utf-8')  # type: ignore
-        elif isinstance(image, bytes):
-            # Raw bytes
-            image_b64 = base64.b64encode(image).decode('utf-8')
-        elif isinstance(image, str):
-            # Already a base64 string
-            image_b64 = image
-        else:
-            # Try to handle as bytes
-            image_b64 = base64.b64encode(bytes(image)).decode('utf-8')  # type: ignore
+        # Add prompt only if provided (some models don't require it)
+        if prompt is not None and prompt != "":
+            data["prompt"] = prompt
+        
+        # Convert image to base64 if provided
+        if image is not None:
+            image_b64: str
+            if hasattr(image, 'read') and callable(getattr(image, 'read', None)):
+                # File-like object (e.g., BufferedReader from open())
+                image_bytes = image.read()  # type: ignore
+                image_b64 = base64.b64encode(image_bytes).decode('utf-8')  # type: ignore
+            elif isinstance(image, bytes):
+                # Raw bytes
+                image_b64 = base64.b64encode(image).decode('utf-8')
+            elif isinstance(image, str):
+                # Already a base64 string
+                image_b64 = image
+            else:
+                # Try to handle as bytes
+                image_b64 = base64.b64encode(bytes(image)).decode('utf-8')  # type: ignore
 
-        data["image"] = image_b64
+            # For style-transfer models, map image to init_image
+            model_lower = model.lower()
+            if "style-transfer" in model_lower:
+                data["init_image"] = image_b64
+            else:
+                data["image"] = image_b64
 
         # Add optional params (already mapped in map_openai_params)
         for key, value in image_edit_optional_request_params.items():  # type: ignore
@@ -218,30 +227,43 @@ class BedrockStabilityImageEditConfig(BaseImageEditConfig):
                     file_b64 = str(file_bytes)
                 data[key] = file_b64
                 continue
-
-            # Supported text fields
-            if key in [
-                "negative_prompt",
-                "aspect_ratio",
-                "seed",
-                "output_format",
-                "model",
-                "mode",
+            
+            # Numeric fields that need to be converted to int/float
+            numeric_int_fields = ["left", "right", "up", "down", "seed"]
+            numeric_float_fields = [
                 "strength",
-                "style_preset",
                 "creativity",
                 "control_strength",
                 "grow_mask",
-                "left",
-                "right",
-                "up",
-                "down",
-                "select_prompt",
-                "search_prompt",
                 "fidelity",
                 "composition_fidelity",
                 "style_strength",
                 "change_strength",
+            ]
+            
+            if key in numeric_int_fields:
+                # Convert to int (these are pixel values for outpaint)
+                try:
+                    data[key] = int(value)  # type: ignore
+                except (ValueError, TypeError):
+                    data[key] = value  # type: ignore
+            elif key in numeric_float_fields:
+                # Convert to float
+                try:
+                    data[key] = float(value)  # type: ignore
+                except (ValueError, TypeError):
+                    data[key] = value  # type: ignore
+
+            # Supported text fields
+            elif key in [
+                "negative_prompt",
+                "aspect_ratio",
+                "output_format",
+                "model",
+                "mode",
+                "style_preset",
+                "select_prompt",
+                "search_prompt",
             ]:
                 data[key] = value  # type: ignore
 

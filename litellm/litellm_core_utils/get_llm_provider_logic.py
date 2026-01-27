@@ -1,7 +1,5 @@
 from typing import Optional, Tuple
 
-import httpx
-
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -453,11 +451,7 @@ def get_llm_provider(  # noqa: PLR0915
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=error_str,
                 model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
+                response=None,
                 llm_provider="",
             )
         if api_base is not None and not isinstance(api_base, str):
@@ -481,11 +475,7 @@ def get_llm_provider(  # noqa: PLR0915
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
                 model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
+                response=None,
                 llm_provider="",
             )
 
@@ -768,6 +758,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.GithubCopilotConfig()._get_openai_compatible_provider_info(
             model, api_base, api_key, custom_llm_provider
         )
+    elif custom_llm_provider == "chatgpt":
+        (
+            api_base,
+            dynamic_api_key,
+            custom_llm_provider,
+        ) = litellm.ChatGPTConfig()._get_openai_compatible_provider_info(
+            model, api_base, api_key, custom_llm_provider
+        )
     elif custom_llm_provider == "novita":
         api_base = (
             api_base
@@ -913,6 +911,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "http://localhost:2024"
         )
         dynamic_api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
+    elif custom_llm_provider == "manus":
+        # Manus is OpenAI compatible for responses API
+        api_base = (
+            api_base
+            or get_secret_str("MANUS_API_BASE")
+            or "https://api.manus.im"
+        )
+        dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

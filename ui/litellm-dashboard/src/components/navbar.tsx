@@ -1,4 +1,5 @@
 import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { getProxyBaseUrl } from "@/components/networking";
 import { useTheme } from "@/contexts/ThemeContext";
 import { clearTokenCookies } from "@/utils/cookieUtils";
@@ -11,15 +12,19 @@ import {
 import { fetchProxySettings } from "@/utils/proxyUtils";
 import {
   CrownOutlined,
+  GithubOutlined,
   LogoutOutlined,
   MailOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MoonOutlined,
   SafetyOutlined,
+  SlackOutlined,
+  SunOutlined,
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { Dropdown, Switch, Tooltip } from "antd";
+import { Button, Dropdown, Switch, Tooltip } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
 
@@ -34,6 +39,8 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -47,11 +54,13 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  isDarkMode,
+  toggleDarkMode
 }) => {
   const baseUrl = getProxyBaseUrl();
-  console.log("baseUrl", baseUrl);
   const [logoutUrl, setLogoutUrl] = useState("");
   const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
+  const disableShowPrompts = useDisableShowPrompts();
   const { logoUrl } = useTheme();
   const { data: healthData } = useHealthReadiness();
   const version = healthData?.litellm_version;
@@ -150,6 +159,27 @@ const Navbar: React.FC<NavbarProps> = ({
                 aria-label="Toggle hide new feature indicators"
               />
             </div>
+            <div
+              className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-gray-500 text-xs">Hide All Prompts</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={disableShowPrompts}
+                onChange={(checked) => {
+                  if (checked) {
+                    setLocalStorageItem("disableShowPrompts", "true");
+                    emitLocalStorageChange("disableShowPrompts");
+                  } else {
+                    removeLocalStorageItem("disableShowPrompts");
+                    emitLocalStorageChange("disableShowPrompts");
+                  }
+                }}
+                aria-label="Toggle hide all prompts"
+              />
+            </div>
           </div>
         </div>
       ),
@@ -207,6 +237,33 @@ const Navbar: React.FC<NavbarProps> = ({
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
+            <Button
+              href="https://www.litellm.ai/support"
+              target="_blank"
+              rel="noopener noreferrer"
+              icon={<SlackOutlined />}
+              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
+            >
+              Join Slack
+            </Button>
+            <Button
+              href="https://github.com/BerriAI/litellm"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
+              icon={<GithubOutlined />}
+            >
+              Star us on GitHub
+            </Button>
+            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
+            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
+            {false && <Switch
+              data-testid="dark-mode-toggle"
+              checked={isDarkMode}
+              onChange={toggleDarkMode}
+              checkedChildren={<MoonOutlined />}
+              unCheckedChildren={<SunOutlined />}
+            />}
             <a
               href="https://docs.litellm.ai/docs/"
               target="_blank"

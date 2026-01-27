@@ -5,6 +5,7 @@
 # +-------------------------------------------------------------+
 #  Qualifire - Evaluate LLM outputs for quality, safety, and reliability
 
+import json
 import os
 from typing import Any, Dict, List, Literal, Optional, Type
 
@@ -15,12 +16,17 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import (
     Logging as LiteLLMLoggingObj,
 )
+from litellm.llms.custom_httpx.http_handler import (
+    get_async_httpx_client,
+    httpxSpecialProvider,
+)
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 GUARDRAIL_NAME = "qualifire"
+DEFAULT_QUALIFIRE_API_BASE = "https://proxy.qualifire.ai"
 
 
 class QualifireGuardrail(CustomGuardrail):
@@ -44,7 +50,7 @@ class QualifireGuardrail(CustomGuardrail):
 
         Args:
             api_key: API key for Qualifire (or use QUALIFIRE_API_KEY env var)
-            api_base: Optional custom API base URL
+            api_base: Optional custom API base URL (defaults to https://api.qualifire.ai)
             evaluation_id: Pre-configured evaluation ID from Qualifire dashboard
             prompt_injections: Enable prompt injection detection (default if no other checks)
             hallucinations_check: Enable hallucination detection
@@ -64,6 +70,7 @@ class QualifireGuardrail(CustomGuardrail):
             api_base
             or get_secret_str("QUALIFIRE_BASE_URL")
             or os.environ.get("QUALIFIRE_BASE_URL")
+            or DEFAULT_QUALIFIRE_API_BASE
         )
         self.evaluation_id = evaluation_id
         self.prompt_injections = prompt_injections
@@ -79,7 +86,11 @@ class QualifireGuardrail(CustomGuardrail):
         if not self._has_any_check_enabled() and not self.evaluation_id:
             self.prompt_injections = True
 
-        self._client = None
+        # Initialize async HTTP client for direct API calls
+        self.async_handler = get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
+
         super().__init__(**kwargs)
 
     def _has_any_check_enabled(self) -> bool:
@@ -96,43 +107,22 @@ class QualifireGuardrail(CustomGuardrail):
             ]
         )
 
-    def _get_client(self):
-        """Lazy initialization of Qualifire client."""
-        if self._client is None:
-            try:
-                from qualifire.client import Client
-            except ImportError:
-                raise ImportError(
-                    "qualifire package is required for QualifireGuardrail. "
-                    "Install it with: pip install qualifire"
-                )
-
-            client_kwargs: Dict[str, Any] = {}
-            if self.qualifire_api_key:
-                client_kwargs["api_key"] = self.qualifire_api_key
-            if self.qualifire_api_base:
-                client_kwargs["base_url"] = self.qualifire_api_base
-
-            self._client = Client(**client_kwargs)
-
-        return self._client
-
-    def _convert_messages_to_qualifire_format(
+    def _convert_messages_to_api_format(
         self, messages: List[AllMessageValues]
-    ) -> List[Any]:
+    ) -> List[Dict[str, Any]]:
         """
-        Convert LiteLLM messages to Qualifire's LLMMessage format.
+        Convert LiteLLM messages to Qualifire API format.
         Supports tool calls for tool_selection_quality_check.
-        """
-        try:
-            from qualifire.types import LLMMessage, LLMToolCall
-        except ImportError:
-            raise ImportError(
-                "qualifire package is required for QualifireGuardrail. "
-                "Install it with: pip install qualifire"
-            )
 
-        qualifire_messages = []
+        Returns a list of dicts matching the API's ModelInvocationCanonicalMessage schema:
+        {
+            "role": "user" | "assistant" | "system" | "tool",
+            "content": "...",
+            "tool_call_id": "...",  # optional
+            "tool_calls": [{"id": "...", "name": "...", "arguments": {...}}]  # optional
+        }
+        """
+        api_messages = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
@@ -147,42 +137,86 @@ class QualifireGuardrail(CustomGuardrail):
                         text_parts.append(part)
                 content = "\n".join(text_parts)
 
-            llm_message_kwargs: Dict[str, Any] = {
+            api_message: Dict[str, Any] = {
                 "role": role,
                 "content": content if isinstance(content, str) else str(content),
             }
 
+            # Handle tool_call_id for tool response messages
+            tool_call_id = msg.get("tool_call_id")
+            if tool_call_id:
+                api_message["tool_call_id"] = tool_call_id
+
             # Handle tool calls if present
             tool_calls = msg.get("tool_calls")
             if tool_calls and isinstance(tool_calls, list):
-                qualifire_tool_calls = []
+                api_tool_calls = []
                 for tc in tool_calls:
                     if isinstance(tc, dict):
                         function_info = tc.get("function", {})
                         # Arguments can be a string (JSON) or dict
                         args = function_info.get("arguments", {})
                         if isinstance(args, str):
-                            import json
-
                             try:
                                 args = json.loads(args)
                             except json.JSONDecodeError:
                                 args = {}
-                        qualifire_tool_calls.append(
-                            LLMToolCall(
-                                id=tc.get("id") or "",
-                                name=function_info.get("name") or "",
-                                arguments=args if isinstance(args, dict) else {},
-                            )
+                        api_tool_calls.append(
+                            {
+                                "id": tc.get("id") or "",
+                                "name": function_info.get("name") or "",
+                                "arguments": args if isinstance(args, dict) else {},
+                            }
                         )
-                if qualifire_tool_calls:
-                    llm_message_kwargs["tool_calls"] = qualifire_tool_calls
+                if api_tool_calls:
+                    api_message["tool_calls"] = api_tool_calls
 
-            qualifire_messages.append(LLMMessage(**llm_message_kwargs))
+            api_messages.append(api_message)
 
-        return qualifire_messages
+        return api_messages
 
-    def _check_if_flagged(self, result: Any) -> bool:
+    def _convert_tools_to_api_format(
+        self, tools: Optional[List[Any]]
+    ) -> Optional[List[Dict[str, Any]]]:
+        """
+        Convert OpenAI-format tools to Qualifire API format.
+
+        Returns a list of dicts matching the API's ModelInvocationToolDefinition schema:
+        {
+            "name": "...",
+            "description": "...",
+            "parameters": {...}
+        }
+        """
+        if not tools:
+            return None
+
+        api_tools = []
+        for tool in tools:
+            if isinstance(tool, dict):
+                # Handle OpenAI function tool format
+                if tool.get("type") == "function":
+                    function_def = tool.get("function", {})
+                    api_tools.append(
+                        {
+                            "name": function_def.get("name", ""),
+                            "description": function_def.get("description", ""),
+                            "parameters": function_def.get("parameters", {}),
+                        }
+                    )
+                # Handle direct tool format
+                elif "name" in tool:
+                    api_tools.append(
+                        {
+                            "name": tool.get("name", ""),
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {}),
+                        }
+                    )
+
+        return api_tools if api_tools else None
+
+    def _check_if_flagged(self, result: Dict[str, Any]) -> bool:
         """
         Check if the Qualifire evaluation result indicates flagged content.
 
@@ -190,65 +224,53 @@ class QualifireGuardrail(CustomGuardrail):
         A high score (close to 100) indicates GOOD content, low score indicates problems.
         """
         # Check evaluation results for any flagged items
-        evaluation_results = getattr(result, "evaluationResults", None) or []
-        if isinstance(result, dict):
-            evaluation_results = result.get("evaluationResults", []) or []
+        evaluation_results = result.get("evaluationResults", []) or []
 
         for eval_result in evaluation_results:
-            results: List[Any] = []
-            if isinstance(eval_result, dict):
-                results = eval_result.get("results", []) or []
-            else:
-                results = getattr(eval_result, "results", []) or []
-
+            results = eval_result.get("results", []) or []
             for r in results:
-                flagged = (
-                    r.get("flagged")
-                    if isinstance(r, dict)
-                    else getattr(r, "flagged", False)
-                )
-                if flagged:
+                if r.get("flagged"):
                     return True
 
         return False
 
-    def _build_evaluate_kwargs(
+    def _build_evaluate_payload(
         self,
-        qualifire_messages: List[Any],
+        api_messages: List[Dict[str, Any]],
         output: Optional[str],
         assertions: Optional[List[str]],
-        available_tools: Optional[List[Any]],
+        available_tools: Optional[List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
-        """Build kwargs dictionary for the evaluate call."""
-        kwargs: Dict[str, Any] = {"messages": qualifire_messages}
+        """Build payload dictionary for the /api/evaluation/evaluate endpoint."""
+        payload: Dict[str, Any] = {"messages": api_messages}
 
         if output is not None:
-            kwargs["output"] = output
+            payload["output"] = output
 
         # Add enabled checks
         if self.prompt_injections:
-            kwargs["prompt_injections"] = True
+            payload["prompt_injections"] = True
         if self.hallucinations_check:
-            kwargs["hallucinations_check"] = True
+            payload["hallucinations_check"] = True
         if self.grounding_check:
-            kwargs["grounding_check"] = True
+            payload["grounding_check"] = True
         if self.pii_check:
-            kwargs["pii_check"] = True
+            payload["pii_check"] = True
         if self.content_moderation_check:
-            kwargs["content_moderation_check"] = True
+            payload["content_moderation_check"] = True
         if self.tool_selection_quality_check:
             # Only enable tool_selection_quality_check if available_tools is provided
             if available_tools:
-                kwargs["tool_selection_quality_check"] = True
-                kwargs["available_tools"] = available_tools
+                payload["tool_selection_quality_check"] = True
+                payload["available_tools"] = available_tools
             else:
                 verbose_proxy_logger.debug(
                     "Qualifire Guardrail: tool_selection_quality_check enabled but no available_tools provided, skipping this check"
                 )
         if assertions:
-            kwargs["assertions"] = assertions
+            payload["assertions"] = assertions
 
-        return kwargs
+        return payload
 
     async def _run_qualifire_check(
         self,
@@ -274,11 +296,17 @@ class QualifireGuardrail(CustomGuardrail):
         assertions = dynamic_params.get("assertions") or self.assertions
         on_flagged = dynamic_params.get("on_flagged") or self.on_flagged
 
-        try:
-            client = self._get_client()
-            qualifire_messages = self._convert_messages_to_qualifire_format(messages)
+        # Prepare headers
+        headers = {
+            "X-Qualifire-API-Key": self.qualifire_api_key or "",
+            "Content-Type": "application/json",
+        }
 
-            # Use invoke_evaluation if evaluation_id is provided
+        try:
+            # Convert messages to API format
+            api_messages = self._convert_messages_to_api_format(messages)
+
+            # Use invoke endpoint if evaluation_id is provided
             if evaluation_id:
                 # For invoke_evaluation, we need to extract input/output
                 input_text = ""
@@ -291,25 +319,47 @@ class QualifireGuardrail(CustomGuardrail):
                             input_text = content
                         break
 
-                result = client.invoke_evaluation(
-                    evaluation_id=evaluation_id,
-                    input=input_text,
-                    output=output or "",
-                )
+                payload = {
+                    "evaluation_id": evaluation_id,
+                    "input": input_text,
+                    "output": output or "",
+                    "messages": api_messages,
+                }
+
+                # Convert tools if provided
+                api_tools = self._convert_tools_to_api_format(available_tools)
+                if api_tools:
+                    payload["available_tools"] = api_tools
+
+                url = f"{self.qualifire_api_base}/api/evaluation/invoke"
             else:
-                # Use evaluate with individual checks
-                kwargs = self._build_evaluate_kwargs(
-                    qualifire_messages=qualifire_messages,
+                # Use evaluate endpoint with individual checks
+                api_tools = self._convert_tools_to_api_format(available_tools)
+                payload = self._build_evaluate_payload(
+                    api_messages=api_messages,
                     output=output,
                     assertions=assertions,
-                    available_tools=available_tools,
+                    available_tools=api_tools,
                 )
-                result = client.evaluate(**kwargs)
+                url = f"{self.qualifire_api_base}/api/evaluation/evaluate"
 
-            # Convert result to dict for logging
+            verbose_proxy_logger.debug(
+                f"Qualifire Guardrail: Making request to {url}"
+            )
+
+            # Make the API request
+            response = await self.async_handler.post(
+                url=url,
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # Extract response info for logging
             qualifire_response = {
-                "score": getattr(result, "score", None),
-                "status": getattr(result, "status", None),
+                "score": result.get("score"),
+                "status": result.get("status"),
             }
 
             verbose_proxy_logger.debug(

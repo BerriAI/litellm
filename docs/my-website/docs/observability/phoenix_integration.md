@@ -73,6 +73,8 @@ environment_variables:
     PHOENIX_COLLECTOR_HTTP_ENDPOINT: "https://app.phoenix.arize.com/s/<space-name>/v1/traces" # OPTIONAL - For setting the HTTP endpoint
 ```
 
+> Note: If you set the gRPC endpoint, install `grpcio` via `pip install "litellm[grpc]"` (or `grpcio`).
+
 2. Start the proxy
 
 ```bash

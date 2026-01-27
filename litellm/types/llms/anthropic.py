@@ -359,6 +359,7 @@ class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     mcp_servers: Optional[List[AnthropicMcpServerTool]]
     context_management: Optional[Dict[str, Any]]
     container: Optional[Dict[str, Any]]  # Container config with skills for code execution
+    output_format: Optional[AnthropicOutputSchema]  # Structured outputs support
 
 
 class AnthropicMessagesRequest(AnthropicMessagesRequestOptionalParams, total=False):
@@ -475,6 +476,8 @@ class MessageDelta(TypedDict, total=False):
 class UsageDelta(TypedDict, total=False):
     input_tokens: int
     output_tokens: int
+    cache_creation_input_tokens: int
+    cache_read_input_tokens: int
 
 
 class MessageBlockDelta(TypedDict):
@@ -634,8 +637,14 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     ADVANCED_TOOL_USE_2025_11_20 = "advanced-tool-use-2025-11-20"
 
 
-# Tool search beta header constant
+# Tool search beta header constant (for Anthropic direct API and Microsoft Foundry)
 ANTHROPIC_TOOL_SEARCH_BETA_HEADER = "advanced-tool-use-2025-11-20"
 
 # Effort beta header constant
 ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
+
+# OAuth constants
+ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
+ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
+
+

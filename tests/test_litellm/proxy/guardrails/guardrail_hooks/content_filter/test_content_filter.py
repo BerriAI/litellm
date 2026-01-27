@@ -14,7 +14,6 @@ sys.path.insert(
 
 from fastapi import HTTPException
 
-import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )

@@ -1,3 +1,7 @@
+import json
+import importlib
+import logging
+import os
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -12,6 +16,7 @@ sys.path.insert(0, "../../../../../")
 import httpx
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
+    CallToolResult,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
@@ -26,6 +31,15 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+
+
+def _reload_mcp_manager_module():
+    utils_module = sys.modules["litellm.proxy._experimental.mcp_server.utils"]
+    manager_module = sys.modules[
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager"
+    ]
+    importlib.reload(utils_module)
+    return importlib.reload(manager_module)
 
 
 class TestMCPServerManager:
@@ -146,6 +160,90 @@ class TestMCPServerManager:
 
         # When the header isn't provided, the key is omitted entirely
         assert env == {}
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_warns_on_invalid_alias(self, caplog):
+        """Invalid aliases from config should emit warnings during load."""
+
+        manager = MCPServerManager()
+        config = {
+            "validserver": {
+                "alias": "bad/name",
+                "url": "https://example.com",
+                "transport": MCPTransport.http,
+            }
+        }
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        assert any(
+            "invalid alias 'bad/name'" in message for message in caplog.messages
+        )
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_valid_alias(self, caplog):
+        """Valid aliases should be accepted and populate the registry."""
+
+        manager = MCPServerManager()
+        config = {
+            "validserver": {
+                "alias": "friendly_alias",
+                "url": "https://example.com",
+                "transport": MCPTransport.http,
+            }
+        }
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        # No warnings logged for the valid alias
+        assert all("invalid alias" not in message for message in caplog.messages)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.alias == "friendly_alias"
+        assert server.server_name == "validserver"
+
+    def test_warns_when_custom_separator_invalid(self, monkeypatch, caplog):
+        """Invalid MCP_TOOL_PREFIX_SEPARATOR values should log a warning."""
+
+        original_value = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR")
+        monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", "/")
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _reload_mcp_manager_module()
+
+        assert any("violates SEP-986" in message for message in caplog.messages)
+
+        # Restore original setting and ensure warning disappears
+        if original_value is None:
+            monkeypatch.delenv("MCP_TOOL_PREFIX_SEPARATOR", raising=False)
+        else:
+            monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", original_value)
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _reload_mcp_manager_module()
+
+        assert all("violates SEP-986" not in message for message in caplog.messages)
+
+    def test_accepts_valid_custom_separator(self, monkeypatch, caplog):
+        """Valid separators should not emit warnings during module import."""
+
+        original_value = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR")
+        monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", "_")
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _reload_mcp_manager_module()
+
+        assert all("violates SEP-986" not in message for message in caplog.messages)
+
+        if original_value is None:
+            monkeypatch.delenv("MCP_TOOL_PREFIX_SEPARATOR", raising=False)
+        else:
+            monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", original_value)
+
+        _reload_mcp_manager_module()
 
     @pytest.mark.asyncio
     async def test_list_tools_with_server_specific_auth_headers(self):
@@ -285,6 +383,50 @@ class TestMCPServerManager:
 
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_case_insensitive_extra_headers(self):
+        """_call_regular_mcp_tool should forward headers regardless of original casing."""
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-case-call",
+            name="case-call-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.authorization,
+            extra_headers=["Authorization"],
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = MagicMock(side_effect=capture_create_mcp_client)
+
+        result = await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"authorization": "Bearer token"},
+            proxy_logging_obj=None,
+        )
+
+        assert captured_extra_headers == {"Authorization": "Bearer token"}
+        assert isinstance(result, CallToolResult)
 
     @pytest.mark.asyncio
     async def test_get_prompts_from_server_success(self):
@@ -847,6 +989,68 @@ class TestMCPServerManager:
         assert result.server_id == "test-server"
         assert result.status == "healthy"
         assert result.health_check_error is None
+
+    @pytest.mark.asyncio
+    async def test_register_openapi_tools_includes_static_headers(self, tmp_path):
+        """Ensure OpenAPI-to-MCP tool calls include server.static_headers (Issue #19341)."""
+        manager = MCPServerManager()
+
+        spec_path = tmp_path / "openapi.json"
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Demo", "version": "1.0.0"},
+                    "paths": {
+                        "/health": {
+                            "get": {
+                                "operationId": "health_check",
+                                "summary": "health",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            server_name="openapi-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            static_headers={"Authorization": "STATIC token"},
+        )
+
+        captured: dict = {}
+
+        def fake_create_tool_function(path, method, operation, base_url, headers=None):
+            captured["headers"] = headers
+
+            async def tool_func(**kwargs):
+                return "ok"
+
+            return tool_func
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
+            side_effect=fake_create_tool_function,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
+            return_value={"type": "object", "properties": {}, "required": []},
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
+            return_value=None,
+        ):
+            manager._register_openapi_tools(
+                spec_path=str(spec_path),
+                server=server,
+                base_url="https://example.com",
+            )
+
+        assert captured["headers"] is not None
+        assert captured["headers"]["Authorization"] == "STATIC token"
 
     @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
@@ -1681,7 +1885,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params):
+        async def mock_call_tool(params, host_progress_callback=None):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]

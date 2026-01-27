@@ -1,8 +1,8 @@
-import { waitFor } from "@testing-library/react";
-import { renderWithProviders } from "../../../tests/test-utils";
+import { fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { KeyEditView } from "./key_edit_view";
+import { renderWithProviders } from "../../../tests/test-utils";
 import { KeyResponse } from "../key_team_helpers/key_list";
+import { KeyEditView } from "./key_edit_view";
 
 // Mock window.matchMedia
 Object.defineProperty(window, "matchMedia", {
@@ -142,5 +142,29 @@ describe("KeyEditView", () => {
     await waitFor(() => {
       expect(metadataTextarea).toHaveValue("{}");
     });
+  });
+
+  it("should call onCancel when cancel button is clicked", async () => {
+    const onCancelMock = vi.fn();
+    const { getByText } = renderWithProviders(
+      <KeyEditView
+        keyData={MOCK_KEY_DATA}
+        onCancel={onCancelMock}
+        onSubmit={async () => {}}
+        accessToken={""}
+        userID={""}
+        userRole={""}
+        premiumUser={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(getByText("Cancel")).toBeInTheDocument();
+    });
+
+    const cancelButton = getByText("Cancel");
+    fireEvent.click(cancelButton);
+
+    expect(onCancelMock).toHaveBeenCalledTimes(1);
   });
 });

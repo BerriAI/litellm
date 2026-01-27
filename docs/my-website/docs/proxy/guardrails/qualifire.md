@@ -8,13 +8,7 @@ Use [Qualifire](https://qualifire.ai) to evaluate LLM outputs for quality, safet
 
 ## Quick Start
 
-### 1. Install the Qualifire SDK
-
-```bash
-pip install qualifire
-```
-
-### 2. Define Guardrails on your LiteLLM config.yaml
+### 1. Define Guardrails on your LiteLLM config.yaml
 
 Define your guardrails under the `guardrails` section:
 
@@ -61,13 +55,13 @@ guardrails:
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input**. Same as `pre_call` but runs in parallel as LLM call. Response not returned until guardrail check completes
 
-### 3. Start LiteLLM Gateway
+### 2. Start LiteLLM Gateway
 
 ```shell
 litellm --config config.yaml --detailed_debug
 ```
 
-### 4. Test request
+### 3. Test request
 
 **[Langchain, OpenAI SDK Usage Examples](../proxy/user_keys#request-format)**
 
@@ -142,7 +136,7 @@ guardrails:
       evaluation_id: eval_abc123 # Your evaluation ID from Qualifire dashboard
 ```
 
-When `evaluation_id` is provided, LiteLLM will use `invoke_evaluation()` instead of `evaluate()`, running the pre-configured evaluation from your dashboard.
+When `evaluation_id` is provided, LiteLLM will use the invoke evaluation API endpoint instead of the evaluate endpoint, running the pre-configured evaluation from your dashboard.
 
 ## Available Checks
 
@@ -213,19 +207,19 @@ guardrails:
 
 ### Parameter Reference
 
-| Parameter                      | Type        | Default                     | Description                                              |
-| ------------------------------ | ----------- | --------------------------- | -------------------------------------------------------- |
-| `api_key`                      | `str`       | `QUALIFIRE_API_KEY` env var | Your Qualifire API key                                   |
-| `api_base`                     | `str`       | `None`                      | Custom API base URL (optional)                           |
-| `evaluation_id`                | `str`       | `None`                      | Pre-configured evaluation ID from Qualifire dashboard    |
-| `prompt_injections`            | `bool`      | `true` (if no other checks) | Enable prompt injection detection                        |
-| `hallucinations_check`         | `bool`      | `None`                      | Enable hallucination detection                           |
-| `grounding_check`              | `bool`      | `None`                      | Enable grounding verification                            |
-| `pii_check`                    | `bool`      | `None`                      | Enable PII detection                                     |
-| `content_moderation_check`     | `bool`      | `None`                      | Enable content moderation                                |
-| `tool_selection_quality_check` | `bool`      | `None`                      | Enable tool selection quality check                      |
-| `assertions`                   | `List[str]` | `None`                      | Custom assertions to validate                            |
-| `on_flagged`                   | `str`       | `"block"`                   | Action when content is flagged: `"block"` or `"monitor"` |
+| Parameter                      | Type        | Default                      | Description                                              |
+| ------------------------------ | ----------- | ---------------------------- | -------------------------------------------------------- |
+| `api_key`                      | `str`       | `QUALIFIRE_API_KEY` env var  | Your Qualifire API key                                   |
+| `api_base`                     | `str`       | `https://proxy.qualifire.ai` | Custom API base URL (optional)                           |
+| `evaluation_id`                | `str`       | `None`                       | Pre-configured evaluation ID from Qualifire dashboard    |
+| `prompt_injections`            | `bool`      | `true` (if no other checks)  | Enable prompt injection detection                        |
+| `hallucinations_check`         | `bool`      | `None`                       | Enable hallucination detection                           |
+| `grounding_check`              | `bool`      | `None`                       | Enable grounding verification                            |
+| `pii_check`                    | `bool`      | `None`                       | Enable PII detection                                     |
+| `content_moderation_check`     | `bool`      | `None`                       | Enable content moderation                                |
+| `tool_selection_quality_check` | `bool`      | `None`                       | Enable tool selection quality check                      |
+| `assertions`                   | `List[str]` | `None`                       | Custom assertions to validate                            |
+| `on_flagged`                   | `str`       | `"block"`                    | Action when content is flagged: `"block"` or `"monitor"` |
 
 ### Default Behavior
 
@@ -261,4 +255,3 @@ This evaluates whether the LLM selected the appropriate tools and provided corre
 
 - [Qualifire Documentation](https://docs.qualifire.ai)
 - [Qualifire Dashboard](https://app.qualifire.ai)
-- [Qualifire Python SDK](https://github.com/qualifire-dev/qualifire-python-sdk)

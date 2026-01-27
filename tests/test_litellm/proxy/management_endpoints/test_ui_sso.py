@@ -18,6 +18,7 @@ sys.path.insert(
 import litellm
 from litellm.proxy._types import LiteLLM_UserTable, NewTeamRequest, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
@@ -112,6 +113,47 @@ def test_microsoft_sso_handler_with_empty_response():
     assert result.first_name is None
     assert result.last_name is None
     assert result.team_ids == []
+
+
+def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
+    """
+    Test that MicrosoftSSOHandler.openid_from_response uses custom attribute names
+    from constants when environment variables are set.
+    """
+    # Arrange
+    mock_response = {
+        "custom_email_field": "custom@example.com",
+        "custom_display_name": "Custom Display Name",
+        "custom_id_field": "custom_user_123",
+        "custom_first_name": "CustomFirst",
+        "custom_last_name": "CustomLast",
+    }
+    expected_team_ids = ["team1"]
+
+    # Act
+    with patch("litellm.constants.MICROSOFT_USER_EMAIL_ATTRIBUTE", "custom_email_field"), \
+         patch("litellm.constants.MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "custom_display_name"), \
+         patch("litellm.constants.MICROSOFT_USER_ID_ATTRIBUTE", "custom_id_field"), \
+         patch("litellm.constants.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"), \
+         patch("litellm.constants.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_EMAIL_ATTRIBUTE", "custom_email_field"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "custom_display_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_ID_ATTRIBUTE", "custom_id_field"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"):
+        result = MicrosoftSSOHandler.openid_from_response(
+            response=mock_response, team_ids=expected_team_ids, user_role=None
+        )
+
+    # Assert
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "custom@example.com"
+    assert result.display_name == "Custom Display Name"
+    assert result.provider == "microsoft"
+    assert result.id == "custom_user_123"
+    assert result.first_name == "CustomFirst"
+    assert result.last_name == "CustomLast"
+    assert result.team_ids == expected_team_ids
 
 
 def test_get_microsoft_callback_response():
@@ -802,9 +844,9 @@ def test_get_user_email_and_id_extracts_microsoft_role():
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db():
+async def test_get_user_info_from_db_user_exists():
     """
-    received args in get_user_info_from_db: {'result': CustomOpenID(id='krrishd', email='krrishdholakia@gmail.com', first_name=None, last_name=None, display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce', picture=None, provider=None, team_ids=[]), 'prisma_client': <litellm.proxy.utils.PrismaClient object at 0x14a74e3c0>, 'user_api_key_cache': <litellm.caching.dual_cache.DualCache object at 0x148d37110>, 'proxy_logging_obj': <litellm.proxy.utils.ProxyLogging object at 0x148dd9090>, 'user_email': 'krrishdholakia@gmail.com', 'user_defined_values': {'models': [], 'user_id': 'krrishd', 'user_email': 'krrishdholakia@gmail.com', 'max_budget': None, 'user_role': None, 'budget_duration': None}}
+    Test that get_user_info_from_db finds existing user and calls upsert_sso_user to update.
     """
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
@@ -846,7 +888,7 @@ async def test_get_user_info_from_db():
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_alternate_user_id():
+async def test_get_user_info_from_db_user_exists_alternate_user_id():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     prisma_client = MagicMock()
@@ -886,6 +928,190 @@ async def test_get_user_info_from_db_alternate_user_id():
         mock_get_user_object.assert_called_once()
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd-email1234"
 
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_user_not_exists_creates_user():
+    """
+    Test that get_user_info_from_db creates a new user when user doesn't exist in DB.
+    
+    When get_existing_user_info_from_db returns None, get_user_info_from_db should:
+    1. Call upsert_sso_user with user_info=None
+    2. upsert_sso_user should call insert_sso_user to create the user
+    3. Add user to teams from SSO response
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "newuser@example.com"
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "new-user-123",
+        "user_email": "newuser@example.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+
+    sso_result = CustomOpenID(
+        id="new-user-123",
+        email="newuser@example.com",
+        first_name="New",
+        last_name="User",
+        display_name="New User",
+        picture=None,
+        provider="microsoft",
+        team_ids=["team-1", "team-2"],
+    )
+
+    args = {
+        "result": sso_result,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+    }
+
+    # Mock new user response
+    mock_new_user = NewUserResponse(
+        user_id="new-user-123",
+        key="sk-xxxxx",
+        teams=None,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+        return_value=None,  # User doesn't exist
+    ) as mock_get_existing, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+        return_value=mock_new_user,
+    ) as mock_upsert, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+    ) as mock_add_teams:
+        # Act
+        user_info = await get_user_info_from_db(**args)
+
+        # Assert
+        # Should try to find user by id
+        mock_get_existing.assert_called_once()
+        assert mock_get_existing.call_args.kwargs["user_id"] == "new-user-123"
+        assert mock_get_existing.call_args.kwargs["user_email"] == "newuser@example.com"
+
+        # Should call upsert_sso_user with None user_info
+        mock_upsert.assert_called_once()
+        upsert_call_args = mock_upsert.call_args
+        assert upsert_call_args.kwargs["user_info"] is None
+        assert upsert_call_args.kwargs["user_email"] == "newuser@example.com"
+        assert upsert_call_args.kwargs["user_defined_values"] == user_defined_values
+
+        # Should add user to teams
+        mock_add_teams.assert_called_once()
+        add_teams_call_args = mock_add_teams.call_args
+        assert add_teams_call_args.kwargs["result"] == sso_result
+        assert add_teams_call_args.kwargs["user_info"] == mock_new_user
+
+        # Should return the new user
+        assert user_info == mock_new_user
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_user_exists_updates_user():
+    """
+    Test that get_user_info_from_db updates existing user when user exists in DB.
+    
+    When get_existing_user_info_from_db returns a user, get_user_info_from_db should:
+    1. Call upsert_sso_user with the existing user_info
+    2. upsert_sso_user should update the user in the database
+    3. Add user to teams from SSO response
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "existing@example.com"
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "existing-user-456",
+        "user_email": "existing@example.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+
+    sso_result = CustomOpenID(
+        id="existing-user-456",
+        email="existing@example.com",
+        first_name="Existing",
+        last_name="User",
+        display_name="Existing User",
+        picture=None,
+        provider="microsoft",
+        team_ids=["team-3"],
+    )
+
+    # Existing user in DB
+    existing_user = LiteLLM_UserTable(
+        user_id="existing-user-456",
+        user_email="old@example.com",
+        user_role="internal_user",
+        models=["gpt-4"],
+        teams=[],
+    )
+
+    # Updated user after upsert
+    updated_user = LiteLLM_UserTable(
+        user_id="existing-user-456",
+        user_email="existing@example.com",  # Updated email
+        user_role="internal_user",
+        models=["gpt-4"],
+        teams=[],
+    )
+
+    args = {
+        "result": sso_result,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+        return_value=existing_user,  # User exists
+    ) as mock_get_existing, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+        return_value=updated_user,
+    ) as mock_upsert, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+    ) as mock_add_teams:
+        # Act
+        user_info = await get_user_info_from_db(**args)
+
+        # Assert
+        # Should find existing user
+        mock_get_existing.assert_called_once()
+        assert mock_get_existing.call_args.kwargs["user_id"] == "existing-user-456"
+
+        # Should call upsert_sso_user with existing user_info
+        mock_upsert.assert_called_once()
+        upsert_call_args = mock_upsert.call_args
+        assert upsert_call_args.kwargs["user_info"] == existing_user
+        assert upsert_call_args.kwargs["user_email"] == "existing@example.com"
+
+        # Should add user to teams
+        mock_add_teams.assert_called_once()
+        add_teams_call_args = mock_add_teams.call_args
+        assert add_teams_call_args.kwargs["result"] == sso_result
+        assert add_teams_call_args.kwargs["user_info"] == updated_user
+
+        # Should return the updated user
+        assert user_info == updated_user
 
 @pytest.mark.asyncio
 async def test_check_and_update_if_proxy_admin_id():
@@ -3386,3 +3612,126 @@ class TestSSOReadinessEndpoint:
                     )
         finally:
             app.dependency_overrides.clear()
+
+
+class TestCustomMicrosoftSSO:
+    """Tests for CustomMicrosoftSSO class."""
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_default_endpoints_when_no_env_vars(self):
+        """
+        Test that CustomMicrosoftSSO uses default Microsoft endpoints
+        when no custom environment variables are set.
+        """
+        # Ensure no custom endpoints are set
+        for key in [
+            "MICROSOFT_AUTHORIZATION_ENDPOINT",
+            "MICROSOFT_TOKEN_ENDPOINT",
+            "MICROSOFT_USERINFO_ENDPOINT",
+        ]:
+            os.environ.pop(key, None)
+
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        discovery = await sso.get_discovery_document()
+
+        assert discovery["authorization_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/authorize"
+        assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
+        assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_custom_endpoints_when_env_vars_set(self):
+        """
+        Test that CustomMicrosoftSSO uses custom endpoints
+        when environment variables are set.
+        """
+        custom_auth_endpoint = "https://custom.example.com/oauth2/v2.0/authorize"
+        custom_token_endpoint = "https://custom.example.com/oauth2/v2.0/token"
+        custom_userinfo_endpoint = "https://custom.example.com/v1.0/me"
+
+        with patch.dict(
+            os.environ,
+            {
+                "MICROSOFT_AUTHORIZATION_ENDPOINT": custom_auth_endpoint,
+                "MICROSOFT_TOKEN_ENDPOINT": custom_token_endpoint,
+                "MICROSOFT_USERINFO_ENDPOINT": custom_userinfo_endpoint,
+            },
+        ):
+            sso = CustomMicrosoftSSO(
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                tenant="test-tenant",
+                redirect_uri="http://localhost:4000/sso/callback",
+            )
+
+            discovery = await sso.get_discovery_document()
+
+            assert discovery["authorization_endpoint"] == custom_auth_endpoint
+            assert discovery["token_endpoint"] == custom_token_endpoint
+            assert discovery["userinfo_endpoint"] == custom_userinfo_endpoint
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_partial_custom_endpoints(self):
+        """
+        Test that CustomMicrosoftSSO uses custom endpoints for those set,
+        and defaults for others.
+        """
+        custom_auth_endpoint = "https://custom.example.com/oauth2/v2.0/authorize"
+
+        # Clear other env vars first
+        os.environ.pop("MICROSOFT_TOKEN_ENDPOINT", None)
+        os.environ.pop("MICROSOFT_USERINFO_ENDPOINT", None)
+
+        with patch.dict(
+            os.environ,
+            {
+                "MICROSOFT_AUTHORIZATION_ENDPOINT": custom_auth_endpoint,
+            },
+        ):
+            sso = CustomMicrosoftSSO(
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                tenant="test-tenant",
+                redirect_uri="http://localhost:4000/sso/callback",
+            )
+
+            discovery = await sso.get_discovery_document()
+
+            # Custom auth endpoint
+            assert discovery["authorization_endpoint"] == custom_auth_endpoint
+            # Default token and userinfo endpoints
+            assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
+            assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
+
+    def test_custom_microsoft_sso_uses_common_tenant_when_none(self):
+        """
+        Test that CustomMicrosoftSSO uses 'common' tenant when tenant is None.
+        """
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant=None,
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        assert sso.tenant == "common"
+
+    def test_custom_microsoft_sso_is_subclass_of_microsoft_sso(self):
+        """
+        Test that CustomMicrosoftSSO is a subclass of MicrosoftSSO.
+        """
+        from fastapi_sso.sso.microsoft import MicrosoftSSO
+
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        assert isinstance(sso, MicrosoftSSO)
