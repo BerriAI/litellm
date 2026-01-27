@@ -390,3 +390,66 @@ class TestAnthropicBetaHeaderSupport:
             "anthropic_beta SHOULD be added for Anthropic models with cross-region prefix."
         )
         assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
+
+    def test_messages_advanced_tool_use_translation_opus_4_5(self):
+        """Test that advanced-tool-use header is translated to Bedrock-specific headers for Opus 4.5.
+        
+        Regression test for: Claude Code sends advanced-tool-use-2025-11-20 header which needs
+        to be translated to tool-search-tool-2025-10-19 and tool-examples-2025-10-29 for
+        Bedrock Invoke API on Claude Opus 4.5.
+        
+        Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
+        """
+        config = AmazonAnthropicClaudeMessagesConfig()
+        headers = {"anthropic-beta": "advanced-tool-use-2025-11-20"}
+        
+        result = config.transform_anthropic_messages_request(
+            model="us.anthropic.claude-opus-4-5-20250514-v1:0",
+            messages=[{"role": "user", "content": "Test"}],
+            anthropic_messages_optional_request_params={"max_tokens": 100},
+            litellm_params={},
+            headers=headers
+        )
+        
+        assert "anthropic_beta" in result
+        beta_headers = result["anthropic_beta"]
+        
+        # advanced-tool-use should be removed
+        assert "advanced-tool-use-2025-11-20" not in beta_headers, (
+            "advanced-tool-use-2025-11-20 should be removed for Bedrock Invoke API"
+        )
+        
+        # Bedrock-specific headers should be added for Opus 4.5
+        assert "tool-search-tool-2025-10-19" in beta_headers, (
+            "tool-search-tool-2025-10-19 should be added for Opus 4.5"
+        )
+        assert "tool-examples-2025-10-29" in beta_headers, (
+            "tool-examples-2025-10-29 should be added for Opus 4.5"
+        )
+
+    def test_messages_advanced_tool_use_filtered_non_opus_4_5(self):
+        """Test that advanced-tool-use header is filtered out for non-Opus 4.5 models.
+        
+        The translation to Bedrock-specific headers should only happen for Opus 4.5.
+        For other models, the advanced-tool-use header should just be removed.
+        """
+        config = AmazonAnthropicClaudeMessagesConfig()
+        headers = {"anthropic-beta": "advanced-tool-use-2025-11-20"}
+        
+        # Test with Sonnet 4.5 (not Opus 4.5)
+        result = config.transform_anthropic_messages_request(
+            model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+            messages=[{"role": "user", "content": "Test"}],
+            anthropic_messages_optional_request_params={"max_tokens": 100},
+            litellm_params={},
+            headers=headers
+        )
+        
+        beta_headers = result.get("anthropic_beta", [])
+        
+        # advanced-tool-use should be removed
+        assert "advanced-tool-use-2025-11-20" not in beta_headers
+        
+        # Bedrock-specific headers should NOT be added for non-Opus 4.5
+        assert "tool-search-tool-2025-10-19" not in beta_headers
+        assert "tool-examples-2025-10-29" not in beta_headers
