@@ -5559,7 +5559,8 @@ async def test_validate_and_populate_member_user_info_only_email_provided():
 async def test_validate_and_populate_member_user_info_only_user_id_not_found():
     """
     Test _validate_and_populate_member_user_info when only user_id is provided
-    but the user doesn't exist in the database. Should raise HTTPException.
+    but the user doesn't exist in the database. Should allow it to pass with
+    user_email as None (will be upserted later).
     """
     # Create member with only user_id
     member = Member(user_email=None, user_id="nonexistent-user", role="user")
@@ -5570,17 +5571,16 @@ async def test_validate_and_populate_member_user_info_only_user_id_not_found():
     # Mock find_unique to return None (user not found)
     mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     
-    # Call the function and expect HTTPException
-    with pytest.raises(HTTPException) as exc_info:
-        await _validate_and_populate_member_user_info(
-            member=member,
-            prisma_client=mock_prisma_client,
-        )
+    # Call the function - should NOT raise an exception
+    result = await _validate_and_populate_member_user_info(
+        member=member,
+        prisma_client=mock_prisma_client,
+    )
     
-    # Verify the exception details
-    assert exc_info.value.status_code == 404
-    assert "not found" in exc_info.value.detail["error"].lower()
-    assert "nonexistent-user" in exc_info.value.detail["error"]
+    # Verify the result - should return member with user_id set and user_email as None
+    assert result.user_id == "nonexistent-user"
+    assert result.user_email is None
+    assert result.role == "user"
     
     # Verify find_unique was called with correct parameters
     mock_prisma_client.db.litellm_usertable.find_unique.assert_called_once_with(
