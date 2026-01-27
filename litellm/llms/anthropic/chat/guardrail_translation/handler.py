@@ -111,6 +111,10 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["tools"] = tools_to_check
             if structured_messages:
                 inputs["structured_messages"] = structured_messages
+            # Include model information if available
+            model = data.get("model")
+            if model:
+                inputs["model"] = model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -313,6 +317,14 @@ class AnthropicMessagesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
+            # Include model information from the response if available
+            response_model = None
+            if isinstance(response, dict):
+                response_model = response.get("model")
+            elif hasattr(response, "model"):
+                response_model = getattr(response, "model", None)
+            if response_model:
+                inputs["model"] = response_model
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
