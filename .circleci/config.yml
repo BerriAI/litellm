@@ -2617,7 +2617,7 @@ jobs:
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               --add-host host.docker.internal:host-gateway \
               --name my-app \
-              -v $(pwd)/tests/responses_api_tests_proxy/config.yaml:/app/config.yaml \
+              -v $(pwd)/tests/responses_api_tests_proxy/proxy_config.yaml:/app/config.yaml \
               litellm-docker-database:ci \
               --config /app/config.yaml \
               --port 4000 \
