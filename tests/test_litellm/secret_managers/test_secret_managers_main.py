@@ -48,7 +48,8 @@ def mock_env():
 
 @patch("litellm.secret_managers.main.oidc_cache")
 @patch("litellm.secret_managers.main._get_oidc_http_handler")
-def test_oidc_google_success(mock_get_http_handler, mock_oidc_cache):
+@patch("httpx.Client")  # Prevent any real HTTP connections
+def test_oidc_google_success(mock_httpx_client, mock_get_http_handler, mock_oidc_cache):
     mock_oidc_cache.get_cache.return_value = None
     mock_handler = MockHTTPHandler(timeout=600.0)
     mock_get_http_handler.return_value = mock_handler
@@ -161,7 +162,7 @@ def test_oidc_azure_ad_token_success(mock_get_azure_ad_token_provider):
     mock_get_azure_ad_token_provider.return_value = mock_token_provider
     
     # Also mock the Azure Identity SDK to prevent any real Azure calls
-    with patch("litellm.secret_managers.get_azure_ad_token_provider.get_bearer_token_provider") as mock_bearer:
+    with patch("azure.identity.get_bearer_token_provider") as mock_bearer:
         mock_bearer.return_value = mock_token_provider
         
         secret_name = "oidc/azure/api://azure-audience"
