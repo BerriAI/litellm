@@ -1769,12 +1769,15 @@ class LiteLLMCompletionResponsesConfig:
                 )
 
         # Translate completion_tokens_details to output_tokens_details
+        # Always set output_tokens_details with at least reasoning_tokens: 0
+        # to ensure OpenAI SDK compatibility (Ruby SDK requires this field to be an object, not null)
+        output_details_dict: Dict[str, Optional[int]] = {"reasoning_tokens": 0}
+
         if (
             hasattr(usage, "completion_tokens_details")
             and usage.completion_tokens_details is not None
         ):
             completion_details = usage.completion_tokens_details
-            output_details_dict: Dict[str, Optional[int]] = {}
             if (
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
@@ -1789,10 +1792,9 @@ class LiteLLMCompletionResponsesConfig:
             ):
                 output_details_dict["text_tokens"] = completion_details.text_tokens
 
-            if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(
-                    **output_details_dict
-                )
+        response_usage.output_tokens_details = OutputTokensDetails(
+            **output_details_dict
+        )
 
         return response_usage
 
