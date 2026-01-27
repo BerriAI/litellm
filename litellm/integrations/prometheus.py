@@ -1296,12 +1296,14 @@ class PrometheusLogger(CustomLogger):
             time_to_first_token_seconds is not None
             and kwargs.get("stream", False) is True  # only emit for streaming requests
         ):
+            _ttft_labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_llm_api_time_to_first_token_metric"
+                ),
+                enum_values=enum_values,
+            )
             self.litellm_llm_api_time_to_first_token_metric.labels(
-                model,
-                user_api_key,
-                user_api_key_alias,
-                user_api_team,
-                user_api_team_alias,
+                **_ttft_labels
             ).observe(time_to_first_token_seconds)
         else:
             verbose_logger.debug(

@@ -70,6 +70,30 @@ def test_prometheus_metric_labels_structure():
         print(f"✅ {metric_name} has proper label structure with user_email")
 
 
+def test_model_id_in_required_metrics():
+    """
+    Test that model_id label is present in all the metrics that should have it:
+    - litellm_proxy_total_requests_metric
+    - litellm_proxy_failed_requests_metric
+    - litellm_request_total_latency_metric
+    - litellm_llm_api_time_to_first_token_metric
+    """
+    model_id_label = UserAPIKeyLabelNames.MODEL_ID.value
+
+    # Metrics that should have model_id
+    metrics_with_model_id = [
+        "litellm_proxy_total_requests_metric",
+        "litellm_proxy_failed_requests_metric",
+        "litellm_request_total_latency_metric",
+        "litellm_llm_api_time_to_first_token_metric"
+    ]
+
+    for metric_name in metrics_with_model_id:
+        labels = PrometheusMetricLabels.get_labels(metric_name)
+        assert model_id_label in labels, f"Metric {metric_name} should contain model_id label"
+        print(f"✅ {metric_name} contains model_id label")
+
+
 def test_route_normalization_for_responses_api():
     """
     Test that route normalization prevents high cardinality in Prometheus metrics
@@ -217,14 +241,3 @@ def test_prometheus_metrics_use_normalized_routes():
     
     print("✅ Prometheus metrics use normalized routes in labels")
 
-
-if __name__ == "__main__":
-    test_user_email_in_required_metrics()
-    test_user_email_label_exists()
-    test_prometheus_metric_labels_structure()
-    test_route_normalization_for_responses_api()
-    test_route_normalization_for_sub_routes()
-    test_route_normalization_preserves_static_routes()
-    test_route_normalization_other_dynamic_apis()
-    test_prometheus_metrics_use_normalized_routes()
-    print("\n✅ All prometheus label tests passed!")

@@ -217,6 +217,10 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_request_total_latency_metric = [
@@ -228,6 +232,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
         UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_request_queue_time_seconds = [
@@ -258,6 +263,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.STATUS_CODE.value,
         UserAPIKeyLabelNames.USER_EMAIL.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_proxy_failed_requests_metric = [
@@ -272,6 +278,7 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.EXCEPTION_STATUS.value,
         UserAPIKeyLabelNames.EXCEPTION_CLASS.value,
         UserAPIKeyLabelNames.ROUTE.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 
     litellm_deployment_latency_per_output_token = [
