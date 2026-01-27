@@ -7,9 +7,27 @@ try:
 except Exception:
     version = "0.0.0"
 
-headers = {
-    "User-Agent": f"litellm/{version}",
-}
+def get_default_headers() -> dict:
+    """
+    Get default headers for HTTP requests.
+    
+    Respects litellm.disable_default_user_agent flag to allow users to disable
+    the automatic User-Agent header injection or override it completely.
+    
+    Returns:
+        dict: Default headers (may be empty if user disabled defaults)
+    """
+    import litellm
+    
+    if getattr(litellm, "disable_default_user_agent", False):
+        return {}
+    
+    return {
+        "User-Agent": f"litellm/{version}",
+    }
+
+# Initialize headers - will be empty if disable_default_user_agent is True
+headers = get_default_headers()
 
 
 class HTTPHandler:
