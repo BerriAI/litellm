@@ -1317,10 +1317,8 @@ class Router:
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
         """
         # Copy kwargs to ensure isolation
-        silent_kwargs = kwargs.copy()
-        if "metadata" in silent_kwargs:
-            silent_kwargs["metadata"] = silent_kwargs["metadata"].copy()
-        else:
+        silent_kwargs = copy.deepcopy(kwargs)
+        if "metadata" not in silent_kwargs:
             silent_kwargs["metadata"] = {}
 
         silent_kwargs["metadata"]["is_silent_experiment"] = True
@@ -1344,6 +1342,8 @@ class Router:
             # Prevent infinite recursion if silent model also has a silent model
             if kwargs.get("metadata", {}).get("is_silent_experiment", False):
                 return
+
+            messages = copy.deepcopy(messages)
 
             verbose_router_logger.info(
                 f"Starting silent experiment for model {silent_model}"
@@ -1580,6 +1580,8 @@ class Router:
             # Prevent infinite recursion if silent model also has a silent model
             if kwargs.get("metadata", {}).get("is_silent_experiment", False):
                 return
+
+            messages = copy.deepcopy(messages)
 
             verbose_router_logger.info(
                 f"Starting silent experiment for model {silent_model}"

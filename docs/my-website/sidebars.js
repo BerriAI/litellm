@@ -351,6 +351,7 @@ const sidebars = {
           label: "Load Balancing, Routing, Fallbacks",
           href: "https://docs.litellm.ai/docs/routing-load-balancing",
         },
+        "traffic_mirroring",
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
