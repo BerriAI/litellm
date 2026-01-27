@@ -851,6 +851,13 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
 
+    @field_validator("max_budget", mode="before")
+    @classmethod
+    def check_max_budget(cls, v):
+        if v == "":
+            return None
+        return v
+
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
     index_name: str
@@ -3421,6 +3428,8 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     """
 
     spend_logs_metadata: Optional[dict]
+    agent_id: Optional[str]
+    trace_id: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):

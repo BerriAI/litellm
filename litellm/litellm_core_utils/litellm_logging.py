@@ -3304,6 +3304,7 @@ def _get_masked_values(
         "token",
         "key",
         "secret",
+        "vertex_credentials",
     ]
     return {
         k: (

@@ -15,10 +15,10 @@ import pytest
 import litellm
 from litellm.proxy._types import (
     CallInfo,
+    Litellm_EntityType,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
-    Litellm_EntityType,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
@@ -129,6 +129,60 @@ def test_get_key_object_from_ui_hash_key_invalid():
     # Test with invalid token
     key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key("invalid_token")
     assert key_object is None
+
+
+def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
+    """Test generating CLI JWT token with default 24-hour expiration"""
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    # Decrypt and verify token contents
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["user_id"] == "test_user"
+    assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+    assert token_data["models"] == ["gpt-3.5-turbo"]
+    assert token_data["max_budget"] == litellm.max_ui_session_budget
+
+    # Verify expiration time is set to 24 hours (default)
+    assert "expires" in token_data
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    assert expires > get_utc_datetime()
+    assert expires <= get_utc_datetime() + timedelta(hours=24, minutes=1)
+    assert expires >= get_utc_datetime() + timedelta(hours=23, minutes=59)
+
+
+def test_get_cli_jwt_auth_token_custom_expiration(
+    valid_sso_user_defined_values, monkeypatch
+):
+    """Test generating CLI JWT token with custom expiration via environment variable"""
+    # Set custom expiration to 48 hours
+    monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
+    
+    # Reload the constants module to pick up the new env var
+    import importlib
+
+    from litellm import constants
+    importlib.reload(constants)
+    
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    # Decrypt and verify token contents
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    # Verify expiration time is set to 48 hours
+    assert "expires" in token_data
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    assert expires > get_utc_datetime() + timedelta(hours=47, minutes=59)
+    assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
+
 
 
 @pytest.mark.asyncio
