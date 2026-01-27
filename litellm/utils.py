@@ -5135,9 +5135,14 @@ def _invalidate_model_cost_lowercase_map() -> None:
     """Invalidate the case-insensitive lookup map for model_cost.
 
     Call this whenever litellm.model_cost is modified to ensure the map is rebuilt.
+    Also clears related LRU caches that depend on model_cost data.
     """
     global _model_cost_lowercase_map
     _model_cost_lowercase_map = None
+
+    # Clear LRU caches that depend on model_cost data
+    get_model_info.cache_clear()
+    _cached_get_model_info_helper.cache_clear()
 
 
 def _rebuild_model_cost_lowercase_map() -> Dict[str, str]:
@@ -5352,6 +5357,7 @@ def _get_max_position_embeddings(model_name: str) -> Optional[int]:
         return None
 
 
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def _cached_get_model_info_helper(
     model: str, custom_llm_provider: Optional[str]
 ) -> ModelInfoBase:
@@ -5699,6 +5705,7 @@ def _get_model_info_helper(  # noqa: PLR0915
         )
 
 
+@lru_cache(maxsize=DEFAULT_MAX_LRU_CACHE_SIZE)
 def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> ModelInfo:
     """
     Get a dict for the maximum tokens (context window), input_cost_per_token, output_cost_per_token  for a given model.
@@ -8046,6 +8053,12 @@ class ProviderConfigManager:
             )
 
             return OpenrouterEmbeddingConfig()
+        elif litellm.LlmProviders.VERCEL_AI_GATEWAY == provider:
+            from litellm.llms.vercel_ai_gateway.embedding.transformation import (
+                VercelAIGatewayEmbeddingConfig,
+            )
+
+            return VercelAIGatewayEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
