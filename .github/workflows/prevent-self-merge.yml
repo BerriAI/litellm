@@ -17,11 +17,12 @@ jobs:
             async function waitForJobsToStabilize() {
               let previousCount = 0;
               let stableCount = 0;
+              const expectedJobCount = 55; // Expected number of CI jobs
               const maxWaitMinutes = 5;
               const checkIntervalSeconds = 30;
               const checksNeeded = 3; // Jobs must remain stable for 3 checks
               
-              console.log('Waiting for CI jobs to stabilize...');
+              console.log(`Waiting for CI jobs to stabilize (expecting ~${expectedJobCount} jobs)...`);
               
               for (let i = 0; i < (maxWaitMinutes * 60 / checkIntervalSeconds); i++) {
                 const { data: checks } = await github.rest.checks.listForRef({
@@ -38,17 +39,23 @@ jobs:
                 
                 const currentCount = checks.check_runs.length + statuses.statuses.length;
                 
-                console.log(`Check ${i + 1}: ${currentCount} total jobs (${checks.check_runs.length} checks + ${statuses.statuses.length} statuses)`);
+                console.log(`Check ${i + 1}: ${currentCount}/${expectedJobCount} total jobs (${checks.check_runs.length} checks + ${statuses.statuses.length} statuses)`);
                 
-                if (currentCount === previousCount) {
-                  stableCount++;
-                  if (stableCount >= checksNeeded) {
-                    console.log(`✅ Job count stabilized at ${currentCount} jobs\n`);
-                    return { checks, statuses };
+                // If we've reached expected count, check for stability
+                if (currentCount >= expectedJobCount) {
+                  if (currentCount === previousCount) {
+                    stableCount++;
+                    if (stableCount >= checksNeeded) {
+                      console.log(`✅ Job count stabilized at ${currentCount} jobs (expected ${expectedJobCount})\n`);
+                      return { checks, statuses };
+                    }
+                  } else {
+                    stableCount = 0;
+                    console.log(`Job count changed from ${previousCount} to ${currentCount}, resetting stability counter`);
                   }
                 } else {
-                  stableCount = 0;
-                  console.log(`Job count changed from ${previousCount} to ${currentCount}, resetting stability counter`);
+                  // Haven't reached expected count yet, just keep waiting
+                  console.log(`Still waiting for more jobs... (${currentCount}/${expectedJobCount})`);
                 }
                 
                 previousCount = currentCount;
@@ -58,7 +65,7 @@ jobs:
                 }
               }
               
-              console.log(`⚠️ Timeout: Job count did not stabilize after ${maxWaitMinutes} minutes`);
+              console.log(`⚠️ Timeout: Job count did not reach expected ${expectedJobCount} after ${maxWaitMinutes} minutes`);
               // Return latest data even if not stable
               const { data: checks } = await github.rest.checks.listForRef({
                 owner: context.repo.owner,
