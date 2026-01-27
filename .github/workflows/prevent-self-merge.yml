@@ -13,19 +13,67 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            // Get GitHub Checks (newer API - GitHub Actions, some CI tools)
-            const { data: checks } = await github.rest.checks.listForRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: context.payload.pull_request.head.sha,
-            });
+            // Wait for CI jobs to stabilize (jobs may be dynamically registered)
+            async function waitForJobsToStabilize() {
+              let previousCount = 0;
+              let stableCount = 0;
+              const maxWaitMinutes = 5;
+              const checkIntervalSeconds = 30;
+              const checksNeeded = 3; // Jobs must remain stable for 3 checks
+              
+              console.log('Waiting for CI jobs to stabilize...');
+              
+              for (let i = 0; i < (maxWaitMinutes * 60 / checkIntervalSeconds); i++) {
+                const { data: checks } = await github.rest.checks.listForRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha,
+                });
+                
+                const { data: statuses } = await github.rest.repos.getCombinedStatusForRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha,
+                });
+                
+                const currentCount = checks.check_runs.length + statuses.statuses.length;
+                
+                console.log(`Check ${i + 1}: ${currentCount} total jobs (${checks.check_runs.length} checks + ${statuses.statuses.length} statuses)`);
+                
+                if (currentCount === previousCount) {
+                  stableCount++;
+                  if (stableCount >= checksNeeded) {
+                    console.log(`✅ Job count stabilized at ${currentCount} jobs\n`);
+                    return { checks, statuses };
+                  }
+                } else {
+                  stableCount = 0;
+                  console.log(`Job count changed from ${previousCount} to ${currentCount}, resetting stability counter`);
+                }
+                
+                previousCount = currentCount;
+                
+                if (i < (maxWaitMinutes * 60 / checkIntervalSeconds) - 1) {
+                  await new Promise(resolve => setTimeout(resolve, checkIntervalSeconds * 1000));
+                }
+              }
+              
+              console.log(`⚠️ Timeout: Job count did not stabilize after ${maxWaitMinutes} minutes`);
+              // Return latest data even if not stable
+              const { data: checks } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+              });
+              const { data: statuses } = await github.rest.repos.getCombinedStatusForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+              });
+              return { checks, statuses };
+            }
             
-            // Get GitHub Statuses (older API - CircleCI, Travis, etc.)
-            const { data: statuses } = await github.rest.repos.getCombinedStatusForRef({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: context.payload.pull_request.head.sha,
-            });
+            const { checks, statuses } = await waitForJobsToStabilize();
             
             console.log('=== CI Status Check ===');
             console.log(`PR: #${context.payload.pull_request.number} - ${context.payload.pull_request.title}`);
