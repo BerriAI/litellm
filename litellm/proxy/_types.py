@@ -630,6 +630,9 @@ class LiteLLMRoutes(enum.Enum):
         "/model/{model_id}/update",
         "/prompt/list",
         "/prompt/info",
+        "/guardrails",
+        "/guardrails/{guardrail_id}",
+        "/v2/guardrails/list",
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##
