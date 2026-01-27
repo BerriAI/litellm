@@ -21,6 +21,11 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.constants import (
+    S3_VECTORS_DEFAULT_DIMENSION,
+    S3_VECTORS_DEFAULT_DISTANCE_METRIC,
+    S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
@@ -47,8 +52,8 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
     Configuration:
     - vector_bucket_name: S3 vector bucket name (required)
     - index_name: Vector index name (auto-creates if not provided)
-    - dimension: Vector dimension (default: 1024)
-    - distance_metric: "cosine" or "euclidean" (default: cosine)
+    - dimension: Vector dimension (default: S3_VECTORS_DEFAULT_DIMENSION)
+    - distance_metric: "cosine" or "euclidean" (default: S3_VECTORS_DEFAULT_DISTANCE_METRIC)
     - non_filterable_metadata_keys: List of metadata keys to exclude from filtering
     """
 
@@ -63,9 +68,12 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Extract config
         self.vector_bucket_name = self.vector_store_config["vector_bucket_name"]
         self.index_name = self.vector_store_config.get("index_name")
-        self.distance_metric = self.vector_store_config.get("distance_metric", "cosine")
+        self.distance_metric = self.vector_store_config.get(
+            "distance_metric", S3_VECTORS_DEFAULT_DISTANCE_METRIC
+        )
         self.non_filterable_metadata_keys = self.vector_store_config.get(
-            "non_filterable_metadata_keys", ["source_text"]
+            "non_filterable_metadata_keys",
+            S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS,
         )
         
         # Get dimension from config (will be auto-detected on first use if not provided)
@@ -97,7 +105,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         the output dimension of the embedding model.
         """
         if not self.embedding_config or "model" not in self.embedding_config:
-            return 1024
+            return S3_VECTORS_DEFAULT_DIMENSION
         
         try:
             model_name = self.embedding_config["model"]
@@ -122,10 +130,10 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         except Exception as e:
             verbose_logger.warning(
                 f"Could not auto-detect dimension from embedding model: {e}. "
-                "Using default dimension of 1024."
+                f"Using default dimension of {S3_VECTORS_DEFAULT_DIMENSION}."
             )
         
-        return 1024
+        return S3_VECTORS_DEFAULT_DIMENSION
     
     def _get_dimension_from_config(self) -> Optional[int]:
         """
