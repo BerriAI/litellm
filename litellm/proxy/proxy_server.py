@@ -1224,6 +1224,7 @@ redis_usage_cache: Optional[
     RedisCache
 ] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
+native_background_mode: List[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -2456,14 +2457,17 @@ class ProxyConfig:
                     pass
                 elif key == "responses":
                     # Initialize global polling via cache settings
-                    global polling_via_cache_enabled, polling_cache_ttl
+                    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
                     background_mode = value.get("background_mode", {})
                     polling_via_cache_enabled = background_mode.get(
                         "polling_via_cache", False
                     )
+                    native_background_mode = background_mode.get(
+                        "native_background_mode", []
+                    )
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
-                        f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, ttl={polling_cache_ttl}{reset_color_code}"
+                        f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, native_background_mode={native_background_mode}, ttl={polling_cache_ttl}{reset_color_code}"
                     )
                 elif key == "default_team_settings":
                     for idx, team_setting in enumerate(
