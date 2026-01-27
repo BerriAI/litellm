@@ -13,35 +13,52 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            // Get GitHub Checks (newer API - GitHub Actions, some CI tools)
             const { data: checks } = await github.rest.checks.listForRef({
               owner: context.repo.owner,
               repo: context.repo.repo,
               ref: context.payload.pull_request.head.sha,
             });
             
-            // Define required CI jobs that must pass
-            const requiredJobs = [
-              'test',  // from test-litellm.yml
-              'lint',  // from test-linting.yml (if exists)
-            ];
+            // Get GitHub Statuses (older API - CircleCI, Travis, etc.)
+            const { data: statuses } = await github.rest.repos.getCombinedStatusForRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.payload.pull_request.head.sha,
+            });
             
             console.log('=== CI Status Check ===');
             console.log(`PR: #${context.payload.pull_request.number} - ${context.payload.pull_request.title}`);
             console.log(`Total checks: ${checks.check_runs.length}`);
+            console.log(`Total statuses (CircleCI, etc): ${statuses.statuses.length}`);
             
             let failedJobs = [];
             let pendingJobs = [];
             let passedJobs = [];
             
+            // Check GitHub Actions checks
             checks.check_runs.forEach(check => {
-              console.log(`- ${check.name}: ${check.status} / ${check.conclusion}`);
+              console.log(`[Check] ${check.name}: ${check.status} / ${check.conclusion}`);
               
               if (check.status === 'completed' && check.conclusion === 'failure') {
-                failedJobs.push(check.name);
+                failedJobs.push(`[Check] ${check.name}`);
               } else if (check.status !== 'completed') {
-                pendingJobs.push(check.name);
+                pendingJobs.push(`[Check] ${check.name}`);
               } else if (check.status === 'completed' && check.conclusion === 'success') {
-                passedJobs.push(check.name);
+                passedJobs.push(`[Check] ${check.name}`);
+              }
+            });
+            
+            // Check CircleCI and other status checks
+            statuses.statuses.forEach(status => {
+              console.log(`[Status] ${status.context}: ${status.state}`);
+              
+              if (status.state === 'failure' || status.state === 'error') {
+                failedJobs.push(`[Status] ${status.context}`);
+              } else if (status.state === 'pending') {
+                pendingJobs.push(`[Status] ${status.context}`);
+              } else if (status.state === 'success') {
+                passedJobs.push(`[Status] ${status.context}`);
               }
             });
             
@@ -56,7 +73,8 @@ jobs:
             }
             
             if (pendingJobs.length > 0) {
-              console.log(`⏳ Warning: ${pendingJobs.length} job(s) still running. Wait for completion.`);
+              core.setFailed(`⏳ Cannot evaluate: ${pendingJobs.length} job(s) still running. Wait for all CI jobs to complete before merging.\n\nPending jobs:\n${pendingJobs.join('\n')}`);
+              return;
             }
             
             // Calculate pass/fail rates
