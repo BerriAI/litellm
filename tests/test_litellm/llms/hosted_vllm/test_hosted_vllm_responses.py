@@ -1,3 +1,5 @@
+import pytest
+
 import litellm
 from litellm.utils import ProviderConfigManager
 
@@ -97,6 +99,55 @@ def test_hosted_vllm_responses_falls_back_when_endpoint_missing(monkeypatch):
     )
 
     resp = litellm_responses(model="hosted_vllm/gpt-oss-120b", input="hi")
+
+    assert called["native"] is True
+    assert called["fallback"] is True
+    assert resp is not None
+
+
+@pytest.mark.asyncio
+async def test_hosted_vllm_aresponses_falls_back_when_endpoint_missing(monkeypatch):
+    """
+    Async parity: aresponses() should also fall back to the chat-completions bridge
+    when hosted_vllm doesn't expose `/responses` yet (404/405/501).
+    """
+    from litellm import aresponses as litellm_aresponses
+    from litellm.responses import main as responses_main
+
+    monkeypatch.setenv("HOSTED_VLLM_API_BASE", "http://localhost:8000")
+
+    called = {"native": False, "fallback": False}
+
+    class _NotFound(Exception):
+        status_code = 404
+
+    async def native_coroutine():
+        called["native"] = True
+        raise _NotFound()
+
+    def fake_native(*args, **kwargs):
+        return native_coroutine()
+
+    async def fallback_coroutine():
+        called["fallback"] = True
+        return responses_main.mock_responses_api_response(mock_response="ok")
+
+    def fake_fallback(*args, **kwargs):
+        if kwargs.get("_is_async"):
+            return fallback_coroutine()
+        called["fallback"] = True
+        return responses_main.mock_responses_api_response(mock_response="ok")
+
+    monkeypatch.setattr(
+        responses_main.base_llm_http_handler, "response_api_handler", fake_native
+    )
+    monkeypatch.setattr(
+        responses_main.litellm_completion_transformation_handler,
+        "response_api_handler",
+        fake_fallback,
+    )
+
+    resp = await litellm_aresponses(model="hosted_vllm/gpt-oss-120b", input="hi")
 
     assert called["native"] is True
     assert called["fallback"] is True

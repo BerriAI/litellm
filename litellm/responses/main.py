@@ -706,6 +706,40 @@ def responses(
                 litellm_metadata=kwargs.get("litellm_metadata", {}),
                 shared_session=kwargs.get("shared_session"),
             )
+            if _is_async and asyncio.iscoroutine(response):
+
+                async def _await_with_fallback():
+                    try:
+                        return await response
+                    except Exception as e:
+                        status_code = getattr(e, "status_code", None)
+                        should_fallback = (
+                            getattr(
+                                responses_api_provider_config,
+                                "supports_fallback_to_chat",
+                                False,
+                            )
+                            and status_code in {404, 405, 501}
+                        )
+                        if should_fallback:
+                            fallback = (
+                                litellm_completion_transformation_handler.response_api_handler(
+                                    model=model,
+                                    input=input,
+                                    responses_api_request=response_api_optional_params,
+                                    custom_llm_provider=custom_llm_provider,
+                                    _is_async=_is_async,
+                                    stream=stream,
+                                    extra_headers=extra_headers,
+                                    **kwargs,
+                                )
+                            )
+                            if asyncio.iscoroutine(fallback):
+                                return await fallback
+                            return fallback
+                        raise
+
+                return _await_with_fallback()
         except Exception as e:
             status_code = getattr(e, "status_code", None)
             should_fallback = (
