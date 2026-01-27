@@ -1964,6 +1964,21 @@ def _can_object_call_model(
         if _model:
             potential_models.append(_model)
 
+    # Resolve URL model name to config model_name for passthrough endpoints
+    # e.g., "gemini-2.5-pro" (from URL) -> "gcp/google/gemini-2.5-pro" (config model_name)
+    # This enables access_groups validation when the URL model name differs from config name
+    if llm_router:
+        for deployment in llm_router.model_list:
+            litellm_model = deployment.get("litellm_params", {}).get("model", "")
+            if "/" in litellm_model:
+                # Extract underlying model: "vertex_ai/gemini-2.5-pro" -> "gemini-2.5-pro"
+                underlying_model = litellm_model.split("/")[-1]
+                if underlying_model == model:  # Exact match only to avoid false positives
+                    config_model_name = deployment.get("model_name")
+                    if config_model_name and config_model_name not in potential_models:
+                        potential_models.append(config_model_name)
+                    break
+
     ## check model access for alias + underlying model - allow if either is in allowed models
     for m in potential_models:
         if _check_model_access_helper(

@@ -1331,3 +1331,258 @@ async def test_virtual_key_max_budget_alert_check_scenarios(
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, max_budget={max_budget}"
+
+
+# Passthrough Access Groups Tests
+
+
+def test_can_object_call_model_passthrough_with_access_group():
+    """
+    Test that a key with access to an access_group can call a model via passthrough endpoint
+    where the URL model name differs from the config model_name.
+
+    This tests the scenario:
+    - Config has model_name="gcp/google/gemini-2.5-pro", litellm_params.model="vertex_ai/gemini-2.5-pro"
+    - Model has access_groups=["default-models"]
+    - Key has access to models=["default-models"]
+    - URL extracts "gemini-2.5-pro"
+    - Expected: Access allowed because we resolve "gemini-2.5-pro" -> "gcp/google/gemini-2.5-pro" -> access_groups
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    # URL extracts "gemini-2.5-pro" from passthrough endpoint
+    model = "gemini-2.5-pro"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "api_key": "test-api-key",
+                },
+                "model_info": {
+                    "id": "gcp/google/gemini-2.5-pro",
+                    "access_groups": ["default-models"],
+                },
+            }
+        ],
+    )
+
+    # Key has access to the access_group that contains this model
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["default-models"],  # Key has access to access_group
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    # Should return True because:
+    # 1. "gemini-2.5-pro" resolves to "gcp/google/gemini-2.5-pro" via litellm_params.model suffix match
+    # 2. "gcp/google/gemini-2.5-pro" has access_groups=["default-models"]
+    # 3. Key has access to "default-models"
+    assert result is True
+
+
+def test_can_object_call_model_passthrough_with_direct_model_access():
+    """
+    Test that direct model access continues to work for passthrough endpoints.
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "gemini-2.5-pro"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "api_key": "test-api-key",
+                },
+            }
+        ],
+    )
+
+    # Key has direct access to the config model_name
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["gcp/google/gemini-2.5-pro"],  # Direct access to config model_name
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    assert result is True
+
+
+def test_can_object_call_model_passthrough_denied_without_access():
+    """
+    Test that a key WITHOUT access to the model or its access_group is properly denied.
+    """
+    from litellm import Router
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "gemini-2.5-pro"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "api_key": "test-api-key",
+                },
+                "model_info": {
+                    "access_groups": ["default-models"],
+                },
+            }
+        ],
+    )
+
+    # Key has access to a different access_group
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=["other-models"],  # Different access_group
+            team_model_aliases=None,
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
+    assert "key not allowed to access model" in str(exc_info.value.message)
+
+
+def test_can_object_call_model_passthrough_multiple_deployments():
+    """
+    Test that URL model resolution works correctly when multiple deployments exist.
+    First matching deployment wins.
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "gemini-2.5-pro"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "team-a/gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "api_key": "test-api-key-a",
+                },
+                "model_info": {
+                    "access_groups": ["team-a-models"],
+                },
+            },
+            {
+                "model_name": "team-b/gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "api_key": "test-api-key-b",
+                },
+                "model_info": {
+                    "access_groups": ["team-b-models"],
+                },
+            },
+        ],
+    )
+
+    # Key has access to team-a-models (first deployment)
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["team-a-models"],
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    assert result is True
+
+
+def test_can_object_call_model_no_provider_prefix_still_works():
+    """
+    Test that models without provider prefix (e.g., just "gpt-4") continue to work.
+    The URL model resolution should only apply when there's a "/" in the litellm_params.model.
+    """
+    from litellm import Router
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    model = "gpt-4"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {
+                    "model": "gpt-4",  # No provider prefix
+                    "api_key": "test-api-key",
+                },
+                "model_info": {
+                    "access_groups": ["openai-models"],
+                },
+            }
+        ],
+    )
+
+    # Key has access to the access_group
+    result = _can_object_call_model(
+        model=model,
+        llm_router=llm_router,
+        models=["openai-models"],
+        team_model_aliases=None,
+        object_type="key",
+        fallback_depth=0,
+    )
+
+    assert result is True
+
+
+def test_can_object_call_model_exact_match_required():
+    """
+    Test that URL model resolution requires exact match, not suffix match.
+    This prevents "pro" from matching "gemini-2.5-pro".
+    """
+    from litellm import Router
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import _can_object_call_model
+
+    # "pro" should NOT match "vertex_ai/gemini-2.5-pro"
+    model = "pro"
+
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gcp/google/gemini-2.5-pro",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-pro",
+                    "api_key": "test-api-key",
+                },
+                "model_info": {
+                    "access_groups": ["default-models"],
+                },
+            }
+        ],
+    )
+
+    # Key has access to the access_group, but model name doesn't match
+    with pytest.raises(ProxyException) as exc_info:
+        _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=["default-models"],
+            team_model_aliases=None,
+            object_type="key",
+            fallback_depth=0,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.key_model_access_denied
