@@ -62,6 +62,7 @@ asyncio.run(completion())
 - `async_log_failure_event` - Log failed API calls  
 - `log_pre_api_call` - Log before API call
 - `log_post_api_call` - Log after API call
+- `log_retry_event` / `async_log_retry_event` - Log retry attempts when using `completion_with_retries()` or `acompletion_with_retries()`
 
 **Proxy-only hooks** (only work with LiteLLM Proxy):
 - `async_post_call_success_hook` - Access user data + modify responses

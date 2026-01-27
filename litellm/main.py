@@ -4235,6 +4235,28 @@ def completion(  # type: ignore # noqa: PLR0915
         )
 
 
+def _fire_retry_callbacks(retry_state, num_retries: int, kwargs: dict):
+    """
+    Fire retry event to all registered callbacks.
+
+    Called by tenacity's before_sleep callback when a retry is about to occur.
+    """
+    exception = retry_state.outcome.exception() if retry_state.outcome else None
+    retry_count = retry_state.attempt_number
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger) and hasattr(callback, "log_retry_event"):
+            try:
+                callback.log_retry_event(
+                    kwargs=kwargs,
+                    exception=exception,
+                    retry_count=retry_count,
+                    max_retries=num_retries,
+                )
+            except Exception as e:
+                verbose_logger.debug(f"Error in log_retry_event callback: {e}")
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -4254,17 +4276,48 @@ def completion_with_retries(*args, **kwargs):
         "retry_strategy", "constant_retry"
     )  # type: ignore
     original_function = kwargs.pop("original_function", completion)
+
+    def before_sleep_handler(retry_state):
+        _fire_retry_callbacks(retry_state, num_retries, kwargs)
+
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.Retrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
+            before_sleep=before_sleep_handler,
         )
     else:
         retryer = tenacity.Retrying(
-            stop=tenacity.stop_after_attempt(num_retries), reraise=True
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+            before_sleep=before_sleep_handler,
         )
     return retryer(original_function, *args, **kwargs)
+
+
+async def _async_fire_retry_callbacks(retry_state, num_retries: int, kwargs: dict):
+    """
+    Async version: Fire retry event to all registered callbacks.
+
+    Called by tenacity's before_sleep callback when a retry is about to occur.
+    """
+    exception = retry_state.outcome.exception() if retry_state.outcome else None
+    retry_count = retry_state.attempt_number
+
+    for callback in litellm.callbacks:
+        if isinstance(callback, CustomLogger) and hasattr(
+            callback, "async_log_retry_event"
+        ):
+            try:
+                await callback.async_log_retry_event(
+                    kwargs=kwargs,
+                    exception=exception,
+                    retry_count=retry_count,
+                    max_retries=num_retries,
+                )
+            except Exception as e:
+                verbose_logger.debug(f"Error in async_log_retry_event callback: {e}")
 
 
 async def acompletion_with_retries(*args, **kwargs):
@@ -4284,15 +4337,22 @@ async def acompletion_with_retries(*args, **kwargs):
     kwargs["num_retries"] = 0
     retry_strategy = kwargs.pop("retry_strategy", "constant_retry")
     original_function = kwargs.pop("original_function", completion)
+
+    async def before_sleep_handler(retry_state):
+        await _async_fire_retry_callbacks(retry_state, num_retries, kwargs)
+
     if retry_strategy == "exponential_backoff_retry":
         retryer = tenacity.AsyncRetrying(
             wait=tenacity.wait_exponential(multiplier=1, max=10),
             stop=tenacity.stop_after_attempt(num_retries),
             reraise=True,
+            before_sleep=before_sleep_handler,
         )
     else:
         retryer = tenacity.AsyncRetrying(
-            stop=tenacity.stop_after_attempt(num_retries), reraise=True
+            stop=tenacity.stop_after_attempt(num_retries),
+            reraise=True,
+            before_sleep=before_sleep_handler,
         )
     return await retryer(original_function, *args, **kwargs)
 
