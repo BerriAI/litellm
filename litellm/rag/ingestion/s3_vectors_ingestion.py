@@ -15,7 +15,6 @@ This implementation:
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
@@ -407,10 +406,13 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
             f"Generating embeddings for {len(chunks)} chunks using {embedding_model}"
         )
 
+        # Convert to list to ensure type compatibility
+        input_chunks: List[str] = list(chunks)
+        
         if self.router:
-            response = await self.router.aembedding(model=embedding_model, input=chunks)
+            response = await self.router.aembedding(model=embedding_model, input=input_chunks)
         else:
-            response = await litellm.aembedding(model=embedding_model, input=chunks)
+            response = await litellm.aembedding(model=embedding_model, input=input_chunks)
 
         return [item["embedding"] for item in response.data]
 
