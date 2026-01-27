@@ -557,7 +557,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
-    async def base_process_llm_request(
+    async def base_process_llm_request(  # noqa: PLR0915
         self,
         request: Request,
         fastapi_response: Response,
