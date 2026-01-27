@@ -471,15 +471,19 @@ async def test_mcp_allowed_tools_filtering():
 async def test_streaming_mcp_events_validation():
     """
     Test that MCP streaming events are properly emitted when using streaming with MCP tools.
-    
+
     This test validates:
     1. MCP discovery events are emitted first
     2. Regular streaming response events follow
     3. Tool execution events are emitted when tools are auto-executed
     """
+    # Skip test if OPENAI_API_KEY is not set (this test makes real LLM calls)
+    if not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set, skipping test that requires real LLM calls")
+
     from unittest.mock import AsyncMock, patch
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
-    
+
     print("🧪 Testing MCP streaming events...")
     
     # Mock MCP tools that would be returned from the manager
@@ -683,10 +687,12 @@ async def test_streaming_responses_api_with_mcp_tools(
 
     Return the user the result of request 2
     """
-    # Skip test if ANTHROPIC_API_KEY is not set for anthropic/claude models
+    # Skip test if API keys are not set for the respective models
     if ("anthropic" in model.lower() or "claude" in model.lower()) and not os.getenv("ANTHROPIC_API_KEY"):
         pytest.skip("ANTHROPIC_API_KEY not set, skipping anthropic model test")
-    
+    if ("gpt" in model.lower() or "openai" in model.lower()) and not os.getenv("OPENAI_API_KEY"):
+        pytest.skip("OPENAI_API_KEY not set, skipping openai model test")
+
     from unittest.mock import AsyncMock, patch
     
     print("🧪 Testing basic streaming with MCP tools...")
