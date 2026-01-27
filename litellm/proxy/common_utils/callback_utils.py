@@ -279,6 +279,36 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     callback_specific_params=callback_specific_params,
                 )
                 imported_list.append(websearch_interception_obj)
+            elif isinstance(callback, dict):
+                # Handle dict-based callback configurations
+                # e.g., callbacks: [{"websearch_interception": {"enabled_providers": ["poe"]}}]
+                if len(callback) == 1:
+                    callback_name = list(callback.keys())[0]
+                    callback_config = callback[callback_name]
+                    
+                    if callback_name == "websearch_interception":
+                        from litellm.integrations.websearch_interception.handler import (
+                            WebSearchInterceptionLogger,
+                        )
+
+                        # Merge callback_config into callback_specific_params for this callback
+                        callback_specific_params_copy = callback_specific_params.copy()
+                        callback_specific_params_copy[callback_name] = callback_config
+
+                        websearch_interception_obj = WebSearchInterceptionLogger.initialize_from_proxy_config(
+                            litellm_settings=litellm_settings,
+                            callback_specific_params=callback_specific_params_copy,
+                        )
+                        imported_list.append(websearch_interception_obj)
+                    else:
+                        verbose_proxy_logger.warning(
+                            f"Unsupported dict-based callback configuration: {callback_name}. "
+                            "Please use the string format in success_callback and configure via callback-specific params."
+                        )
+                else:
+                    verbose_proxy_logger.warning(
+                        f"Invalid dict-based callback configuration (expected single key): {callback}"
+                    )
             elif isinstance(callback, CustomLogger):
                 imported_list.append(callback)
             else:
