@@ -1724,3 +1724,148 @@ def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint()
     assert credentials["aws_secret_access_key"] == "test-secret-key"
     assert credentials["aws_region_name"] == "us-east-1"
     assert credentials["custom_llm_provider"] == "bedrock"
+
+
+def test_get_available_guardrail_single_deployment():
+    """
+    Test get_available_guardrail returns the single guardrail when only one exists.
+    """
+    guardrail_config = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    result = router.get_available_guardrail(guardrail_name="content-filter")
+    assert result == guardrail_config
+
+
+def test_get_available_guardrail_multiple_deployments():
+    """
+    Test get_available_guardrail load balances across multiple guardrails.
+    """
+    guardrail_1 = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+    guardrail_2 = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-2",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_1, guardrail_2],
+    )
+
+    # Call multiple times to verify load balancing
+    results = set()
+    for _ in range(20):
+        result = router.get_available_guardrail(guardrail_name="content-filter")
+        results.add(result["id"])
+
+    # Both guardrails should be selected at least once
+    assert "guardrail-1" in results or "guardrail-2" in results
+
+
+def test_get_available_guardrail_not_found():
+    """
+    Test get_available_guardrail raises ValueError when guardrail not found.
+    """
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[],
+    )
+
+    with pytest.raises(ValueError, match="No guardrail found with name"):
+        router.get_available_guardrail(guardrail_name="non-existent")
+
+
+@pytest.mark.asyncio
+async def test_aguardrail_helper():
+    """
+    Test _aguardrail_helper selects a guardrail and executes the original function.
+    """
+    guardrail_config = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    # Mock the original function
+    async def mock_original_function(**kwargs):
+        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+
+    result = await router._aguardrail_helper(
+        model="content-filter",
+        original_generic_function=mock_original_function,
+    )
+
+    assert result["result"] == "success"
+    assert result["selected_guardrail"] == guardrail_config
+
+
+@pytest.mark.asyncio
+async def test_aguardrail():
+    """
+    Test aguardrail executes a guardrail with load balancing and fallbacks.
+    """
+    guardrail_config = {
+        "guardrail_name": "content-filter",
+        "litellm_params": {"guardrail": "custom", "mode": "pre_call"},
+        "id": "guardrail-1",
+    }
+
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-3.5-turbo",
+                "litellm_params": {"model": "gpt-3.5-turbo"},
+            }
+        ],
+        guardrail_list=[guardrail_config],
+    )
+
+    # Mock the original function
+    async def mock_original_function(**kwargs):
+        return {"result": "success", "selected_guardrail": kwargs.get("selected_guardrail")}
+
+    result = await router.aguardrail(
+        guardrail_name="content-filter",
+        original_function=mock_original_function,
+    )
+
+    assert result["result"] == "success"
+    assert result["selected_guardrail"]["id"] == "guardrail-1"

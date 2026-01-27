@@ -23,16 +23,16 @@ def mock_httpx_client():
     with mock.patch(
         "litellm_enterprise.enterprise_callbacks.send_emails.resend_email.get_async_httpx_client"
     ) as mock_client:
-        # Create a mock response
-        mock_response = mock.AsyncMock(spec=Response)
+
+        mock_response = mock.Mock(spec=Response)
         mock_response.status_code = 200
         mock_response.json.return_value = {"id": "test_email_id"}
+        mock_response.raise_for_status.return_value = None 
 
-        # Create a mock client
         mock_async_client = mock.AsyncMock()
         mock_async_client.post.return_value = mock_response
-        mock_client.return_value = mock_async_client
 
+        mock_client.return_value = mock_async_client
         yield mock_async_client
 
 
@@ -72,28 +72,40 @@ async def test_send_email_success(mock_env_vars, mock_httpx_client):
 
 @pytest.mark.asyncio
 async def test_send_email_missing_api_key(mock_httpx_client):
-    # Remove the API key from environment
-    if "RESEND_API_KEY" in os.environ:
-        del os.environ["RESEND_API_KEY"]
+    # Remove the API key from environment before initializing logger
+    original_key = os.environ.pop("RESEND_API_KEY", None)
+    
+    try:
+        # Initialize the logger after removing the API key
+        logger = ResendEmailLogger()
 
-    # Initialize the logger
-    logger = ResendEmailLogger()
+        # Test data
+        from_email = "test@example.com"
+        to_email = ["recipient@example.com"]
+        subject = "Test Subject"
+        html_body = "<p>Test email body</p>"
 
-    # Test data
-    from_email = "test@example.com"
-    to_email = ["recipient@example.com"]
-    subject = "Test Subject"
-    html_body = "<p>Test email body</p>"
+        # Mock the response to avoid making real HTTP requests
+        mock_response = mock.Mock(spec=Response)
+        mock_response.raise_for_status.return_value = None
 
-    # Send email
-    await logger.send_email(
-        from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
-    )
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"id": "test_email_id"}
+        mock_httpx_client.post.return_value = mock_response
 
-    # Verify the HTTP client was called with None as the API key
-    mock_httpx_client.post.assert_called_once()
-    call_args = mock_httpx_client.post.call_args
-    assert call_args[1]["headers"] == {"Authorization": "Bearer None"}
+        # Send email
+        await logger.send_email(
+            from_email=from_email, to_email=to_email, subject=subject, html_body=html_body
+        )
+
+        # Verify the HTTP client was called with None as the API key
+        mock_httpx_client.post.assert_called_once()
+        call_args = mock_httpx_client.post.call_args
+        assert call_args[1]["headers"] == {"Authorization": "Bearer None"}
+    finally:
+        # Restore the original key if it existed
+        if original_key is not None:
+            os.environ["RESEND_API_KEY"] = original_key
 
 
 @pytest.mark.asyncio
@@ -106,6 +118,14 @@ async def test_send_email_multiple_recipients(mock_env_vars, mock_httpx_client):
     to_email = ["recipient1@example.com", "recipient2@example.com"]
     subject = "Test Subject"
     html_body = "<p>Test email body</p>"
+
+    # Mock the response to avoid making real HTTP requests
+    mock_response = mock.Mock(spec=Response)
+    mock_response.raise_for_status.return_value = None
+
+    mock_response.status_code = 200
+    mock_response.json.return_value = {"id": "test_email_id"}
+    mock_httpx_client.post.return_value = mock_response
 
     # Send email
     await logger.send_email(

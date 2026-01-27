@@ -35,6 +35,36 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
     throw error;
   }
 };
+
+export const getInProductNudgesCall = async (accessToken: string) => {
+  /**
+   * Get in-product nudges configuration.
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/in_product_nudges` : `/in_product_nudges`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get in-product nudges:", error);
+    throw error;
+  }
+};
 /**
  * Helper file for calls being made to proxy
  */
@@ -53,7 +83,7 @@ const defaultServerRootPath = "/";
 export let serverRootPath = defaultServerRootPath;
 export let proxyBaseUrl = defaultProxyBaseUrl;
 if (isLocal != true) {
-  console.log = function () {};
+  console.log = function () { };
 }
 
 const getWindowLocation = () => {
@@ -230,6 +260,7 @@ export interface LiteLLMWellKnownUiConfig {
   server_root_path: string;
   proxy_base_url: string | null;
   auto_redirect_to_sso: boolean;
+  admin_ui_disabled: boolean;
 }
 
 export interface CredentialsResponse {
@@ -238,7 +269,7 @@ export interface CredentialsResponse {
 
 let lastErrorTime = 0;
 
-const handleError = async (errorData: string | any) => {
+export const handleError = async (errorData: string | any) => {
   const currentTime = Date.now();
   if (currentTime - lastErrorTime > 60000) {
     // 60000 milliseconds = 60 seconds
@@ -307,6 +338,11 @@ const MCP_AUTH_HEADER: string = "x-mcp-auth";
 export function setGlobalLitellmHeaderName(headerName: string = "Authorization") {
   console.log(`setGlobalLitellmHeaderName: ${headerName}`);
   globalLitellmHeaderName = headerName;
+}
+
+// Function to get the global header name
+export function getGlobalLitellmHeaderName(): string {
+  return globalLitellmHeaderName;
 }
 
 export const makeModelGroupPublic = async (accessToken: string, modelGroups: string[]) => {
@@ -1410,12 +1446,31 @@ export const availableTeamListCall = async (accessToken: string) => {
   }
 };
 
-export const organizationListCall = async (accessToken: string) => {
+export const organizationListCall = async (
+  accessToken: string,
+  org_id: string | null = null,
+  org_alias: string | null = null,
+) => {
   /**
    * Get all organizations on proxy
    */
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/organization/list` : `/organization/list`;
+    const queryParams = new URLSearchParams();
+
+    if (org_id) {
+      queryParams.append("org_id", org_id.toString());
+    }
+
+    if (org_alias) {
+      queryParams.append("org_alias", org_alias.toString());
+    }
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1952,15 +2007,26 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
+    params.append("page", page.toString());
+    params.append("size", size.toString());
+    if (search && search.trim()) {
+      params.append("search", search.trim());
+    }
+    if (modelId && modelId.trim()) {
+      params.append("modelId", modelId.trim());
+    }
+    if (teamId && teamId.trim()) {
+      params.append("teamId", teamId.trim());
+    }
     if (params.toString()) {
       url += `?${params.toString()}`;
     }
@@ -2400,6 +2466,7 @@ export const modelAvailableCall = async (
   teamID: string | null = null,
   include_model_access_groups: boolean = false,
   only_model_access_groups: boolean = false,
+  scope?: string
 ) => {
   /**
    * Get all the models user has access to
@@ -2417,6 +2484,9 @@ export const modelAvailableCall = async (
     }
     if (teamID) {
       params.append("team_id", teamID.toString());
+    }
+    if (scope) {
+      params.append("scope", scope);
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -2687,6 +2757,7 @@ export const uiSpendLogsCall = async (
   status_filter?: string,
   model?: string,
   keyAlias?: string,
+  error_code?: string,
 ) => {
   try {
     // Construct base URL
@@ -2706,6 +2777,7 @@ export const uiSpendLogsCall = async (
     if (status_filter) queryParams.append("status_filter", status_filter);
     if (model) queryParams.append("model", model);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
+    if (error_code) queryParams.append("error_code", error_code);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -3247,6 +3319,8 @@ export const keyListCall = async (
   pageSize: number,
   sortBy: string | null = null,
   sortOrder: string | null = null,
+  expand: string | null = null,
+  status: string | null = null,
 ) => {
   /**
    * Get all available teams on proxy
@@ -3291,6 +3365,15 @@ export const keyListCall = async (
     if (sortOrder) {
       queryParams.append("sort_order", sortOrder);
     }
+
+    if (expand) {
+      queryParams.append("expand", expand);
+    }
+
+    if (status) {
+      queryParams.append("status", status);
+    }
+
     queryParams.append("return_full_object", "true");
     queryParams.append("include_team_keys", "true");
     queryParams.append("include_created_by_keys", "true");
@@ -5273,6 +5356,275 @@ export const getGuardrailsList = async (accessToken: string) => {
   }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Policy CRUD API Calls
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const getPoliciesList = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/list` : `/policies/list`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get policies list:", error);
+    throw error;
+  }
+};
+
+export const getPolicyInfoWithGuardrails = async (accessToken: string, policyName: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policy/info/${policyName}` : `/policy/info/${policyName}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to get policy info for ${policyName}:`, error);
+    throw error;
+  }
+};
+
+export const createPolicyCall = async (accessToken: string, policyData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies` : `/policies`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(policyData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create policy:", error);
+    throw error;
+  }
+};
+
+export const updatePolicyCall = async (accessToken: string, policyId: string, policyData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
+    const response = await fetch(url, {
+      method: "PUT",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(policyData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update policy:", error);
+    throw error;
+  }
+};
+
+export const deletePolicyCall = async (accessToken: string, policyId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to delete policy:", error);
+    throw error;
+  }
+};
+
+export const getPolicyInfo = async (accessToken: string, policyId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}` : `/policies/${policyId}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get policy info:", error);
+    throw error;
+  }
+};
+
+// Policy Attachments API Calls
+
+export const getPolicyAttachmentsList = async (accessToken: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments/list` : `/policies/attachments/list`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get policy attachments list:", error);
+    throw error;
+  }
+};
+
+export const createPolicyAttachmentCall = async (accessToken: string, attachmentData: any) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments` : `/policies/attachments`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(attachmentData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to create policy attachment:", error);
+    throw error;
+  }
+};
+
+export const deletePolicyAttachmentCall = async (accessToken: string, attachmentId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/attachments/${attachmentId}` : `/policies/attachments/${attachmentId}`;
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to delete policy attachment:", error);
+    throw error;
+  }
+};
+
+export const getResolvedGuardrails = async (accessToken: string, policyId: string) => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/policies/${policyId}/resolved-guardrails` : `/policies/${policyId}/resolved-guardrails`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get resolved guardrails:", error);
+    throw error;
+  }
+};
+
 export const getPromptsList = async (accessToken: string): Promise<ListPromptsResponse> => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/prompts/list` : `/prompts/list`;
@@ -5684,6 +6036,44 @@ export const fetchMCPServers = async (accessToken: string) => {
   }
 };
 
+export const fetchMCPServerHealth = async (accessToken: string, serverIds?: string[]) => {
+  try {
+    // Construct base URL
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/v1/mcp/server/health` : `/v1/mcp/server/health`;
+
+    // Add server_ids query parameters if provided
+    if (serverIds && serverIds.length > 0) {
+      const params = new URLSearchParams();
+      serverIds.forEach((id) => params.append("server_ids", id));
+      url = `${url}?${params.toString()}`;
+    }
+
+    console.log("Fetching MCP server health from:", url);
+
+    const response = await fetch(url, {
+      method: HTTP_REQUEST.GET,
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    console.log("Fetched MCP server health:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch MCP server health:", error);
+    throw error;
+  }
+};
+
 export const fetchMCPAccessGroups = async (accessToken: string) => {
   try {
     // Construct base URL
@@ -6062,12 +6452,17 @@ export const listMCPTools = async (accessToken: string, serverId: string) => {
   }
 };
 
-export const callMCPTool = async (accessToken: string, toolName: string, toolArguments: Record<string, any>) => {
+export const callMCPTool = async (
+  accessToken: string,
+  serverId: string,
+  toolName: string,
+  toolArguments: Record<string, any>,
+) => {
   try {
     // Construct base URL
     let url = proxyBaseUrl ? `${proxyBaseUrl}/mcp-rest/tools/call` : `/mcp-rest/tools/call`;
 
-    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments);
+    console.log("Calling MCP tool:", toolName, "with arguments:", toolArguments, "for server:", serverId);
 
     const headers: Record<string, string> = {
       [globalLitellmHeaderName]: `Bearer ${accessToken}`,
@@ -6078,6 +6473,7 @@ export const callMCPTool = async (accessToken: string, toolName: string, toolArg
       method: "POST",
       headers,
       body: JSON.stringify({
+        server_id: serverId,
         name: toolName,
         arguments: toolArguments,
       }),
@@ -6144,7 +6540,7 @@ export const tagCreateCall = async (accessToken: string, formValues: TagNewReque
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(formValues),
     });
@@ -6170,7 +6566,7 @@ export const tagUpdateCall = async (accessToken: string, formValues: TagUpdateRe
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(formValues),
     });
@@ -6196,7 +6592,7 @@ export const tagInfoCall = async (accessToken: string, tagNames: string[]): Prom
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ names: tagNames }),
     });
@@ -6222,7 +6618,7 @@ export const tagListCall = async (accessToken: string): Promise<TagListResponse>
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     });
 
@@ -6248,7 +6644,7 @@ export const tagDeleteCall = async (accessToken: string, tagName: string): Promi
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ name: tagName }),
     });
@@ -6340,7 +6736,7 @@ export const getTeamPermissionsCall = async (accessToken: string, teamId: string
       method: "GET",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     });
 
@@ -6368,7 +6764,7 @@ export const teamPermissionsUpdateCall = async (accessToken: string, teamId: str
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({
         team_id: teamId,
@@ -6432,7 +6828,7 @@ export const vectorStoreCreateCall = async (accessToken: string, formValues: Rec
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(formValues),
     });
@@ -6461,7 +6857,7 @@ export const vectorStoreListCall = async (
       method: "GET",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
     });
 
@@ -6485,7 +6881,7 @@ export const vectorStoreDeleteCall = async (accessToken: string, vectorStoreId: 
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ vector_store_id: vectorStoreId }),
     });
@@ -6510,7 +6906,7 @@ export const vectorStoreInfoCall = async (accessToken: string, vectorStoreId: st
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ vector_store_id: vectorStoreId }),
     });
@@ -6535,7 +6931,7 @@ export const vectorStoreUpdateCall = async (accessToken: string, formValues: Rec
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
       },
       body: JSON.stringify(formValues),
     });
@@ -6832,6 +7228,40 @@ export const getGuardrailProviderSpecificParams = async (accessToken: string) =>
     return data;
   } catch (error) {
     console.error("Failed to get guardrail provider specific parameters:", error);
+    throw error;
+  }
+};
+
+export const getCategoryYaml = async (accessToken: string, categoryName: string) => {
+  try {
+    // URL encode the category name to handle special characters
+    const encodedCategoryName = encodeURIComponent(categoryName);
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/guardrails/ui/category_yaml/${encodedCategoryName}`
+      : `/guardrails/ui/category_yaml/${encodedCategoryName}`;
+
+    console.log(`Fetching category YAML from: ${url}`);
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      console.error(`Failed to get category YAML. Status: ${response.status}, Error:`, errorData);
+      handleError(errorData);
+      throw new Error(`Failed to get category YAML: ${response.status} ${errorData}`);
+    }
+
+    const data = await response.json();
+    console.log("Category YAML response:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to get category YAML:", error);
     throw error;
   }
 };
@@ -7622,7 +8052,7 @@ export const vectorStoreSearchCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -7655,7 +8085,7 @@ export const searchToolQueryCall = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
@@ -8050,7 +8480,7 @@ export const perUserAnalyticsCall = async (
   }
 };
 
-const deriveErrorMessage = (errorData: any): string => {
+export const deriveErrorMessage = (errorData: any): string => {
   return (
     (errorData?.error && (errorData.error.message || errorData.error)) ||
     errorData?.message ||
@@ -8133,4 +8563,279 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   }
   const data = await response.json();
   return data;
+};
+
+// ============================================================
+// Claude Code Marketplace Networking Functions
+// ============================================================
+
+/**
+ * Get public marketplace catalog (no authentication required)
+ * Returns marketplace.json for Claude Code CLI discovery
+ */
+export const getClaudeCodeMarketplace = async () => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/claude-code/marketplace.json`
+      : `/claude-code/marketplace.json`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch Claude Code marketplace:", error);
+    throw error;
+  }
+};
+
+/**
+ * List all Claude Code plugins (admin only)
+ * @param accessToken - Admin access token
+ * @param enabledOnly - If true, only return enabled plugins (default: false)
+ */
+export const getClaudeCodePluginsList = async (
+  accessToken: string,
+  enabledOnly: boolean = false
+) => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/claude-code/plugins?enabled_only=${enabledOnly}`
+      : `/claude-code/plugins?enabled_only=${enabledOnly}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch Claude Code plugins list:", error);
+    throw error;
+  }
+};
+
+/**
+ * Get details for a specific Claude Code plugin (admin only)
+ * @param accessToken - Admin access token
+ * @param pluginName - Name of the plugin
+ */
+export const getClaudeCodePluginDetails = async (
+  accessToken: string,
+  pluginName: string
+) => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/claude-code/plugins/${pluginName}`
+      : `/claude-code/plugins/${pluginName}`;
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to fetch plugin "${pluginName}":`, error);
+    throw error;
+  }
+};
+
+/**
+ * Register or update a Claude Code plugin (admin only)
+ * @param accessToken - Admin access token
+ * @param pluginData - Plugin registration data
+ */
+export const registerClaudeCodePlugin = async (
+  accessToken: string,
+  pluginData: {
+    name: string;
+    source: { source: string; repo?: string; url?: string };
+    version?: string;
+    description?: string;
+    author?: { name: string; email?: string };
+    homepage?: string;
+    keywords?: string[];
+    category?: string;
+  }
+) => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/claude-code/plugins`
+      : `/claude-code/plugins`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(pluginData),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to register Claude Code plugin:", error);
+    throw error;
+  }
+};
+
+/**
+ * Enable a Claude Code plugin (admin only)
+ * @param accessToken - Admin access token
+ * @param pluginName - Name of the plugin to enable
+ */
+export const enableClaudeCodePlugin = async (
+  accessToken: string,
+  pluginName: string
+) => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/claude-code/plugins/${pluginName}/enable`
+      : `/claude-code/plugins/${pluginName}/enable`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to enable plugin "${pluginName}":`, error);
+    throw error;
+  }
+};
+
+/**
+ * Disable a Claude Code plugin (admin only)
+ * @param accessToken - Admin access token
+ * @param pluginName - Name of the plugin to disable
+ */
+export const disableClaudeCodePlugin = async (
+  accessToken: string,
+  pluginName: string
+) => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/claude-code/plugins/${pluginName}/disable`
+      : `/claude-code/plugins/${pluginName}/disable`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to disable plugin "${pluginName}":`, error);
+    throw error;
+  }
+};
+
+/**
+ * Delete a Claude Code plugin (admin only)
+ * @param accessToken - Admin access token
+ * @param pluginName - Name of the plugin to delete
+ */
+export const deleteClaudeCodePlugin = async (
+  accessToken: string,
+  pluginName: string
+) => {
+  try {
+    const proxyBaseUrl = getProxyBaseUrl();
+    const url = proxyBaseUrl
+      ? `${proxyBaseUrl}/claude-code/plugins/${pluginName}`
+      : `/claude-code/plugins/${pluginName}`;
+
+    const response = await fetch(url, {
+      method: "DELETE",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.text();
+      const errorMessage = deriveErrorMessage(JSON.parse(errorData));
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error(`Failed to delete plugin "${pluginName}":`, error);
+    throw error;
+  }
 };

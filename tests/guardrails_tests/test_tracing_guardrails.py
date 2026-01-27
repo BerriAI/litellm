@@ -74,13 +74,16 @@ async def test_standard_logging_payload_includes_guardrail_information():
     
     class MockClientSession:
         def __init__(self):
-            pass
+            self.closed = False
             
         async def __aenter__(self):
             return self
             
         async def __aexit__(self, exc_type, exc_val, exc_tb):
             pass
+            
+        async def close(self):
+            self.closed = True
             
         def post(self, url, json=None):
             class MockResponse:
@@ -282,8 +285,6 @@ async def test_bedrock_guardrail_status_blocked():
         aws_region_name="us-east-1",
     )
     
-    # Mock Bedrock API response indicating content was blocked
-    # action="GUARDRAIL_INTERVENED" means the guardrail blocked the request
     mock_response = MagicMock()
     mock_response.status_code = 200
     mock_response.json.return_value = {
@@ -295,33 +296,32 @@ async def test_bedrock_guardrail_status_blocked():
             }
         }]
     }
-    bedrock_guard.async_handler.post = AsyncMock(return_value=mock_response)
-    
-    request_data = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "harmful content"}],
-        "mock_response": "Hello",
-        "metadata": {}
-    }
-    
-    # Mock should_run_guardrail to ensure guardrail logic executes
-    with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
-        # Call guardrail pre_call hook - this will raise an exception when content is blocked
-        try:
-            await bedrock_guard.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(),
-                cache=None,
-                data=request_data,
-                call_type="completion"
-            )
-        except Exception:
-            # Expected exception when guardrail blocks content
-            pass
-    
-    # Call litellm.acompletion to trigger logging callbacks
-    # This populates the standard_logging_payload in our custom logger
-    response = await litellm.acompletion(**request_data)
-    await asyncio.sleep(1)
+    with patch.object(bedrock_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "harmful content"}],
+            "mock_response": "Hello",
+            "metadata": {}
+        }
+        
+        # Mock should_run_guardrail to ensure guardrail logic executes
+        with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
+            # Call guardrail pre_call hook - this will raise an exception when content is blocked
+            try:
+                await bedrock_guard.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=None,
+                    data=request_data,
+                    call_type="completion"
+                )
+            except Exception:
+                # Expected exception when guardrail blocks content
+                pass
+        
+        # Call litellm.acompletion to trigger logging callbacks
+        # This populates the standard_logging_payload in our custom logger
+        response = await litellm.acompletion(**request_data)
+        await asyncio.sleep(1)
     
     # Verify the standard logging payload was captured
     assert test_custom_logger.standard_logging_payload is not None
@@ -383,27 +383,26 @@ async def test_bedrock_guardrail_status_success():
         "outputs": [{"text": "Safe content"}],
         "assessments": []
     }
-    bedrock_guard.async_handler.post = AsyncMock(return_value=mock_response)
-    
-    request_data = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "safe content"}],
-        "mock_response": "Hello",
-        "metadata": {}
-    }
-    
-    # Mock should_run_guardrail to return True
-    with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
-        await bedrock_guard.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(),
-            cache=None,
-            data=request_data,
-            call_type="completion"
-        )
-    
-    # Call litellm.acompletion to trigger logging
-    response = await litellm.acompletion(**request_data)
-    await asyncio.sleep(1)
+    with patch.object(bedrock_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "safe content"}],
+            "mock_response": "Hello",
+            "metadata": {}
+        }
+        
+        # Mock should_run_guardrail to return True
+        with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
+            await bedrock_guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None,
+                data=request_data,
+                call_type="completion"
+            )
+        
+        # Call litellm.acompletion to trigger logging
+        response = await litellm.acompletion(**request_data)
+        await asyncio.sleep(1)
     
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
@@ -456,34 +455,31 @@ async def test_bedrock_guardrail_status_failure():
     )
     
     # Mock network failure (endpoint down)
-    bedrock_guard.async_handler.post = AsyncMock(
-        side_effect=httpx.ConnectError("Connection failed")
-    )
-    
-    request_data = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "test content"}],
-        "mock_response": "Hello",
-        "metadata": {}
-    }
-    
-    # Mock should_run_guardrail to return True
-    with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
-        # Call guardrail (will raise exception on network failure)
-        try:
-            await bedrock_guard.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(),
-                cache=None,
-                data=request_data,
-                call_type="completion"
-            )
-        except Exception:
-            # Expected exception when endpoint is down
-            pass
-    
-    # Call litellm.acompletion to trigger logging
-    response = await litellm.acompletion(**request_data)
-    await asyncio.sleep(1)
+    with patch.object(bedrock_guard.async_handler, "post", AsyncMock(side_effect=httpx.ConnectError("Connection failed"))):
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "test content"}],
+            "mock_response": "Hello",
+            "metadata": {}
+        }
+        
+        # Mock should_run_guardrail to return True
+        with patch.object(bedrock_guard, 'should_run_guardrail', return_value=True):
+            # Call guardrail (will raise exception on network failure)
+            try:
+                await bedrock_guard.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=None,
+                    data=request_data,
+                    call_type="completion"
+                )
+            except Exception:
+                # Expected exception when endpoint is down
+                pass
+        
+        # Call litellm.acompletion to trigger logging
+        response = await litellm.acompletion(**request_data)
+        await asyncio.sleep(1)
     
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
@@ -544,31 +540,30 @@ async def test_noma_guardrail_status_blocked():
         }
     }
     mock_response.raise_for_status = MagicMock()
-    noma_guard.async_handler.post = AsyncMock(return_value=mock_response)
-    
-    request_data = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "harmful content"}],
-        "mock_response": "Hello",
-        "metadata": {}
-    }
-    
-    # Mock should_run_guardrail to return True
-    with patch.object(noma_guard, 'should_run_guardrail', return_value=True):
-        # Call guardrail (will raise exception on block)
-        try:
-            await noma_guard.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(),
-                cache=None,
-                data=request_data,
-                call_type="completion"
-            )
-        except Exception:
-            pass
-    
-    # Call litellm.acompletion to trigger logging
-    response = await litellm.acompletion(**request_data)
-    await asyncio.sleep(1)
+    with patch.object(noma_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "harmful content"}],
+            "mock_response": "Hello",
+            "metadata": {}
+        }
+        
+        # Mock should_run_guardrail to return True
+        with patch.object(noma_guard, 'should_run_guardrail', return_value=True):
+            # Call guardrail (will raise exception on block)
+            try:
+                await noma_guard.async_pre_call_hook(
+                    user_api_key_dict=UserAPIKeyAuth(),
+                    cache=None,
+                    data=request_data,
+                    call_type="completion"
+                )
+            except Exception:
+                pass
+        
+        # Call litellm.acompletion to trigger logging
+        response = await litellm.acompletion(**request_data)
+        await asyncio.sleep(1)
     
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None
@@ -625,27 +620,26 @@ async def test_noma_guardrail_status_success():
         "originalResponse": {"prompt": {}}
     }
     mock_response.raise_for_status = MagicMock()
-    noma_guard.async_handler.post = AsyncMock(return_value=mock_response)
-    
-    request_data = {
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "safe content"}],
-        "mock_response": "Hello",
-        "metadata": {}
-    }
-    
-    # Mock should_run_guardrail to return True
-    with patch.object(noma_guard, 'should_run_guardrail', return_value=True):
-        await noma_guard.async_pre_call_hook(
-            user_api_key_dict=UserAPIKeyAuth(),
-            cache=None,
-            data=request_data,
-            call_type="completion"
-        )
-    
-    # Call litellm.acompletion to trigger logging
-    response = await litellm.acompletion(**request_data)
-    await asyncio.sleep(1)
+    with patch.object(noma_guard.async_handler, "post", AsyncMock(return_value=mock_response)):
+        request_data = {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "safe content"}],
+            "mock_response": "Hello",
+            "metadata": {}
+        }
+        
+        # Mock should_run_guardrail to return True
+        with patch.object(noma_guard, 'should_run_guardrail', return_value=True):
+            await noma_guard.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=None,
+                data=request_data,
+                call_type="completion"
+            )
+        
+        # Call litellm.acompletion to trigger logging
+        response = await litellm.acompletion(**request_data)
+        await asyncio.sleep(1)
     
     # Check standard logging payload status fields
     assert test_custom_logger.standard_logging_payload is not None

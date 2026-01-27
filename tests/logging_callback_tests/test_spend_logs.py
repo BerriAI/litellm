@@ -54,7 +54,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
             },
             "litellm_params": {
                 "acompletion": True,
-                "api_key": "23c217a5b59f41b6b7a198017f4792f2",
+                "api_key": "sk-test-mock-key-707",
                 "force_timeout": 600,
                 "logger_fn": None,
                 "verbose": False,
@@ -65,7 +65,7 @@ def test_spend_logs_payload(model_id: Optional[str]):
                 "completion_call_id": None,
                 "metadata": {
                     "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
-                    "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+                    "user_api_key": "sk-test-mock-api-key-123",
                     "user_api_key_alias": "custom-key-alias",
                     "user_api_end_user_max_budget": None,
                     "litellm_api_version": "0.0.0",
@@ -243,7 +243,7 @@ def test_spend_logs_payload_whisper():
         "litellm_params": {
             "api_base": "",
             "metadata": {
-                "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+                "user_api_key": "sk-test-mock-api-key-123",
                 "user_api_key_alias": None,
                 "user_api_key_end_user_id": "test-user",
                 "user_api_end_user_max_budget": None,

@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Type, cast
 
 import litellm
+from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -399,6 +400,7 @@ class InMemoryGuardrailHandler:
         self,
         guardrail: Guardrail,
         config_file_path: Optional[str] = None,
+        llm_router: Optional["Router"] = None,
     ) -> Optional[Guardrail]:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
@@ -447,7 +449,16 @@ class InMemoryGuardrailHandler:
         initializer = guardrail_initializer_registry.get(guardrail_type)
 
         if initializer:
-            custom_guardrail_callback = initializer(litellm_params, guardrail)
+            # Try to call with llm_router first, fall back to without if it fails
+            import inspect
+
+            sig = inspect.signature(initializer)
+            if "llm_router" in sig.parameters:
+                custom_guardrail_callback = initializer(
+                    litellm_params, guardrail, llm_router  # type: ignore
+                )
+            else:
+                custom_guardrail_callback = initializer(litellm_params, guardrail)
         elif isinstance(guardrail_type, str) and "." in guardrail_type:
             custom_guardrail_callback = self.initialize_custom_guardrail(
                 guardrail=cast(dict, guardrail),
@@ -515,10 +526,24 @@ class InMemoryGuardrailHandler:
             )
 
         default_on = litellm_params.default_on
+
+        # Extract additional params from litellm_params to pass to custom guardrail
+        # This matches the behavior of other guardrail initializers (e.g., initialize_lakera)
+        # and aligns with the documented behavior for custom guardrails
+        if hasattr(litellm_params, "model_dump"):
+            extra_params = litellm_params.model_dump(exclude_none=True)
+        else:
+            extra_params = dict(litellm_params) if litellm_params else {}
+
+        # Remove params that are handled explicitly or are internal
+        for key in ["guardrail", "mode", "default_on"]:
+            extra_params.pop(key, None)
+
         _guardrail_callback = _guardrail_class(
             guardrail_name=guardrail["guardrail_name"],
             event_hook=mode,
             default_on=default_on,
+            **extra_params,
         )
         litellm.logging_callback_manager.add_litellm_callback(_guardrail_callback)  # type: ignore
 

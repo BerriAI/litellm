@@ -19,7 +19,7 @@ import os
 
 os.environ['ZAI_API_KEY'] = ""
 response = completion(
-    model="zai/glm-4.6",
+    model="zai/glm-4.7",
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -34,7 +34,7 @@ import os
 
 os.environ['ZAI_API_KEY'] = ""
 response = completion(
-    model="zai/glm-4.6",
+    model="zai/glm-4.7",
     messages=[
        {"role": "user", "content": "hello from litellm"}
    ],
@@ -51,7 +51,8 @@ We support ALL Z.AI GLM models, just set `zai/` as a prefix when sending complet
 
 | Model Name | Function Call | Notes |
 |------------|---------------|-------|
-| glm-4.6 | `completion(model="zai/glm-4.6", messages)` | Latest flagship model, 200K context |
+| glm-4.7 | `completion(model="zai/glm-4.7", messages)` | **Latest flagship**, 200K context, **Reasoning** |
+| glm-4.6 | `completion(model="zai/glm-4.6", messages)` | 200K context |
 | glm-4.5 | `completion(model="zai/glm-4.5", messages)` | 128K context |
 | glm-4.5v | `completion(model="zai/glm-4.5v", messages)` | Vision model |
 | glm-4.5-x | `completion(model="zai/glm-4.5-x", messages)` | Premium tier |
@@ -62,16 +63,17 @@ We support ALL Z.AI GLM models, just set `zai/` as a prefix when sending complet
 
 ## Model Pricing
 
-| Model | Input ($/1M tokens) | Output ($/1M tokens) | Context Window |
-|-------|---------------------|----------------------|----------------|
-| glm-4.6 | $0.60 | $2.20 | 200K |
-| glm-4.5 | $0.60 | $2.20 | 128K |
-| glm-4.5v | $0.60 | $1.80 | 128K |
-| glm-4.5-x | $2.20 | $8.90 | 128K |
-| glm-4.5-air | $0.20 | $1.10 | 128K |
-| glm-4.5-airx | $1.10 | $4.50 | 128K |
-| glm-4-32b-0414-128k | $0.10 | $0.10 | 128K |
-| glm-4.5-flash | **FREE** | **FREE** | 128K |
+| Model | Input ($/1M tokens) | Output ($/1M tokens) | Cached Input ($/1M tokens) | Context Window |
+|-------|---------------------|----------------------|---------------------------|----------------|
+| glm-4.7 | $0.60 | $2.20 | $0.11 | 200K |
+| glm-4.6 | $0.60 | $2.20 | - | 200K |
+| glm-4.5 | $0.60 | $2.20 | - | 128K |
+| glm-4.5v | $0.60 | $1.80 | - | 128K |
+| glm-4.5-x | $2.20 | $8.90 | - | 128K |
+| glm-4.5-air | $0.20 | $1.10 | - | 128K |
+| glm-4.5-airx | $1.10 | $4.50 | - | 128K |
+| glm-4-32b-0414-128k | $0.10 | $0.10 | - | 128K |
+| glm-4.5-flash | **FREE** | **FREE** | - | 128K |
 
 ## Using with LiteLLM Proxy
 
@@ -84,7 +86,7 @@ import os
 
 os.environ['ZAI_API_KEY'] = ""
 response = completion(
-    model="zai/glm-4.6",
+    model="zai/glm-4.7",
     messages=[{"role": "user", "content": "Hello, how are you?"}],
 )
 
@@ -98,9 +100,9 @@ print(response.choices[0].message.content)
 
 ```yaml
 model_list:
-  - model_name: glm-4.6
+  - model_name: glm-4.7
     litellm_params:
-        model: zai/glm-4.6
+        model: zai/glm-4.7
         api_key: os.environ/ZAI_API_KEY
   - model_name: glm-4.5-flash  # Free tier
     litellm_params:
@@ -121,7 +123,7 @@ curl -L -X POST 'http://0.0.0.0:4000/v1/chat/completions' \
 -H 'Content-Type: application/json' \
 -H 'Authorization: Bearer sk-1234' \
 -d '{
-    "model": "glm-4.6",
+    "model": "glm-4.7",
     "messages": [
       {
         "role": "user",

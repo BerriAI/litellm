@@ -229,6 +229,9 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         transport: mcpServer.transport,
         auth_type: mcpServer.auth_type,
         mcp_info: mcpServer.mcp_info,
+        authorization_url: mcpServer.authorization_url,
+        token_url: mcpServer.token_url,
+        registration_url: mcpServer.registration_url,
       };
 
       const toolsResponse = await testMCPToolsListRequest(accessToken, mcpServerConfig, oauthAccessToken);
@@ -283,7 +286,12 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
     if (!accessToken) return;
     try {
       // Ensure access groups is always a string array
-      const { static_headers: staticHeadersList, credentials: credentialValues, ...restValues } = values;
+      const {
+        static_headers: staticHeadersList,
+        credentials: credentialValues,
+        allow_all_keys: allowAllKeysRaw,
+        ...restValues
+      } = values;
 
       const accessGroups = (restValues.mcp_access_groups || []).map((g: any) =>
         typeof g === "string" ? g : g.name || String(g),
@@ -336,6 +344,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         allowed_tools: allowedTools.length > 0 ? allowedTools : null,
         disallowed_tools: restValues.disallowed_tools || [],
         static_headers: staticHeaders,
+        allow_all_keys: Boolean(allowAllKeysRaw ?? mcpServer.allow_all_keys),
       };
 
       const includeCredentials = restValues.auth_type && AUTH_TYPES_REQUIRING_CREDENTIALS.includes(restValues.auth_type);
@@ -495,8 +504,56 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
                     size="large"
                   />
                 </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Authorization URL Override (optional)
+                      <Tooltip title="Optional override for the authorization endpoint.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="authorization_url"
+                >
+                  <TextInput
+                    placeholder="https://example.com/oauth/authorize"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Token URL Override (optional)
+                      <Tooltip title="Optional override for the token endpoint.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="token_url"
+                >
+                  <TextInput
+                    placeholder="https://example.com/oauth/token"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
+                <Form.Item
+                  label={
+                    <span className="text-sm font-medium text-gray-700 flex items-center">
+                      Registration URL Override (optional)
+                      <Tooltip title="Optional override for the dynamic client registration endpoint.">
+                        <InfoCircleOutlined className="ml-2 text-blue-400 hover:text-blue-600 cursor-help" />
+                      </Tooltip>
+                    </span>
+                  }
+                  name="registration_url"
+                >
+                  <TextInput
+                    placeholder="https://example.com/oauth/register"
+                    className="rounded-lg border-gray-300 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                </Form.Item>
                 <div className="rounded-lg border border-dashed border-gray-300 p-4 space-y-2">
-                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and save it as the authentication value.</p>
+                  <p className="text-sm text-gray-600">Use OAuth to fetch a fresh access token and temporarily save it in the session as the authentication value.</p>
                   <Button
                     variant="secondary"
                     onClick={startOAuthFlow}

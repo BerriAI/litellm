@@ -43,7 +43,6 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.llms.anthropic_messages.anthropic_response import (
         AnthropicMessagesResponse,
-        AnthropicResponseTextBlock,
     )
 
 

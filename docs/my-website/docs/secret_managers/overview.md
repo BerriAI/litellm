@@ -49,9 +49,28 @@ general_settings:
 
 ## Team-Level Secret Manager Settings
 
-From the **Teams** page in the LiteLLM dashboard you can configure a secret manager per team. Open the team (or the “Create New Team” modal), find the **Secret Manager Settings** panel, and enter the provider-specific JSON configuration (e.g. `{"namespace": "admin", "mount": "secret", "path_prefix": "litellm"}`). This configuration is applied whenever LiteLLM writes secrets (e.g., storing virtual keys) on behalf of that team.
+Team-level secret manager settings let every team bring their own key-management configuration. These settings are used when creating virtual keys tied to the team.
 
-<Image img={require('../../img/secret_manager_settings.png')} />
+Follow these steps to configure it:
 
+1. **Create a team**  
+   Open the Teams page and click `Create Team` to launch the modal.  
 
-Refer to each provider’s documentation (AWS, Azure, Google, Hashicorp, etc.) for the supported keys/values you can place inside `secret_manager_settings`.
+   <Image img={require('../../img/secret_manager_settings_create_team.png')} />
+
+2. **Expand Additional Settings**  
+   Use the `Additional Settings` toggle to reveal the advanced configuration panel.  
+   
+  <Image img={require('../../img/secret_manager_settings_additional_settings.png')} />
+
+3. **Configure the Secret Manager**  
+   In the `Secret Manager Settings` panel, paste the provider-specific JSON. Refer to each provider page (AWS, Azure, Google, Hashicorp, etc.) for the supported keys/values. JSON is required today, but we plan to add a more UI-friendly editor.  
+   
+   <Image img={require('../../img/secret_manager_settings.png')} />
+
+4. **Create the team**  
+   Review the inputs and click `Create Team` to save.  
+   
+   <Image img={require('../../img/secret_manager_settings_create_button.png')} />
+
+Once saved, LiteLLM will use this configuration.

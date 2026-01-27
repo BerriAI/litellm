@@ -13,11 +13,13 @@ from litellm.main import base_llm_http_handler
 from litellm.types.containers.main import (
     ContainerCreateOptionalRequestParams,
     ContainerFileListResponse,
+    ContainerFileObject,
     ContainerListOptionalRequestParams,
     ContainerListResponse,
     ContainerObject,
     DeleteContainerResult,
 )
+from litellm.types.llms.openai import FileTypes
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import CallTypes
 from litellm.utils import ProviderConfigManager, client
@@ -28,11 +30,13 @@ __all__ = [
     "alist_container_files",
     "alist_containers",
     "aretrieve_container",
+    "aupload_container_file",
     "create_container",
     "delete_container",
     "list_container_files",
     "list_containers",
     "retrieve_container",
+    "upload_container_file",
 ]
 
 ##### Container Create #######################
@@ -195,7 +199,13 @@ def create_container(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -402,7 +412,13 @@ def list_containers(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -590,7 +606,13 @@ def retrieve_container(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -770,7 +792,13 @@ def delete_container(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -964,7 +992,13 @@ def list_container_files(
             return response
 
         # get llm provider logic
-        litellm_params = GenericLiteLLMParams(**kwargs)
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
         # get provider config
         container_provider_config: Optional[BaseContainerConfig] = (
             ProviderConfigManager.get_provider_container_config(
@@ -1011,3 +1045,242 @@ def list_container_files(
             extra_kwargs=kwargs,
         )
 
+
+##### Container File Upload #######################
+@client
+async def aupload_container_file(
+    container_id: str,
+    file: FileTypes,
+    timeout=600,  # default to 10 minutes
+    custom_llm_provider: Literal["openai"] = "openai",
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    **kwargs,
+) -> ContainerFileObject:
+    """Asynchronously upload a file to a container.
+
+    This endpoint allows uploading files directly to a container session,
+    supporting various file types like CSV, Excel, Python scripts, etc.
+
+    Parameters:
+    - `container_id` (str): The ID of the container to upload the file to
+    - `file` (FileTypes): The file to upload. Can be:
+        - A tuple of (filename, content, content_type)
+        - A tuple of (filename, content)
+        - A file-like object with read() method
+        - Bytes
+        - A string path to a file
+    - `timeout` (int): Request timeout in seconds
+    - `custom_llm_provider` (Literal["openai"]): The LLM provider to use
+    - `extra_headers` (Optional[Dict[str, Any]]): Additional headers
+    - `extra_query` (Optional[Dict[str, Any]]): Additional query parameters
+    - `extra_body` (Optional[Dict[str, Any]]): Additional body parameters
+    - `kwargs` (dict): Additional keyword arguments
+
+    Returns:
+    - `response` (ContainerFileObject): The uploaded file object
+
+    Example:
+    ```python
+    import litellm
+
+    # Upload a CSV file
+    response = await litellm.aupload_container_file(
+        container_id="container_abc123",
+        file=("data.csv", open("data.csv", "rb").read(), "text/csv"),
+        custom_llm_provider="openai",
+    )
+    print(response)
+    ```
+    """
+    local_vars = locals()
+    try:
+        loop = asyncio.get_event_loop()
+        kwargs["async_call"] = True
+
+        func = partial(
+            upload_container_file,
+            container_id=container_id,
+            file=file,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            extra_body=extra_body,
+            **kwargs,
+        )
+
+        ctx = contextvars.copy_context()
+        func_with_context = partial(ctx.run, func)
+        init_response = await loop.run_in_executor(None, func_with_context)
+
+        if asyncio.iscoroutine(init_response):
+            response = await init_response
+        else:
+            response = init_response
+
+        return response
+    except Exception as e:
+        raise litellm.exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )
+
+
+# fmt: off
+
+@overload
+def upload_container_file(
+    container_id: str,
+    file: FileTypes,
+    timeout=600,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    custom_llm_provider: Literal["openai"] = "openai",
+    *,
+    aupload_container_file: Literal[True],
+    **kwargs,
+) -> Coroutine[Any, Any, ContainerFileObject]:
+    ...
+
+
+@overload
+def upload_container_file(
+    container_id: str,
+    file: FileTypes,
+    timeout=600,
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    custom_llm_provider: Literal["openai"] = "openai",
+    *,
+    aupload_container_file: Literal[False] = False,
+    **kwargs,
+) -> ContainerFileObject:
+    ...
+
+# fmt: on
+
+
+@client
+def upload_container_file(
+    container_id: str,
+    file: FileTypes,
+    timeout=600,  # default to 10 minutes
+    api_key: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_version: Optional[str] = None,
+    custom_llm_provider: Literal["openai"] = "openai",
+    extra_headers: Optional[Dict[str, Any]] = None,
+    extra_query: Optional[Dict[str, Any]] = None,
+    extra_body: Optional[Dict[str, Any]] = None,
+    **kwargs,
+) -> Union[
+    ContainerFileObject,
+    Coroutine[Any, Any, ContainerFileObject],
+]:
+    """Upload a file to a container using the OpenAI Container API.
+
+    This endpoint allows uploading files directly to a container session,
+    supporting various file types like CSV, Excel, Python scripts, JSON, etc.
+    This is useful when /chat/completions or /responses sends files to the
+    container but the input file type is limited to PDF. This endpoint lets
+    you work with other file types.
+
+    Currently supports OpenAI
+
+    Example:
+    ```python
+    import litellm
+
+    # Upload a CSV file
+    response = litellm.upload_container_file(
+        container_id="container_abc123",
+        file=("data.csv", open("data.csv", "rb").read(), "text/csv"),
+        custom_llm_provider="openai",
+    )
+    print(response)
+
+    # Upload a Python script
+    response = litellm.upload_container_file(
+        container_id="container_abc123",
+        file=("script.py", b"print('hello world')", "text/x-python"),
+        custom_llm_provider="openai",
+    )
+    print(response)
+    ```
+    """
+    from litellm.llms.custom_httpx.container_handler import generic_container_handler
+
+    local_vars = locals()
+    try:
+        litellm_logging_obj: LiteLLMLoggingObj = kwargs.pop("litellm_logging_obj")  # type: ignore
+        litellm_call_id: Optional[str] = kwargs.get("litellm_call_id")
+        _is_async = kwargs.pop("async_call", False) is True
+
+        # Check for mock response first
+        mock_response = kwargs.get("mock_response")
+        if mock_response is not None:
+            if isinstance(mock_response, str):
+                mock_response = json.loads(mock_response)
+
+            response = ContainerFileObject(**mock_response)
+            return response
+
+        # get llm provider logic
+        # Pass credential params explicitly since they're named args, not in kwargs
+        litellm_params = GenericLiteLLMParams(
+            api_key=api_key,
+            api_base=api_base,
+            api_version=api_version,
+            **kwargs,
+        )
+        # get provider config
+        container_provider_config: Optional[BaseContainerConfig] = (
+            ProviderConfigManager.get_provider_container_config(
+                provider=litellm.LlmProviders(custom_llm_provider),
+            )
+        )
+
+        if container_provider_config is None:
+            raise ValueError(f"Container provider config not found for provider: {custom_llm_provider}")
+
+        # Pre Call logging
+        litellm_logging_obj.update_environment_variables(
+            model="",
+            optional_params={"container_id": container_id},
+            litellm_params={
+                "litellm_call_id": litellm_call_id,
+            },
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        # Set the correct call type
+        litellm_logging_obj.call_type = CallTypes.upload_container_file.value
+
+        return generic_container_handler.handle(
+            endpoint_name="upload_container_file",
+            container_provider_config=container_provider_config,
+            litellm_params=litellm_params,
+            logging_obj=litellm_logging_obj,
+            extra_headers=extra_headers,
+            extra_query=extra_query,
+            timeout=timeout or DEFAULT_REQUEST_TIMEOUT,
+            _is_async=_is_async,
+            container_id=container_id,
+            file=file,
+        )
+
+    except Exception as e:
+        raise litellm.exception_type(
+            model="",
+            custom_llm_provider=custom_llm_provider,
+            original_exception=e,
+            completion_kwargs=local_vars,
+            extra_kwargs=kwargs,
+        )

@@ -11,6 +11,8 @@ import requests
 from rich.console import Console
 from rich.table import Table
 
+from litellm.constants import CLI_JWT_EXPIRATION_HOURS
+
 
 # Token storage utilities
 def get_token_file_path() -> str:
@@ -592,8 +594,8 @@ def whoami():
     age_hours = (time.time() - timestamp) / 3600
     click.echo(f"Token age: {age_hours:.1f} hours")
 
-    if age_hours > 24:
-        click.echo("⚠️ Warning: Token is more than 24 hours old and may have expired.")
+    if age_hours > CLI_JWT_EXPIRATION_HOURS:
+        click.echo(f"⚠️ Warning: Token is more than {CLI_JWT_EXPIRATION_HOURS} hours old and may have expired.")
 
 
 # Export functions for use by other CLI commands

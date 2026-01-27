@@ -1,10 +1,14 @@
+import { useOrganizations } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import {
   ApiOutlined,
   AppstoreOutlined,
+  AuditOutlined,
   BankOutlined,
   BarChartOutlined,
   BgColorsOutlined,
   BlockOutlined,
+  BookOutlined,
   CreditCardOutlined,
   DatabaseOutlined,
   ExperimentOutlined,
@@ -21,17 +25,18 @@ import {
   ToolOutlined,
   UserOutlined,
 } from "@ant-design/icons";
-import { Badge, ConfigProvider, Layout, Menu } from "antd";
 import type { MenuProps } from "antd";
+import { ConfigProvider, Layout, Menu } from "antd";
+import { useMemo } from "react";
 import { all_admin_roles, internalUserRoles, isAdminRole, rolesWithWriteAccess } from "../utils/roles";
+import type { Organization } from "./networking";
 import UsageIndicator from "./usage_indicator";
+import NewBadge from "./common_components/NewBadge";
 const { Sider } = Layout;
 
 // Define the props type
 interface SidebarProps {
-  accessToken: string | null;
   setPage: (page: string) => void;
-  userRole: string;
   defaultSelectedKey: string;
   collapsed?: boolean;
 }
@@ -44,6 +49,7 @@ interface MenuItem {
   roles?: string[];
   children?: MenuItem[];
   icon?: React.ReactNode;
+  external_url?: string;
 }
 
 // Group configuration
@@ -53,7 +59,18 @@ interface MenuGroup {
   roles?: string[];
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defaultSelectedKey, collapsed = false }) => {
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false }) => {
+  const { userId, accessToken, userRole } = useAuthorized();
+  const { data: organizations } = useOrganizations();
+
+  // Check if user is an org_admin
+  const isOrgAdmin = useMemo(() => {
+    if (!userId || !organizations) return false;
+    return organizations.some((org: Organization) =>
+      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
+    );
+  }, [userId, organizations]);
+
   // Navigate to page helper
   const navigateToPage = (page: string) => {
     const newSearchParams = new URLSearchParams(window.location.search);
@@ -90,11 +107,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
         {
           key: "agents",
           page: "agents",
-          label: (
-            <span className="flex items-center gap-4">
-              Agents <Badge color="blue" count="New" />
-            </span>
-          ),
+          label: "Agents",
           icon: <RobotOutlined />,
           roles: rolesWithWriteAccess,
         },
@@ -109,6 +122,17 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           page: "guardrails",
           label: "Guardrails",
           icon: <SafetyOutlined />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "policies",
+          page: "policies",
+          label: (
+            <span className="flex items-center gap-4">
+              Policies <NewBadge />
+            </span>
+          ),
+          icon: <AuditOutlined />,
           roles: all_admin_roles,
         },
         {
@@ -142,16 +166,16 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           page: "new_usage",
           icon: <BarChartOutlined />,
           roles: [...all_admin_roles, ...internalUserRoles],
-          label: (
-            <span className="flex items-center gap-4">
-              Usage <Badge color="blue" count="New" />
-            </span>
-        ),
+          label: "Usage",
         },
         {
           key: "logs",
           page: "logs",
-          label: "Logs",
+          label: (
+            <span className="flex items-center gap-4">
+              Logs <NewBadge />
+            </span>
+          ),
           icon: <LineChartOutlined />,
         },
       ],
@@ -204,6 +228,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
           icon: <AppstoreOutlined />,
         },
         {
+          key: "learning-resources",
+          page: "learning-resources",
+          label: "Learning Resources",
+          icon: <BookOutlined />,
+          external_url: "https://models.litellm.ai/cookbook",
+        },
+        {
           key: "experimental",
           page: "experimental",
           label: "Experimental",
@@ -238,11 +269,18 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
               roles: all_admin_roles,
             },
             {
+              key: "claude-code-plugins",
+              page: "claude-code-plugins",
+              label: "Claude Code Plugins",
+              icon: <ToolOutlined />,
+              roles: all_admin_roles,
+            },
+            {
               key: "4",
               page: "usage",
               label: "Old Usage",
               icon: <BarChartOutlined />,
-            },
+            }
           ],
         },
       ],
@@ -254,7 +292,7 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
         {
           key: "settings",
           page: "settings",
-          label: "Settings",
+          label: <span className="flex items-center gap-4">Settings</span>,
           icon: <SettingOutlined />,
           roles: all_admin_roles,
           children: [
@@ -302,7 +340,13 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
   // Filter items based on user role
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
     return items
-      .filter((item) => !item.roles || item.roles.includes(userRole))
+      .filter((item) => {
+        // Special handling for organizations menu item - allow org_admins
+        if (item.key === "organizations") {
+          return !item.roles || item.roles.includes(userRole) || isOrgAdmin;
+        }
+        return !item.roles || item.roles.includes(userRole);
+      })
       .map((item) => ({
         ...item,
         children: item.children ? filterItemsByRole(item.children) : undefined,
@@ -348,9 +392,23 @@ const Sidebar: React.FC<SidebarProps> = ({ accessToken, setPage, userRole, defau
             key: child.key,
             icon: child.icon,
             label: child.label,
-            onClick: () => navigateToPage(child.page),
+            onClick: () => {
+              if (child.external_url) {
+                window.open(child.external_url, "_blank");
+              } else {
+                navigateToPage(child.page);
+              }
+            },
           })),
-          onClick: !item.children ? () => navigateToPage(item.page) : undefined,
+          onClick: !item.children
+            ? () => {
+                if (item.external_url) {
+                  window.open(item.external_url, "_blank");
+                } else {
+                  navigateToPage(item.page);
+                }
+              }
+            : undefined,
         })),
       });
     });

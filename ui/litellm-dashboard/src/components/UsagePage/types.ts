@@ -23,6 +23,7 @@ export interface BreakdownMetrics {
   providers: { [key: string]: MetricWithMetadata };
   api_keys: { [key: string]: KeyMetricWithMetadata };
   entities: { [key: string]: MetricWithMetadata };
+  endpoints?: { [key: string]: MetricWithMetadata };
 }
 
 export interface MetricWithMetadata {

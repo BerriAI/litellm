@@ -21,13 +21,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.main import stream_chunk_builder
 from litellm.types.llms.openai import ChatCompletionToolParam
-from litellm.types.utils import (
-    Choices,
-    GenericGuardrailAPIInputs,
-    ModelResponse,
-    ModelResponseStream,
-    StreamingChoices,
-)
+from litellm.types.utils import Choices, GenericGuardrailAPIInputs, ModelResponse, ModelResponseStream, StreamingChoices
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -89,6 +83,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 inputs["structured_messages"] = (
                     messages  # pass the openai /chat/completions messages to the guardrail, as-is
                 )
+            # Pass tools (function definitions) to the guardrail
+            tools = data.get("tools")
+            if tools:
+                inputs["tools"] = tools
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -162,6 +160,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                             url = image_url.get("url")
                             if url:
                                 images_to_check.append(url)
+                        elif isinstance(image_url, str):
+                            images_to_check.append(image_url)
 
         # Extract tool calls (typically in assistant messages)
         tool_calls = message.get("tool_calls", None)
@@ -362,7 +362,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         if has_stream_ended:
             # convert to model response
             model_response = cast(
-                ModelResponse, stream_chunk_builder(chunks=responses_so_far)
+                ModelResponse, stream_chunk_builder(chunks=responses_so_far, logging_obj=litellm_logging_obj)
             )
             # run process_output_response
             await self.process_output_response(

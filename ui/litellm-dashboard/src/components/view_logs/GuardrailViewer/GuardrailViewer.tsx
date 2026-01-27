@@ -4,6 +4,7 @@ import PresidioDetectedEntities from "./PresidioDetectedEntities";
 import BedrockGuardrailDetails, {
   BedrockGuardrailResponse,
 } from "@/components/view_logs/GuardrailViewer/BedrockGuardrailDetails";
+import ContentFilterDetails from "./ContentFilterDetails";
 
 interface RecognitionMetadata {
   recognizer_name: string;
@@ -30,9 +31,9 @@ interface GuardrailInformation {
   guardrail_mode: string;
   guardrail_name: string;
   guardrail_status: string;
-  guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse;
+  guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse | any;
   masked_entity_count: MaskedEntityCount;
-  guardrail_provider?: string; // "presidio" | other providers
+  guardrail_provider?: string; // "presidio" | "bedrock" | "litellm_content_filter" | other providers
 }
 
 interface GuardrailViewerProps {
@@ -48,6 +49,42 @@ interface GuardrailDetailsProps {
 const formatTime = (timestamp: number) => {
   const date = new Date(timestamp * 1000);
   return date.toLocaleString();
+};
+
+// Providers with custom renderers
+const PROVIDERS_WITH_CUSTOM_RENDERERS = new Set(["presidio", "bedrock", "litellm_content_filter"]);
+
+const GenericGuardrailResponse = ({ response }: { response: any }) => {
+  const [showRaw, setShowRaw] = useState(false);
+  return (
+    <div className="mt-4">
+      <div className="border rounded-lg overflow-hidden">
+        <div
+          className="flex items-center justify-between p-3 bg-gray-50 cursor-pointer hover:bg-gray-100"
+          onClick={() => setShowRaw(!showRaw)}
+        >
+          <div className="flex items-center">
+            <svg
+              className={`w-5 h-5 mr-2 transition-transform ${showRaw ? "transform rotate-90" : ""}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+            <h5 className="font-medium">Raw Guardrail Response</h5>
+          </div>
+        </div>
+        {showRaw && (
+          <div className="p-3 border-t bg-white">
+            <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">
+              {JSON.stringify(response, null, 2)}
+            </pre>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 };
 
 const GuardrailDetails = ({ entry, index, total }: GuardrailDetailsProps) => {
@@ -148,6 +185,17 @@ const GuardrailDetails = ({ entry, index, total }: GuardrailDetailsProps) => {
           <BedrockGuardrailDetails response={bedrockResponse} />
         </div>
       )}
+
+      {guardrailProvider === "litellm_content_filter" && guardrailResponse && (
+        <div className="mt-4">
+          <ContentFilterDetails response={guardrailResponse} />
+        </div>
+      )}
+
+      {/* Generic fallback for unknown guardrail providers */}
+      {guardrailProvider &&
+        !PROVIDERS_WITH_CUSTOM_RENDERERS.has(guardrailProvider) &&
+        guardrailResponse && <GenericGuardrailResponse response={guardrailResponse} />}
     </div>
   );
 };

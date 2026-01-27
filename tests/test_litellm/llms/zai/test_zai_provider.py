@@ -1,6 +1,7 @@
 """
 Tests for Z.AI (Zhipu AI) provider - GLM models
 """
+
 import json
 import math
 
@@ -50,10 +51,12 @@ def test_zai_in_provider_lists():
 def test_zai_models_in_model_cost():
     """Test that ZAI models are in the model cost map"""
     import os
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
     zai_models = [
+        "zai/glm-4.7",
         "zai/glm-4.6",
         "zai/glm-4.5",
         "zai/glm-4.5v",
@@ -72,6 +75,7 @@ def test_zai_models_in_model_cost():
 def test_zai_glm46_cost_calculation():
     """Test the cost calculation for glm-4.6"""
     import os
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -92,6 +96,7 @@ def test_zai_glm46_cost_calculation():
 def test_zai_flash_model_is_free():
     """Test that glm-4.5-flash has zero cost"""
     import os
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
@@ -100,6 +105,38 @@ def test_zai_flash_model_is_free():
 
     assert info["input_cost_per_token"] == 0
     assert info["output_cost_per_token"] == 0
+
+
+def test_glm47_supports_reasoning():
+    """Test that GLM-4.7 supports reasoning"""
+    import os
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    key = "zai/glm-4.7"
+    assert key in litellm.model_cost, f"Model {key} not found in model_cost"
+
+    info = litellm.model_cost[key]
+    assert info["supports_reasoning"] is True
+
+
+def test_glm47_cost_calculation():
+    """Test cost calculation for GLM-4.7"""
+    import os
+
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prompt_cost, completion_cost = cost_per_token(
+        model="zai/glm-4.7",
+        prompt_tokens=1000000,  # 1M tokens
+        completion_tokens=1000000,
+    )
+
+    # GLM-4.7: $0.6/M input, $2.2/M output (same as GLM-4.6)
+    assert math.isclose(prompt_cost, 0.6, rel_tol=1e-6)
+    assert math.isclose(completion_cost, 2.2, rel_tol=1e-6)
 
 
 @pytest.mark.asyncio

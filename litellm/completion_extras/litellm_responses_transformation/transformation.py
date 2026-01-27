@@ -3,6 +3,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 """
 
 import json
+import os
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,6 +23,7 @@ from typing import (
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel
 
+import litellm
 from litellm import ModelResponse
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
@@ -29,6 +31,7 @@ from litellm.llms.base_llm.bridges.completion_transformation import (
     CompletionTransformationBridge,
 )
 from litellm.types.llms.openai import (
+    ChatCompletionAnnotation,
     ChatCompletionToolParamFunctionChunk,
     Reasoning,
     ResponsesAPIOptionalRequestParams,
@@ -88,9 +91,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     content_type = content_item.get("type")
                     if content_type == "output_text":
                         response_text = content_item.get("text", "")
+                        # Extract annotations from content if present
+                        annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                            content_item.get("annotations", None)
+                        )
                         msg = Message(
                             role=item.get("role", "assistant"),
                             content=response_text if response_text else "",
+                            annotations=annotations,
                         )
                         choice = Choices(message=msg, finish_reason="stop", index=index)
                         return choice, index + 1
@@ -167,24 +175,27 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     )
             elif role == "tool":
                 # Convert tool message to function call output format
-                # Transform content to responses format (handles str, list, and other types)
-                # _convert_content_to_responses_format always returns List[Dict[str, Any]]
+                # The Responses API expects 'output' to be a list with input_text/input_image types
+                # Using list format for consistency across text and multimodal content
+                tool_output: List[Dict[str, Any]]
                 if content is None:
-                    transformed_output: list[dict[str, Any]] = []
-                elif isinstance(content, (str, list)):
-                    transformed_output = self._convert_content_to_responses_format(
-                        content, "tool"
+                    tool_output = []
+                elif isinstance(content, str):
+                    # Convert string to list with input_text
+                    tool_output = [{"type": "input_text", "text": content}]
+                elif isinstance(content, list):
+                    # Transform list content to Responses API format
+                    tool_output = self._convert_content_to_responses_format(
+                        content, "user"  # Use "user" role to get input_* types
                     )
                 else:
-                    # Fallback: convert unexpected types to string first
-                    transformed_output = self._convert_content_to_responses_format(
-                        str(content), "tool"
-                    )
+                    # Fallback: convert unexpected types to input_text
+                    tool_output = [{"type": "input_text", "text": str(content)}]
                 input_items.append(
                     {
                         "type": "function_call_output",
                         "call_id": tool_call_id,
-                        "output": transformed_output,
+                        "output": tool_output,
                     }
                 )
             elif role == "assistant" and tool_calls and isinstance(tool_calls, list):
@@ -345,6 +356,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         index = 0
         reasoning_content: Optional[str] = None
 
+        # Collect all tool calls to put them in a single choice
+        # (Chat Completions API expects all tool calls in one message)
+        accumulated_tool_calls: List[Dict[str, Any]] = []
+        tool_call_index = 0
+
         for item in output_items:
             if isinstance(item, ResponseReasoningItem):
                 for summary_item in item.summary:
@@ -354,10 +370,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             elif isinstance(item, ResponseOutputMessage):
                 for content in item.content:
                     response_text = getattr(content, "text", "")
+                    # Extract annotations from content if present
+                    raw_annotations = getattr(content, "annotations", None)
+                    annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                        raw_annotations
+                    )
                     msg = Message(
                         role=item.role,
                         content=response_text if response_text else "",
                         reasoning_content=reasoning_content,
+                        annotations=annotations,
                     )
 
                     choices.append(
@@ -378,20 +400,10 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
                 tool_call_dict = LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
                     tool_call_item=item,
-                    index=index,
+                    index=tool_call_index,
                 )
-
-                msg = Message(
-                    content=None,
-                    tool_calls=[tool_call_dict],
-                    reasoning_content=reasoning_content,
-                )
-
-                choices.append(
-                    Choices(message=msg, finish_reason="tool_calls", index=index)
-                )
-                reasoning_content = None  # flush reasoning content
-                index += 1
+                accumulated_tool_calls.append(tool_call_dict)
+                tool_call_index += 1
 
             elif isinstance(item, dict) and handle_raw_dict_callback is not None:
                 # Handle raw dict responses (e.g., from GPT-5 Codex)
@@ -400,6 +412,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     choices.append(choice)
             else:
                 pass  # don't fail request if item in list is not supported
+
+        # If we accumulated tool calls, create a single choice with all of them
+        if accumulated_tool_calls:
+            msg = Message(
+                content=None,
+                tool_calls=accumulated_tool_calls,
+                reasoning_content=reasoning_content,
+            )
+            choices.append(
+                Choices(message=msg, finish_reason="tool_calls", index=index)
+            )
+            reasoning_content = None
 
         return choices
 
@@ -492,7 +516,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _convert_content_str_to_input_text(
         self, content: str, role: str
     ) -> Dict[str, Any]:
-        if role == "user" or role == "system":
+        if role == "user" or role == "system" or role == "tool":
             return {"type": "input_text", "text": content}
         else:
             return {"type": "output_text", "text": content}
@@ -681,19 +705,26 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if isinstance(reasoning_effort, dict):
             return Reasoning(**reasoning_effort)  # type: ignore[typeddict-item]
 
-        # If string is passed, map without summary (default)
+        # Check if auto-summary is enabled via flag or environment variable
+        # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
+        auto_summary_enabled = (
+            litellm.reasoning_auto_summary
+            or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
+        )
+
+        # If string is passed, map with optional summary based on flag/env var
         if reasoning_effort == "none":
-            return Reasoning(effort="none")  # type: ignore
+            return Reasoning(effort="none", summary="detailed") if auto_summary_enabled else Reasoning(effort="none")  # type: ignore
         elif reasoning_effort == "high":
-            return Reasoning(effort="high")
+            return Reasoning(effort="high", summary="detailed") if auto_summary_enabled else Reasoning(effort="high")
         elif reasoning_effort == "xhigh":
-            return Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
+            return Reasoning(effort="xhigh", summary="detailed") if auto_summary_enabled else Reasoning(effort="xhigh")  # type: ignore[typeddict-item]
         elif reasoning_effort == "medium":
-            return Reasoning(effort="medium")
+            return Reasoning(effort="medium", summary="detailed") if auto_summary_enabled else Reasoning(effort="medium")
         elif reasoning_effort == "low":
-            return Reasoning(effort="low")
+            return Reasoning(effort="low", summary="detailed") if auto_summary_enabled else Reasoning(effort="low")
         elif reasoning_effort == "minimal":
-            return Reasoning(effort="minimal")
+            return Reasoning(effort="minimal", summary="detailed") if auto_summary_enabled else Reasoning(effort="minimal")
         return None
 
     def _transform_response_format_to_text_format(
@@ -744,6 +775,42 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 return {"format": {"type": "text"}}
 
         return None
+    
+    @staticmethod
+    def _convert_annotations_to_chat_format(
+        annotations: Optional[List[Any]],
+    ) -> Optional[List[ChatCompletionAnnotation]]:
+        """
+        Convert annotations from Responses API to Chat Completions format.
+
+        Annotations are already in compatible format between both APIs,
+        so we just need to convert Pydantic models to dicts.
+        """
+        if not annotations:
+            return None
+
+        result: List[ChatCompletionAnnotation] = []
+        for annotation in annotations:
+            try:
+                # Convert Pydantic models to dicts (handles both v1 and v2)
+                if hasattr(annotation, "model_dump"):
+                    annotation_dict = annotation.model_dump()
+                elif hasattr(annotation, "dict"):
+                    annotation_dict = annotation.dict()
+                elif isinstance(annotation, dict):
+                    annotation_dict = annotation
+                else:
+                    # Skip unsupported annotation types
+                    verbose_logger.debug(f"Skipping unsupported annotation type: {type(annotation)}")
+                    continue
+
+                result.append(annotation_dict)  # type: ignore
+            except Exception as e:
+                # Skip malformed annotations
+                verbose_logger.debug(f"Skipping malformed annotation: {annotation}, error: {e}")
+                continue
+
+        return result if result else None
 
     def _map_responses_status_to_finish_reason(self, status: Optional[str]) -> str:
         """Map responses API status to chat completion finish_reason"""

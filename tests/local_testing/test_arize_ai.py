@@ -71,6 +71,7 @@ def test_get_arize_config(mock_env_vars):
     assert config.api_key == "test_api_key"
     assert config.endpoint == "https://otlp.arize.com/v1"
     assert config.protocol == "otlp_grpc"
+    assert config.project_name is None
 
 
 def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
@@ -79,10 +80,12 @@ def test_get_arize_config_with_endpoints(mock_env_vars, monkeypatch):
     """
     monkeypatch.setenv("ARIZE_ENDPOINT", "grpc://test.endpoint")
     monkeypatch.setenv("ARIZE_HTTP_ENDPOINT", "http://test.endpoint")
+    monkeypatch.setenv("ARIZE_PROJECT_NAME", "custom-project")
 
     config = ArizeLogger.get_arize_config()
     assert config.endpoint == "grpc://test.endpoint"
     assert config.protocol == "otlp_grpc"
+    assert config.project_name == "custom-project"
 
 
 @pytest.mark.skip(

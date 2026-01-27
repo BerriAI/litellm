@@ -53,6 +53,7 @@ const PassThroughRoutesSelector: React.FC<PassThroughRoutesSelectorProps> = ({
       value={value}
       loading={loading}
       className={className}
+      allowClear
       options={passThroughRoutes.map((route) => ({
         label: route,
         value: route,

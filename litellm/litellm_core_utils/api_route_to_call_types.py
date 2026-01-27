@@ -5,10 +5,12 @@ This dictionary maps each API endpoint to the CallTypes that can be used for tha
 Each route can have both async (prefixed with 'a') and sync call types.
 """
 
+from typing import List, Optional
+
 from litellm.types.utils import API_ROUTE_TO_CALL_TYPES, CallTypes
 
 
-def get_call_types_for_route(route: str) -> list:
+def get_call_types_for_route(route: str) -> Optional[List[CallTypes]]:
     """
     Get the list of CallTypes for a given API route.
 
@@ -16,9 +18,9 @@ def get_call_types_for_route(route: str) -> list:
         route: API route path (e.g., "/chat/completions")
 
     Returns:
-        List of CallTypes for that route, or empty list if route not found
+        List of CallTypes for that route, or None if route not found
     """
-    return API_ROUTE_TO_CALL_TYPES.get(route, [])
+    return API_ROUTE_TO_CALL_TYPES.get(route, None)
 
 
 def get_routes_for_call_type(call_type: CallTypes) -> list:

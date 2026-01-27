@@ -269,6 +269,16 @@ def initialize_callbacks_on_proxy(  # noqa: PLR0915
                     **azure_content_safety_params,
                 )
                 imported_list.append(azure_content_safety_obj)
+            elif isinstance(callback, str) and callback == "websearch_interception":
+                from litellm.integrations.websearch_interception.handler import (
+                    WebSearchInterceptionLogger,
+                )
+
+                websearch_interception_obj = WebSearchInterceptionLogger.initialize_from_proxy_config(
+                    litellm_settings=litellm_settings,
+                    callback_specific_params=callback_specific_params,
+                )
+                imported_list.append(websearch_interception_obj)
             elif isinstance(callback, CustomLogger):
                 imported_list.append(callback)
             else:
@@ -370,6 +380,11 @@ def get_logging_caching_headers(request_data: Dict) -> Optional[Dict]:
             _metadata["applied_guardrails"]
         )
 
+    if "applied_policies" in _metadata:
+        headers["x-litellm-applied-policies"] = ",".join(
+            _metadata["applied_policies"]
+        )
+
     if "semantic-similarity" in _metadata:
         headers["x-litellm-semantic-similarity"] = str(_metadata["semantic-similarity"])
 
@@ -392,6 +407,27 @@ def add_guardrail_to_applied_guardrails_header(
         _metadata["applied_guardrails"].append(guardrail_name)
     else:
         _metadata["applied_guardrails"] = [guardrail_name]
+    # Ensure metadata is set back to request_data (important when metadata didn't exist)
+    request_data["metadata"] = _metadata
+
+
+def add_policy_to_applied_policies_header(
+    request_data: Dict, policy_name: Optional[str]
+):
+    """
+    Add a policy name to the applied_policies list in request metadata.
+
+    This is used to track which policies were applied to a request,
+    similar to how applied_guardrails tracks guardrails.
+    """
+    if policy_name is None:
+        return
+    _metadata = request_data.get("metadata", None) or {}
+    if "applied_policies" in _metadata:
+        if policy_name not in _metadata["applied_policies"]:
+            _metadata["applied_policies"].append(policy_name)
+    else:
+        _metadata["applied_policies"] = [policy_name]
     # Ensure metadata is set back to request_data (important when metadata didn't exist)
     request_data["metadata"] = _metadata
 

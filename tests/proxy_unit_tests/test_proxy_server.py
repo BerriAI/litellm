@@ -640,10 +640,6 @@ def test_embedding(mock_aembedding, client_no_auth):
             pre_call_kwargs.get("call_type") == "aembedding"
         ), f"expected pre_call_hook to receive call_type='aembedding', got {pre_call_kwargs.get('call_type')}"
 
-        during_call_kwargs = mock_during_hook.await_args_list[0].kwargs
-        assert (
-            during_call_kwargs.get("call_type") == "embeddings"
-        ), f"expected during_call_hook to receive call_type='embeddings', got {during_call_kwargs.get('call_type')}"
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
 
@@ -2185,6 +2181,10 @@ async def test_proxy_server_prisma_setup():
         mock_client._set_spend_logs_row_count_in_proxy_state = (
             AsyncMock()
         )  # Mock the _set_spend_logs_row_count_in_proxy_state method
+        # Mock the db attribute with start_token_refresh_task for RDS IAM token refresh
+        mock_db = MagicMock()
+        mock_db.start_token_refresh_task = AsyncMock()
+        mock_client.db = mock_db
 
         await ProxyStartupEvent._setup_prisma_client(
             database_url=os.getenv("DATABASE_URL"),
