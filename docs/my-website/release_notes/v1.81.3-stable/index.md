@@ -53,13 +53,18 @@ pip install litellm==1.81.3.rc.2
 
 ### New Model Support
 
-| Provider | Model | Features |
-| -------- | ----- | -------- |
-| OpenAI | `gpt-5.2-codex` | Code generation |
-| Azure | `azure/gpt-5.2-codex` | Code generation |
-| Cerebras | `cerebras/zai-glm-4.7` | Reasoning, function calling |
-| Replicate | All chat models | Full support for all Replicate chat models |
-
+| Provider | Model | Context Window | Input ($/1M tokens) | Output ($/1M tokens) | Deprecation Date |
+| -------- | ----- | -------------- | ------------------- | -------------------- | ---------------- |
+| OpenAI | `gpt-audio`, `gpt-audio-2025-08-28` | 128K | $32/1M audio tokens, $2.5/1M text tokens | $64/1M audio tokens, $10/1M text tokens | - | 
+| OpenAI | `gpt-audio-mini`, `gpt-audio-mini-2025-08-28` | 128K | $10/1M audio tokens, $0.6/1M text tokens | $20/1M audio tokens, $2.4/1M text tokens | - |
+| Deepinfra, Vertex AI, Google AI Studio, OpenRouter, Vercel AI Gateway | `gemini-2.0-flash-001`, `gemini-2.0-flash` |  - | - | - | 2026-03-31 |
+| Groq | `openai/gpt-oss-120b` | 131K | 0.075/1M cache read | 0.6/1M output tokens | - |
+| Groq | `groq/openai/gpt-oss-20b` | 131K | 0.0375/1M cache read, $0.075/1M text tokens | 0.3/1M output tokens | - |
+| Vertex AI | `gemini-2.5-computer-use-preview-10-2025` | 128K |  $1.25 | $10 | - |
+| Azure AI | `claude-haiku-4-5` | $1.25/1M cache read, $2/1M cache read above 1 hr, $0.1/1M text tokens | $5/1M output tokens | - |
+| Azure AI | `claude-sonnet-4-5` | $3.75/1M cache read, $6/1M cache read above 1 hr, $3/1M text tokens | $15/1M output tokens | - |
+| Azure AI | `claude-opus-4-5` | $6.25/1M cache read, $10/1M cache read above 1 hr, $0.5/1M text tokens | $25/1M output tokens | - |
+| Azure AI | `claude-opus-4-1` | $18.75/1M cache read, $30/1M cache read above 1 hr, $1.5/1M text tokens | $75/1M output tokens | - |
 
 ### Features
 
@@ -70,6 +75,7 @@ pip install litellm==1.81.3.rc.2
 
 - **[VertexAI](../../docs/providers/vertex)**
     - Docs - Google Workload Identity Federation (WIF) support - [PR #19320](https://github.com/BerriAI/litellm/pull/19320)
+
 - **[Agentcore](../../docs/providers/bedrock_agentcore)**
     - Fixes streaming issues with AWS Bedrock AgentCore where responses would stop after the first chunk, particularly affecting OAuth-enabled agents - [PR #17141](https://github.com/BerriAI/litellm/pull/17141)
 
@@ -87,7 +93,6 @@ pip install litellm==1.81.3.rc.2
 
 - **Gemini([Vertex AI](../../docs/providers/vertex), [Google AI Studio](../../docs/providers/gemini))**
     - use responseJsonSchema for Gemini 2.0+ models - [PR #19314](https://github.com/BerriAI/litellm/pull/19314)
-    - Update Gemini 2.0 Flash deprecation dates to March 31, 2026 - [PR #19592](https://github.com/BerriAI/litellm/pull/19592)
 
 - **[Volcengine](../../docs/providers/volcano)**
     - Support Volcengine responses api - [PR #18508](https://github.com/BerriAI/litellm/pull/18508)
@@ -111,6 +116,7 @@ pip install litellm==1.81.3.rc.2
 - **[Anthropic](../../docs/providers/anthropic)**
     - Fix anthropic-beta sent client side being overridden instead of appended to - [PR #19343](https://github.com/BerriAI/litellm/pull/19343)
     - Filter out unsupported fields from JSON schema for Anthropic's output_format API - [PR #19482](https://github.com/BerriAI/litellm/pull/19482)
+
 - **[Bedrock](../../docs/providers/bedrock)**
     - Expose stability models via /image_edits endpoint and ensure proper request transformation - [PR #19323](https://github.com/BerriAI/litellm/pull/19323)
     - Claude Code x Bedrock Invoke fails with advanced-tool-use-2025-11-20 - [PR #19373](https://github.com/BerriAI/litellm/pull/19373)
@@ -119,20 +125,21 @@ pip install litellm==1.81.3.rc.2
     - Fix request validation errors when using Claude 4 via bedrock invoke - [PR #19381](https://github.com/BerriAI/litellm/pull/19381)
     - Handle thinking with tool calls for Claude 4 models - [PR #19506](https://github.com/BerriAI/litellm/pull/19506)
     - correct streaming choice index for tool calls - [PR #19506](https://github.com/BerriAI/litellm/pull/19506)
-- **[Groq](../../docs/providers/groq)**
-    - correct Groq gpt-oss pricing and add cache pricing - [PR #19311](https://github.com/BerriAI/litellm/pull/19311)
+
 - **[Ollama](../../docs/providers/ollama)**
     - Fix tool call errors due with improved message extraction - [PR #19369](https://github.com/BerriAI/litellm/pull/19369)
+
 - **[VertexAI](../../docs/providers/vertex)**
     - Removed optional vertex_count_tokens_location param before request is sent to vertex - [PR #19359](https://github.com/BerriAI/litellm/pull/19359)
+
 - **Gemini([Vertex AI](../../docs/providers/vertex), [Google AI Studio](../../docs/providers/gemini))**
     - Supports setting media_resolution and fps parameters on each video file, when using Gemini video understanding - [PR #19273](https://github.com/BerriAI/litellm/pull/19273)
-    - Add gemini-2.5-computer-use-preview-10-2025 model for vertex ai provider - [PR #19397](https://github.com/BerriAI/litellm/pull/19397)
     - handle reasoning_effort as dict from OpenAI Agents SDK - [PR #19419](https://github.com/BerriAI/litellm/pull/19419)
     - add file content support in tool results - [PR #19416](https://github.com/BerriAI/litellm/pull/19416)
+
 - **[Azure](../../docs/providers/azure_ai)**
     - Fix Azure AI costs for Anthropic models - [PR #19530](https://github.com/BerriAI/litellm/pull/19530)
-    - Anthropic models on Azure AI cache pricing - [PR #19532](https://github.com/BerriAI/litellm/pull/19532)
+
 - **[Giga Chat](../../docs/providers/gigachat)**
     - Add tool choice mapping - [PR #19645](https://github.com/BerriAI/litellm/pull/19645)
 ---
