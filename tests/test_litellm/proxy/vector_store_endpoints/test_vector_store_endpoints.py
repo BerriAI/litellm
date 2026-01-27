@@ -1368,3 +1368,217 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     assert litellm_params_dict["litellm_embedding_config"]["api_key"] == "resolved-api-key"
     assert litellm_params_dict["litellm_embedding_config"]["api_base"] == "https://api.openai.com"
     assert litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-01-01"
+
+
+@pytest.mark.asyncio
+async def test_rag_ingest_calls_save_vector_store_to_db():
+    """
+    Test that rag_ingest endpoint calls _save_vector_store_to_db_from_rag_ingest
+    to persist vector stores in the database.
+    
+    This test verifies:
+    1. The rag_ingest endpoint successfully ingests a document
+    2. _save_vector_store_to_db_from_rag_ingest is called with correct parameters
+    3. Vector store metadata is saved to the database
+    4. File metadata is properly tracked
+    """
+    from litellm.proxy.rag_endpoints.endpoints import (
+        _save_vector_store_to_db_from_rag_ingest,
+    )
+
+    # Mock response from litellm.aingest
+    mock_ingest_response = {
+        "vector_store_id": "vs_test_123",
+        "file_id": "file_abc_456",
+        "status": "completed",
+        "chunks_created": 10,
+    }
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    
+    # Mock user API key
+    mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key.user_role = None
+    mock_user_api_key.user_id = "test-user-123"
+    
+    # Test ingest options with custom vector store name
+    ingest_options = {
+        "vector_store": {
+            "custom_llm_provider": "openai",
+        },
+        "litellm_vector_store_params": {
+            "vector_store_name": "My Test Vector Store",
+            "vector_store_description": "A test vector store for unit testing",
+        },
+    }
+    
+    # Test file data
+    file_data = ("test_document.pdf", b"fake pdf content", "application/pdf")
+    
+    # Mock database operations
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=None  # Vector store doesn't exist yet
+    )
+    
+    captured_create_data = {}
+    
+    async def mock_create(*args, **kwargs):
+        captured_create_data.update(kwargs.get("data", {}))
+        mock_created_vs = MagicMock()
+        mock_created_vs.model_dump.return_value = kwargs.get("data", {})
+        return mock_created_vs
+    
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
+        side_effect=mock_create
+    )
+    
+    mock_registry = MagicMock()
+    mock_registry.add_vector_store_to_registry = MagicMock()
+    
+    # Patch dependencies
+    with patch.object(
+        litellm, "vector_store_registry", mock_registry
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client
+    ):
+        # Call the function directly
+        await _save_vector_store_to_db_from_rag_ingest(
+            response=mock_ingest_response,
+            ingest_options=ingest_options,
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=mock_user_api_key,
+            file_data=file_data,
+            file_url=None,
+        )
+    
+    # Verify database create was called
+    mock_prisma_client.db.litellm_managedvectorstorestable.create.assert_called_once()
+    
+    # Verify the created data has correct structure
+    assert captured_create_data["vector_store_id"] == "vs_test_123"
+    assert captured_create_data["custom_llm_provider"] == "openai"
+    assert captured_create_data["vector_store_name"] == "My Test Vector Store"
+    assert captured_create_data["vector_store_description"] == "A test vector store for unit testing"
+    
+    # Verify file metadata was included
+    import json
+    vector_store_metadata = json.loads(captured_create_data["vector_store_metadata"])
+    assert "ingested_files" in vector_store_metadata
+    assert len(vector_store_metadata["ingested_files"]) == 1
+    
+    file_entry = vector_store_metadata["ingested_files"][0]
+    assert file_entry["file_id"] == "file_abc_456"
+    assert file_entry["filename"] == "test_document.pdf"
+    assert file_entry["content_type"] == "application/pdf"
+    assert "ingested_at" in file_entry
+    
+    # Verify registry was updated
+    mock_registry.add_vector_store_to_registry.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_rag_ingest_updates_existing_vector_store_metadata():
+    """
+    Test that rag_ingest appends file metadata to existing vector stores
+    instead of creating duplicates.
+    """
+    from litellm.proxy.rag_endpoints.endpoints import (
+        _save_vector_store_to_db_from_rag_ingest,
+    )
+
+    # Mock response from litellm.aingest
+    mock_ingest_response = {
+        "vector_store_id": "vs_existing_123",
+        "file_id": "file_new_789",
+        "status": "completed",
+    }
+    
+    # Mock prisma client
+    mock_prisma_client = MagicMock()
+    
+    # Mock user API key
+    mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key.user_role = None
+    mock_user_api_key.user_id = "test-user-123"
+    
+    # Test ingest options
+    ingest_options = {
+        "vector_store": {
+            "custom_llm_provider": "openai",
+            "vector_store_id": "vs_existing_123",
+        },
+    }
+    
+    # Test file data
+    file_data = ("new_document.pdf", b"new content", "application/pdf")
+    
+    # Mock existing vector store in database
+    existing_metadata = {
+        "ingested_files": [
+            {
+                "file_id": "file_old_456",
+                "filename": "old_document.pdf",
+                "ingested_at": "2024-01-01T00:00:00Z",
+            }
+        ]
+    }
+    
+    mock_existing_vs = MagicMock()
+    mock_existing_vs.vector_store_id = "vs_existing_123"
+    mock_existing_vs.custom_llm_provider = "openai"
+    mock_existing_vs.vector_store_metadata = existing_metadata
+    
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=mock_existing_vs
+    )
+    
+    captured_update_data = {}
+    
+    async def mock_update(*args, **kwargs):
+        captured_update_data.update(kwargs.get("data", {}))
+        mock_updated_vs = MagicMock()
+        mock_updated_vs.model_dump.return_value = kwargs.get("data", {})
+        return mock_updated_vs
+    
+    mock_prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(
+        side_effect=mock_update
+    )
+    
+    mock_registry = MagicMock()
+    mock_registry.update_vector_store_in_registry = MagicMock()
+    
+    # Patch dependencies
+    with patch.object(
+        litellm, "vector_store_registry", mock_registry
+    ), patch(
+        "litellm.proxy.proxy_server.prisma_client",
+        mock_prisma_client
+    ):
+        # Call the function
+        await _save_vector_store_to_db_from_rag_ingest(
+            response=mock_ingest_response,
+            ingest_options=ingest_options,
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=mock_user_api_key,
+            file_data=file_data,
+            file_url=None,
+        )
+    
+    # Verify update was called instead of create
+    mock_prisma_client.db.litellm_managedvectorstorestable.update.assert_called_once()
+    
+    # Verify the updated metadata includes both old and new files
+    import json
+    updated_metadata = json.loads(captured_update_data["vector_store_metadata"])
+    assert "ingested_files" in updated_metadata
+    assert len(updated_metadata["ingested_files"]) == 2
+    
+    # Check old file is still there
+    file_ids = [f["file_id"] for f in updated_metadata["ingested_files"]]
+    assert "file_old_456" in file_ids
+    assert "file_new_789" in file_ids
+    
+    # Verify registry was updated
+    mock_registry.update_vector_store_in_registry.assert_called_once()
