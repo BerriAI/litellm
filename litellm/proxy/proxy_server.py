@@ -902,7 +902,6 @@ def get_openapi_schema():
 
     openapi_schema = CustomOpenAPISpec.add_llm_api_request_schema_body(openapi_schema)
 
-
     # Fix Swagger UI execute path error when server_root_path is set
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
@@ -3193,6 +3192,8 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(new_models)}")
+                if search_tools is not None:
+                    llm_router.search_tools = search_tools
                 ## DELETE MODEL LOGIC
                 await self._delete_deployment(db_models=models_list)
 
