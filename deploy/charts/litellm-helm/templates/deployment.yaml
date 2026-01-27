@@ -38,6 +38,8 @@ spec:
       serviceAccountName: {{ include "litellm.serviceAccountName" . }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        {{- include ".Values.extraInitContainers" . | nindent 8 }}
       containers:
         - name: {{ include "litellm.name" . }}
           securityContext:

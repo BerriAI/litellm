@@ -296,6 +296,9 @@ envVars: {}
 # Additional environment variables to be added to the deployment as a list of k8s env vars
 extraEnvVars: {}
 
+# Additional init containers to run before the main container(s)
+extraInitContainers: []
+
 # if you want to override the container command, you can do so here
 command: {}
 # if you want to override the container args, you can do so here
