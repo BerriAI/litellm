@@ -2,7 +2,7 @@ import asyncio
 import os
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
@@ -93,7 +93,7 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         Aggregates costs by Provider, Model, and Date.
         Returns a list of DatadogFOCUSCostEntry.
         """
-        aggregator: Dict[str, DatadogFOCUSCostEntry] = {}
+        aggregator: Dict[Tuple[str, str, str, Tuple[Tuple[str, str], ...]], DatadogFOCUSCostEntry] = {}
 
         for log in logs:
             try:
@@ -171,8 +171,10 @@ class DatadogCostManagementLogger(CustomBatchLogger):
                 tags["user"] = str(metadata["user_api_key_alias"])
             if "user_api_key_team_alias" in metadata:
                 tags["team"] = str(metadata["user_api_key_team_alias"])
-            if "model_group" in metadata:
-                tags["model_group"] = str(metadata["model_group"])
+            # model_group is not in StandardLoggingMetadata TypedDict, so we need to access it via dict.get()
+            model_group = metadata.get("model_group")  # type: ignore[misc]
+            if model_group:
+                tags["model_group"] = str(model_group)
 
         return tags
 
