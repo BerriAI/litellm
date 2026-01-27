@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    ModifyResponseException
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
@@ -205,6 +206,10 @@ class GraySwanGuardrail(CustomGuardrail):
 
         # Get dynamic params from request metadata
         dynamic_body = self.get_guardrail_dynamic_request_body_params(request_data) or {}
+        if dynamic_body:
+            verbose_proxy_logger.debug(
+                "Gray Swan Guardrail: dynamic extra_body=%s", safe_dumps(dynamic_body)
+            )
 
         # Prepare and send payload
         payload = self._prepare_payload(messages, dynamic_body)
@@ -222,7 +227,14 @@ class GraySwanGuardrail(CustomGuardrail):
                 is_output=is_output,
             )
             return result
-        except Exception as exc:
+        except ModifyResponseException:
+            # Guardrail decision (passthrough) should always propagate,
+            # regardless of fail_open.
+            raise
+        except HTTPException as exc:
+            # HTTP Exception could be from "blocked", should not be fail-open in this case.
+            if self._is_grayswan_block_exception(exc):
+                raise
             end_time = time.time()
             status_code = getattr(exc, "status_code", None) or getattr(
                 exc, "exception_status_code", None
@@ -241,6 +253,33 @@ class GraySwanGuardrail(CustomGuardrail):
                 )
                 return inputs
             raise GraySwanGuardrailAPIError(str(exc), status_code=status_code) from exc
+        except Exception as exc:
+            end_time = time.time()
+            status_code = getattr(exc, "status_code", None) or getattr(
+                exc, "exception_status_code", None
+            )
+            self._log_guardrail_failure(
+                exc=exc,
+                request_data=request_data or {},
+                start_time=start_time,
+                end_time=end_time,
+                status_code=status_code,
+            )
+            if self.fail_open:
+                verbose_proxy_logger.warning(
+                    "Gray Swan Guardrail: fail_open=True. Allowing request to proceed despite error: %s",
+                    exc,
+                )
+                return inputs
+            if isinstance(exc, GraySwanGuardrailAPIError):
+                raise exc
+            raise GraySwanGuardrailAPIError(str(exc), status_code=status_code) from exc
+
+    def _is_grayswan_block_exception(self, exc: HTTPException) -> bool:
+        detail = getattr(exc, "detail", None)
+        if isinstance(detail, dict):
+            return detail.get("error") == "Blocked by Gray Swan Guardrail"
+        return False
 
     # ------------------------------------------------------------------
     # Legacy Test Interface (for backward compatibility)
@@ -509,6 +548,14 @@ class GraySwanGuardrail(CustomGuardrail):
         reasoning_mode = dynamic_body.get("reasoning_mode") or self.reasoning_mode
         if reasoning_mode:
             payload["reasoning_mode"] = reasoning_mode
+
+        # Pass through arbitrary metadata when provided via dynamic extra_body.
+        if "metadata" in dynamic_body:
+            payload["metadata"] = dynamic_body["metadata"]
+
+        # Pass through arbitrary metadata when provided via dynamic extra_body.
+        if "metadata" in dynamic_body:
+            payload["metadata"] = dynamic_body["metadata"]
 
         return payload
 
