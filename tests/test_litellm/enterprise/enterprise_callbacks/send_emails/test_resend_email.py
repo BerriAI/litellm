@@ -2,7 +2,9 @@ import os
 import sys
 import unittest.mock as mock
 
+import httpx
 import pytest
+import respx
 from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../../.."))
@@ -39,7 +41,13 @@ def mock_httpx_client():
 
 
 @pytest.mark.asyncio
+@respx.mock
 async def test_send_email_success(mock_env_vars, mock_httpx_client):
+    # Block all HTTP requests at network level to prevent real API calls
+    respx.post("https://api.resend.com/emails").mock(
+        return_value=httpx.Response(200, json={"id": "test_email_id"})
+    )
+    
     # Initialize the logger
     logger = ResendEmailLogger()
 
@@ -73,7 +81,13 @@ async def test_send_email_success(mock_env_vars, mock_httpx_client):
 
 
 @pytest.mark.asyncio
+@respx.mock
 async def test_send_email_missing_api_key(mock_httpx_client):
+    # Block all HTTP requests at network level to prevent real API calls
+    respx.post("https://api.resend.com/emails").mock(
+        return_value=httpx.Response(200, json={"id": "test_email_id"})
+    )
+    
     # Remove the API key from environment before initializing logger
     original_key = os.environ.pop("RESEND_API_KEY", None)
     
@@ -111,7 +125,13 @@ async def test_send_email_missing_api_key(mock_httpx_client):
 
 
 @pytest.mark.asyncio
+@respx.mock
 async def test_send_email_multiple_recipients(mock_env_vars, mock_httpx_client):
+    # Block all HTTP requests at network level to prevent real API calls
+    respx.post("https://api.resend.com/emails").mock(
+        return_value=httpx.Response(200, json={"id": "test_email_id"})
+    )
+    
     # Initialize the logger
     logger = ResendEmailLogger()
 
