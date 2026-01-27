@@ -500,6 +500,7 @@ const sidebars = {
         "apply_guardrail",
         "bedrock_invoke",
         "interactions",
+        "gemini_deep_research",
         "image_edits",
         "image_generation",
         "image_variations",
