@@ -3428,3 +3428,29 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     structured_messages: List[
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
+
+
+# Type alias for mixed message lists (input TypedDict + output Pydantic)
+# Use this when combining user input messages with LLM response messages
+LiteLLMAnyMessage = Union[AllMessageValues, Message]
+
+
+def get_message_role(msg: LiteLLMAnyMessage) -> str:
+    """Get role from either TypedDict (input) or Pydantic Message (output)."""
+    if isinstance(msg, Message):
+        return msg.role
+    return msg["role"]
+
+
+def get_message_content(msg: LiteLLMAnyMessage) -> Any:
+    """Get content from either TypedDict (input) or Pydantic Message (output)."""
+    if isinstance(msg, Message):
+        return msg.content
+    return msg.get("content")
+
+
+def get_message_attr(msg: LiteLLMAnyMessage, key: str, default: Any = None) -> Any:
+    """Get arbitrary attribute from either TypedDict (input) or Pydantic Message (output)."""
+    if isinstance(msg, Message):
+        return getattr(msg, key, default)
+    return msg.get(key, default)

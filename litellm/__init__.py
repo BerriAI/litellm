@@ -1126,7 +1126,13 @@ from .llms.xai.common_utils import XAIModelInfo
 
 # Import LlmProviders here (before main import) because it's imported during import time
 # in multiple places including openai.py (via main import)
-from litellm.types.utils import LlmProviders
+from litellm.types.utils import (
+    LlmProviders,
+    LiteLLMAnyMessage,
+    get_message_role,
+    get_message_content,
+    get_message_attr,
+)
 
 ## Lazy loading this is not straightforward, will leave it here for now.
 from .main import *  # type: ignore

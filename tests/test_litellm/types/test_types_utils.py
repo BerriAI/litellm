@@ -127,3 +127,77 @@ def test_usage_completion_tokens_details_text_tokens():
     # Verify round-trip serialization works
     new_usage = Usage(**dump_result)
     assert new_usage.completion_tokens_details.text_tokens == 12
+
+
+def test_get_message_role_with_pydantic_message():
+    """Test get_message_role with Pydantic Message (output from LLM)."""
+    from litellm.types.utils import Message, get_message_role
+
+    msg = Message(content="Hello", role="assistant")
+    assert get_message_role(msg) == "assistant"
+
+
+def test_get_message_role_with_typeddict():
+    """Test get_message_role with TypedDict (input to LLM)."""
+    from litellm.types.utils import get_message_role
+
+    msg = {"role": "user", "content": "Hello"}
+    assert get_message_role(msg) == "user"
+
+
+def test_get_message_content_with_pydantic_message():
+    """Test get_message_content with Pydantic Message (output from LLM)."""
+    from litellm.types.utils import Message, get_message_content
+
+    msg = Message(content="Hello world", role="assistant")
+    assert get_message_content(msg) == "Hello world"
+
+
+def test_get_message_content_with_typeddict():
+    """Test get_message_content with TypedDict (input to LLM)."""
+    from litellm.types.utils import get_message_content
+
+    msg = {"role": "user", "content": "Hello world"}
+    assert get_message_content(msg) == "Hello world"
+
+
+def test_get_message_attr_with_pydantic_message():
+    """Test get_message_attr with Pydantic Message (output from LLM)."""
+    from litellm.types.utils import Message, get_message_attr
+
+    msg = Message(content="Hello", role="assistant")
+    assert get_message_attr(msg, "role") == "assistant"
+    assert get_message_attr(msg, "content") == "Hello"
+    assert get_message_attr(msg, "nonexistent", "default") == "default"
+
+
+def test_get_message_attr_with_typeddict():
+    """Test get_message_attr with TypedDict (input to LLM)."""
+    from litellm.types.utils import get_message_attr
+
+    msg = {"role": "user", "content": "Hello"}
+    assert get_message_attr(msg, "role") == "user"
+    assert get_message_attr(msg, "content") == "Hello"
+    assert get_message_attr(msg, "nonexistent", "default") == "default"
+
+
+def test_mixed_message_list():
+    """Test helpers work with mixed list of TypedDict and Pydantic messages."""
+    from litellm.types.utils import (
+        LiteLLMAnyMessage,
+        Message,
+        get_message_role,
+        get_message_content,
+    )
+
+    messages: list[LiteLLMAnyMessage] = [
+        {"role": "user", "content": "What is 2+2?"},
+        Message(content="4", role="assistant"),
+        {"role": "user", "content": "Thanks!"},
+    ]
+
+    roles = [get_message_role(m) for m in messages]
+    assert roles == ["user", "assistant", "user"]
+
+    contents = [get_message_content(m) for m in messages]
+    assert contents == ["What is 2+2?", "4", "Thanks!"]
