@@ -156,17 +156,23 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
 
 
 def test_get_cli_jwt_auth_token_custom_expiration(
-    valid_sso_user_defined_values, monkeypatch
+    valid_sso_user_defined_values, monkeypatch, request
 ):
     """Test generating CLI JWT token with custom expiration via environment variable"""
+    import importlib
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+    
+    # Register cleanup to reload modules after test (monkeypatch restores env var automatically)
+    def cleanup_modules():
+        importlib.reload(constants)
+        importlib.reload(auth_checks)
+    request.addfinalizer(cleanup_modules)
+    
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
     
     # Reload the constants module to pick up the new env var
-    import importlib
-
-    from litellm import constants
-    from litellm.proxy.auth import auth_checks
     importlib.reload(constants)
     # Also reload auth_checks to pick up the new constant value
     importlib.reload(auth_checks)
