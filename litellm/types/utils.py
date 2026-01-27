@@ -18,7 +18,14 @@ from openai.types.moderation import (
     CategoryScores,
 )
 from openai.types.moderation_create_response import Moderation, ModerationCreateResponse
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    model_validator,
+    TypeAdapter,
+)
 from typing_extensions import Callable, Dict, Required, TypedDict, override
 
 import litellm
@@ -1815,8 +1822,14 @@ class ModelResponse(ModelResponseBase):
                     usage.model_dump() if hasattr(usage, "model_dump") else usage.dict()
                 )
                 usage = Usage(**dump)
-            else:
-                usage = usage
+            try:
+                usage = UsageAdapter.validate_python(usage)
+            except Exception as e:
+                raise ValueError(
+                    f"Invalid 'usage' object received. Expected strictly typed Usage object.\n"
+                    f"Received type: {type(usage)}\n"
+                    f"Error: {str(e)}"
+                )
         elif stream is None or stream is False:
             usage = Usage()
         if hidden_params:
@@ -3428,3 +3441,6 @@ class GenericGuardrailAPIInputs(TypedDict, total=False):
     structured_messages: List[
         AllMessageValues
     ]  # structured messages sent to the LLM - indicates if text is from system or user
+
+
+UsageAdapter = TypeAdapter(Usage)
