@@ -407,7 +407,7 @@ class GuardrailRegistry:
                             g_dict["guardrail_info"] = {}
 
                     # Construct
-                    guardrails.append(Guardrail(**g_dict))
+                    guardrails.append(Guardrail(**g_dict))  # type: ignore
                 except Exception:
                     continue
 
