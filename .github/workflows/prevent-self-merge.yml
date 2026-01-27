@@ -26,6 +26,7 @@ jobs:
             ];
             
             console.log('=== CI Status Check ===');
+            console.log(`PR: #${context.payload.pull_request.number} - ${context.payload.pull_request.title}`);
             console.log(`Total checks: ${checks.check_runs.length}`);
             
             let failedJobs = [];
