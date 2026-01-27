@@ -162,7 +162,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
   const [userSearchLoading, setUserSearchLoading] = useState<boolean>(false);
   const [mcpAccessGroups, setMcpAccessGroups] = useState<string[]>([]);
   const [disabledCallbacks, setDisabledCallbacks] = useState<string[]>([]);
-  const [keyType, setKeyType] = useState<string>("default");
+  const [keyType, setKeyType] = useState<string>("llm_api");
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [autoRotationEnabled, setAutoRotationEnabled] = useState<boolean>(false);
   const [rotationInterval, setRotationInterval] = useState<string>("30d");
@@ -173,7 +173,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
@@ -188,7 +188,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
     form.resetFields();
     setLoggingSettings([]);
     setDisabledCallbacks([]);
-    setKeyType("default");
+    setKeyType("llm_api");
     setModelAliases({});
     setAutoRotationEnabled(false);
     setRotationInterval("30d");
@@ -707,11 +707,11 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey }) => {
                   </span>
                 }
                 name="key_type"
-                initialValue="default"
+                initialValue="llm_api"
                 className="mt-4"
               >
                 <Select
-                  defaultValue="default"
+                  defaultValue="llm_api"
                   placeholder="Select key type"
                   style={{ width: "100%" }}
                   optionLabelProp="label"
