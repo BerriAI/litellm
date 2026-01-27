@@ -8,8 +8,7 @@ from typing import Optional
 
 from litellm import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
-from litellm.responses.utils import ResponseAPILoggingUtils
-from litellm.types.utils import ImageResponse
+from litellm.types.utils import ImageResponse, Usage
 
 
 def cost_calculator(
@@ -39,11 +38,18 @@ def cost_calculator(
         )
         return 0.0
 
-    # Transform ImageUsage to Usage using the existing helper
-    # ImageUsage has the same format as ResponseAPIUsage
-    chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
-        usage
-    )
+    # If usage is already a Usage object with completion_tokens_details set,
+    # use it directly (it was already transformed in convert_to_image_response)
+    if isinstance(usage, Usage) and usage.completion_tokens_details is not None:
+        chat_usage = usage
+    else:
+        # Transform ImageUsage to Usage using the existing helper
+        # ImageUsage has the same format as ResponseAPIUsage
+        from litellm.responses.utils import ResponseAPILoggingUtils
+
+        chat_usage = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+            usage
+        )
 
     # Use generic_cost_per_token for cost calculation
     prompt_cost, completion_cost = generic_cost_per_token(
