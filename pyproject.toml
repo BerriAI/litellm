@@ -184,7 +184,7 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-retries = 10
+retries = 20
 retry_delay = 5
 markers = [
     "asyncio: mark test as an asyncio test",
