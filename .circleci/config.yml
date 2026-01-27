@@ -4235,6 +4235,7 @@ workflows:
             branches:
               only:
                 - main
+                - /litellm_release_day_.*/
       - publish_to_pypi:
           requires:
             - mypy_linting
