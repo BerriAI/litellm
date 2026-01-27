@@ -11,6 +11,8 @@ from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
     ResendEmailLogger,
 )
 
+# Test file for Resend email integration
+
 
 @pytest.fixture
 def mock_env_vars():
