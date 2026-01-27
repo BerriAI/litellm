@@ -1781,11 +1781,11 @@ async def _validate_and_populate_member_user_info(
     Logic:
     1. If both user_email and user_id are provided, verify they belong to the same user (use user_email as source of truth)
     2. If only user_email is provided, populate user_id from DB
-    3. If only user_id is provided, populate user_email from DB
-    4. If only user_id is provided and doesn't exist, throw error
+    3. If only user_id is provided, populate user_email from DB (if user exists)
+    4. If only user_id is provided and doesn't exist, allow it to pass with user_email as None (will be upserted later)
     5. If user_email and user_id mismatch, throw error
     
-    Returns a Member with both user_email and user_id populated.
+    Returns a Member with user_email and user_id populated (user_email may be None if only user_id provided and user doesn't exist).
     """
     if member.user_email is None and member.user_id is None:
         raise HTTPException(
@@ -1861,19 +1861,16 @@ async def _validate_and_populate_member_user_info(
         member.user_id = user_by_email.user_id
         return member
     
-    # Case 3: Only user_id provided - populate user_email from DB
+    # Case 3: Only user_id provided - populate user_email from DB if user exists
     if member.user_id is not None and member.user_email is None:
         user_by_id = await prisma_client.db.litellm_usertable.find_unique(
             where={"user_id": member.user_id}
         )
         
         if user_by_id is None:
-            raise HTTPException(
-                status_code=404,
-                detail={
-                    "error": f"User with user_id '{member.user_id}' not found in database"
-                },
-            )
+            # User doesn't exist yet - allow it to pass with user_email as None
+            # Will be upserted later with just user_id and null email
+            return member
         
         # Populate user_email
         member.user_email = user_by_id.user_email
