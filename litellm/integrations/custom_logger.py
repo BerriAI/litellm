@@ -788,9 +788,9 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         """
         # Only skip if global redaction applied AND method is not overridden
         if global_redaction_applied:
-            # Check if this method was overridden in a subclass
+            # Check if method was overridden anywhere in the inheritance chain (walks full MRO)
             method_name = "redact_standard_logging_payload_from_model_call_details"
-            is_overridden = method_name in type(self).__dict__
+            is_overridden = getattr(type(self), method_name) is not getattr(CustomLogger, method_name)
 
             if not is_overridden:
                 # Safe to skip - using default implementation
