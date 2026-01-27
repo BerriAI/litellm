@@ -2565,6 +2565,104 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
+  e2e_ruby_sdk_responses_api:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
+      - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Run Docker container
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e OPENAI_API_KEY=$OPENAI_API_KEY \
+              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
+              -e LITELLM_LICENSE=$LITELLM_LICENSE \
+              --add-host host.docker.internal:host-gateway \
+              --name my-app \
+              -v $(pwd)/tests/responses_api_tests_proxy/config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug \
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Install Ruby and Bundler
+          command: |
+            # Import GPG keys first
+            gpg --keyserver hkp://keyserver.ubuntu.com --recv-keys 409B6B1796C275462A1703113804BB82D39DC0E3 7D2BAF1CF37B13E2069D6956105BD0E739499BDB || {
+              curl -sSL https://rvm.io/mpapis.asc | gpg --import -
+              curl -sSL https://rvm.io/pkuczynski.asc | gpg --import -
+            }
+
+            # Install Ruby version manager (RVM)
+            curl -sSL https://get.rvm.io | bash -s stable
+
+            # Source RVM from the correct location
+            source $HOME/.rvm/scripts/rvm
+
+            # Install Ruby 3.2.2
+            rvm install 3.2.2
+            rvm use 3.2.2 --default
+
+            # Install latest Bundler
+            gem install bundler
+
+      - run:
+          name: Run Ruby SDK Responses API tests
+          command: |
+            source $HOME/.rvm/scripts/rvm
+            cd tests/responses_api_tests_proxy/ruby_tests
+            bundle install
+            bundle exec rspec --format documentation
+          no_output_timeout: 30m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
   proxy_logging_guardrails_model_info_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -4005,6 +4103,14 @@ workflows:
               only:
                 - main
                 - /litellm_.*/
+      - e2e_ruby_sdk_responses_api:
+          requires:
+            - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
       - proxy_logging_guardrails_model_info_tests:
           requires:
             - build_docker_database_image
@@ -4242,6 +4348,7 @@ workflows:
             - local_testing_part2
             - build_and_test
             - e2e_openai_endpoints
+            - e2e_ruby_sdk_responses_api
             - test_bad_database_url
             - llm_translation_testing
             - mcp_testing
