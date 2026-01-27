@@ -566,14 +566,28 @@ def generic_cost_per_token(  # noqa: PLR0915
     if usage.prompt_tokens_details:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)
 
-    ## EDGE CASE - text tokens not set inside PromptTokensDetails
+    ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
+    ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
+    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
+    ## Ref: https://github.com/BerriAI/litellm/issues/19680, #14874, #14875
 
-    if prompt_tokens_details["text_tokens"] == 0:
+    cache_hit = prompt_tokens_details["cache_hit_tokens"]
+    text_tokens = prompt_tokens_details["text_tokens"]
+    audio_tokens = prompt_tokens_details["audio_tokens"]
+    cache_creation = prompt_tokens_details["cache_creation_tokens"]
+    image_tokens = prompt_tokens_details["image_tokens"]
+
+    # Check for double-counting: sum of details > prompt_tokens means overlap
+    total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
+
+    if text_tokens == 0 or has_double_counting:
         text_tokens = (
             usage.prompt_tokens
-            - prompt_tokens_details["cache_hit_tokens"]
-            - prompt_tokens_details["audio_tokens"]
-            - prompt_tokens_details["cache_creation_tokens"]
+            - cache_hit
+            - audio_tokens
+            - cache_creation
+            - image_tokens
         )
         prompt_tokens_details["text_tokens"] = text_tokens
 
