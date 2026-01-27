@@ -3488,11 +3488,21 @@ jobs:
             python3 -m pip install toml
             VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "LiteLLM Version ${VERSION}"
+            
+            # Determine which branch to use for Docker build
+            if [[ "$CIRCLE_BRANCH" =~ ^litellm_release_day_.* ]]; then
+              BUILD_BRANCH="$CIRCLE_BRANCH"
+              echo "Using release branch: $BUILD_BRANCH"
+            else
+              BUILD_BRANCH="main"
+              echo "Using default branch: $BUILD_BRANCH"
+            fi
+            
             curl -X POST \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
+              -d "{\"ref\":\"${BUILD_BRANCH}\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
             echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
