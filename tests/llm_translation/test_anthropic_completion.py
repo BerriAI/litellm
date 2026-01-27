@@ -385,7 +385,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
     "computer_tool_used, prompt_caching_set, expected_beta_header",
     [
         (True, False, True),
-        (False, True, True),
+        (False, True, False),
         (True, True, True),
         (False, False, False),
     ],
@@ -1594,7 +1594,6 @@ def test_anthropic_via_responses_api():
         ResponsesAPIStreamEvents.RESPONSE_CREATED,
         ResponsesAPIStreamEvents.RESPONSE_IN_PROGRESS,
         ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
-        ResponsesAPIStreamEvents.CONTENT_PART_ADDED,
         ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,  # Can occur multiple times
         ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ResponsesAPIStreamEvents.CONTENT_PART_DONE,

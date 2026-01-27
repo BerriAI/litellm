@@ -1,3 +1,7 @@
+import json
+import importlib
+import logging
+import os
 import sys
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8,9 +12,11 @@ from fastapi import HTTPException
 # Add the parent directory to the path so we can import litellm
 sys.path.insert(0, "../../../../../")
 
+
 import httpx
 from mcp import ReadResourceResult, Resource
 from mcp.types import (
+    CallToolResult,
     GetPromptResult,
     Prompt,
     ResourceTemplate,
@@ -25,6 +31,15 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
 from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
 from litellm.types.mcp import MCPAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
+
+
+def _reload_mcp_manager_module():
+    utils_module = sys.modules["litellm.proxy._experimental.mcp_server.utils"]
+    manager_module = sys.modules[
+        "litellm.proxy._experimental.mcp_server.mcp_server_manager"
+    ]
+    importlib.reload(utils_module)
+    return importlib.reload(manager_module)
 
 
 class TestMCPServerManager:
@@ -64,7 +79,7 @@ class TestMCPServerManager:
             updated_at=datetime.now(),
         )
 
-        await manager.add_update_server(stdio_server)
+        await manager.add_server(stdio_server)
 
         # Verify server was added
         assert "stdio-server-1" in manager.registry
@@ -99,6 +114,137 @@ class TestMCPServerManager:
         assert client.stdio_config["args"] == ["server.js"]
         assert client.stdio_config["env"] == {"NODE_ENV": "test"}
 
+    def test_build_stdio_env_only_accepts_x_prefixed_placeholders(self):
+        """Ensure only ${X-*} placeholders are substituted from headers."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-server-env",
+            name="stdio_env",
+            transport=MCPTransport.stdio,
+            command="node",
+            args=["server.js"],
+            env={
+                "PASSTHROUGH": "${X-Test-Header}",
+                "STATIC": "value",
+                "IGNORED": "${Not-Allowed}",
+            },
+        )
+
+        env = manager._build_stdio_env(
+            server,
+            raw_headers={
+                "x-test-header": "resolved-value",
+                "x-not-used": "other",
+            },
+        )
+
+        assert env == {
+            "PASSTHROUGH": "resolved-value",
+            "STATIC": "value",
+            "IGNORED": "${Not-Allowed}",
+        }
+
+    def test_build_stdio_env_missing_header_skips_entry(self):
+        """Ensure missing headers drop the placeholder from the resolved env."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="stdio-server-env-miss",
+            name="stdio_env_miss",
+            transport=MCPTransport.stdio,
+            command="node",
+            args=["server.js"],
+            env={"EXPECTED": "${X-Missing}"},
+        )
+
+        env = manager._build_stdio_env(server, raw_headers={})
+
+        # When the header isn't provided, the key is omitted entirely
+        assert env == {}
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_warns_on_invalid_alias(self, caplog):
+        """Invalid aliases from config should emit warnings during load."""
+
+        manager = MCPServerManager()
+        config = {
+            "validserver": {
+                "alias": "bad/name",
+                "url": "https://example.com",
+                "transport": MCPTransport.http,
+            }
+        }
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        assert any(
+            "invalid alias 'bad/name'" in message for message in caplog.messages
+        )
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_accepts_valid_alias(self, caplog):
+        """Valid aliases should be accepted and populate the registry."""
+
+        manager = MCPServerManager()
+        config = {
+            "validserver": {
+                "alias": "friendly_alias",
+                "url": "https://example.com",
+                "transport": MCPTransport.http,
+            }
+        }
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            await manager.load_servers_from_config(config)
+
+        # No warnings logged for the valid alias
+        assert all("invalid alias" not in message for message in caplog.messages)
+
+        server = next(iter(manager.config_mcp_servers.values()))
+        assert server.alias == "friendly_alias"
+        assert server.server_name == "validserver"
+
+    def test_warns_when_custom_separator_invalid(self, monkeypatch, caplog):
+        """Invalid MCP_TOOL_PREFIX_SEPARATOR values should log a warning."""
+
+        original_value = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR")
+        monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", "/")
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _reload_mcp_manager_module()
+
+        assert any("violates SEP-986" in message for message in caplog.messages)
+
+        # Restore original setting and ensure warning disappears
+        if original_value is None:
+            monkeypatch.delenv("MCP_TOOL_PREFIX_SEPARATOR", raising=False)
+        else:
+            monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", original_value)
+
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _reload_mcp_manager_module()
+
+        assert all("violates SEP-986" not in message for message in caplog.messages)
+
+    def test_accepts_valid_custom_separator(self, monkeypatch, caplog):
+        """Valid separators should not emit warnings during module import."""
+
+        original_value = os.environ.get("MCP_TOOL_PREFIX_SEPARATOR")
+        monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", "_")
+
+        with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            _reload_mcp_manager_module()
+
+        assert all("violates SEP-986" not in message for message in caplog.messages)
+
+        if original_value is None:
+            monkeypatch.delenv("MCP_TOOL_PREFIX_SEPARATOR", raising=False)
+        else:
+            monkeypatch.setenv("MCP_TOOL_PREFIX_SEPARATOR", original_value)
+
+        _reload_mcp_manager_module()
+
     @pytest.mark.asyncio
     async def test_list_tools_with_server_specific_auth_headers(self):
         """Test list_tools method with server-specific auth headers"""
@@ -123,7 +269,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server to return different results
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             if server.name == "github":
                 tool1 = MagicMock()
@@ -174,7 +323,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             assert mcp_auth_header == "legacy-token"  # Should use legacy header
             tool = MagicMock()
@@ -209,7 +361,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -228,6 +383,50 @@ class TestMCPServerManager:
 
         assert len(result) == 1
         assert result[0].name == "github_tool_1"
+
+    @pytest.mark.asyncio
+    async def test_call_regular_mcp_tool_case_insensitive_extra_headers(self):
+        """_call_regular_mcp_tool should forward headers regardless of original casing."""
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="server-case-call",
+            name="case-call-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.authorization,
+            extra_headers=["Authorization"],
+        )
+
+        mock_client = AsyncMock()
+        mock_client.call_tool = AsyncMock(
+            return_value=CallToolResult(content=[], isError=False)
+        )
+        captured_extra_headers = None
+
+        def capture_create_mcp_client(
+            server, mcp_auth_header, extra_headers, stdio_env
+        ):  # pragma: no cover - helper
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = MagicMock(side_effect=capture_create_mcp_client)
+
+        result = await manager._call_regular_mcp_tool(
+            mcp_server=server,
+            original_tool_name="tool",
+            arguments={},
+            tasks=[],
+            mcp_auth_header=None,
+            mcp_server_auth_headers=None,
+            oauth2_headers=None,
+            raw_headers={"authorization": "Bearer token"},
+            proxy_logging_obj=None,
+        )
+
+        assert captured_extra_headers == {"Authorization": "Bearer token"}
+        assert isinstance(result, CallToolResult)
 
     @pytest.mark.asyncio
     async def test_get_prompts_from_server_success(self):
@@ -373,6 +572,7 @@ class TestMCPServerManager:
             server=server,
             mcp_auth_header="auth",
             extra_headers=None,
+            stdio_env=None,
         )
         mock_client.list_resource_templates.assert_awaited_once()
         mock_prefix.assert_called_once_with(mock_templates, server, add_prefix=False)
@@ -536,7 +736,26 @@ class TestMCPServerManager:
         assert (
             server.registration_url == "https://discovered.example.com/register"
         )
+    @pytest.mark.asyncio
+    async def test_config_oauth_initialize_tool_name_to_mcp_server_name_mapping(self):
+        manager = MCPServerManager()
 
+        config = {
+            "example": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+                "auth_type": MCPAuth.oauth2,
+                "scopes": ["config"],
+                "authorization_url": "https://config.example.com/auth",
+            }
+        }
+
+        await manager.load_servers_from_config(config)
+
+        # Initialize the tool mapping
+        await manager._initialize_tool_name_to_mcp_server_name_mapping()
+        assert manager.tool_name_to_mcp_server_name_mapping == {}
+        
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
         """Test that list_tools handles servers without alias gracefully"""
@@ -554,7 +773,10 @@ class TestMCPServerManager:
 
         # Mock _get_tools_from_server
         async def mock_get_tools_from_server(
-            server, mcp_auth_header=None, mcp_protocol_version=None
+            server,
+            mcp_auth_header=None,
+            mcp_protocol_version=None,
+            raw_headers=None,
         ):
             assert (
                 mcp_auth_header == "server-specific-token"
@@ -580,33 +802,31 @@ class TestMCPServerManager:
         manager = MCPServerManager()
 
         # Mock server
-        server = MagicMock()
-        server.server_id = "test-server"
-        server.name = "test-server"
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://test-server.com",
+        )
 
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
 
-        # Mock successful _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
-            tool1 = MagicMock()
-            tool1.name = "tool1"
-            tool2 = MagicMock()
-            tool2.name = "tool2"
-            return [tool1, tool2]
-
-        manager._get_tools_from_server = mock_get_tools_from_server
+        # Mock successful client.run_with_session
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+        manager._create_mcp_client = MagicMock(return_value=mock_client)
 
         # Perform health check
         result = await manager.health_check_server("test-server")
 
-        # Verify results
-        assert result["server_id"] == "test-server"
-        assert result["status"] == "healthy"
-        assert result["tools_count"] == 2
-        assert result["error"] is None
-        assert "last_health_check" in result
-        assert "response_time_ms" in result
-        assert result["response_time_ms"] >= 0  # Allow 0 for very fast mocks
+        # Verify results - result is now LiteLLM_MCPServerTable
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "test-server"
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
 
     @pytest.mark.asyncio
     async def test_health_check_server_unhealthy(self):
@@ -614,28 +834,33 @@ class TestMCPServerManager:
         manager = MCPServerManager()
 
         # Mock server
-        server = MagicMock()
-        server.server_id = "test-server"
-        server.name = "test-server"
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://test-server.com",
+        )
 
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
 
-        # Mock failed _get_tools_from_server
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
-            raise Exception("Connection timeout")
-
-        manager._get_tools_from_server = mock_get_tools_from_server
+        # Mock failed client.run_with_session
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(
+            side_effect=Exception("Connection timeout")
+        )
+        manager._create_mcp_client = MagicMock(return_value=mock_client)
 
         # Perform health check
         result = await manager.health_check_server("test-server")
 
         # Verify results
-        assert result["server_id"] == "test-server"
-        assert result["status"] == "unhealthy"
-        assert result["error"] == "Connection timeout"
-        assert "last_health_check" in result
-        assert "response_time_ms" in result
-        assert result["response_time_ms"] >= 0  # Allow 0 for very fast mocks
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "test-server"
+        assert result.status == "unhealthy"
+        assert result.health_check_error == "Connection timeout"
+        assert result.last_health_check is not None
 
     @pytest.mark.asyncio
     async def test_health_check_server_not_found(self):
@@ -649,96 +874,183 @@ class TestMCPServerManager:
         result = await manager.health_check_server("non-existent-server")
 
         # Verify results
-        assert result["server_id"] == "non-existent-server"
-        assert result["status"] == "unknown"
-        assert result["error"] == "Server not found"
-        assert result["response_time_ms"] is None
-        assert "last_health_check" in result
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "non-existent-server"
+        assert result.server_name is None
+        assert result.status == "unknown"
+        assert result.health_check_error == "Server not found"
+        assert result.last_health_check is not None
 
     @pytest.mark.asyncio
-    async def test_health_check_all_servers(self):
-        """Test health check for all servers"""
+    async def test_health_check_server_oauth2_skips_check(self):
+        """Test that health check is skipped for OAuth2 servers and returns unknown status"""
         manager = MCPServerManager()
 
-        # Mock servers
-        server1 = MagicMock()
-        server1.server_id = "server1"
-        server1.name = "server1"
-
-        server2 = MagicMock()
-        server2.server_id = "server2"
-        server2.name = "server2"
-
-        # Mock registry
-        manager.registry = {"server1": server1, "server2": server2}
-
-        # Mock get_mcp_server_by_id
-        def mock_get_server_by_id(server_id):
-            if server_id == "server1":
-                return server1
-            elif server_id == "server2":
-                return server2
-            return None
-
-        manager.get_mcp_server_by_id = mock_get_server_by_id
-
-        # Mock _get_tools_from_server with different results
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
-            if server.server_id == "server1":
-                tool = MagicMock()
-                tool.name = "tool1"
-                return [tool]
-            elif server.server_id == "server2":
-                raise Exception("Connection failed")
-            return []
-
-        manager._get_tools_from_server = mock_get_tools_from_server
-
-        # Perform health check for all servers
-        result = await manager.health_check_all_servers()
-
-        # Verify results
-        assert len(result) == 2
-        assert "server1" in result
-        assert "server2" in result
-
-        # Check server1 (healthy)
-        assert result["server1"]["status"] == "healthy"
-        assert result["server1"]["tools_count"] == 1
-        assert result["server1"]["error"] is None
-
-        # Check server2 (unhealthy)
-        assert result["server2"]["status"] == "unhealthy"
-        assert result["server2"]["error"] == "Connection failed"
-
-    @pytest.mark.asyncio
-    async def test_health_check_server_with_auth_header(self):
-        """Test health check with authentication header"""
-        manager = MCPServerManager()
-
-        # Mock server
-        server = MagicMock()
-        server.server_id = "test-server"
-        server.name = "test-server"
+        # Mock OAuth2 server
+        server = MCPServer(
+            server_id="oauth2-server",
+            name="oauth2-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            url="http://oauth2-server.com",
+        )
 
         manager.get_mcp_server_by_id = MagicMock(return_value=server)
 
-        # Mock _get_tools_from_server to verify auth header is passed
-        async def mock_get_tools_from_server(server, mcp_auth_header=None):
-            assert mcp_auth_header == "test-token"
-            tool = MagicMock()
-            tool.name = "tool1"
-            return [tool]
+        # _create_mcp_client should not be called for OAuth2 servers
+        manager._create_mcp_client = MagicMock()
 
-        manager._get_tools_from_server = mock_get_tools_from_server
+        # Perform health check
+        result = await manager.health_check_server("oauth2-server")
 
-        # Perform health check with auth header
-        result = await manager.health_check_server("test-server", "test-token")
+        # Verify that client was not created (health check was skipped)
+        manager._create_mcp_client.assert_not_called()
 
         # Verify results
-        assert result["server_id"] == "test-server"
-        assert result["status"] == "healthy"
-        assert result["tools_count"] == 1
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "oauth2-server"
+        assert result.status == "unknown"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+
+    @pytest.mark.asyncio
+    async def test_health_check_server_no_token_skips_check(self):
+        """Test that health check is skipped when auth_type is set but authentication_token is missing"""
+        manager = MCPServerManager()
+
+        # Mock server with auth_type but no authentication_token
+        server = MCPServer(
+            server_id="no-token-server",
+            name="no-token-server",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.bearer_token,
+            authentication_token=None,  # No token
+            url="http://no-token-server.com",
+        )
+
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+
+        # _create_mcp_client should not be called
+        manager._create_mcp_client = MagicMock()
+
+        # Perform health check
+        result = await manager.health_check_server("no-token-server")
+
+        # Verify that client was not created (health check was skipped)
+        manager._create_mcp_client.assert_not_called()
+
+        # Verify results
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "no-token-server"
+        assert result.status == "unknown"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+
+    @pytest.mark.asyncio
+    async def test_health_check_server_with_static_headers(self):
+        """Test health check with static headers configured"""
+        manager = MCPServerManager()
+
+        # Mock server with static_headers
+        server = MCPServer(
+            server_id="test-server",
+            name="test-server",
+            transport=MCPTransport.http,
+            auth_type=None,
+            authentication_token="test-token",
+            url="http://test-server.com",
+            static_headers={"X-Custom-Header": "custom-value"},
+        )
+
+        manager.get_mcp_server_by_id = MagicMock(return_value=server)
+
+        # Mock successful client
+        mock_client = AsyncMock()
+        mock_client.run_with_session = AsyncMock(return_value="ok")
+
+        # Capture the extra_headers passed to _create_mcp_client
+        captured_extra_headers = None
+
+        def capture_create_mcp_client(server, mcp_auth_header, extra_headers, stdio_env):
+            nonlocal captured_extra_headers
+            captured_extra_headers = extra_headers
+            return mock_client
+
+        manager._create_mcp_client = MagicMock(side_effect=capture_create_mcp_client)
+
+        # Perform health check
+        result = await manager.health_check_server("test-server")
+
+        # Verify static headers were passed
+        assert captured_extra_headers == {"X-Custom-Header": "custom-value"}
+
+        # Verify results
+        assert isinstance(result, LiteLLM_MCPServerTable)
+        assert result.server_id == "test-server"
+        assert result.status == "healthy"
+        assert result.health_check_error is None
+
+    @pytest.mark.asyncio
+    async def test_register_openapi_tools_includes_static_headers(self, tmp_path):
+        """Ensure OpenAPI-to-MCP tool calls include server.static_headers (Issue #19341)."""
+        manager = MCPServerManager()
+
+        spec_path = tmp_path / "openapi.json"
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Demo", "version": "1.0.0"},
+                    "paths": {
+                        "/health": {
+                            "get": {
+                                "operationId": "health_check",
+                                "summary": "health",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            server_name="openapi-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            static_headers={"Authorization": "STATIC token"},
+        )
+
+        captured: dict = {}
+
+        def fake_create_tool_function(path, method, operation, base_url, headers=None):
+            captured["headers"] = headers
+
+            async def tool_func(**kwargs):
+                return "ok"
+
+            return tool_func
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
+            side_effect=fake_create_tool_function,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
+            return_value={"type": "object", "properties": {}, "required": []},
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
+            return_value=None,
+        ):
+            manager._register_openapi_tools(
+                spec_path=str(spec_path),
+                server=server,
+                base_url="https://example.com",
+            )
+
+        assert captured["headers"] is not None
+        assert captured["headers"]["Authorization"] == "STATIC token"
 
     @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
@@ -1275,7 +1587,7 @@ class TestMCPServerManager:
                 "env": {},
             },
         )
-        await manager.add_update_server(server)
+        await manager.add_server(server)
         assert server.server_id in manager.get_registry()
 
     @pytest.mark.asyncio
@@ -1573,7 +1885,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params):
+        async def mock_call_tool(params, host_progress_callback=None):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]

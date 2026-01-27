@@ -2,15 +2,9 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk, ChatCompletionToolParam
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionToolCallChunk,
-    ChatCompletionToolParam,
-)
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
 )
@@ -22,6 +16,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
+    QualifireGuardrailConfigModel,
 )
 
 """
@@ -67,6 +64,7 @@ class SupportedGuardrailIntegrations(Enum):
     ONYX = "onyx"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
+    QUALIFIRE = "qualifire"
 
 
 class Role(Enum):
@@ -302,9 +300,7 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
             "'output' runs on model → user traffic, and 'both' applies to both."
         ),
     )
-    presidio_score_thresholds: Optional[
-        Dict[Union[PiiEntityType, str], float]
-    ] = Field(
+    presidio_score_thresholds: Optional[Dict[Union[PiiEntityType, str], float]] = Field(
         default=None,
         description=(
             "Optional per-entity minimum confidence scores for Presidio detections. "
@@ -665,11 +661,28 @@ class LitellmParams(
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
+    QualifireGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
+
+    @field_validator(
+        "mode",
+        "default_action",
+        "on_disallowed_action",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def normalize_lowercase(cls, v):
+        """Normalize string and list fields to lowercase for ALL guardrail types."""
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [x.lower() if isinstance(x, str) else x for x in v]
+        return v
 
     def __init__(self, **kwargs):
         default_on = kwargs.pop("default_on", None)
@@ -677,6 +690,7 @@ class LitellmParams(
             kwargs["default_on"] = default_on
         else:
             kwargs["default_on"] = False
+
         super().__init__(**kwargs)
 
     def __contains__(self, key):

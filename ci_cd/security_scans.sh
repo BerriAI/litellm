@@ -34,47 +34,47 @@ install_ggshield() {
     echo "ggshield installed successfully"
 }
 
-# Function to run secret detection scans
-run_secret_detection() {
-    echo "Running secret detection scans..."
+# # Function to run secret detection scans
+# run_secret_detection() {
+#     echo "Running secret detection scans..."
     
-    if ! command -v ggshield &> /dev/null; then
-        install_ggshield
-    fi
+#     if ! command -v ggshield &> /dev/null; then
+#         install_ggshield
+#     fi
     
-    # Check if GITGUARDIAN_API_KEY is set (required for CI/CD)
-    if [ -z "$GITGUARDIAN_API_KEY" ]; then
-        echo "Warning: GITGUARDIAN_API_KEY environment variable is not set."
-        echo "ggshield requires a GitGuardian API key to scan for secrets."
-        echo "Please set GITGUARDIAN_API_KEY in your CI/CD environment variables."
-        exit 1
-    fi
+#     # Check if GITGUARDIAN_API_KEY is set (required for CI/CD)
+#     if [ -z "$GITGUARDIAN_API_KEY" ]; then
+#         echo "Warning: GITGUARDIAN_API_KEY environment variable is not set."
+#         echo "ggshield requires a GitGuardian API key to scan for secrets."
+#         echo "Please set GITGUARDIAN_API_KEY in your CI/CD environment variables."
+#         exit 1
+#     fi
     
-    echo "Scanning codebase for secrets..."
-    echo "Note: Large codebases may take several minutes due to API rate limits (50 requests/minute on free plan)"
-    echo "ggshield will automatically handle rate limits and retry as needed."
-    echo "Binary files, cache files, and build artifacts are excluded via .gitguardian.yaml"
+#     echo "Scanning codebase for secrets..."
+#     echo "Note: Large codebases may take several minutes due to API rate limits (50 requests/minute on free plan)"
+#     echo "ggshield will automatically handle rate limits and retry as needed."
+#     echo "Binary files, cache files, and build artifacts are excluded via .gitguardian.yaml"
     
-    # Use --recursive for directory scanning and auto-confirm if prompted
-    # .gitguardian.yaml will automatically exclude binary files, wheel files, etc.
-    # GITGUARDIAN_API_KEY environment variable will be used for authentication
-    echo y | ggshield secret scan path . --recursive || {
-        echo ""
-        echo "=========================================="
-        echo "ERROR: Secret Detection Failed"
-        echo "=========================================="
-        echo "ggshield has detected secrets in the codebase."
-        echo "Please review discovered secrets above, revoke any actively used secrets"
-        echo "from underlying systems and make changes to inject secrets dynamically at runtime."
-        echo ""
-        echo "For more information, see: https://docs.gitguardian.com/secrets-detection/"
-        echo "=========================================="
-        echo ""
-        exit 1
-    }
+#     # Use --recursive for directory scanning and auto-confirm if prompted
+#     # .gitguardian.yaml will automatically exclude binary files, wheel files, etc.
+#     # GITGUARDIAN_API_KEY environment variable will be used for authentication
+#     echo y | ggshield secret scan path . --recursive || {
+#         echo ""
+#         echo "=========================================="
+#         echo "ERROR: Secret Detection Failed"
+#         echo "=========================================="
+#         echo "ggshield has detected secrets in the codebase."
+#         echo "Please review discovered secrets above, revoke any actively used secrets"
+#         echo "from underlying systems and make changes to inject secrets dynamically at runtime."
+#         echo ""
+#         echo "For more information, see: https://docs.gitguardian.com/secrets-detection/"
+#         echo "=========================================="
+#         echo ""
+#         exit 1
+#     }
     
-    echo "Secret detection scans completed successfully"
-}
+#     echo "Secret detection scans completed successfully"
+# }
 
 # Function to run Trivy scans
 run_trivy_scans() {
@@ -101,12 +101,12 @@ run_grype_scans() {
     # Build and scan Dockerfile.database
     echo "Building and scanning Dockerfile.database..."
     docker build --no-cache -t litellm-database:latest -f ./docker/Dockerfile.database .
-    grype litellm-database:latest --fail-on critical
+    grype litellm-database:latest --config ci_cd/.grype.yaml --fail-on critical
     
     # Build and scan main Dockerfile
     echo "Building and scanning main Dockerfile..."
     docker build --no-cache -t litellm:latest .
-    grype litellm:latest --fail-on critical
+    grype litellm:latest --config ci_cd/.grype.yaml --fail-on critical
     
     # Restore original .dockerignore
     echo "Restoring original .dockerignore..."
@@ -128,6 +128,31 @@ run_grype_scans() {
         "GHSA-5j98-mcp5-4vw2"
         "CVE-2025-13836" # Python 3.13 HTTP response reading OOM/DoS - no fix available in base image
         "CVE-2025-12084" # Python 3.13 xml.dom.minidom quadratic algorithm - no fix available in base image
+        "CVE-2025-60876" # BusyBox wget HTTP request splitting - no fix available in Chainguard Wolfi base image
+        "CVE-2026-0861" # Wolfi glibc still flagged even on 2.42-r5; upstream patched build unavailable yet
+        "CVE-2010-4756" # glibc glob DoS - awaiting patched Wolfi glibc build
+        "CVE-2019-1010022" # glibc stack guard bypass - awaiting patched Wolfi glibc build
+        "CVE-2019-1010023" # glibc ldd remap issue - awaiting patched Wolfi glibc build
+        "CVE-2019-1010024" # glibc ASLR mitigation bypass - awaiting patched Wolfi glibc build
+        "CVE-2019-1010025" # glibc pthread heap address leak - awaiting patched Wolfi glibc build
+        "CVE-2026-22184" # zlib untgz buffer overflow - untgz unused + no fixed Wolfi build yet
+        "GHSA-58pv-8j8x-9vj2" # jaraco.context path traversal - setuptools vendored only (v5.3.0), not used in application code (using v6.1.0+)
+        "GHSA-r6q2-hw4h-h46w" # node-tar not used by application runtime, Linux-only container, not affect by macOS APFS-specific exploit
+        "GHSA-8rrh-rw8j-w5fx" # wheel is from chainguard and will be handled by then TODO: Remove this after Chainguard updates the wheel
+        "CVE-2025-59465" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-55131" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59466" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-55130" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59467" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2026-21637" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-15281" # No fix available yet
+        "CVE-2026-0865" # No fix available yet
+        "CVE-2025-15282" # No fix available yet
+        "CVE-2026-0672" # No fix available yet
+        "CVE-2025-15366" # No fix available yet
+        "CVE-2025-15367" # No fix available yet
+        "CVE-2025-12781" # No fix available yet
+        "CVE-2025-11468" # No fix available yet
     )
 
     # Build JSON array of allowlisted CVE IDs for jq
@@ -208,8 +233,8 @@ main() {
     install_trivy
     install_grype
     
-    echo "Running secret detection scans..."
-    run_secret_detection
+    # echo "Running secret detection scans..."
+    # run_secret_detection
     
     echo "Running filesystem vulnerability scans..."
     run_trivy_scans

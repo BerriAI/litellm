@@ -108,7 +108,7 @@ async def test_create_skill_sdk(prisma_client):
     # Verify skill was created correctly
     assert skill is not None
     assert skill.id is not None
-    assert skill.id.startswith("skill_")
+    assert skill.id.startswith("litellm_skill")
     assert skill.display_title == "SDK Test Skill"
     assert skill.type == "skill"
     assert skill.source == "custom"

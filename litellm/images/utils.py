@@ -82,7 +82,6 @@ class ImageEditRequestUtils:
         filtered_params = {
             k: v for k, v in params.items() if k in valid_keys and v is not None
         }
-
         return cast(ImageEditOptionalRequestParams, filtered_params)
 
     @staticmethod

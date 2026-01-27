@@ -106,6 +106,9 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
   );
   const [customApiKey, setCustomApiKey] = useState("");
   const [debouncedCustomApiKey, setDebouncedCustomApiKey] = useState("");
+  const [customProxyBaseUrl] = useState<string>(
+    () => sessionStorage.getItem("customProxyBaseUrl") || ""
+  );
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedCustomApiKey(customApiKey);
@@ -171,7 +174,7 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
       }
       setIsLoadingAgents(true);
       try {
-        const agents = await fetchAvailableAgents(effectiveApiKey);
+        const agents = await fetchAvailableAgents(effectiveApiKey, customProxyBaseUrl || undefined);
         if (!active) return;
         setAgentOptions(agents);
       } catch (error) {
@@ -598,6 +601,8 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             undefined,
             (time) => updateTimingDataForComparison(prepared.id, time),
             (latency) => updateTotalLatencyForComparison(prepared.id, latency),
+            undefined, // onA2AMetadata
+            customProxyBaseUrl || undefined,
           )
         : makeOpenAIChatCompletionRequest(
             prepared.apiChatHistory,
@@ -614,10 +619,12 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             guardrails,
             undefined,
             undefined,
+            undefined,
             (searchResults) => updateSearchResultsForComparison(prepared.id, searchResults),
             useAdvancedParams ? prepared.temperature : undefined,
             useAdvancedParams ? prepared.maxTokens : undefined,
             (latency) => updateTotalLatencyForComparison(prepared.id, latency),
+            customProxyBaseUrl || undefined,
           );
 
       requestPromise

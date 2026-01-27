@@ -1,21 +1,10 @@
-import React, { useState, useEffect } from "react";
-import {
-  Card,
-  Title,
-  Text,
-  Button as TremorButton,
-  Table,
-  TableHead,
-  TableHeaderCell,
-  TableBody,
-  TableRow,
-  TableCell,
-} from "@tremor/react";
-import { Button, Checkbox, Empty } from "antd";
-import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
 import { getTeamPermissionsCall, teamPermissionsUpdateCall } from "@/components/networking";
-import { getPermissionInfo } from "./permission_definitions";
+import { ReloadOutlined, SaveOutlined } from "@ant-design/icons";
+import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
+import { Button, Checkbox, Empty } from "antd";
+import React, { useEffect, useState } from "react";
 import NotificationsManager from "../molecules/notifications_manager";
+import { getPermissionInfo } from "./permission_definitions";
 
 interface MemberPermissionsProps {
   teamId: string;
@@ -94,9 +83,9 @@ const MemberPermissions: React.FC<MemberPermissionsProps> = ({ teamId, accessTok
             <Button icon={<ReloadOutlined />} onClick={handleReset}>
               Reset
             </Button>
-            <TremorButton onClick={handleSave} loading={saving} className="flex items-center gap-2">
+            <Button onClick={handleSave} loading={saving} type="primary">
               <SaveOutlined /> Save Changes
-            </TremorButton>
+            </Button>
           </div>
         )}
       </div>

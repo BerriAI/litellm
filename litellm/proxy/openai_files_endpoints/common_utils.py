@@ -2,12 +2,12 @@ import base64
 import mimetypes
 import re
 from dataclasses import dataclass, field
-from typing import List, Literal, Optional, Union
+from typing import TYPE_CHECKING, List, Literal, Optional, Union
 
-from fastapi import Request
-
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.types.utils import SpecialEnums
+
+if TYPE_CHECKING:
+    from fastapi import Request
 
 
 def _is_base64_encoded_unified_file_id(b64_uid: str) -> Union[str, Literal[False]]:
@@ -554,7 +554,7 @@ class FileCreationParams:
 
 
 async def extract_file_creation_params(
-    request: Request,
+    request: "Request",
     request_body: Optional[dict] = None,
     target_model_names_form: Optional[str] = None,
     target_storage_form: Optional[str] = None,
@@ -571,6 +571,8 @@ async def extract_file_creation_params(
     Returns:
         FileCreationParams: Structured parameters extracted from the request
     """
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    
     if request_body is None:
         request_body = await _read_request_body(request=request) or {}
     
@@ -621,7 +623,7 @@ def _extract_target_model_names_simple(target_model_names_form: Optional[str] = 
     return []
 
 
-def _extract_model_param(request: Request, request_body: dict) -> Optional[str]:
+def _extract_model_param(request: "Request", request_body: dict) -> Optional[str]:
     """
     Extract model parameter from request.
     

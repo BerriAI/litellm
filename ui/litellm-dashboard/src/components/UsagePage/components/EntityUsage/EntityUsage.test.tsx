@@ -36,8 +36,20 @@ vi.mock("./TopModelView", () => ({
   default: () => <div>Top Models</div>,
 }));
 
-vi.mock("./EntityUsageExport", () => ({
+vi.mock("../../../EntityUsageExport/EntityUsageExportModal", () => ({
+  default: () => <div>Entity Usage Export Modal</div>,
+}));
+
+vi.mock("../../../EntityUsageExport", () => ({
   UsageExportHeader: () => <div>Usage Export Header</div>,
+}));
+
+// Mock useTeams hook
+vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
+  default: vi.fn(() => ({
+    teams: [],
+    setTeams: vi.fn(),
+  })),
 }));
 
 describe("EntityUsage", () => {

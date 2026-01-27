@@ -314,3 +314,79 @@ def test_calculate_pattern_specificity():
 
     assert PatternUtils.calculate_pattern_specificity("llmengine/*") == (11, 1)
     assert PatternUtils.calculate_pattern_specificity("*") == (1, 1)
+
+
+def test_wildcard_priority_over_deployment_names():
+    """
+    Test that wildcard routes take priority over deployment_names (litellm_params.model) matching.
+    
+    Scenario:
+    - deployment 1: model_name="zapier-multi-provider-text-embedding-3-small", model="openai/text-embedding-3-small"
+    - deployment 2: model_name="*", model="openai/*"
+    - deployment 3: model_name="openai/*", model="openai/*"
+    
+    When calling "openai/text-embedding-3-small", it should match deployment 3 (wildcard),
+    NOT deployment 1 (even though deployment 1's litellm_params.model matches).
+    
+    Priority order should be:
+    1. Exact model_name match
+    2. Wildcard model_name match
+    3. deployment_names (litellm_params.model) match
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "zapier-multi-provider-text-embedding-3-small",
+                "litellm_params": {
+                    "model": "openai/text-embedding-3-small",
+                    "api_base": "http://localhost:8080/openai",
+                    "api_key": "test-key-1"
+                },
+                "model_info": {
+                    "id": "zapier-multi-provider-text-embedding-3-small-openai"
+                }
+            },
+            {
+                "model_name": "*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_base": "http://localhost:8081/openai",
+                    "api_key": "test-key-2"
+                }
+            },
+            {
+                "model_name": "openai/*",
+                "litellm_params": {
+                    "model": "openai/*",
+                    "api_base": "http://localhost:8082/openai",
+                    "api_key": "test-key-3"
+                }
+            }
+        ]
+    )
+    
+    # Test 1: Request "openai/text-embedding-3-small" should match wildcard "openai/*", not deployment_names
+    deployments = router.get_model_list(model_name="openai/text-embedding-3-small")
+    
+    assert deployments is not None, "No deployments found"
+    assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
+    
+    # Should match the "openai/*" wildcard deployment (api_base ending in 8082)
+    assert deployments[0]['litellm_params']['api_base'] == "http://localhost:8082/openai", \
+        f"Expected wildcard deployment (8082), got {deployments[0]['litellm_params']['api_base']}"
+    
+    # Test 2: Request exact model_name should still work
+    deployments = router.get_model_list(model_name="zapier-multi-provider-text-embedding-3-small")
+    
+    assert deployments is not None, "No deployments found"
+    assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
+    assert deployments[0]['litellm_params']['api_base'] == "http://localhost:8080/openai", \
+        f"Expected exact match deployment (8080), got {deployments[0]['litellm_params']['api_base']}"
+    
+    # Test 3: Request with "*" wildcard should match the "*" deployment
+    deployments = router.get_model_list(model_name="some-random-model")
+    
+    assert deployments is not None, "No deployments found"
+    assert len(deployments) == 1, f"Expected 1 deployment, got {len(deployments)}"
+    assert deployments[0]['litellm_params']['api_base'] == "http://localhost:8081/openai", \
+        f"Expected '*' wildcard deployment (8081), got {deployments[0]['litellm_params']['api_base']}"

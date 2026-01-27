@@ -1,7 +1,7 @@
-import { getProxyBaseUrl } from "@/components/networking";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { createQueryKeys } from "../common/queryKeysFactory";
 import { CloudZeroSettings } from "@/components/CloudZeroCostTracking/types";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { createQueryKeys } from "../common/queryKeysFactory";
 
 const cloudZeroSettingsKeys = createQueryKeys("cloudZeroSettings");
 
@@ -12,24 +12,40 @@ const getCloudZeroSettings = async (accessToken: string): Promise<CloudZeroSetti
   const response = await fetch(url, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
   });
 
-  if (response.status === 404) {
-    // 404 means no settings are configured - this is expected and not an error
-    return null;
-  }
-
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage =
-      errorData?.error?.message || errorData?.message || errorData?.detail || "Failed to fetch CloudZero settings";
+    let errorMessage = "Failed to fetch CloudZero settings";
+    try {
+      const errorData = await response.json();
+      // Handle different error response formats
+      if (typeof errorData === "object" && errorData !== null) {
+        errorMessage =
+          errorData?.error?.message ||
+          errorData?.error ||
+          errorData?.message ||
+          errorData?.detail ||
+          (typeof errorData?.error === "string" ? errorData.error : errorMessage);
+      } else if (typeof errorData === "string") {
+        errorMessage = errorData;
+      }
+    } catch {
+      // If JSON parsing fails, use the status text
+      errorMessage = response.statusText || errorMessage;
+    }
     throw new Error(errorMessage);
   }
 
   const data = await response.json();
+
+  // Check if settings are actually configured (all required fields are present)
+  if (!data || (!data.api_key_masked && !data.connection_id)) {
+    return null;
+  }
+
   return data;
 };
 
@@ -54,6 +70,11 @@ interface UpdateResponse {
   status: string;
 }
 
+interface DeleteResponse {
+  message: string;
+  status: string;
+}
+
 const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams): Promise<UpdateResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/cloudzero/settings` : `/cloudzero/settings`;
@@ -61,7 +82,7 @@ const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams
   const response = await fetch(url, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -72,9 +93,22 @@ const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage =
-      errorData?.error?.message || errorData?.message || errorData?.detail || "Failed to update CloudZero settings";
+    let errorMessage = "Failed to update CloudZero settings";
+    try {
+      const errorData = await response.json();
+      if (typeof errorData === "object" && errorData !== null) {
+        errorMessage =
+          errorData?.error?.message ||
+          errorData?.error ||
+          errorData?.message ||
+          errorData?.detail ||
+          (typeof errorData?.error === "string" ? errorData.error : errorMessage);
+      } else if (typeof errorData === "string") {
+        errorMessage = errorData;
+      }
+    } catch {
+      errorMessage = response.statusText || errorMessage;
+    }
     throw new Error(errorMessage);
   }
 
@@ -91,6 +125,59 @@ export const useCloudZeroUpdateSettings = (accessToken: string) => {
         throw new Error("Access token is required");
       }
       return await updateCloudZeroSettings(accessToken, params);
+    },
+    onSuccess: () => {
+      // Invalidate the settings query to refetch updated data
+      queryClient.invalidateQueries({ queryKey: cloudZeroSettingsKeys.list({}) });
+    },
+  });
+};
+
+const deleteCloudZeroSettings = async (accessToken: string): Promise<DeleteResponse> => {
+  const proxyBaseUrl = getProxyBaseUrl();
+  const url = proxyBaseUrl ? `${proxyBaseUrl}/cloudzero/delete` : `/cloudzero/delete`;
+
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: {
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    let errorMessage = "Failed to delete CloudZero settings";
+    try {
+      const errorData = await response.json();
+      if (typeof errorData === "object" && errorData !== null) {
+        errorMessage =
+          errorData?.error?.message ||
+          errorData?.error ||
+          errorData?.message ||
+          errorData?.detail ||
+          (typeof errorData?.error === "string" ? errorData.error : errorMessage);
+      } else if (typeof errorData === "string") {
+        errorMessage = errorData;
+      }
+    } catch {
+      errorMessage = response.statusText || errorMessage;
+    }
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+  return data;
+};
+
+export const useCloudZeroDeleteSettings = (accessToken: string) => {
+  const queryClient = useQueryClient();
+
+  return useMutation<DeleteResponse, Error, void>({
+    mutationFn: async () => {
+      if (!accessToken) {
+        throw new Error("Access token is required");
+      }
+      return await deleteCloudZeroSettings(accessToken);
     },
     onSuccess: () => {
       // Invalidate the settings query to refetch updated data

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cas
 
 from fastapi import HTTPException
 
+import litellm
 from litellm import Router, verbose_logger
 from litellm._uuid import uuid
 from litellm.caching.caching import DualCache
@@ -23,7 +24,9 @@ from litellm.proxy._types import (
 from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     get_batch_id_from_unified_batch_id,
+    get_content_type_from_file_object,
     get_model_id_from_unified_batch_id,
+    normalize_mime_type_for_provider,
 )
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -33,6 +36,7 @@ from litellm.types.llms.openai import (
     FileObject,
     OpenAIFileObject,
     OpenAIFilesPurpose,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import (
     CallTypesLiteral,
@@ -40,10 +44,6 @@ from litellm.types.utils import (
     LiteLLMFineTuningJob,
     LLMResponseTypes,
     SpecialEnums,
-)
-from litellm.proxy.openai_files_endpoints.common_utils import (
-    get_content_type_from_file_object,
-    normalize_mime_type_for_provider,
 )
 
 if TYPE_CHECKING:
@@ -133,10 +133,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     async def store_unified_object_id(
         self,
         unified_object_id: str,
-        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob],
+        file_object: Union[LiteLLMBatch, LiteLLMFineTuningJob, "ResponsesAPIResponse"],
         litellm_parent_otel_span: Optional[Span],
         model_object_id: str,
-        file_purpose: Literal["batch", "fine-tune"],
+        file_purpose: Literal["batch", "fine-tune", "response"],
         user_api_key_dict: UserAPIKeyAuth,
     ) -> None:
         verbose_logger.info(
@@ -837,15 +837,36 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         return response
 
     async def afile_retrieve(
-        self, file_id: str, litellm_parent_otel_span: Optional[Span]
+        self, file_id: str, litellm_parent_otel_span: Optional[Span], llm_router=None
     ) -> OpenAIFileObject:
         stored_file_object = await self.get_unified_file_id(
             file_id, litellm_parent_otel_span
         )
-        if stored_file_object:
-            return stored_file_object.file_object
-        else:
+
+        # Case 1 : This is not a managed file
+        if not stored_file_object:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
+        
+        # Case 2: Managed file and the file object exists in the database
+        if stored_file_object and stored_file_object.file_object:
+            return stored_file_object.file_object
+
+        # Case 3: Managed file exists in the database but not the file object (for. e.g the batch task might not have run)
+        # So we fetch the file object from the provider. We deliberately do not store the result to avoid interfering with batch cost tracking code.
+        if not llm_router:
+            raise Exception(
+                f"LiteLLM Managed File object with id={file_id} has no file_object "
+                f"and llm_router is required to fetch from provider"
+            )
+
+        try:
+            model_id, model_file_id = next(iter(stored_file_object.model_mappings.items()))
+            credentials = llm_router.get_deployment_credentials_with_provider(model_id) or {}
+            response = await litellm.afile_retrieve(file_id=model_file_id, **credentials)
+            response.id = file_id  # Replace with unified ID
+            return response
+        except Exception as e:
+            raise Exception(f"Failed to retrieve file {file_id} from provider: {str(e)}") from e
 
     async def afile_list(
         self,
@@ -869,10 +890,11 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             [file_id], litellm_parent_otel_span
         )
 
+        delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
@@ -880,6 +902,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         if stored_file_object:
             return stored_file_object
+        elif delete_response:
+            delete_response.id = file_id
+            return delete_response
         else:
             raise Exception(f"LiteLLM Managed File object with id={file_id} not found")
 
@@ -946,7 +971,9 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             
             # File is stored in a storage backend, download and convert to base64
             try:
-                from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
+                from litellm.llms.base_llm.files.storage_backend_factory import (
+                    get_storage_backend,
+                )
                 
                 storage_backend_name = db_file.storage_backend
                 storage_url = db_file.storage_url

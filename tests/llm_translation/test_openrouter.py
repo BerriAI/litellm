@@ -22,7 +22,7 @@ def test_completion_openrouter_reasoning_content():
 def test_completion_openrouter_image_generation():
     litellm._turn_on_debug()
     resp = litellm.completion(
-        model="openrouter/google/gemini-2.5-flash-image-preview",
+        model="openrouter/google/gemini-2.5-flash-image",
         messages=[{"role": "user", "content": "Generate an image of a cat"}],
         modalities=["image", "text"],
     )
@@ -32,3 +32,18 @@ def test_completion_openrouter_image_generation():
         .message.images[0]["image_url"]["url"]
         .startswith("data:image/png;base64,")
     )
+
+
+def test_openrouter_embedding():
+    """Test OpenRouter embeddings support."""
+    litellm._turn_on_debug()
+    resp = litellm.embedding(
+        model="openrouter/openai/text-embedding-3-small",
+        input=["Hello world", "How are you?"],
+    )
+    print(resp)
+    assert resp is not None
+    assert len(resp.data) == 2
+    assert resp.data[0]["embedding"] is not None
+    assert isinstance(resp.data[0]["embedding"], list)
+    assert len(resp.data[0]["embedding"]) > 0

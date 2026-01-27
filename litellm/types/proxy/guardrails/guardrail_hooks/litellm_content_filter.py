@@ -1,9 +1,43 @@
-from typing import List, Literal, Optional
+from enum import Enum
+from typing import List, Literal, Optional, TypedDict, Union
 
 from pydantic import Field
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+
+
+# Detection type enum
+class DetectionType(str, Enum):
+    PATTERN = "pattern"
+    BLOCKED_WORD = "blocked_word"
+    CATEGORY_KEYWORD = "category_keyword"
+
+
+# Typed detection dictionaries
+class PatternDetection(TypedDict):
+    type: Literal["pattern"]
+    pattern_name: str
+    # Note: matched_text is intentionally excluded to avoid logging sensitive content
+    action: str  # ContentFilterAction.value
+
+
+class BlockedWordDetection(TypedDict):
+    type: Literal["blocked_word"]
+    keyword: str
+    action: str  # ContentFilterAction.value
+    description: Optional[str]
+
+
+class CategoryKeywordDetection(TypedDict):
+    type: Literal["category_keyword"]
+    category: str
+    keyword: str
+    severity: str
+    action: str  # ContentFilterAction.value
+
+
+ContentFilterDetection = Union[PatternDetection, BlockedWordDetection, CategoryKeywordDetection]
 
 
 class ContentFilterCategoryConfig(BaseLiteLLMOpenAIResponseObject):
