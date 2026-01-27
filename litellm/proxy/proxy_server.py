@@ -4497,6 +4497,18 @@ async def async_data_generator(
                 response_str = litellm.get_response_string(response_obj=chunk)
                 str_so_far_parts.append(response_str)
 
+            # Ensure the proxy returns the client-requested model name (not provider-prefixed
+            # internal identifiers) on streaming chunks.
+            client_requested_model = request_data.get("model")
+            if isinstance(client_requested_model, str) and client_requested_model:
+                try:
+                    if hasattr(chunk, "model"):
+                        chunk.model = client_requested_model  # type: ignore[attr-defined]
+                    elif isinstance(chunk, dict) and "model" in chunk:
+                        chunk["model"] = client_requested_model
+                except Exception:
+                    pass
+
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
             elif isinstance(chunk, str) and chunk.startswith("data: "):

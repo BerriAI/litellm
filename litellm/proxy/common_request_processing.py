@@ -649,6 +649,13 @@ class ProxyBaseLLMRequestProcessing:
             llm_router=llm_router,
         )
 
+        # Preserve the client-facing model name for the response. Router/deployments may use
+        # provider-prefixed internal model identifiers (e.g. `hosted_vllm/...`) which should
+        # not be leaked back to clients.
+        client_requested_model: Optional[str] = (
+            self.data.get("model") if isinstance(self.data.get("model"), str) else None
+        )
+
         tasks = []
         tasks.append(
             proxy_logging_obj.during_call_hook(
@@ -784,6 +791,17 @@ class ProxyBaseLLMRequestProcessing:
         response = await proxy_logging_obj.post_call_success_hook(
             data=self.data, user_api_key_dict=user_api_key_dict, response=response
         )
+
+        # Ensure the proxy returns the client-requested model name (not provider-prefixed
+        # internal identifiers) for OpenAI-compatible responses.
+        if client_requested_model:
+            try:
+                if hasattr(response, "model"):
+                    response.model = client_requested_model  # type: ignore[attr-defined]
+                elif isinstance(response, dict) and "model" in response:
+                    response["model"] = client_requested_model
+            except Exception:
+                pass
 
         hidden_params = (
             getattr(response, "_hidden_params", {}) or {}
