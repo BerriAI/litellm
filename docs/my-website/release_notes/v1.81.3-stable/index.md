@@ -43,12 +43,6 @@ pip install litellm==1.81.3.rc.2
 
 ---
 
-## Key Highlights
-[TODO]
----
-
-[TODO]
-
 ## New Models / Updated Models
 
 ### New Model Support
@@ -104,7 +98,7 @@ pip install litellm==1.81.3.rc.2
 - **[Brave Search](../../docs/search/brave)**
     - New Search provider - [PR #19433](https://github.com/BerriAI/litellm/pull/19433)
 
-- **Sarvam ai** [TODO: MISSING DOCS]
+- **Sarvam ai**
     - Add support for new sarvam models  - [PR #19479](https://github.com/BerriAI/litellm/pull/19479)
 
 - **[GMI](../../docs/providers/gmi)**
