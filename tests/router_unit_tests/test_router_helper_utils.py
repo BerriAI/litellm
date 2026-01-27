@@ -980,6 +980,32 @@ def test_get_num_retries_from_retry_policy(
     assert calc_num_retries == num_retries
 
 
+def test_content_policy_retries_not_overridden_by_bad_request(model_list):
+    """
+    Test that ContentPolicyViolationError uses ContentPolicyViolationErrorRetries,
+    not BadRequestErrorRetries, even though ContentPolicyViolationError inherits
+    from BadRequestError.
+
+    Regression test for: https://github.com/BerriAI/litellm/issues/19876
+    """
+    from litellm.router import RetryPolicy
+
+    router = Router(
+        model_list=model_list,
+        retry_policy=RetryPolicy(
+            BadRequestErrorRetries=10,
+            ContentPolicyViolationErrorRetries=0,
+        ),
+    )
+    calc_num_retries = router.get_num_retries_from_retry_policy(
+        exception=litellm.exceptions.ContentPolicyViolationError(
+            message="test", llm_provider="openai", model="gpt-3.5-turbo"
+        )
+    )
+    # Should return 0 (ContentPolicyViolationErrorRetries), not 10 (BadRequestErrorRetries)
+    assert calc_num_retries == 0
+
+
 @pytest.mark.parametrize(
     "exception_type, exception_name, allowed_fails",
     [
