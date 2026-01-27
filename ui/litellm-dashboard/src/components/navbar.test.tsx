@@ -16,6 +16,7 @@ vi.mock("@/utils/proxyUtils", () => ({
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessImpl = () => ({ data: null as any });
 let mockGetLocalStorageItemImpl = () => null as string | null;
+let mockUseDisableShowPromptsImpl = () => false;
 
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
@@ -25,7 +26,12 @@ vi.mock("@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness", () => ({
   useHealthReadiness: () => mockUseHealthReadinessImpl(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/useDisableShowPrompts", () => ({
+  useDisableShowPrompts: () => mockUseDisableShowPromptsImpl(),
+}));
+
 vi.mock("@/utils/localStorageUtils", () => ({
+  LOCAL_STORAGE_EVENT: "local-storage-change",
   getLocalStorageItem: () => mockGetLocalStorageItemImpl(),
   setLocalStorageItem: vi.fn(),
   removeLocalStorageItem: vi.fn(),
