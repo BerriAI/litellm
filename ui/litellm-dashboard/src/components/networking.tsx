@@ -9270,6 +9270,152 @@ export const leaderboardCall = async (
   }
 };
 
+// User-count based analytics (not broken down by user-agent tag)
+export const userDauCall = async (
+  accessToken: string,
+  startDate?: string,
+  endDate?: string,
+  custom_llm_provider?: string,
+) => {
+  /**
+   * Get daily unique user count (not broken down by user-agent)
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/dau` : `/user/dau`;
+
+    const queryParams = new URLSearchParams();
+
+    if (startDate) {
+      queryParams.append("start_date", startDate);
+    }
+
+    if (endDate) {
+      queryParams.append("end_date", endDate);
+    }
+
+    if (custom_llm_provider) {
+      queryParams.append("custom_llm_provider", custom_llm_provider);
+    }
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user DAU:", error);
+    throw error;
+  }
+};
+
+export const userWauCall = async (
+  accessToken: string,
+  custom_llm_provider?: string,
+) => {
+  /**
+   * Get weekly unique user count for the last 7 weeks (not broken down by user-agent)
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/wau` : `/user/wau`;
+
+    const queryParams = new URLSearchParams();
+
+    if (custom_llm_provider) {
+      queryParams.append("custom_llm_provider", custom_llm_provider);
+    }
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user WAU:", error);
+    throw error;
+  }
+};
+
+export const userMauCall = async (
+  accessToken: string,
+  months: number = 7,
+  custom_llm_provider?: string,
+) => {
+  /**
+   * Get monthly unique user count for the last N months (not broken down by user-agent)
+   */
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/user/mau` : `/user/mau`;
+
+    const queryParams = new URLSearchParams();
+
+    queryParams.append("months", months.toString());
+
+    if (custom_llm_provider) {
+      queryParams.append("custom_llm_provider", custom_llm_provider);
+    }
+
+    const queryString = queryParams.toString();
+    if (queryString) {
+      url += `?${queryString}`;
+    }
+
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch user MAU:", error);
+    throw error;
+  }
+};
+
 export const deriveErrorMessage = (errorData: any): string => {
   const detail = errorData?.detail;
   const detailStr = Array.isArray(detail)

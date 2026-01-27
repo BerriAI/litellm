@@ -986,3 +986,284 @@ async def get_user_leaderboard(
             status_code=500,
             detail=f"Failed to fetch leaderboard: {str(e)}",
         )
+
+
+class UserActiveUsersResponse(BaseModel):
+    """Response for user-count based active users analytics (not broken down by tag)"""
+    results: List[Dict[str, Any]]
+
+
+class UserActiveUsersItem(BaseModel):
+    """Single user active users item"""
+    date: str  # "YYYY-MM-DD" or "Week X (Mon DD)" or "Mon YYYY"
+    active_users: int
+    period_start: Optional[str] = None
+    period_end: Optional[str] = None
+
+
+@router.get(
+    "/user/dau",
+    response_model=UserActiveUsersResponse,
+    tags=["user agent analytics"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_user_daily_active_users(
+    start_date: Optional[str] = Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format (defaults to 7 days ago)",
+    ),
+    end_date: Optional[str] = Query(
+        default=None,
+        description="End date in YYYY-MM-DD format (defaults to today)",
+    ),
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get daily unique user count (not broken down by user-agent tag).
+
+    Returns the total count of unique users per day for the selected date range.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    try:
+        from datetime import timezone
+
+        if end_date:
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ) + timedelta(days=1)
+        else:
+            end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+
+        if start_date:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+        else:
+            start_dt = end_dt - timedelta(days=7)
+
+        end_date_str = end_dt.strftime("%Y-%m-%d")
+        start_date_str = start_dt.strftime("%Y-%m-%d")
+
+        # Build SQL query
+        where_clause = "WHERE dts.date >= $1 AND dts.date < $2 AND vt.user_id IS NOT NULL"
+        params = [start_date_str, end_date_str]
+
+        if custom_llm_provider:
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
+
+        sql_query = f"""
+        SELECT
+            dts.date,
+            COUNT(DISTINCT vt.user_id) as active_users
+        FROM "LiteLLM_DailyTagSpend" dts
+        INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
+        {where_clause}
+        GROUP BY dts.date
+        ORDER BY dts.date DESC
+        """
+
+        db_response = await prisma_client.db.query_raw(sql_query, *params)
+
+        results = [
+            {
+                "date": row["date"],
+                "active_users": row["active_users"],
+            }
+            for row in db_response
+        ]
+
+        return UserActiveUsersResponse(results=results)
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid date format. Use YYYY-MM-DD: {str(e)}",
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch user DAU analytics: {str(e)}",
+        )
+
+
+@router.get(
+    "/user/wau",
+    response_model=UserActiveUsersResponse,
+    tags=["user agent analytics"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_user_weekly_active_users(
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get weekly unique user count for the last 7 weeks.
+
+    Returns total unique users per week (not broken down by user-agent tag).
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    try:
+        from datetime import timezone
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_date = end_dt.strftime("%Y-%m-%d")
+
+        # Calculate start date for 7 weeks
+        start_dt = end_dt - timedelta(days=(MAX_WEEKS * 7 - 1))
+        start_date = start_dt.strftime("%Y-%m-%d")
+
+        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
+        params = [start_date, end_date]
+
+        if custom_llm_provider:
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
+
+        sql_query = f"""
+        WITH weekly_data AS (
+            SELECT
+                dts.date,
+                vt.user_id,
+                FLOOR((DATE '{end_date}' - dts.date::date) / 7) as week_offset
+            FROM "LiteLLM_DailyTagSpend" dts
+            INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
+            {where_clause}
+        )
+        SELECT
+            COUNT(DISTINCT user_id) as active_users,
+            'Week ' || ({MAX_WEEKS} - week_offset)::text || ' (' ||
+            TO_CHAR(DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval, 'Mon DD') || ')' as date,
+            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval - '6 days'::interval)::text as period_start,
+            (DATE '{end_date}' - (week_offset * 7 || ' days')::interval)::text as period_end,
+            week_offset
+        FROM weekly_data
+        WHERE week_offset < {MAX_WEEKS}
+        GROUP BY week_offset
+        ORDER BY week_offset DESC
+        """
+
+        db_response = await prisma_client.db.query_raw(sql_query, *params)
+
+        results = [
+            {
+                "date": row["date"],
+                "active_users": row["active_users"],
+                "period_start": row["period_start"],
+                "period_end": row["period_end"],
+            }
+            for row in db_response
+        ]
+
+        return UserActiveUsersResponse(results=results)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch user WAU analytics: {str(e)}",
+        )
+
+
+@router.get(
+    "/user/mau",
+    response_model=UserActiveUsersResponse,
+    tags=["user agent analytics"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def get_user_monthly_active_users(
+    months: int = Query(default=7, ge=1, le=12, description="Number of months to show (1-12)"),
+    custom_llm_provider: Optional[str] = Query(
+        default=None,
+        description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Get monthly unique user count for the last N months.
+
+    Returns total unique users per month (not broken down by user-agent tag).
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": CommonProxyErrors.db_not_connected_error.value},
+        )
+
+    try:
+        from datetime import timezone
+        end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+        end_date = end_dt.strftime("%Y-%m-%d")
+
+        start_dt = end_dt - timedelta(days=(months * 30 - 1))
+        start_date = start_dt.strftime("%Y-%m-%d")
+
+        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
+        params = [start_date, end_date]
+
+        if custom_llm_provider:
+            where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
+            params.append(custom_llm_provider)
+
+        sql_query = f"""
+        WITH monthly_data AS (
+            SELECT
+                dts.date,
+                vt.user_id,
+                FLOOR((DATE '{end_date}' - dts.date::date) / 30) as month_offset
+            FROM "LiteLLM_DailyTagSpend" dts
+            INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
+            {where_clause}
+        )
+        SELECT
+            COUNT(DISTINCT user_id) as active_users,
+            TO_CHAR(DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval, 'Mon YYYY') as date,
+            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
+            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end,
+            month_offset
+        FROM monthly_data
+        WHERE month_offset < {months}
+        GROUP BY month_offset
+        ORDER BY month_offset DESC
+        """
+
+        db_response = await prisma_client.db.query_raw(sql_query, *params)
+
+        results = [
+            {
+                "date": row["date"].strip(),
+                "active_users": row["active_users"],
+                "period_start": row["period_start"],
+                "period_end": row["period_end"],
+            }
+            for row in db_response
+        ]
+
+        return UserActiveUsersResponse(results=results)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch user MAU analytics: {str(e)}",
+        )
