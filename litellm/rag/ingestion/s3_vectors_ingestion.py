@@ -17,11 +17,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import uuid
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
+import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -32,18 +33,6 @@ from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
-
-
-def _get_str_or_none(value: Any) -> Optional[str]:
-    """Cast config value to Optional[str]."""
-    return str(value) if value is not None else None
-
-
-def _get_int(value: Any, default: int) -> int:
-    """Cast config value to int with default."""
-    if value is None:
-        return default
-    return int(value)
 
 
 class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
@@ -75,7 +64,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Extract config
         self.vector_bucket_name = self.vector_store_config["vector_bucket_name"]
         self.index_name = self.vector_store_config.get("index_name")
-        self.dimension = _get_int(self.vector_store_config.get("dimension"), 1024)
+        self.dimension = int(self.vector_store_config.get("dimension", 1024))
         self.distance_metric = self.vector_store_config.get("distance_metric", "cosine")
         self.non_filterable_metadata_keys = self.vector_store_config.get(
             "non_filterable_metadata_keys", ["source_text"]
@@ -142,35 +131,29 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Get AWS credentials
         asyncified_get_credentials = asyncify(self.get_credentials)
+        
+        # Extract AWS config values
+        aws_access_key_id = self.vector_store_config.get("aws_access_key_id")
+        aws_secret_access_key = self.vector_store_config.get("aws_secret_access_key")
+        aws_session_token = self.vector_store_config.get("aws_session_token")
+        aws_session_name = self.vector_store_config.get("aws_session_name")
+        aws_profile_name = self.vector_store_config.get("aws_profile_name")
+        aws_role_name = self.vector_store_config.get("aws_role_name")
+        aws_web_identity_token = self.vector_store_config.get("aws_web_identity_token")
+        aws_sts_endpoint = self.vector_store_config.get("aws_sts_endpoint")
+        aws_external_id = self.vector_store_config.get("aws_external_id")
+        
         credentials = await asyncified_get_credentials(
-            aws_access_key_id=_get_str_or_none(
-                self.vector_store_config.get("aws_access_key_id")
-            ),
-            aws_secret_access_key=_get_str_or_none(
-                self.vector_store_config.get("aws_secret_access_key")
-            ),
-            aws_session_token=_get_str_or_none(
-                self.vector_store_config.get("aws_session_token")
-            ),
+            aws_access_key_id=str(aws_access_key_id) if aws_access_key_id is not None else None,
+            aws_secret_access_key=str(aws_secret_access_key) if aws_secret_access_key is not None else None,
+            aws_session_token=str(aws_session_token) if aws_session_token is not None else None,
             aws_region_name=self.aws_region_name,
-            aws_session_name=_get_str_or_none(
-                self.vector_store_config.get("aws_session_name")
-            ),
-            aws_profile_name=_get_str_or_none(
-                self.vector_store_config.get("aws_profile_name")
-            ),
-            aws_role_name=_get_str_or_none(
-                self.vector_store_config.get("aws_role_name")
-            ),
-            aws_web_identity_token=_get_str_or_none(
-                self.vector_store_config.get("aws_web_identity_token")
-            ),
-            aws_sts_endpoint=_get_str_or_none(
-                self.vector_store_config.get("aws_sts_endpoint")
-            ),
-            aws_external_id=_get_str_or_none(
-                self.vector_store_config.get("aws_external_id")
-            ),
+            aws_session_name=str(aws_session_name) if aws_session_name is not None else None,
+            aws_profile_name=str(aws_profile_name) if aws_profile_name is not None else None,
+            aws_role_name=str(aws_role_name) if aws_role_name is not None else None,
+            aws_web_identity_token=str(aws_web_identity_token) if aws_web_identity_token is not None else None,
+            aws_sts_endpoint=str(aws_sts_endpoint) if aws_sts_endpoint is not None else None,
+            aws_external_id=str(aws_external_id) if aws_external_id is not None else None,
         )
 
         # Prepare headers
@@ -227,7 +210,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Try to get bucket info using GetVectorBucket API
         get_url = f"https://s3vectors.{self.aws_region_name}.api.aws/GetVectorBucket"
-        get_body = json.dumps({"vectorBucketName": self.vector_bucket_name})
+        get_body = safe_dumps({"vectorBucketName": self.vector_bucket_name})
 
         try:
             response = await self._sign_and_execute_request("POST", get_url, data=get_body)
@@ -243,7 +226,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         try:
             verbose_logger.debug(f"Creating vector bucket: {self.vector_bucket_name}")
             create_url = f"https://s3vectors.{self.aws_region_name}.api.aws/CreateVectorBucket"
-            create_body = json.dumps({
+            create_body = safe_dumps({
                 "vectorBucketName": self.vector_bucket_name
             })
             
@@ -271,7 +254,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         # Try to get index info using GetIndex API
         get_url = f"https://s3vectors.{self.aws_region_name}.api.aws/GetIndex"
-        get_body = json.dumps({
+        get_body = safe_dumps({
             "vectorBucketName": self.vector_bucket_name,
             "indexName": self.index_name
         })
@@ -308,7 +291,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
             create_url = f"https://s3vectors.{self.aws_region_name}.api.aws/CreateIndex"
             response = await self._sign_and_execute_request(
-                "POST", create_url, data=json.dumps(index_config)
+                "POST", create_url, data=safe_dumps(index_config)
             )
 
             if response.status_code in (200, 201):
@@ -344,7 +327,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         try:
             response = await self._sign_and_execute_request(
-                "POST", url, data=json.dumps(request_body)
+                "POST", url, data=safe_dumps(request_body)
             )
 
             if response.status_code in (200, 201):
@@ -384,8 +367,6 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.debug(
             f"Generating embeddings for {len(chunks)} chunks using {embedding_model}"
         )
-
-        import litellm
 
         if self.router:
             response = await self.router.aembedding(model=embedding_model, input=chunks)
@@ -472,8 +453,6 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         embedding_model = self.embedding_config.get("model", "text-embedding-3-small")
 
-        import litellm
-
         response = await litellm.aembedding(model=embedding_model, input=[query])
         query_embedding = response.data[0]["embedding"]
 
@@ -491,7 +470,7 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
 
         try:
             response = await self._sign_and_execute_request(
-                "POST", url, data=json.dumps(request_body)
+                "POST", url, data=safe_dumps(request_body)
             )
 
             if response.status_code == 200:
