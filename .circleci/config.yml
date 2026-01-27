@@ -715,8 +715,8 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_router_coverage.xml
-            mv .coverage litellm_router_coverage
+            mv coverage.xml litellm_router_unit_coverage.xml
+            mv .coverage litellm_router_unit_coverage
       # Store test results
       - store_test_results:
           path: test-results
@@ -724,8 +724,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_router_coverage.xml
-            - litellm_router_coverage
+            - litellm_router_unit_coverage.xml
+            - litellm_router_unit_coverage
   litellm_security_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3428,7 +3428,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
