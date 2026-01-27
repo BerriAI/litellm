@@ -23,6 +23,7 @@ from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
 from litellm.litellm_core_utils.core_helpers import (
     safe_deep_copy,
     reconstruct_model_name,
+    filter_exceptions_from_params,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
@@ -75,9 +76,8 @@ def _extract_cache_read_input_tokens(usage_obj) -> int:
     # Check prompt_tokens_details.cached_tokens (used by Gemini and other providers)
     if hasattr(usage_obj, "prompt_tokens_details"):
         prompt_tokens_details = getattr(usage_obj, "prompt_tokens_details", None)
-        if (
-            prompt_tokens_details is not None
-            and hasattr(prompt_tokens_details, "cached_tokens")
+        if prompt_tokens_details is not None and hasattr(
+            prompt_tokens_details, "cached_tokens"
         ):
             cached_tokens = getattr(prompt_tokens_details, "cached_tokens", None)
             if (
@@ -540,7 +540,6 @@ class LangFuseLogger:
         verbose_logger.debug("Langfuse Layer Logging - logging to langfuse v2")
 
         try:
-            metadata = metadata or {}
             standard_logging_object: Optional[StandardLoggingPayload] = cast(
                 Optional[StandardLoggingPayload],
                 kwargs.get("standard_logging_object", None),
@@ -706,9 +705,10 @@ class LangFuseLogger:
 
             clean_metadata["litellm_response_cost"] = cost
             if standard_logging_object is not None:
-                clean_metadata["hidden_params"] = standard_logging_object[
-                    "hidden_params"
-                ]
+                hidden_params = standard_logging_object.get("hidden_params", {})
+                clean_metadata["hidden_params"] = filter_exceptions_from_params(
+                    hidden_params
+                )
 
             if (
                 litellm.langfuse_default_tags is not None
