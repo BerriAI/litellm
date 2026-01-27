@@ -27,6 +27,8 @@ local_cache_obj = Cache(
     type=LiteLLMCacheType.LOCAL
 )  # only used for calling 'get_cache_key' function
 
+MAX_PAGINATION_PAGES = 100  # Reasonable upper bound for pagination
+
 
 class ContextCachingEndpoints(VertexBase):
     """
@@ -127,7 +129,7 @@ class ContextCachingEndpoints(VertexBase):
         page_token: Optional[str] = None
 
         # Iterate through all pages
-        while True:
+        for _ in range(MAX_PAGINATION_PAGES):
             # Build URL with pagination token if present
             if page_token:
                 separator = "&" if "?" in base_url else "?"
@@ -219,7 +221,7 @@ class ContextCachingEndpoints(VertexBase):
         page_token: Optional[str] = None
 
         # Iterate through all pages
-        while True:
+        for _ in range(MAX_PAGINATION_PAGES):
             # Build URL with pagination token if present
             if page_token:
                 separator = "&" if "?" in base_url else "?"
