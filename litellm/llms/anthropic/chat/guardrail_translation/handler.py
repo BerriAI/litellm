@@ -76,7 +76,8 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         chat_completion_compatible_request = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
-                anthropic_message_request=cast(AnthropicMessagesRequest, data)
+                # Use a shallow copy to avoid mutating request data (pop on litellm_metadata).
+                anthropic_message_request=cast(AnthropicMessagesRequest, data.copy())
             )
         )
 

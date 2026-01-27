@@ -37,6 +37,26 @@ class MockPassThroughGuardrail(CustomGuardrail):
         return inputs
 
 
+class MockDynamicGuardrail(CustomGuardrail):
+    """Mock guardrail that records dynamic params from request metadata."""
+
+    def __init__(self, guardrail_name: str):
+        super().__init__(guardrail_name=guardrail_name)
+        self.dynamic_params: Optional[dict] = None
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.dynamic_params = self.get_guardrail_dynamic_request_body_params(
+            request_data
+        )
+        return inputs
+
+
 class TestAnthropicMessagesHandlerStreamingOutputProcessing:
     """Test streaming output processing functionality"""
 
@@ -69,6 +89,35 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
 
             # Should return the responses unchanged
             assert result == responses_so_far
+
+
+class TestAnthropicMessagesHandlerInputProcessing:
+    """Test input processing preserves litellm_metadata for dynamic guardrails."""
+
+    @pytest.mark.asyncio
+    async def test_process_input_messages_preserves_litellm_metadata_guardrails(self):
+        handler = AnthropicMessagesHandler()
+        guardrail = MockDynamicGuardrail(guardrail_name="cygnal-monitor")
+
+        data = {
+            "model": "claude-3-5-sonnet-20241022",
+            "messages": [{"role": "user", "content": "hello"}],
+            "litellm_metadata": {
+                "guardrails": [
+                    {
+                        "cygnal-monitor": {
+                            "extra_body": {"policy_id": "policy-123"}
+                        }
+                    }
+                ]
+            },
+        }
+
+        with patch("litellm.proxy.proxy_server.premium_user", True):
+            await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert data.get("litellm_metadata", {}).get("guardrails")
+        assert guardrail.dynamic_params == {"policy_id": "policy-123"}
 
     @pytest.mark.asyncio
     async def test_process_output_streaming_response_empty_choices(self):
