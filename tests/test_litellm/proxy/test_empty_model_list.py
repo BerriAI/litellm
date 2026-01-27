@@ -171,6 +171,75 @@ class TestEmptyModelListHandling:
         assert response.status_code == 200
         assert response.json() == {"data": []}
 
+    def test_model_group_info_returns_db_models_when_llm_model_list_is_none(
+        self, client, monkeypatch
+    ):
+        """
+        Test that /model_group/info returns models from router even when llm_model_list is None.
+        This tests the fix for issue #19853 where DB models were not shown on AI Hub.
+        """
+        # Create a mock router with models (simulating DB models loaded into router)
+        mock_router = MagicMock()
+        mock_model_list = [
+            {
+                "model_name": "vllm-model",
+                "litellm_params": {
+                    "model": "vllm/my-model",
+                    "api_key": "test-key",
+                },
+                "model_info": {"id": "db-model-1", "db_model": True},
+            }
+        ]
+        mock_router.get_model_list.return_value = mock_model_list
+        mock_router.get_model_names.return_value = ["vllm-model"]
+        mock_router.get_model_access_groups.return_value = {}
+        mock_router.get_model_group_info.return_value = MagicMock(
+            model_group="vllm-model",
+            providers=["vllm"],
+            model_dump=lambda: {
+                "model_group": "vllm-model",
+                "providers": ["vllm"],
+                "max_input_tokens": None,
+                "max_output_tokens": None,
+                "input_cost_per_token": 0,
+                "output_cost_per_token": 0,
+                "mode": "chat",
+                "tpm": None,
+                "rpm": None,
+                "supports_parallel_function_calling": False,
+                "supports_vision": False,
+                "supports_function_calling": False,
+            },
+        )
+
+        # llm_model_list is None (no config file models), but router has DB models
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            return_value=MagicMock(
+                user_id="test-user",
+                team_id=None,
+                team_models=[],
+                models=[],
+                user_role="proxy_admin",
+            ),
+        ):
+            response = client.get(
+                "/model_group/info",
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "data" in data
+        # Should return the DB model, not an empty list
+        assert len(data["data"]) == 1
+        assert data["data"][0]["model_group"] == "vllm-model"
+
     def test_model_group_info_returns_empty_data_when_model_list_empty(
         self, client, monkeypatch
     ):
@@ -180,6 +249,7 @@ class TestEmptyModelListHandling:
         """
         mock_router = MagicMock()
         mock_router.model_list = []
+        mock_router.get_model_list.return_value = []
 
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])

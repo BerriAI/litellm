@@ -8783,19 +8783,21 @@ async def model_info_v1(  # noqa: PLR0915
         )
         return {"data": _deployment_info_dict}
 
-    if llm_model_list is None:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
-            },
-        )
-
     if llm_router is None:
         raise HTTPException(
             status_code=500,
             detail={
                 "error": "LLM Router is not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
+            },
+        )
+
+    # Check if router has any models (includes both config file and DB models)
+    router_model_list = llm_router.get_model_list()
+    if not router_model_list:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "LLM Model List not loaded in. Make sure you passed models in your config.yaml or on the LiteLLM Admin UI. - https://docs.litellm.ai/docs/proxy/configs"
             },
         )
 
@@ -8847,10 +8849,8 @@ async def model_info_v1(  # noqa: PLR0915
             router_models = llm_router.get_model_list(model_name=model)
             if router_models is not None:
                 _relevant_models.extend(router_models)
-        if llm_model_list is not None:
-            all_models = copy.deepcopy(_relevant_models)  # type: ignore
-        else:
-            all_models = []
+        # Use models from router (includes both config file and DB models)
+        all_models = copy.deepcopy(_relevant_models)  # type: ignore
 
     for in_place_model in all_models:
         in_place_model = _get_proxy_model_info(model=in_place_model)
@@ -9055,7 +9055,12 @@ async def model_group_info(
     global llm_model_list, general_settings, user_config_file_path, proxy_config, llm_router
 
     # Return empty data array when no models are configured (graceful handling for fresh installs)
-    if llm_model_list is None or llm_router is None or not llm_model_list:
+    # Check llm_router.get_model_list() to include DB models (not just config file models via llm_model_list)
+    if llm_router is None:
+        return {"data": []}
+
+    router_model_list = llm_router.get_model_list()
+    if not router_model_list:
         return {"data": []}
 
     from litellm.proxy.utils import get_available_models_for_user
