@@ -74,9 +74,7 @@ class VertexBase:
                         json_obj = json.loads(credentials)
                 except Exception:
                     raise Exception(
-                        "Unable to load vertex credentials from environment. Got={}".format(
-                            credentials
-                        )
+                        "Unable to load vertex credentials from environment. Check if credentials contain valid JSON."
                     )
             elif isinstance(credentials, dict):
                 json_obj = credentials
