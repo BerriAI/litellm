@@ -55,9 +55,30 @@ async def _handle_stream_message(
     proxy_server_request: Optional[dict] = None,
 ) -> StreamingResponse:
     """Handle message/stream method via SDK functions."""
-    from a2a.types import MessageSendParams, SendStreamingMessageRequest
-
     from litellm.a2a_protocol import asend_message_streaming
+    from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
+
+    # Check is handled in invoke_agent_a2a, but if called directly:
+    if not A2A_SDK_AVAILABLE:
+        # Return a streaming response that yields an error
+        async def _error_stream():
+            yield json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32603,
+                        "message": "Server error: 'a2a' package not installed",
+                    },
+                }
+            ) + "\n"
+
+        return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
+
+    from a2a.types import (
+        MessageSendParams,
+        SendStreamingMessageRequest,
+    )
 
     async def stream_response():
         try:
@@ -75,16 +96,20 @@ async def _handle_stream_message(
             ):
                 # Chunk may be dict or object depending on bridge vs standard path
                 if hasattr(chunk, "model_dump"):
-                    yield json.dumps(chunk.model_dump(mode="json", exclude_none=True)) + "\n"
+                    yield json.dumps(
+                        chunk.model_dump(mode="json", exclude_none=True)
+                    ) + "\n"
                 else:
                     yield json.dumps(chunk) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
-            yield json.dumps({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
-            }) + "\n"
+            yield json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
+                }
+            ) + "\n"
 
     return StreamingResponse(stream_response(), media_type="application/x-ndjson")
 
@@ -169,9 +194,8 @@ async def invoke_agent_a2a(
     - message/send: Send a message and get a response
     - message/stream: Send a message and stream the response
     """
-    from a2a.types import MessageSendParams, SendMessageRequest
-
     from litellm.a2a_protocol import asend_message
+    from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
     from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
         AgentRequestHandler,
     )
@@ -189,16 +213,28 @@ async def invoke_agent_a2a(
 
         # Validate JSON-RPC format
         if body.get("jsonrpc") != "2.0":
-            return _jsonrpc_error(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
+            return _jsonrpc_error(
+                body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'"
+            )
 
         request_id = body.get("id")
         method = body.get("method")
         params = body.get("params", {})
 
+        if not A2A_SDK_AVAILABLE:
+            return _jsonrpc_error(
+                request_id,
+                -32603,
+                "Server error: 'a2a' package not installed. Please install 'a2a-sdk'.",
+                500,
+            )
+
         # Find the agent
         agent = _get_agent(agent_id)
         if agent is None:
-            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
+            return _jsonrpc_error(
+                request_id, -32000, f"Agent '{agent_id}' not found", 404
+            )
 
         is_allowed = await AgentRequestHandler.is_agent_allowed(
             agent_id=agent.agent_id,
@@ -213,23 +249,29 @@ async def invoke_agent_a2a(
         # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")
         agent_name = agent.agent_card_params.get("name", agent_id)
-        
+
         # Get litellm_params (may include custom_llm_provider for completion bridge)
         litellm_params = agent.litellm_params or {}
         custom_llm_provider = litellm_params.get("custom_llm_provider")
-        
+
         # URL is required unless using completion bridge with a provider that derives endpoint from model
         # (e.g., bedrock/agentcore derives endpoint from ARN in model string)
         if not agent_url and not custom_llm_provider:
-            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
+            return _jsonrpc_error(
+                request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
+            )
 
-        verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url or 'completion-bridge'}")
+        verbose_proxy_logger.info(
+            f"Proxying A2A request to agent '{agent_id}' at {agent_url or 'completion-bridge'}"
+        )
 
         # Set up data dict for litellm processing
-        body.update({
-            "model": f"a2a_agent/{agent_name}",
-            "custom_llm_provider": "a2a_agent",
-        })
+        body.update(
+            {
+                "model": f"a2a_agent/{agent_name}",
+                "custom_llm_provider": "a2a_agent",
+            }
+        )
 
         # Add litellm data (user_api_key, user_id, team_id, etc.)
         data = await add_litellm_data_to_request(
@@ -243,6 +285,8 @@ async def invoke_agent_a2a(
 
         # Route through SDK functions
         if method == "message/send":
+            from a2a.types import MessageSendParams, SendMessageRequest
+
             a2a_request = SendMessageRequest(
                 id=request_id,
                 params=MessageSendParams(**params),
@@ -255,7 +299,9 @@ async def invoke_agent_a2a(
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
-            return JSONResponse(content=response.model_dump(mode="json", exclude_none=True))
+            return JSONResponse(
+                content=response.model_dump(mode="json", exclude_none=True)
+            )
 
         elif method == "message/stream":
             return await _handle_stream_message(

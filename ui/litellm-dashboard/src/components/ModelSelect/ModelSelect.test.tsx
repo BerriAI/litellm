@@ -18,6 +18,10 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganization: vi.fn(),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
+  useCurrentUser: vi.fn(),
+}));
+
 vi.mock("antd", async (importOriginal) => {
   const actual = await importOriginal<typeof import("antd")>();
   return {
@@ -71,10 +75,12 @@ vi.mock("antd", async (importOriginal) => {
 import { useAllProxyModels } from "@/app/(dashboard)/hooks/models/useModels";
 import { useOrganization } from "@/app/(dashboard)/hooks/organizations/useOrganizations";
 import { useTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 
 const mockUseAllProxyModels = vi.mocked(useAllProxyModels);
 const mockUseTeam = vi.mocked(useTeam);
 const mockUseOrganization = vi.mocked(useOrganization);
+const mockUseCurrentUser = vi.mocked(useCurrentUser);
 
 describe("ModelSelect", () => {
   const mockProxyModels: ProxyModel[] = [
@@ -100,10 +106,16 @@ describe("ModelSelect", () => {
       data: undefined,
       isLoading: false,
     } as any);
+    mockUseCurrentUser.mockReturnValue({
+      data: { models: [] },
+      isLoading: false,
+    } as any);
   });
 
   it("should render", async () => {
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("model-select")).toBeInTheDocument();
@@ -116,7 +128,7 @@ describe("ModelSelect", () => {
       isLoading: true,
     } as any);
 
-    renderWithProviders(<ModelSelect onChange={mockOnChange} />);
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="user" />);
 
     expect(screen.getByTestId("skeleton-input")).toBeInTheDocument();
     expect(screen.queryByTestId("model-select")).not.toBeInTheDocument();
@@ -128,7 +140,7 @@ describe("ModelSelect", () => {
       isLoading: true,
     } as any);
 
-    renderWithProviders(<ModelSelect onChange={mockOnChange} teamID="team-1" />);
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="team" teamID="team-1" />);
 
     expect(screen.getByTestId("skeleton-input")).toBeInTheDocument();
   });
@@ -139,13 +151,54 @@ describe("ModelSelect", () => {
       isLoading: true,
     } as any);
 
-    renderWithProviders(<ModelSelect onChange={mockOnChange} organizationID="org-1" />);
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" />);
+
+    expect(screen.getByTestId("skeleton-input")).toBeInTheDocument();
+  });
+
+  it("should show skeleton loader when current user is loading", () => {
+    mockUseCurrentUser.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+    } as any);
+
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="user" />);
 
     expect(screen.getByTestId("skeleton-input")).toBeInTheDocument();
   });
 
   it("should render special options group", async () => {
-    renderWithProviders(<ModelSelect onChange={mockOnChange} />);
+    const mockOrganization: Organization = {
+      organization_id: "org-1",
+      organization_alias: "Test Org",
+      budget_id: "budget-1",
+      metadata: {},
+      models: ["all-proxy-models"],
+      spend: 0,
+      model_spend: {},
+      created_at: "2024-01-01",
+      created_by: "user-1",
+      updated_at: "2024-01-01",
+      updated_by: "user-1",
+      litellm_budget_table: null,
+      teams: null,
+      users: null,
+      members: null,
+    };
+
+    mockUseOrganization.mockReturnValue({
+      data: mockOrganization,
+      isLoading: false,
+    } as any);
+
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        context="organization"
+        organizationID="org-1"
+        options={{ includeSpecialOptions: true }}
+      />,
+    );
 
     await waitFor(() => {
       const select = screen.getByTestId("model-select");
@@ -156,7 +209,9 @@ describe("ModelSelect", () => {
   });
 
   it("should render wildcard options group", async () => {
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("All Openai models")).toBeInTheDocument();
@@ -165,7 +220,9 @@ describe("ModelSelect", () => {
   });
 
   it("should render regular models group", async () => {
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
@@ -175,7 +232,9 @@ describe("ModelSelect", () => {
 
   it("should call onChange when selecting a regular model", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("model-select")).toBeInTheDocument();
@@ -189,7 +248,37 @@ describe("ModelSelect", () => {
 
   it("should call onChange with only last special option when multiple special options are selected", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    const mockOrganization: Organization = {
+      organization_id: "org-1",
+      organization_alias: "Test Org",
+      budget_id: "budget-1",
+      metadata: {},
+      models: ["all-proxy-models"],
+      spend: 0,
+      model_spend: {},
+      created_at: "2024-01-01",
+      created_by: "user-1",
+      updated_at: "2024-01-01",
+      updated_by: "user-1",
+      litellm_budget_table: null,
+      teams: null,
+      users: null,
+      members: null,
+    };
+
+    mockUseOrganization.mockReturnValue({
+      data: mockOrganization,
+      isLoading: false,
+    } as any);
+
+    renderWithProviders(
+      <ModelSelect
+        onChange={mockOnChange}
+        context="organization"
+        organizationID="org-1"
+        options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
+      />,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("model-select")).toBeInTheDocument();
@@ -203,7 +292,12 @@ describe("ModelSelect", () => {
 
   it("should disable regular models when special option is selected", async () => {
     renderWithProviders(
-      <ModelSelect onChange={mockOnChange} value={["all-proxy-models"]} showAllProxyModelsOverride={true} />,
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["all-proxy-models"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true }}
+      />,
     );
 
     await waitFor(() => {
@@ -214,7 +308,12 @@ describe("ModelSelect", () => {
 
   it("should disable wildcard models when special option is selected", async () => {
     renderWithProviders(
-      <ModelSelect onChange={mockOnChange} value={["all-proxy-models"]} showAllProxyModelsOverride={true} />,
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["all-proxy-models"]}
+        context="user"
+        options={{ showAllProxyModelsOverride: true }}
+      />,
     );
 
     await waitFor(() => {
@@ -224,8 +323,37 @@ describe("ModelSelect", () => {
   });
 
   it("should disable other special options when one special option is selected", async () => {
+    const mockOrganization: Organization = {
+      organization_id: "org-1",
+      organization_alias: "Test Org",
+      budget_id: "budget-1",
+      metadata: {},
+      models: ["all-proxy-models"],
+      spend: 0,
+      model_spend: {},
+      created_at: "2024-01-01",
+      created_by: "user-1",
+      updated_at: "2024-01-01",
+      updated_by: "user-1",
+      litellm_budget_table: null,
+      teams: null,
+      users: null,
+      members: null,
+    };
+
+    mockUseOrganization.mockReturnValue({
+      data: mockOrganization,
+      isLoading: false,
+    } as any);
+
     renderWithProviders(
-      <ModelSelect onChange={mockOnChange} value={["all-proxy-models"]} showAllProxyModelsOverride={true} />,
+      <ModelSelect
+        onChange={mockOnChange}
+        value={["all-proxy-models"]}
+        context="organization"
+        organizationID="org-1"
+        options={{ showAllProxyModelsOverride: true, includeSpecialOptions: true }}
+      />,
     );
 
     await waitFor(() => {
@@ -235,7 +363,9 @@ describe("ModelSelect", () => {
   });
 
   it("should filter models when showAllProxyModelsOverride is true", async () => {
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
@@ -267,7 +397,7 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
-    renderWithProviders(<ModelSelect onChange={mockOnChange} organizationID="org-1" />);
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" />);
 
     await waitFor(() => {
       expect(screen.getByText("gpt-4")).toBeInTheDocument();
@@ -275,7 +405,7 @@ describe("ModelSelect", () => {
     });
   });
 
-  it("should return empty models array when organization does not have all-proxy-models", async () => {
+  it("should show all models when organization context is used", async () => {
     const mockOrganization: Organization = {
       organization_id: "org-1",
       organization_alias: "Test Org",
@@ -299,17 +429,22 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
-    renderWithProviders(<ModelSelect onChange={mockOnChange} organizationID="org-1" />);
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="organization" organizationID="org-1" />);
 
     await waitFor(() => {
-      expect(screen.queryByText("gpt-4")).not.toBeInTheDocument();
-      expect(screen.queryByText("claude-3")).not.toBeInTheDocument();
+      expect(screen.getByText("gpt-4")).toBeInTheDocument();
+      expect(screen.getByText("claude-3")).toBeInTheDocument();
     });
   });
 
   it("should use custom dataTestId when provided", async () => {
     renderWithProviders(
-      <ModelSelect onChange={mockOnChange} dataTestId="custom-test-id" showAllProxyModelsOverride={true} />,
+      <ModelSelect
+        onChange={mockOnChange}
+        dataTestId="custom-test-id"
+        context="user"
+        options={{ showAllProxyModelsOverride: true }}
+      />,
     );
 
     await waitFor(() => {
@@ -319,7 +454,9 @@ describe("ModelSelect", () => {
 
   it("should handle multiple model selections", async () => {
     const user = userEvent.setup();
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByTestId("model-select")).toBeInTheDocument();
@@ -337,7 +474,9 @@ describe("ModelSelect", () => {
   });
 
   it("should capitalize provider name in wildcard options", async () => {
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       expect(screen.getByText("All Openai models")).toBeInTheDocument();
@@ -356,11 +495,70 @@ describe("ModelSelect", () => {
       isLoading: false,
     } as any);
 
-    renderWithProviders(<ModelSelect onChange={mockOnChange} showAllProxyModelsOverride={true} />);
+    renderWithProviders(
+      <ModelSelect onChange={mockOnChange} context="user" options={{ showAllProxyModelsOverride: true }} />,
+    );
 
     await waitFor(() => {
       const gpt4Options = screen.getAllByText("gpt-4");
       expect(gpt4Options.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("should filter models based on user context with includeUserModels option", async () => {
+    mockUseCurrentUser.mockReturnValue({
+      data: { models: ["gpt-4"] },
+      isLoading: false,
+    } as any);
+
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="user" options={{ includeUserModels: true }} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4")).toBeInTheDocument();
+      expect(screen.queryByText("claude-3")).not.toBeInTheDocument();
+    });
+  });
+
+  it("should filter models based on team context", async () => {
+    const mockTeam = {
+      team_id: "team-1",
+      team_alias: "Test Team",
+      models: ["gpt-4"],
+    };
+
+    const mockOrganization: Organization = {
+      organization_id: "org-1",
+      organization_alias: "Test Org",
+      budget_id: "budget-1",
+      metadata: {},
+      models: ["gpt-4"],
+      spend: 0,
+      model_spend: {},
+      created_at: "2024-01-01",
+      created_by: "user-1",
+      updated_at: "2024-01-01",
+      updated_by: "user-1",
+      litellm_budget_table: null,
+      teams: null,
+      users: null,
+      members: null,
+    };
+
+    mockUseTeam.mockReturnValue({
+      data: mockTeam,
+      isLoading: false,
+    } as any);
+
+    mockUseOrganization.mockReturnValue({
+      data: mockOrganization,
+      isLoading: false,
+    } as any);
+
+    renderWithProviders(<ModelSelect onChange={mockOnChange} context="team" teamID="team-1" organizationID="org-1" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("gpt-4")).toBeInTheDocument();
+      expect(screen.queryByText("claude-3")).not.toBeInTheDocument();
     });
   });
 });

@@ -32,7 +32,7 @@ class TestEmptyModelListHandling:
         self, client, monkeypatch
     ):
         """
-        Test that /v2/model/info returns {"data": []} instead of 500
+        Test that /v2/model/info returns paginated empty response instead of 500
         when llm_router is None.
         """
         monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
@@ -56,13 +56,18 @@ class TestEmptyModelListHandling:
             )
 
         assert response.status_code == 200
-        assert response.json() == {"data": []}
+        data = response.json()
+        assert data["data"] == []
+        assert data["total_count"] == 0
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 0
+        assert data["size"] == 50  # default page size
 
     def test_v2_model_info_returns_empty_data_when_model_list_empty(
         self, client, monkeypatch
     ):
         """
-        Test that /v2/model/info returns {"data": []} instead of 500
+        Test that /v2/model/info returns paginated empty response instead of 500
         when llm_router exists but model_list is empty.
         """
         mock_router = MagicMock()
@@ -89,7 +94,52 @@ class TestEmptyModelListHandling:
             )
 
         assert response.status_code == 200
-        assert response.json() == {"data": []}
+        data = response.json()
+        assert data["data"] == []
+        assert data["total_count"] == 0
+        assert data["current_page"] == 1
+        assert data["total_pages"] == 0
+        assert data["size"] == 50  # default page size
+
+    def test_v2_model_info_pagination_with_empty_results(
+        self, client, monkeypatch
+    ):
+        """
+        Test that /v2/model/info pagination parameters work correctly
+        when there are no models (empty results).
+        """
+        mock_router = MagicMock()
+        mock_router.model_list = []
+
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+        monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
+        monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+        with patch(
+            "litellm.proxy.auth.user_api_key_auth.user_api_key_auth",
+            return_value=MagicMock(
+                user_id="test-user",
+                team_id=None,
+                team_models=[],
+                models=[],
+                user_role="proxy_admin",
+            ),
+        ):
+            # Test with custom pagination parameters
+            response = client.get(
+                "/v2/model/info",
+                params={"page": 2, "size": 25},
+                headers={"Authorization": "Bearer sk-test"},
+            )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["data"] == []
+        assert data["total_count"] == 0
+        assert data["current_page"] == 2  # Should respect the page parameter
+        assert data["total_pages"] == 0
+        assert data["size"] == 25  # Should respect the size parameter
 
     def test_model_group_info_returns_empty_data_when_model_list_none(
         self, client, monkeypatch

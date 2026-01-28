@@ -17,7 +17,10 @@ from starlette.websockets import WebSocketState
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES
+from litellm.constants import (
+    ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS,
+    BEDROCK_AGENT_RUNTIME_PASS_THROUGH_ROUTES,
+)
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._types import *
 from litellm.proxy.auth.route_checks import RouteChecks
@@ -761,6 +764,7 @@ async def handle_bedrock_passthrough_router_model(
             proxy_logging_obj=proxy_logging_obj,
         )
 
+
 async def handle_bedrock_count_tokens(
     endpoint: str,
     request: Request,
@@ -1368,6 +1372,27 @@ def get_vertex_base_url(vertex_location: Optional[str]) -> str:
     return f"https://{vertex_location}-aiplatform.googleapis.com/"
 
 
+def get_vertex_ai_allowed_incoming_headers(request: Request) -> dict:
+    """
+    Extract only the allowed headers from incoming request for Vertex AI pass-through.
+
+    Uses an allowlist approach for security - only forwards headers we explicitly trust.
+    This prevents accidentally forwarding sensitive headers like the LiteLLM auth token.
+
+    Args:
+        request: The FastAPI request object
+
+    Returns:
+        dict: Headers dictionary with only allowed headers
+    """
+    incoming_headers = dict(request.headers) or {}
+    headers = {}
+    for header_name in ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS:
+        if header_name in incoming_headers:
+            headers[header_name] = incoming_headers[header_name]
+    return headers
+
+
 def get_vertex_pass_through_handler(
     call_type: Literal["discovery", "aiplatform"],
 ) -> BaseVertexAIPassThroughHandler:
@@ -1511,9 +1536,10 @@ async def _prepare_vertex_auth_headers(
             api_base="",
         )
 
-        headers = {
-            "Authorization": f"Bearer {auth_header}",
-        }
+        # Use allowlist approach - only forward specific safe headers
+        headers = get_vertex_ai_allowed_incoming_headers(request)
+        # Add the Authorization header with vendor credentials
+        headers["Authorization"] = f"Bearer {auth_header}"
 
         if base_target_url is not None:
             base_target_url = get_vertex_pass_through_handler.update_base_target_url_with_credential_location(

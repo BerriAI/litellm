@@ -1138,6 +1138,73 @@ def test_bedrock_create_bedrock_block_different_document_formats():
         assert block["document"]["name"].endswith(f"_{format_type}")
         assert block["document"]["format"] == format_type
 
+def test_bedrock_nova_web_search_options_mapping():
+    """
+    Test that web_search_options is correctly mapped to Nova grounding.
+
+    This follows the LiteLLM pattern for web search where:
+    - Vertex AI maps web_search_options to {"googleSearch": {}}
+    - Anthropic maps web_search_options to {"type": "web_search_20250305", ...}
+    - Nova should map web_search_options to {"systemTool": {"name": "nova_grounding"}}
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    # Test basic mapping for Nova model
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    # Test with search_context_size (should be ignored for Nova)
+    result2 = config._map_web_search_options(
+        {"search_context_size": "high"},
+        "us.amazon.nova-premier-v1:0"
+    )
+
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"
+    # Nova doesn't support search_context_size, so it's just ignored
+
+def test_bedrock_tools_pt_does_not_handle_system_tool():
+    """
+    Verify that _bedrock_tools_pt does NOT handle system_tool format.
+
+    System tools (nova_grounding) should be added via web_search_options,
+    not via the tools parameter directly.
+    """
+    
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    # Regular function tools should still work
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    },
+                    "required": ["location"]
+                }
+            }
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools=tools)
+
+    assert len(result) == 1
+    tool_spec = result[0].get("toolSpec")
+    assert tool_spec is not None
+    assert tool_spec["name"] == "get_weather"
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
@@ -1305,12 +1372,12 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
     assert result["content"][0]["cache_control"]["type"] == "ephemeral"
 def test_anthropic_messages_pt_server_tool_use_passthrough():
     """
-    Test that anthropic_messages_pt passes through server_tool_use and 
+    Test that anthropic_messages_pt passes through server_tool_use and
     tool_search_tool_result blocks in assistant message content.
-    
+
     These are Anthropic-native content types used for tool search functionality
     that need to be preserved when reconstructing multi-turn conversations.
-    
+
     Fixes: https://github.com/BerriAI/litellm/issues/XXXXX
     """
     from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
@@ -1359,15 +1426,15 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
 
     # Verify we have 3 messages (user, assistant, user)
     assert len(result) == 3
-    
+
     # Verify the assistant message content
     assistant_msg = result[1]
     assert assistant_msg["role"] == "assistant"
     assert isinstance(assistant_msg["content"], list)
-    
+
     # Find the different content block types
     content_types = [block.get("type") for block in assistant_msg["content"]]
-    
+
     # Verify server_tool_use block is preserved
     assert "server_tool_use" in content_types
     server_tool_use_block = next(
@@ -1376,7 +1443,7 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert server_tool_use_block["id"] == "srvtoolu_01ABC123"
     assert server_tool_use_block["name"] == "tool_search_tool_regex"
     assert server_tool_use_block["input"] == {"query": ".*time.*"}
-    
+
     # Verify tool_search_tool_result block is preserved
     assert "tool_search_tool_result" in content_types
     tool_result_block = next(
@@ -1385,10 +1452,141 @@ def test_anthropic_messages_pt_server_tool_use_passthrough():
     assert tool_result_block["tool_use_id"] == "srvtoolu_01ABC123"
     assert tool_result_block["content"]["type"] == "tool_search_tool_search_result"
     assert tool_result_block["content"]["tool_references"][0]["tool_name"] == "get_time"
-    
+
     # Verify text block is also preserved
     assert "text" in content_types
     text_block = next(
         b for b in assistant_msg["content"] if b.get("type") == "text"
     )
     assert text_block["text"] == "I found the time tool. How can I help you?"
+
+
+def test_bedrock_tools_unpack_defs_no_oom_with_nested_refs():
+    """
+    Regression test for issue #19098: unpack_defs() causes OOM with nested tool schemas.
+
+    The old implementation had a "flatten defs" loop that would pre-expand each def
+    using unpack_defs(), but since defs often reference each other, each subsequent
+    call would copy already-expanded content, causing exponential memory growth.
+
+    This test creates a schema with multiple nested $defs that reference each other
+    to verify the fix prevents memory explosion while still correctly resolving refs.
+    """
+    import sys
+    import copy
+
+    from litellm.litellm_core_utils.prompt_templates.factory import _bedrock_tools_pt
+
+    # Schema with multiple nested $defs that reference each other
+    # This pattern would cause OOM with the old "flatten defs" loop
+    complex_nested_schema = {
+        "type": "object",
+        "properties": {
+            "query": {"$ref": "#/$defs/Expression"},
+        },
+        "$defs": {
+            "Expression": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "enum": ["and", "or", "not", "comparison"]},
+                    "left": {"$ref": "#/$defs/Operand"},
+                    "right": {"$ref": "#/$defs/Operand"},
+                    "operator": {"$ref": "#/$defs/Operator"},
+                },
+            },
+            "Operand": {
+                "type": "object",
+                "anyOf": [
+                    {"$ref": "#/$defs/Literal"},
+                    {"$ref": "#/$defs/FieldRef"},
+                    {"$ref": "#/$defs/Expression"},  # Circular: Operand -> Expression -> Operand
+                ],
+            },
+            "Literal": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "const": "literal"},
+                    "value": {"$ref": "#/$defs/LiteralValue"},
+                },
+            },
+            "LiteralValue": {
+                "oneOf": [
+                    {"type": "string"},
+                    {"type": "number"},
+                    {"type": "boolean"},
+                    {"type": "null"},
+                ],
+            },
+            "FieldRef": {
+                "type": "object",
+                "properties": {
+                    "type": {"type": "string", "const": "field"},
+                    "name": {"type": "string"},
+                    "table": {"$ref": "#/$defs/TableRef"},
+                },
+            },
+            "TableRef": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "alias": {"type": "string"},
+                },
+            },
+            "Operator": {
+                "type": "string",
+                "enum": ["=", "!=", "<", ">", "<=", ">=", "LIKE", "IN"],
+            },
+        },
+    }
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "execute_query",
+                "description": "Execute a query with complex expressions",
+                "parameters": complex_nested_schema,
+            },
+        }
+    ]
+
+    # Measure initial size
+    def get_size(obj, seen=None):
+        size = sys.getsizeof(obj)
+        if seen is None:
+            seen = set()
+        obj_id = id(obj)
+        if obj_id in seen:
+            return 0
+        seen.add(obj_id)
+        if isinstance(obj, dict):
+            size += sum([get_size(v, seen) for v in obj.values()])
+            size += sum([get_size(k, seen) for k in obj.keys()])
+        elif hasattr(obj, "__iter__") and not isinstance(obj, (str, bytes, bytearray)):
+            size += sum([get_size(i, seen) for i in obj])
+        return size
+
+    initial_size = get_size(tools)
+
+    # Process through _bedrock_tools_pt - this should complete without OOM
+    tools_copy = copy.deepcopy(tools)
+    result = _bedrock_tools_pt(tools=tools_copy)
+
+    final_size = get_size(result)
+
+    # The expansion factor should be reasonable (< 100x), not exponential (35000x as in #19098)
+    expansion_factor = final_size / initial_size
+    assert expansion_factor < 100, (
+        f"Memory expansion factor {expansion_factor:.1f}x is too high. "
+        f"Initial: {initial_size} bytes, Final: {final_size} bytes"
+    )
+
+    # Verify the result is valid Bedrock tools format
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "toolSpec" in result[0]
+    assert result[0]["toolSpec"]["name"] == "execute_query"
+
+    # Verify $defs have been removed (Bedrock doesn't support them)
+    tool_schema = result[0]["toolSpec"].get("inputSchema", {}).get("json", {})
+    assert "$defs" not in tool_schema, "$defs should be removed after expansion"

@@ -49,9 +49,7 @@ if TYPE_CHECKING:
     ProxyConfig = _ProxyConfig
 else:
     ProxyConfig = Any
-from litellm.proxy.litellm_pre_call_utils import (
-    add_litellm_data_to_request,
-)
+from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
 from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 
 
@@ -751,19 +749,25 @@ class ProxyBaseLLMRequestProcessing:
                         headers=custom_headers,
                     )
             elif route_type == "anthropic_messages":
-                selected_data_generator = (
-                    ProxyBaseLLMRequestProcessing.async_sse_data_generator(
-                        response=response,
-                        user_api_key_dict=user_api_key_dict,
-                        request_data=self.data,
-                        proxy_logging_obj=proxy_logging_obj,
+                # Check if response is actually a streaming response (async generator)
+                # Non-streaming responses (dict) should be returned directly
+                # This handles cases like websearch_interception agentic loop
+                # which returns a non-streaming dict even for streaming requests
+                if self._is_streaming_response(response):
+                    selected_data_generator = (
+                        ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+                            response=response,
+                            user_api_key_dict=user_api_key_dict,
+                            request_data=self.data,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
                     )
-                )
-                return await create_response(
-                    generator=selected_data_generator,
-                    media_type="text/event-stream",
-                    headers=custom_headers,
-                )
+                    return await create_response(
+                        generator=selected_data_generator,
+                        media_type="text/event-stream",
+                        headers=custom_headers,
+                    )
+                # Non-streaming response - fall through to normal response handling
             elif select_data_generator:
                 selected_data_generator = select_data_generator(
                     response=response,

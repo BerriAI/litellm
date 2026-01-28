@@ -127,6 +127,7 @@ class ProxyInitializationHelpers:
         Get the arguments for `uvicorn` worker
         """
         import litellm
+        from litellm._logging import _get_uvicorn_json_log_config
 
         uvicorn_args = {
             "app": "litellm.proxy.proxy_server:app",
@@ -137,8 +138,8 @@ class ProxyInitializationHelpers:
             print(f"Using log_config: {log_config}")  # noqa
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
-            print("Using json logs. Setting log_config to None.")  # noqa
-            uvicorn_args["log_config"] = None
+            # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
+            uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         return uvicorn_args
@@ -187,7 +188,6 @@ class ProxyInitializationHelpers:
         ssl_certfile_path: str,
         ssl_keyfile_path: str,
         max_requests_before_restart: Optional[int] = None,
-        keepalive_timeout: Optional[int] = None,
     ):
         """
         Run litellm with `gunicorn`
@@ -267,10 +267,6 @@ class ProxyInitializationHelpers:
             "timeout": 600,  # default to very high number, bedrock/anthropic.claude-v2:1 can take 30+ seconds for the 1st chunk to come in
             "access_log_format": '%(h)s %(l)s %(u)s %(t)s "%(r)s" %(s)s %(b)s',
         }
-
-        # Optional: set keepalive timeout if specified by user
-        if keepalive_timeout is not None:
-            gunicorn_options["keepalive"] = keepalive_timeout
 
         # Optional: recycle workers after N requests to mitigate memory growth
         if max_requests_before_restart is not None:
@@ -494,7 +490,7 @@ class ProxyInitializationHelpers:
     "--keepalive_timeout",
     default=None,
     type=int,
-    help="Set the keepalive timeout in seconds. For Uvicorn: timeout_keep_alive parameter. For Gunicorn: keepalive parameter. Default: Uvicorn uses ~75s, Gunicorn uses 90s",
+    help="Set the uvicorn keepalive timeout in seconds (uvicorn timeout_keep_alive parameter)",
     envvar="KEEPALIVE_TIMEOUT",
 )
 @click.option(
@@ -864,7 +860,6 @@ def run_server(  # noqa: PLR0915
                 ssl_certfile_path=ssl_certfile_path,
                 ssl_keyfile_path=ssl_keyfile_path,
                 max_requests_before_restart=max_requests_before_restart,
-                keepalive_timeout=keepalive_timeout,
             )
         elif run_hypercorn is True:
             ProxyInitializationHelpers._init_hypercorn_server(

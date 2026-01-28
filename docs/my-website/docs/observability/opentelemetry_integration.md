@@ -63,6 +63,8 @@ OTEL_EXPORTER_OTLP_PROTOCOL=grpc
 OTEL_EXPORTER_OTLP_HEADERS="api-key=key,other-config-value=value"
 ```
 
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
+
 </TabItem>
 
 <TabItem value="laminar" label="Log to Laminar">
@@ -72,6 +74,8 @@ OTEL_EXPORTER="otlp_grpc"
 OTEL_ENDPOINT="https://api.lmnr.ai:8443"
 OTEL_HEADERS="authorization=Bearer <project-api-key>"
 ```
+
+> Note: OTLP gRPC requires `grpcio`. Install via `pip install "litellm[grpc]"` (or `grpcio`).
 
 </TabItem>
 

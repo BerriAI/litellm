@@ -8,6 +8,7 @@ import os
 import uuid
 from typing import TYPE_CHECKING, Any, Literal, Optional, Type
 
+import httpx
 from fastapi import HTTPException
 
 from litellm._logging import verbose_proxy_logger
@@ -25,10 +26,12 @@ if TYPE_CHECKING:
 
 class OnyxGuardrail(CustomGuardrail):
     def __init__(
-        self, api_base: Optional[str] = None, api_key: Optional[str] = None, **kwargs
+        self, api_base: Optional[str] = None, api_key: Optional[str] = None, timeout: Optional[float] = 10.0, **kwargs
     ):
+        timeout = timeout or int(os.getenv("ONYX_TIMEOUT", 10.0))
         self.async_handler = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.GuardrailCallback
+            llm_provider=httpxSpecialProvider.GuardrailCallback,
+            params={"timeout": httpx.Timeout(timeout=timeout, connect=5.0)},
         )
         self.api_base = api_base or os.getenv(
             "ONYX_API_BASE",

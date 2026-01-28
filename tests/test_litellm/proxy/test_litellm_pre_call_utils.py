@@ -16,6 +16,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     _get_enforced_params,
     _update_model_if_key_alias_exists,
+    add_guardrails_from_policy_engine,
     add_litellm_data_to_request,
     check_if_token_is_service_account,
 )
@@ -1393,23 +1394,21 @@ async def test_embedding_header_forwarding_with_model_group():
             version="test-version",
         )
 
-        # Verify that headers were added to the request metadata
-        assert "metadata" in updated_data, "Metadata should be added to embedding request"
-        assert "headers" in updated_data["metadata"], "Headers should be added to embedding request metadata"
+        # Verify that headers were added to the request data
+        assert "headers" in updated_data, "Headers should be added to embedding request"
         
         # Verify that only x- prefixed headers (except x-stainless) were forwarded
-        forwarded_headers = updated_data["metadata"]["headers"]
+        forwarded_headers = updated_data["headers"]
         assert "X-Custom-Header" in forwarded_headers, "X-Custom-Header should be forwarded"
         assert forwarded_headers["X-Custom-Header"] == "custom-value"
         assert "X-Request-ID" in forwarded_headers, "X-Request-ID should be forwarded"
         assert forwarded_headers["X-Request-ID"] == "test-request-123"
         
-        # Verify that Authorization header is present in metadata (not filtered out at this level)
-        # Note: The metadata headers contain all original headers for logging/tracking purposes
-        assert "Authorization" in forwarded_headers, "Authorization header should be in metadata headers"
+        # Verify that authorization header was NOT forwarded (sensitive header)
+        assert "Authorization" not in forwarded_headers, "Authorization header should not be forwarded"
         
-        # Verify that Content-Type is present (it's included in metadata headers)
-        assert "Content-Type" in forwarded_headers, "Content-Type should be in metadata headers"
+        # Verify that Content-Type was NOT forwarded (doesn't start with x-)
+        assert "Content-Type" not in forwarded_headers, "Content-Type should not be forwarded"
 
         # Verify original data fields are preserved
         assert updated_data["model"] == "local-openai/text-embedding-3-small"
@@ -1479,3 +1478,120 @@ async def test_embedding_header_forwarding_without_model_group_config():
     finally:
         # Restore original model_group_settings
         litellm.model_group_settings = original_model_group_settings
+
+
+def test_add_guardrails_from_policy_engine():
+    """
+    Test that add_guardrails_from_policy_engine adds guardrails from matching policies
+    and tracks applied policies in metadata.
+    """
+    from litellm.proxy.policy_engine.attachment_registry import get_attachment_registry
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+    from litellm.types.proxy.policy_engine import (
+        Policy,
+        PolicyAttachment,
+        PolicyGuardrails,
+    )
+
+    # Setup test data
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_alias="healthcare-team",
+        key_alias="my-key",
+    )
+
+    # Setup mock policies in the registry (policies define WHAT guardrails to apply)
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {
+        "global-baseline": Policy(
+            guardrails=PolicyGuardrails(add=["pii_blocker"]),
+        ),
+        "healthcare": Policy(
+            guardrails=PolicyGuardrails(add=["hipaa_audit"]),
+        ),
+    }
+    policy_registry._initialized = True
+
+    # Setup attachments in the attachment registry (attachments define WHERE policies apply)
+    attachment_registry = get_attachment_registry()
+    attachment_registry._attachments = [
+        PolicyAttachment(policy="global-baseline", scope="*"),  # applies to all
+        PolicyAttachment(policy="healthcare", teams=["healthcare-team"]),  # applies to healthcare team
+    ]
+    attachment_registry._initialized = True
+
+    # Call the function
+    add_guardrails_from_policy_engine(
+        data=data,
+        metadata_variable_name="metadata",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Verify guardrails were added
+    assert "guardrails" in data["metadata"]
+    assert "pii_blocker" in data["metadata"]["guardrails"]
+    assert "hipaa_audit" in data["metadata"]["guardrails"]
+
+    # Verify applied policies were tracked
+    assert "applied_policies" in data["metadata"]
+    assert "global-baseline" in data["metadata"]["applied_policies"]
+    assert "healthcare" in data["metadata"]["applied_policies"]
+
+    # Clean up registries
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+    attachment_registry._attachments = []
+    attachment_registry._initialized = False
+
+
+def test_add_guardrails_from_policy_engine_accepts_dynamic_policies_and_pops_from_data():
+    """
+    Test that add_guardrails_from_policy_engine accepts dynamic 'policies' from the request body
+    and removes them to prevent forwarding to the LLM provider.
+    
+    This is critical because 'policies' is a LiteLLM proxy-specific parameter that should
+    not be sent to the actual LLM API (e.g., OpenAI, Anthropic, etc.).
+    """
+    from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+    # Setup test data with 'policies' in the request body
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "policies": ["PII-POLICY-GLOBAL", "HIPAA-POLICY"],  # Dynamic policies - should be accepted and removed
+        "metadata": {},
+    }
+
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        team_alias="test-team",
+        key_alias="test-key",
+    )
+
+    # Initialize empty policy registry (we're just testing the accept and pop behavior)
+    policy_registry = get_policy_registry()
+    policy_registry._policies = {}
+    policy_registry._initialized = False
+
+    # Call the function - should accept dynamic policies and not raise an error
+    add_guardrails_from_policy_engine(
+        data=data,
+        metadata_variable_name="metadata",
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    # Verify that 'policies' was removed from the request body
+    assert "policies" not in data, "'policies' should be removed from request body to prevent forwarding to LLM provider"
+
+    # Verify that other fields are preserved
+    assert "model" in data
+    assert data["model"] == "gpt-4"
+    assert "messages" in data
+    assert data["messages"] == [{"role": "user", "content": "Hello"}]
+    assert "metadata" in data

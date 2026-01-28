@@ -39,7 +39,6 @@ import { Button } from "@tremor/react";
 import { all_admin_roles } from "../../../utils/roles";
 import { ActivityMetrics, processActivityData } from "../../activity_metrics";
 import CloudZeroExportModal from "../../cloudzero_export_modal";
-import NewBadge from "../../common_components/NewBadge";
 import EntityUsageExportModal from "../../EntityUsageExport";
 import { Team } from "../../key_team_helpers/key_list";
 import { Organization, tagListCall, userDailyActivityAggregatedCall, userDailyActivityCall } from "../../networking";
@@ -438,15 +437,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           {usageView === "global" && (
             <TabGroup>
               <div className="flex justify-between items-center">
-                <NewBadge>
-                  <TabList variant="solid" className="mt-1">
-                    <Tab>Cost</Tab>
-                    <Tab>Model Activity</Tab>
-                    <Tab>Key Activity</Tab>
-                    <Tab>MCP Server Activity</Tab>
-                    <Tab>Endpoint Activity</Tab>
-                  </TabList>
-                </NewBadge>
+                <TabList variant="solid" className="mt-1">
+                  <Tab>Cost</Tab>
+                  <Tab>Model Activity</Tab>
+                  <Tab>Key Activity</Tab>
+                  <Tab>MCP Server Activity</Tab>
+                  <Tab>Endpoint Activity</Tab>
+                </TabList>
                 <Button
                   onClick={() => setIsGlobalExportModalOpen(true)}
                   icon={() => (
@@ -604,21 +601,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           />
                           <div className="flex bg-gray-100 rounded-lg p-1">
                             <button
-                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                modelViewType === "groups"
-                                  ? "bg-white shadow-sm text-gray-900"
-                                  : "text-gray-600 hover:text-gray-900"
-                              }`}
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${modelViewType === "groups"
+                                ? "bg-white shadow-sm text-gray-900"
+                                : "text-gray-600 hover:text-gray-900"
+                                }`}
                               onClick={() => setModelViewType("groups")}
                             >
                               Public Model Name
                             </button>
                             <button
-                              className={`px-3 py-1 text-sm rounded-md transition-colors ${
-                                modelViewType === "individual"
-                                  ? "bg-white shadow-sm text-gray-900"
-                                  : "text-gray-600 hover:text-gray-900"
-                              }`}
+                              className={`px-3 py-1 text-sm rounded-md transition-colors ${modelViewType === "individual"
+                                ? "bg-white shadow-sm text-gray-900"
+                                : "text-gray-600 hover:text-gray-900"
+                                }`}
                               onClick={() => setModelViewType("individual")}
                             >
                               Litellm Model Name
