@@ -342,6 +342,15 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
     const isAdmin = isAdminRole(userRole);
 
+    // Debug logging
+    if (enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
+      console.log("[LeftNav] Filtering with enabled pages:", {
+        userRole,
+        isAdmin,
+        enabledPagesInternalUsers,
+      });
+    }
+
     return items
       .filter((item) => {
         // Special handling for organizations menu item - allow org_admins
@@ -351,7 +360,9 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
           // Check enabled pages for internal users (non-admins)
           if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-            return enabledPagesInternalUsers.includes(item.page);
+            const isIncluded = enabledPagesInternalUsers.includes(item.page);
+            console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
+            return isIncluded;
           }
           return true;
         }
@@ -361,7 +372,9 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
         // Check enabled pages for internal users (non-admins)
         if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
-          return enabledPagesInternalUsers.includes(item.page);
+          const isIncluded = enabledPagesInternalUsers.includes(item.page);
+          console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
+          return isIncluded;
         }
 
         return true;

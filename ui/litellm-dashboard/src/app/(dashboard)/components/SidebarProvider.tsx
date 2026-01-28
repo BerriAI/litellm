@@ -17,15 +17,25 @@ const SidebarProvider = ({ setPage, defaultSelectedKey, sidebarCollapsed }: Side
 
   useEffect(() => {
     const fetchUISettings = async () => {
-      if (!accessToken) return;
+      if (!accessToken) {
+        console.log("[SidebarProvider] No access token, skipping UI settings fetch");
+        return;
+      }
 
       try {
+        console.log("[SidebarProvider] Fetching UI settings from /get/ui_settings");
         const settings = await getUISettings(accessToken);
-        if (settings?.settings?.enabled_ui_pages_internal_users !== undefined) {
-          setEnabledPagesInternalUsers(settings.settings.enabled_ui_pages_internal_users);
+        console.log("[SidebarProvider] UI settings response:", settings);
+        
+        // API returns 'values' not 'settings'
+        if (settings?.values?.enabled_ui_pages_internal_users !== undefined) {
+          console.log("[SidebarProvider] Setting enabled pages:", settings.values.enabled_ui_pages_internal_users);
+          setEnabledPagesInternalUsers(settings.values.enabled_ui_pages_internal_users);
+        } else {
+          console.log("[SidebarProvider] No enabled_ui_pages_internal_users in response (all pages visible by default)");
         }
       } catch (error) {
-        console.error("Failed to fetch UI settings:", error);
+        console.error("[SidebarProvider] Failed to fetch UI settings:", error);
       }
     };
 
