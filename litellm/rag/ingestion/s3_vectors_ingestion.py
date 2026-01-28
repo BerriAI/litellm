@@ -253,6 +253,20 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         verbose_logger.debug(
             f"Ensuring S3 vector bucket exists: {self.vector_bucket_name}"
         )
+        
+        # Validate bucket name (AWS S3 naming rules)
+        if len(self.vector_bucket_name) < 3:
+            raise ValueError(
+                f"Invalid vector_bucket_name '{self.vector_bucket_name}': "
+                f"AWS S3 bucket names must be at least 3 characters long. "
+                f"Please provide a valid bucket name (e.g., 'my-vector-bucket')."
+            )
+        if not self.vector_bucket_name.replace("-", "").replace(".", "").isalnum():
+            raise ValueError(
+                f"Invalid vector_bucket_name '{self.vector_bucket_name}': "
+                f"AWS S3 bucket names can only contain lowercase letters, numbers, hyphens, and periods. "
+                f"Please provide a valid bucket name (e.g., 'my-vector-bucket')."
+            )
 
         # Try to get bucket info using GetVectorBucket API
         get_url = f"https://s3vectors.{self.aws_region_name}.api.aws/GetVectorBucket"
@@ -455,30 +469,43 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         await self._ensure_config_initialized()
 
         if not embeddings or not chunks:
-            verbose_logger.warning("No embeddings or chunks to store")
-            return self.index_name, None
+            error_msg = (
+                "No text content could be extracted from the file for embedding. "
+                "Possible causes:\n"
+                "  1. PDF files require OCR - add 'ocr' config with a vision model (e.g., 'anthropic/claude-3-5-sonnet-20241022')\n"
+                "  2. Binary files cannot be processed - convert to text first\n"
+                "  3. File is empty or contains no extractable text\n"
+                "For PDFs, either enable OCR or use a PDF extraction library to convert to text before ingestion."
+            )
+            verbose_logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Prepare vectors for PutVectors API
         vectors = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            # Build metadata dict
+            metadata: Dict[str, str] = {
+                "source_text": chunk,  # Non-filterable (for reference)
+                "chunk_index": str(i),  # Filterable
+            }
+            
+            if filename:
+                metadata["filename"] = filename  # Filterable
+            
             vector_obj = {
                 "key": f"{filename}_{i}" if filename else f"chunk_{i}",
                 "data": {"float32": embedding},
-                "metadata": {
-                    "source_text": chunk,  # Non-filterable (for reference)
-                    "chunk_index": str(i),  # Filterable
-                },
+                "metadata": metadata,
             }
-
-            if filename:
-                vector_obj["metadata"]["filename"] = filename  # Filterable
 
             vectors.append(vector_obj)
 
         # Call PutVectors API
         await self._put_vectors(vectors)
 
-        return self.index_name, filename
+        # Return vector_store_id in format bucket_name:index_name for S3 Vectors search compatibility
+        vector_store_id = f"{self.vector_bucket_name}:{self.index_name}"
+        return vector_store_id, filename
 
     async def query_vector_store(
         self, vector_store_id: str, query: str, top_k: int = 5
