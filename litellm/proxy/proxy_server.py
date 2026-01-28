@@ -8174,6 +8174,55 @@ async def _filter_models_by_team_id(
     return filtered_models
 
 
+async def _find_model_by_id(
+    model_id: str,
+    search: Optional[str],
+    llm_router,
+    prisma_client,
+    proxy_config,
+) -> tuple[list, Optional[int]]:
+    """Find a model by its ID and optionally filter by search term."""
+    found_model = None
+
+    # First, search in config
+    if llm_router is not None:
+        found_model = llm_router.get_model_info(id=model_id)
+        if found_model:
+            found_model = copy.deepcopy(found_model)
+
+    # If not found in config, search in database
+    if found_model is None:
+        try:
+            db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+                where={"model_id": model_id}
+            )
+            if db_model:
+                # Convert database model to router format
+                decrypted_models = proxy_config.decrypt_model_list_from_db(
+                    [db_model]
+                )
+                if decrypted_models:
+                    found_model = decrypted_models[0]
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error querying database for modelId {model_id}: {str(e)}"
+            )
+
+    # If model found, verify search filter if provided
+    if found_model is not None:
+        if search is not None and search.strip():
+            search_lower = search.lower().strip()
+            model_name = found_model.get("model_name", "")
+            if search_lower not in model_name.lower():
+                # Model found but doesn't match search filter
+                found_model = None
+
+    # Set all_models to the found model or empty list
+    all_models = [found_model] if found_model is not None else []
+    search_total_count: Optional[int] = len(all_models)
+    return all_models, search_total_count
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -8240,44 +8289,13 @@ async def model_info_v2(
 
     # If modelId is provided, search for the specific model
     if modelId is not None:
-        found_model = None
-
-        # First, search in config
-        if llm_router is not None:
-            found_model = llm_router.get_model_info(id=modelId)
-            if found_model:
-                found_model = copy.deepcopy(found_model)
-
-        # If not found in config, search in database
-        if found_model is None:
-            try:
-                db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
-                    where={"model_id": modelId}
-                )
-                if db_model:
-                    # Convert database model to router format
-                    decrypted_models = proxy_config.decrypt_model_list_from_db(
-                        [db_model]
-                    )
-                    if decrypted_models:
-                        found_model = decrypted_models[0]
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    f"Error querying database for modelId {modelId}: {str(e)}"
-                )
-
-        # If model found, verify search filter if provided
-        if found_model is not None:
-            if search is not None and search.strip():
-                search_lower = search.lower().strip()
-                model_name = found_model.get("model_name", "")
-                if search_lower not in model_name.lower():
-                    # Model found but doesn't match search filter
-                    found_model = None
-
-        # Set all_models to the found model or empty list
-        all_models = [found_model] if found_model is not None else []
-        search_total_count: Optional[int] = len(all_models)
+        all_models, search_total_count = await _find_model_by_id(
+            model_id=modelId,
+            search=search,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            proxy_config=proxy_config,
+        )
     else:
         # Normal flow when modelId is not provided
         all_models = copy.deepcopy(llm_router.model_list)
