@@ -8452,6 +8452,12 @@ class ProviderConfigManager:
             )
 
             return RAGFlowVectorStoreConfig()
+        elif litellm.LlmProviders.S3_VECTORS == provider:
+            from litellm.llms.s3_vectors.vector_stores.transformation import (
+                S3VectorsVectorStoreConfig,
+            )
+
+            return S3VectorsVectorStoreConfig()
         return None
 
     @staticmethod
@@ -8699,9 +8705,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
-        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig

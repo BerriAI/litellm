@@ -1771,6 +1771,113 @@ async def _add_team_members_to_team(
     return updated_team, updated_users, updated_team_memberships
 
 
+async def _validate_and_populate_member_user_info(
+    member: Member,
+    prisma_client: PrismaClient,
+) -> Member:
+    """
+    Validate and populate user_email/user_id for a member.
+    
+    Logic:
+    1. If both user_email and user_id are provided, verify they belong to the same user (use user_email as source of truth)
+    2. If only user_email is provided, populate user_id from DB
+    3. If only user_id is provided, populate user_email from DB (if user exists)
+    4. If only user_id is provided and doesn't exist, allow it to pass with user_email as None (will be upserted later)
+    5. If user_email and user_id mismatch, throw error
+    
+    Returns a Member with user_email and user_id populated (user_email may be None if only user_id provided and user doesn't exist).
+    """
+    if member.user_email is None and member.user_id is None:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Either user_id or user_email must be provided"},
+        )
+    
+    # Case 1: Both user_email and user_id provided - verify they match
+    if member.user_email is not None and member.user_id is not None:
+        # Use user_email as source of truth
+        # Check for multiple users with same email first
+        users_by_email = await prisma_client.get_data(
+            key_val={"user_email": member.user_email},
+            table_name="user",
+            query_type="find_all",
+        )
+        
+        if users_by_email is None or (
+            isinstance(users_by_email, list) and len(users_by_email) == 0
+        ):
+            # User doesn't exist yet - this is fine, will be created later
+            return member
+        
+        if isinstance(users_by_email, list) and len(users_by_email) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Multiple users found with email '{member.user_email}'. Please use 'user_id' instead."
+                },
+            )
+        
+        # Get the single user
+        user_by_email = users_by_email[0]
+        
+        # Verify the user_id matches
+        if user_by_email.user_id != member.user_id:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"user_email '{member.user_email}' and user_id '{member.user_id}' do not belong to the same user."
+                },
+            )
+        
+        # Both match, return as is
+        return member
+    
+    # Case 2: Only user_email provided - populate user_id from DB
+    if member.user_email is not None and member.user_id is None:
+        user_by_email = await prisma_client.db.litellm_usertable.find_first(
+            where={"user_email": {"equals": member.user_email, "mode": "insensitive"}}
+        )
+        
+        if user_by_email is None:
+            # User doesn't exist yet - this is fine, will be created later
+            return member
+        
+        # Check for multiple users with same email
+        users_by_email = await prisma_client.get_data(
+            key_val={"user_email": member.user_email},
+            table_name="user",
+            query_type="find_all",
+        )
+        
+        if users_by_email and isinstance(users_by_email, list) and len(users_by_email) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"Multiple users found with email '{member.user_email}'. Please use 'user_id' instead."
+                },
+            )
+        
+        # Populate user_id
+        member.user_id = user_by_email.user_id
+        return member
+    
+    # Case 3: Only user_id provided - populate user_email from DB if user exists
+    if member.user_id is not None and member.user_email is None:
+        user_by_id = await prisma_client.db.litellm_usertable.find_unique(
+            where={"user_id": member.user_id}
+        )
+        
+        if user_by_id is None:
+            # User doesn't exist yet - allow it to pass with user_email as None
+            # Will be upserted later with just user_id and null email
+            return member
+        
+        # Populate user_email
+        member.user_email = user_by_id.user_email
+        return member
+    
+    return member
+
 @router.post(
     "/team/member_add",
     tags=["team management"],
@@ -1845,6 +1952,19 @@ async def team_member_add(
         user_api_key_dict=user_api_key_dict,
         complete_team_data=complete_team_data,
     )
+
+    # Validate and populate user_email/user_id for members before processing
+    if isinstance(data.member, Member):
+        await _validate_and_populate_member_user_info(
+            member=data.member,
+            prisma_client=prisma_client,
+        )
+    elif isinstance(data.member, List):
+        for m in data.member:
+            await _validate_and_populate_member_user_info(
+                member=m,
+                prisma_client=prisma_client,
+            )
 
     updated_team, updated_users, updated_team_memberships = (
         await _add_team_members_to_team(

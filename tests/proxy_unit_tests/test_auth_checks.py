@@ -584,7 +584,7 @@ async def test_get_fuzzy_user_object():
     )
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": "test@example.com"},
+        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
         include={"organization_memberships": True},
     )
 
@@ -612,7 +612,7 @@ async def test_get_fuzzy_user_object():
     )
     assert result == test_user
     mock_prisma.db.litellm_usertable.find_first.assert_called_with(
-        where={"user_email": "test@example.com"},
+        where={"user_email": {"equals": "test@example.com", "mode": "insensitive"}},
         include={"organization_memberships": True},
     )
 
