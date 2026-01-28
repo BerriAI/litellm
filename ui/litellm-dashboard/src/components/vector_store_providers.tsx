@@ -1,11 +1,11 @@
 export enum VectorStoreProviders {
   Bedrock = "Amazon Bedrock",
+  S3Vectors = "Amazon S3 Vectors",
   PgVector = "PostgreSQL pgvector (LiteLLM Connector)",
   VertexRagEngine = "Vertex AI RAG Engine",
   OpenAI = "OpenAI",
   Azure = "Azure OpenAI",
   Milvus = "Milvus",
-  S3Vectors = "AWS S3 Vectors",
 }
 
 export const vectorStoreProviderMap: Record<string, string> = {
