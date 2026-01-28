@@ -14,11 +14,39 @@ sys.path.insert(0, os.path.abspath("../.."))
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
-from litellm.types.integrations.slack_alerting import HangingRequestData
+from litellm.types.integrations.slack_alerting import (
+    HANGING_ALERT_BUFFER_TIME_SECONDS,
+    HangingRequestData,
+)
 
 
 class TestAlertingHangingRequestCheck:
     """Test suite for AlertingHangingRequestCheck class"""
+
+    @pytest.fixture
+    def mock_proxy_server_module(self):
+        """Factory to build a dummy litellm.proxy.proxy_server module."""
+
+        _UNSET = object()
+
+        def _factory(
+            internal_usage_cache_return_value: Optional[dict] = None,
+            internal_usage_cache=_UNSET,
+        ):
+            dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
+            proxy_logging_obj = MagicMock()
+
+            if internal_usage_cache is _UNSET:
+                mock_internal_cache = AsyncMock()
+                mock_internal_cache.async_get_cache.return_value = internal_usage_cache_return_value
+                proxy_logging_obj.internal_usage_cache = mock_internal_cache
+            else:
+                proxy_logging_obj.internal_usage_cache = internal_usage_cache
+
+            setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+            return dummy_proxy_server
+
+        return _factory
 
     @pytest.fixture
     def mock_slack_alerting(self):
@@ -42,7 +70,7 @@ class TestAlertingHangingRequestCheck:
         checker = AlertingHangingRequestCheck(slack_alerting_object=mock_slack_alerting)
 
         # The cache should be created with TTL = alerting_threshold + buffer time
-        expected_ttl = mock_slack_alerting.alerting_threshold + 60  # HANGING_ALERT_BUFFER_TIME_SECONDS
+        expected_ttl = mock_slack_alerting.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS
         assert checker.hanging_request_cache.default_ttl == expected_ttl
 
     @pytest.mark.asyncio
@@ -135,22 +163,23 @@ class TestAlertingHangingRequestCheck:
         assert call_args[1]["level"] == "Medium"
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_no_proxy_logging(self, hanging_request_checker):
+    async def test_send_alerts_for_hanging_requests_no_proxy_logging(
+        self, hanging_request_checker, mock_proxy_server_module
+    ):
         """
         Test send_alerts_for_hanging_requests when proxy_logging_obj.internal_usage_cache is None.
         Should return early without processing when internal usage cache is unavailable.
         """
-        dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
-        proxy_logging_obj = MagicMock()
-        proxy_logging_obj.internal_usage_cache = None
-        setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             result = await hanging_request_checker.send_alerts_for_hanging_requests()
             assert result is None
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_with_completed_request(self, hanging_request_checker):
+    async def test_send_alerts_for_hanging_requests_with_completed_request(
+        self, hanging_request_checker, mock_proxy_server_module
+    ):
         """
         Test send_alerts_for_hanging_requests when request has completed (not hanging).
         Should remove completed requests from cache and not send alerts.
@@ -165,14 +194,8 @@ class TestAlertingHangingRequestCheck:
             key="completed_request_789", value=hanging_data, ttl=300
         )
 
-        dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
-        proxy_logging_obj = MagicMock()
-
         # Mock internal usage cache to return a request status (meaning request completed)
-        mock_internal_cache = AsyncMock()
-        mock_internal_cache.async_get_cache.return_value = {"status": "success"}
-        proxy_logging_obj.internal_usage_cache = mock_internal_cache
-        setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value={"status": "success"})
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             # Mock the cache method to return our test request
@@ -186,7 +209,9 @@ class TestAlertingHangingRequestCheck:
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_with_actual_hanging_request(self, hanging_request_checker):
+    async def test_send_alerts_for_hanging_requests_with_actual_hanging_request(
+        self, hanging_request_checker, mock_proxy_server_module
+    ):
         """
         Test send_alerts_for_hanging_requests when request is actually hanging.
         Should send alert for requests that haven't completed within threshold.
@@ -207,14 +232,8 @@ class TestAlertingHangingRequestCheck:
             key="hanging_request_999", value=hanging_data, ttl=300
         )
 
-        dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
-        proxy_logging_obj = MagicMock()
-
         # Mock internal usage cache to return None (meaning request is still hanging)
-        mock_internal_cache = AsyncMock()
-        mock_internal_cache.async_get_cache.return_value = None
-        proxy_logging_obj.internal_usage_cache = mock_internal_cache
-        setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             # Mock the cache method to return our test request
@@ -233,7 +252,9 @@ class TestAlertingHangingRequestCheck:
         assert cached_data.alert_sent is True
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_does_not_alert_before_threshold(self, hanging_request_checker):
+    async def test_send_alerts_for_hanging_requests_does_not_alert_before_threshold(
+        self, hanging_request_checker, mock_proxy_server_module
+    ):
         """Should not send hanging alert before alerting_threshold has elapsed."""
         hanging_data = HangingRequestData(
             request_id="not_yet_hanging_request",
@@ -245,12 +266,7 @@ class TestAlertingHangingRequestCheck:
             key="not_yet_hanging_request", value=hanging_data, ttl=300
         )
 
-        dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
-        proxy_logging_obj = MagicMock()
-        mock_internal_cache = AsyncMock()
-        mock_internal_cache.async_get_cache.return_value = None
-        proxy_logging_obj.internal_usage_cache = mock_internal_cache
-        setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
@@ -262,7 +278,9 @@ class TestAlertingHangingRequestCheck:
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_prevents_duplicate_alerts(self, hanging_request_checker):
+    async def test_send_alerts_for_hanging_requests_prevents_duplicate_alerts(
+        self, hanging_request_checker, mock_proxy_server_module
+    ):
         """Should not send duplicate alerts for the same request_id after alert_sent is True."""
         hanging_data = HangingRequestData(
             request_id="duplicate_alert_test",
@@ -278,12 +296,7 @@ class TestAlertingHangingRequestCheck:
             key="duplicate_alert_test", value=hanging_data, ttl=300
         )
 
-        dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
-        proxy_logging_obj = MagicMock()
-        mock_internal_cache = AsyncMock()
-        mock_internal_cache.async_get_cache.return_value = None
-        proxy_logging_obj.internal_usage_cache = mock_internal_cache
-        setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
@@ -295,16 +308,14 @@ class TestAlertingHangingRequestCheck:
         hanging_request_checker.slack_alerting_object.send_alert.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_send_alerts_for_hanging_requests_with_missing_hanging_data(self, hanging_request_checker):
+    async def test_send_alerts_for_hanging_requests_with_missing_hanging_data(
+        self, hanging_request_checker, mock_proxy_server_module
+    ):
         """
         Test send_alerts_for_hanging_requests when hanging request data is missing from cache.
         Should continue processing other requests when individual request data is missing.
         """
-        dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
-        proxy_logging_obj = MagicMock()
-        mock_internal_cache = AsyncMock()
-        proxy_logging_obj.internal_usage_cache = mock_internal_cache
-        setattr(dummy_proxy_server, "proxy_logging_obj", proxy_logging_obj)
+        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache=AsyncMock())
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             # Mock cache to return request ID but no data (simulating expired or missing data)
