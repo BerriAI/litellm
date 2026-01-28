@@ -5269,6 +5269,23 @@ def scrub_sensitive_keys_in_metadata(litellm_params: Optional[dict]):
         metadata["user_api_key_metadata"] = cleaned_user_api_key_metadata
         litellm_params["metadata"] = metadata
 
+    ## check user_api_key_auth_metadata for sensitive logging keys
+    if isinstance(
+        (user_api_key_auth_metadata := metadata.get("user_api_key_auth_metadata")), dict
+    ):
+        if "logging" in user_api_key_auth_metadata:
+            user_api_key_auth_metadata[
+                "logging"
+            ] = "scrubbed_by_litellm_for_sensitive_keys"
+            litellm_params["metadata"] = metadata
+
+    ## check user_api_key_auth (full object) for sensitive logging keys in its metadata
+    if isinstance((user_api_key_auth := metadata.get("user_api_key_auth")), dict):
+        if isinstance((auth_metadata := user_api_key_auth.get("metadata")), dict):
+            if "logging" in auth_metadata:
+                auth_metadata["logging"] = "scrubbed_by_litellm_for_sensitive_keys"
+                litellm_params["metadata"] = metadata
+
     return litellm_params
 
 

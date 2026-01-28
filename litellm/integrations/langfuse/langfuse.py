@@ -25,6 +25,10 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
     filter_exceptions_from_params,
 )
+from litellm.litellm_core_utils.redact_messages import (
+    redact_user_api_key_info,
+    redact_sensitive_keys,
+)
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
@@ -595,6 +599,12 @@ class LangFuseLogger:
                         continue
                     else:
                         clean_metadata[key] = value
+
+            # Scrub sensitive keys like langfuse_secret_key from metadata
+            clean_metadata = redact_sensitive_keys(
+                clean_metadata,
+                lambda k: k.endswith("_secret_key") or k.endswith("_secret"),
+            )
 
             # Add default langfuse tags
             tags = self.add_default_langfuse_tags(
