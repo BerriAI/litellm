@@ -3,6 +3,7 @@
 import importlib
 import os
 import sys
+import warnings
 
 import pytest
 
@@ -27,7 +28,6 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
     curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(0, os.path.abspath("../.."))  # Adds the project directory to the system path
 
     import litellm
     from litellm import Router
@@ -46,10 +46,15 @@ def setup_and_teardown():
     # Otherwise, pytest may close the loop with pending tasks ("Event loop is closed").
     try:
         from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
-        loop.run_until_complete(GLOBAL_LOGGING_WORKER.stop())
-    except Exception:
-        pass
+    except (ImportError, AttributeError) as e:
+        warnings.warn(f"GLOBAL_LOGGING_WORKER not available: {e}")
+    else:
+        try:
+            loop.run_until_complete(GLOBAL_LOGGING_WORKER.stop())
+        except (RuntimeError, asyncio.CancelledError):
+            # RuntimeError: event loop already closed
+            # CancelledError: pending tasks cancelled during shutdown
+            pass
 
     loop.close()  # Close the loop created earlier
     asyncio.set_event_loop(None)  # Remove the reference to the loop
