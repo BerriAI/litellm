@@ -115,6 +115,53 @@ def test_get_enforced_params(
     assert enforced_params == expected_enforced_params
 
 
+def test_get_sanitized_user_information_from_key_derives_end_user_id_from_key_user_id_when_enabled():
+    """
+    When `general_settings.use_key_user_id_as_end_user` is enabled, spend logging should
+    treat the key's `user_id` as the end-user id (if no explicit end_user_id was set).
+    """
+    from litellm.proxy import proxy_server
+
+    prev_general_settings = getattr(proxy_server, "general_settings")
+    setattr(proxy_server, "general_settings", {"use_key_user_id_as_end_user": True})
+    try:
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            user_id="customer-123",
+            end_user_id=None,
+        )
+
+        md = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=user_api_key_dict
+        )
+        assert md["user_api_key_end_user_id"] == "customer-123"
+    finally:
+        setattr(proxy_server, "general_settings", prev_general_settings)
+
+
+def test_get_sanitized_user_information_from_key_respects_explicit_end_user_id():
+    """
+    If an explicit end_user_id is set on the key auth object, it should take precedence.
+    """
+    from litellm.proxy import proxy_server
+
+    prev_general_settings = getattr(proxy_server, "general_settings")
+    setattr(proxy_server, "general_settings", {"use_key_user_id_as_end_user": True})
+    try:
+        user_api_key_dict = UserAPIKeyAuth(
+            api_key="hashed-key",
+            user_id="customer-123",
+            end_user_id="explicit-end-user",
+        )
+
+        md = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+            user_api_key_dict=user_api_key_dict
+        )
+        assert md["user_api_key_end_user_id"] == "explicit-end-user"
+    finally:
+        setattr(proxy_server, "general_settings", prev_general_settings)
+
+
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_parses_string_metadata():
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
