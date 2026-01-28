@@ -685,6 +685,58 @@ def run_server(  # noqa: PLR0915
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
+            cors_allow_origins = general_settings.get("cors_allow_origins", None)
+            cors_allow_credentials = general_settings.get(
+                "cors_allow_credentials", None
+            )
+            cors_allow_methods = general_settings.get("cors_allow_methods", None)
+            cors_allow_headers = general_settings.get("cors_allow_headers", None)
+
+            def _normalize_cors_value(value: Any, setting_name: str) -> Optional[str]:
+                """
+                Normalize a CORS config value to a comma-separated string.
+
+                Accepts either a string or a list of strings. Returns None if the
+                incoming value is None. Raises ValueError for any other type or for
+                lists containing non-string elements.
+                """
+                if value is None:
+                    return None
+                if isinstance(value, str):
+                    return value
+                if isinstance(value, list):
+                    if not all(isinstance(item, str) for item in value):
+                        raise ValueError(
+                            f"Invalid CORS setting for '{setting_name}': expected a list of strings."
+                        )
+                    return ",".join(value)
+                raise ValueError(
+                    f"Invalid CORS setting for '{setting_name}': expected a string or list of strings, "
+                    f"got {type(value).__name__}."
+                )
+
+            normalized_origins = _normalize_cors_value(
+                cors_allow_origins, "cors_allow_origins"
+            )
+            if normalized_origins is not None:
+                os.environ["LITELLM_CORS_ALLOW_ORIGINS"] = normalized_origins
+
+            if cors_allow_credentials is not None:
+                os.environ["LITELLM_CORS_ALLOW_CREDENTIALS"] = str(
+                    cors_allow_credentials
+                )
+
+            normalized_methods = _normalize_cors_value(
+                cors_allow_methods, "cors_allow_methods"
+            )
+            if normalized_methods is not None:
+                os.environ["LITELLM_CORS_ALLOW_METHODS"] = normalized_methods
+
+            normalized_headers = _normalize_cors_value(
+                cors_allow_headers, "cors_allow_headers"
+            )
+            if normalized_headers is not None:
+                os.environ["LITELLM_CORS_ALLOW_HEADERS"] = normalized_headers
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings = general_settings.get(
                 "key_management_settings", None
