@@ -73,6 +73,9 @@ model_list:
 Use this to add all openai models with one API Key. **WARNING: This will not do any load balancing**
 This means requests to `gpt-4`, `gpt-3.5-turbo` , `gpt-4-turbo-preview` will all go through this route 
 
+<Tabs>
+<TabItem value="config-all-yaml" label="config.yaml">
+
 ```yaml
 model_list:
   - model_name: "*"             # all requests where model not in your config go to this deployment
@@ -80,6 +83,26 @@ model_list:
       model: openai/*           # set `openai/` to use the openai route
       api_key: os.environ/OPENAI_API_KEY
 ```
+
+</TabItem>
+<TabItem value="config-all-api" label="API">
+
+```bash
+curl -X POST "http://0.0.0.0:4000/model/new" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <your-master-key>" \
+  -d '{
+    "model_name": "*",
+    "litellm_params": {
+      "model": "openai/*",
+      "api_key": "os.environ/OPENAI_API_KEY"
+    }
+  }'
+```
+
+</TabItem>
+</Tabs>
+
 </TabItem>
 <TabItem value="cli" label="CLI">
 
