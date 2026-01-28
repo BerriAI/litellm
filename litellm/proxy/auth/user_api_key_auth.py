@@ -664,13 +664,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         use_key_user_id_as_end_user = (
             general_settings.get("use_key_user_id_as_end_user", False) is True
         )
-        verbose_proxy_logger.debug(
-            "[auth] end-user inputs resolved route=%s use_key_user_id_as_end_user=%s request_end_user_id=%s request_has_user_field=%s",
-            route,
-            use_key_user_id_as_end_user,
-            request_end_user_id,
-            "user" in request_data,
-        )
 
         ### CHECK IF ADMIN ###
         # note: never string compare api keys, this is vulenerable to a time attack. Use secrets.compare_digest instead
@@ -849,12 +842,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             abbreviated_api_key = abbreviate_api_key(api_key=api_key)
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
-            verbose_proxy_logger.debug(
-                "[auth] looking up virtual key route=%s received_key=%s hashed_key=%s",
-                route,
-                abbreviated_api_key,
-                api_key,
-            )
 
             try:
                 valid_token = await get_key_object(
@@ -879,14 +866,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
         user_obj: Optional[LiteLLM_UserTable] = None
         valid_token_dict: dict = {}
         if valid_token is not None:
-            verbose_proxy_logger.debug(
-                "[auth] key object loaded route=%s token_has_user_id=%s token_user_id=%s token_end_user_id=%s token_team_id=%s",
-                route,
-                bool(getattr(valid_token, "user_id", None)),
-                getattr(valid_token, "user_id", None),
-                getattr(valid_token, "end_user_id", None),
-                getattr(valid_token, "team_id", None),
-            )
             # Got Valid Token from Cache, DB
             # Run checks for
             # 1. If token can call model
@@ -1137,18 +1116,8 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 # Ensure downstream hooks / spend logging that read `kwargs.get("user")`
                 # see the derived end-user id (and prevent client spoofing).
                 request_data["user"] = end_user_id
-                verbose_proxy_logger.debug(
-                    "[auth] derived end_user_id from key.user_id route=%s end_user_id=%s (request user overwritten)",
-                    route,
-                    end_user_id,
-                )
             else:
                 end_user_id = request_end_user_id
-                verbose_proxy_logger.debug(
-                    "[auth] using request-provided end_user_id route=%s end_user_id=%s",
-                    route,
-                    end_user_id,
-                )
 
             if end_user_id:
                 try:
@@ -1192,22 +1161,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 except Exception as e:
                     if isinstance(e, litellm.BudgetExceededError):
                         raise e
-                    verbose_proxy_logger.debug(
-                        "Unable to find user in db. Error - {}".format(str(e))
-                    )
 
             # Attach resolved end-user information to the key auth object
             valid_token.end_user_id = end_user_params.get("end_user_id")
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
             valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
-            verbose_proxy_logger.debug(
-                "[auth] attached end-user to auth object route=%s auth_end_user_id=%s auth_user_id=%s request_user=%s",
-                route,
-                valid_token.end_user_id,
-                valid_token.user_id,
-                request_data.get("user"),
-            )
 
             _ = await common_checks(
                 request=request,
@@ -1261,9 +1220,6 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 route=route,
                 start_time=start_time,
             )
-        # This should never happen (valid_token_dict is always initialized as a dict),
-        # but keep an explicit raise to satisfy static type checkers.
-        raise RuntimeError("Unexpected authentication state: missing valid_token_dict")
     except Exception as e:
         return await UserAPIKeyAuthExceptionHandler._handle_authentication_error(
             e=e,
@@ -1321,22 +1277,9 @@ async def user_api_key_auth(
         request_data, _safe_get_request_headers(request)
     )
     if end_user_id is not None:
-        verbose_proxy_logger.debug(
-            "[auth] post-auth end_user_id overwrite check route=%s existing_auth_end_user_id=%s request_end_user_id=%s",
-            route,
-            getattr(user_api_key_auth_obj, "end_user_id", None),
-            end_user_id,
-        )
         user_api_key_auth_obj.end_user_id = end_user_id
 
     user_api_key_auth_obj.request_route = normalize_request_route(route)
-    verbose_proxy_logger.debug(
-        "[auth] returning auth object route=%s user_id=%s end_user_id=%s team_id=%s",
-        route,
-        getattr(user_api_key_auth_obj, "user_id", None),
-        getattr(user_api_key_auth_obj, "end_user_id", None),
-        getattr(user_api_key_auth_obj, "team_id", None),
-    )
 
     return user_api_key_auth_obj
 

@@ -904,15 +904,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
             if user_api_key_dict.end_user_id is None:
                 user_api_key_dict.end_user_id = derived_end_user_id
 
-    # Debug: trace end-user attribution path (safe, no prompts logged)
-    verbose_proxy_logger.debug(
-        "[pre_call] end-user attribution route=%s auth_user_id=%s auth_end_user_id=%s request_user=%s",
-        request.url.path if request and request.url else None,
-        getattr(user_api_key_dict, "user_id", None),
-        getattr(user_api_key_dict, "end_user_id", None),
-        data.get("user"),
-    )
-
     data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
@@ -975,17 +966,6 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name=_metadata_variable_name,
     )
-    try:
-        _md = data.get(_metadata_variable_name, {}) if isinstance(data, dict) else {}
-        verbose_proxy_logger.debug(
-            "[pre_call] metadata end-user fields route=%s user_api_key_end_user_id=%s user_api_key_user_id=%s",
-            request.url.path if request and request.url else None,
-            _md.get("user_api_key_end_user_id"),
-            _md.get("user_api_key_user_id"),
-        )
-    except Exception:
-        # Logging must never break requests
-        pass
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
