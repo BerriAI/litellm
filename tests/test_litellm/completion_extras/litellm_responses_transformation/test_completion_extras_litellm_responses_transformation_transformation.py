@@ -506,6 +506,222 @@ and I learn to carry this small calm home."""
     print("✓ transform_response correctly handled reasoning items and output messages")
 
 
+def test_transform_response_preserves_reasoning_encrypted_content_in_provider_specific_fields():
+    """If Responses API returns reasoning.encrypted_content, preserve it for multi-turn chat."""
+    from unittest.mock import Mock
+
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem, Summary
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+    from litellm.types.llms.openai import (
+        InputTokensDetails,
+        OutputTokensDetails,
+        ResponseAPIUsage,
+        ResponsesAPIResponse,
+    )
+    from litellm.types.utils import ModelResponse, Usage
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    reasoning_item = ResponseReasoningItem(
+        id="rs_123",
+        summary=[Summary(text="ok", type="summary_text")],
+        type="reasoning",
+        encrypted_content="encrypted-blob-abc123",
+        content=None,
+        status=None,
+    )
+
+    output_message = ResponseOutputMessage(
+        id="msg_123",
+        content=[ResponseOutputText(annotations=[], text="Hello", type="output_text", logprobs=[])],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    raw_response = ResponsesAPIResponse(
+        id="resp_test",
+        created_at=1234567890,
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        metadata={},
+        model="gpt-5.1",
+        object="response",
+        output=[reasoning_item, output_message],
+        parallel_tool_calls=True,
+        temperature=1.0,
+        tool_choice="auto",
+        tools=[],
+        top_p=1.0,
+        max_output_tokens=None,
+        previous_response_id=None,
+        reasoning={"effort": "low", "summary": "detailed"},
+        status="completed",
+        text={"format": {"type": "text"}, "verbosity": "medium"},
+        truncation="disabled",
+        usage=ResponseAPIUsage(
+            input_tokens=1,
+            input_tokens_details=InputTokensDetails(cached_tokens=0),
+            output_tokens=1,
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=0),
+            total_tokens=2,
+        ),
+        user=None,
+        store=True,
+        background=False,
+    )
+
+    model_response = ModelResponse(
+        id="chatcmpl-test",
+        created=1234567890,
+        model=None,
+        object="chat.completion",
+        choices=[],
+        usage=Usage(completion_tokens=0, prompt_tokens=0, total_tokens=0),
+    )
+
+    result = handler.transform_response(
+        model="gpt-5.1",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=Mock(),
+        request_data={"model": "gpt-5.1"},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"reasoning_effort": "low"},
+        litellm_params={"custom_llm_provider": "openai"},
+        encoding=Mock(),
+    )
+
+    provider_fields = result.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert provider_fields["reasoning"]["encrypted_content"] == "encrypted-blob-abc123"
+    thinking_blocks = getattr(result.choices[0].message, "thinking_blocks", None)
+    assert thinking_blocks is not None
+    assert thinking_blocks[0]["encrypted_content"] == "encrypted-blob-abc123"
+
+
+def test_convert_chat_completion_messages_to_responses_api_includes_reasoning_item_from_provider_specific_fields():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "hello",
+            "provider_specific_fields": {
+                "reasoning": {
+                    "type": "reasoning",
+                    "id": "rs_123",
+                    "summary": [{"text": "ok", "type": "summary_text"}],
+                    "encrypted_content": "encrypted-blob-abc123",
+                }
+            },
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, custom_llm_provider="openai"
+    )
+
+    assert input_items[0]["type"] == "reasoning"
+    assert input_items[0]["encrypted_content"] == "encrypted-blob-abc123"
+    assert input_items[1]["type"] == "message"
+    assert input_items[1]["role"] == "assistant"
+
+
+def test_convert_chat_completion_messages_to_responses_api_includes_reasoning_item_from_thinking_blocks():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    messages = [
+        {
+            "role": "assistant",
+            "content": "hello",
+            "thinking_blocks": [
+                {
+                    "type": "thinking",
+                    "encrypted_content": "encrypted-blob-abc123",
+                }
+            ],
+        },
+        {"role": "user", "content": "continue"},
+    ]
+
+    input_items, _ = handler.convert_chat_completion_messages_to_responses_api(
+        messages, custom_llm_provider="openai"
+    )
+
+    assert input_items[0]["type"] == "reasoning"
+    assert input_items[0]["encrypted_content"] == "encrypted-blob-abc123"
+    assert input_items[1]["type"] == "message"
+    assert input_items[1]["role"] == "assistant"
+
+
+def test_transform_request_adds_reasoning_encrypted_content_include_for_openai():
+    from unittest.mock import Mock
+
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    request = handler.transform_request(
+        model="gpt-5.1",
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={"reasoning_effort": "low"},
+        litellm_params={"custom_llm_provider": "openai"},
+        headers={},
+        litellm_logging_obj=Mock(),
+    )
+
+    assert "reasoning.encrypted_content" in (request.get("include") or [])
+
+
+def test_streaming_response_completed_emits_reasoning_provider_specific_fields():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.completed",
+        "response": {
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_123",
+                    "summary": [{"text": "ok", "type": "summary_text"}],
+                    "encrypted_content": "encrypted-blob-abc123",
+                }
+            ]
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+    provider_fields = getattr(result.choices[0].delta, "provider_specific_fields", None)
+    assert provider_fields is not None
+    assert provider_fields["reasoning"]["encrypted_content"] == "encrypted-blob-abc123"
+    thinking_blocks = getattr(result.choices[0].delta, "thinking_blocks", None)
+    assert thinking_blocks is not None
+    assert thinking_blocks[0]["encrypted_content"] == "encrypted-blob-abc123"
+
+
 def test_convert_tools_to_responses_format():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
