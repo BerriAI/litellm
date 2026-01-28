@@ -235,10 +235,8 @@ class ProductionGCSLogger(CustomLogger):
                 },
                 "request": {
                     "messages_count": len(kwargs.get("messages", [])),
-                    "first_message": (
-                        kwargs.get("messages", [{}])[0].get("content", "")[:100]
-                        if kwargs.get("messages")
-                        else None
+                    "first_message": json.dumps(
+                        kwargs.get("messages", []), default=str
                     ),
                     "max_tokens": kwargs.get("max_tokens"),
                     "route": metadata.get("user_api_key_request_route"),
