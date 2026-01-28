@@ -72,6 +72,42 @@ class PerplexityChatConfig(OpenAIGPTConfig):
         
         return base_openai_params
 
+    def transform_request(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        optional_params: dict,
+        litellm_params: dict,
+        headers: dict,
+    ) -> dict:
+        """
+        Transform request for Perplexity API.
+        
+        Filters out invalid response_format parameters that Perplexity doesn't support.
+        """
+        # Make a copy of optional_params to avoid modifying the original
+        filtered_params = optional_params.copy()
+        
+        # Filter out response_format if it's {"type": "text"} since Perplexity doesn't support this
+        response_format = filtered_params.get("response_format")
+        if (
+            response_format
+            and isinstance(response_format, dict)
+            and response_format.get("type") == "text"
+        ):
+            # Remove the response_format parameter as {"type": "text"} is not valid for Perplexity
+            filtered_params.pop("response_format")
+            verbose_logger.debug(f"Removed response_format with type 'text' for Perplexity model {model}")
+        
+        # Call parent transform_request with filtered parameters
+        return super().transform_request(
+            model=model,
+            messages=messages,
+            optional_params=filtered_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
     def transform_response(
         self,
         model: str,
