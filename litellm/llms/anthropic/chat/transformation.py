@@ -1369,7 +1369,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             else 0
         )
         completion_token_details = CompletionTokensDetailsWrapper(
-            reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else None,
+            reasoning_tokens=reasoning_tokens if reasoning_tokens > 0 else 0,
             text_tokens=completion_tokens - reasoning_tokens if reasoning_tokens > 0 else completion_tokens,
         )
         total_tokens = prompt_tokens + completion_tokens
