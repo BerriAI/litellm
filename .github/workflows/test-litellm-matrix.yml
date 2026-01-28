@@ -36,6 +36,13 @@ jobs:
           - name: "root"
             path: "tests/test_litellm/test_*.py"
             workers: 2
+          # tests/proxy_unit_tests split alphabetically (~48 files total)
+          - name: "proxy-unit-a"
+            path: "tests/proxy_unit_tests/test_[a-o]*.py"
+            workers: 2
+          - name: "proxy-unit-b"
+            path: "tests/proxy_unit_tests/test_[p-z]*.py"
+            workers: 2
 
     name: test (${{ matrix.test-group.name }})
 
@@ -107,3 +114,5 @@ jobs:
           echo "| core-utils | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| other | ✅ |" >> $GITHUB_STEP_SUMMARY
           echo "| root | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| proxy-unit-a | ✅ |" >> $GITHUB_STEP_SUMMARY
+          echo "| proxy-unit-b | ✅ |" >> $GITHUB_STEP_SUMMARY

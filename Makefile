@@ -1,7 +1,7 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-unit-llms test-unit-proxy test-unit-integrations test-unit-core-utils test-unit-other test-unit-root test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety
+.PHONY: help test test-unit test-unit-llms test-unit-proxy test-unit-integrations test-unit-core-utils test-unit-other test-unit-root test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety
 
 # Default target
 help:
@@ -28,6 +28,8 @@ help:
 	@echo "  make test-unit-core-utils - Run core utils tests (~33 files)"
 	@echo "  make test-unit-other    - Run other tests (caching, responses, etc.)"
 	@echo "  make test-unit-root     - Run root-level tests (~33 files)"
+	@echo "  make test-proxy-unit-a  - Run proxy_unit_tests (a-o, ~20 files)"
+	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 
@@ -108,6 +110,13 @@ test-unit-other: install-test-deps
 
 test-unit-root: install-test-deps
 	poetry run pytest tests/test_litellm/test_*.py --tb=short -vv -n 2 --durations=20
+
+# Proxy unit tests (tests/proxy_unit_tests split alphabetically)
+test-proxy-unit-a: install-test-deps
+	poetry run pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
+
+test-proxy-unit-b: install-test-deps
+	poetry run pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
 
 test-integration:
 	poetry run pytest tests/ -k "not test_litellm"
