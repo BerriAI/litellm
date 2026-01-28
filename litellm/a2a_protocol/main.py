@@ -9,7 +9,7 @@ import datetime
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
 import litellm
-from litellm._logging import verbose_logger
+from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.a2a_protocol.streaming_iterator import A2AStreamingIterator
 from litellm.a2a_protocol.utils import A2ARequestUtils
 from litellm.constants import DEFAULT_A2A_AGENT_TIMEOUT
@@ -20,6 +20,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.utils import client
+import uuid
 
 if TYPE_CHECKING:
     from a2a.client import A2AClient as A2AClientType
@@ -225,7 +226,11 @@ async def asend_message(
             raise ValueError(
                 "Either a2a_client or api_base is required for standard A2A flow"
             )
-        a2a_client = await create_a2a_client(base_url=api_base)
+        trace_id = str(uuid.uuid4())
+        extra_headers = {"X-LiteLLM-Trace-Id": trace_id}
+        if agent_id:
+            extra_headers["X-LiteLLM-Agent-Id"] = agent_id
+        a2a_client = await create_a2a_client(base_url=api_base, extra_headers=extra_headers)
 
     # Type assertion: a2a_client is guaranteed to be non-None here
     assert a2a_client is not None
@@ -489,6 +494,10 @@ async def create_a2a_client(
         params={"timeout": timeout},
     )
     httpx_client = http_handler.client
+
+    if extra_headers:
+        httpx_client.headers.update(extra_headers)
+        verbose_proxy_logger.debug(f"A2A client created with extra_headers={extra_headers}")
 
     # Resolve agent card
     resolver = A2ACardResolver(

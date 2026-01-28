@@ -221,8 +221,9 @@ async def route_request(
             "aretrieve_container_file_content",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
-        # Interactions API: get/delete/cancel don't need model routing
+        # Interactions API: create with agent, get/delete/cancel don't need model routing
         if route_type in [
+            "acreate_interaction",
             "aget_interaction",
             "adelete_interaction",
             "acancel_interaction",

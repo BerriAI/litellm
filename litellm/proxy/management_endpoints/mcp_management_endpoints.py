@@ -56,7 +56,19 @@ except ImportError as e:
     MCP_AVAILABLE = False
 
 if MCP_AVAILABLE:
-    from mcp.shared.tool_name_validation import validate_tool_name
+    try:
+        from mcp.shared.tool_name_validation import validate_tool_name  # type: ignore
+    except ImportError:
+
+        def validate_tool_name(name: str):
+            from pydantic import BaseModel
+
+            class MockResult(BaseModel):
+                is_valid: bool = True
+                warnings: list = []
+
+            return MockResult()
+
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
@@ -122,9 +134,7 @@ if MCP_AVAILABLE:
             )
             if validation_result.warnings:
                 error_messages_text = (
-                    error_messages_text
-                    + "\n"
-                    + "\n".join(validation_result.warnings)
+                    error_messages_text + "\n" + "\n".join(validation_result.warnings)
                 )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

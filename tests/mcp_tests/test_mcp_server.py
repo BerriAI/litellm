@@ -1105,14 +1105,24 @@ async def test_mcp_server_manager_config_integration_with_database():
 
     test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
 
-    # Mock _create_mcp_client to return a client that completes immediately
-    # This avoids network calls while preserving the actual conversion logic
-    def mock_create_mcp_client(*args, **kwargs):
-        mock_client = MagicMock()
-        mock_client.run_with_session = AsyncMock(return_value="ok")
-        return mock_client
-    
-    test_manager._create_mcp_client = mock_create_mcp_client
+    # Mock health_check_server to avoid real network calls that timeout
+    async def mock_health_check(server_id: str, mcp_auth_header=None):
+        server = test_manager.get_mcp_server_by_id(server_id)
+        if not server:
+            return None
+        return LiteLLM_MCPServerTable(
+            server_id=server_id,
+            server_name=server.name,
+            url=server.url,
+            transport=server.transport,
+            description=server.mcp_info.get("description") if server.mcp_info else None,
+            mcp_access_groups=server.access_groups,
+            status="healthy",
+            last_health_check=datetime.datetime.now(),
+            mcp_info=server.mcp_info,
+        )
+
+    test_manager.health_check_server = mock_health_check
 
     # Test the method (this tests our second fix)
     servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(

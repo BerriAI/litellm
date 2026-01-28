@@ -21,11 +21,13 @@ from litellm.types.utils import (
     ChatCompletionMessageToolCall,
     ChatCompletionRedactedThinkingBlock,
     Choices,
+    CompletionTokensDetailsWrapper,
     Delta,
     EmbeddingResponse,
     Function,
     HiddenParams,
     ImageResponse,
+    PromptTokensDetailsWrapper,
 )
 from litellm.types.utils import Logprobs as TextCompletionLogprobs
 from litellm.types.utils import (
@@ -303,6 +305,22 @@ class LiteLLMResponseObjectHandler:
                     "image_tokens": 0,
                     "text_tokens": 0,
                 }
+
+            # Map Responses API naming to Chat Completions API naming for cost calculator
+            if usage.get("prompt_tokens") is None:
+                usage["prompt_tokens"] = usage.get("input_tokens", 0)
+            if usage.get("completion_tokens") is None:
+                usage["completion_tokens"] = usage.get("output_tokens", 0)
+
+            # Convert dicts to wrapper objects so getattr() works in cost calculation
+            if isinstance(usage.get("input_tokens_details"), dict):
+                usage["prompt_tokens_details"] = PromptTokensDetailsWrapper(
+                    **usage["input_tokens_details"]
+                )
+            if isinstance(usage.get("output_tokens_details"), dict):
+                usage["completion_tokens_details"] = CompletionTokensDetailsWrapper(
+                    **usage["output_tokens_details"]
+                )
 
         if model_response_object is None:
             model_response_object = ImageResponse(**response_object)

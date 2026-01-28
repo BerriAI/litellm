@@ -197,9 +197,9 @@ async def authenticate_user(  # noqa: PLR0915
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username, ui_username) and secrets.compare_digest(
-        password, ui_password
-    ):
+    if secrets.compare_digest(
+        username.encode("utf-8"), ui_username.encode("utf-8")
+    ) and secrets.compare_digest(password.encode("utf-8"), ui_password.encode("utf-8")):
         # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
         user_role = LitellmUserRoles.PROXY_ADMIN
         user_id = LITELLM_PROXY_ADMIN_NAME
@@ -313,9 +313,9 @@ async def authenticate_user(  # noqa: PLR0915
 
         # check if password == _user_row.password
         hash_password = hash_token(token=password)
-        if secrets.compare_digest(password, _password) or secrets.compare_digest(
-            hash_password, _password
-        ):
+        if secrets.compare_digest(
+            password.encode("utf-8"), _password.encode("utf-8")
+        ) or secrets.compare_digest(hash_password.encode("utf-8"), _password.encode("utf-8")):
             if os.getenv("DATABASE_URL") is not None:
                 # Expire any previous UI session tokens for this user
                 await expire_previous_ui_session_tokens(

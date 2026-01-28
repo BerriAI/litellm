@@ -31,6 +31,7 @@ from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.bedrock_ingestion import BedrockRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
 from litellm.rag.ingestion.openai_ingestion import OpenAIRAGIngestion
+from litellm.rag.ingestion.s3_vectors_ingestion import S3VectorsRAGIngestion
 from litellm.rag.rag_query import RAGQuery
 from litellm.types.rag import (
     RAGIngestOptions,
@@ -48,6 +49,7 @@ INGESTION_REGISTRY: Dict[str, Type[BaseRAGIngestion]] = {
     "openai": OpenAIRAGIngestion,
     "bedrock": BedrockRAGIngestion,
     "gemini": GeminiRAGIngestion,
+    "s3_vectors": S3VectorsRAGIngestion,
 }
 
 
@@ -198,6 +200,10 @@ async def _execute_query_pipeline(
     """
     Execute the RAG query pipeline.
     """
+    # Extract router from kwargs - use it for completion if available
+    # to properly resolve virtual model names
+    router: Optional["Router"] = kwargs.pop("router", None)
+
     # 1. Extract query from last user message
     query_text = RAGQuery.extract_query_from_messages(messages)
     if not query_text:
@@ -233,12 +239,21 @@ async def _execute_query_pipeline(
     context_message = RAGQuery.build_context_message(context_chunks)
     modified_messages = messages[:-1] + [context_message] + [messages[-1]]
 
-    response = await litellm.acompletion(
-        model=model,
-        messages=modified_messages,
-        stream=stream,
-        **kwargs,
-    )
+    # Use router if available to properly resolve virtual model names
+    if router is not None:
+        response = await router.acompletion(
+            model=model,
+            messages=modified_messages,
+            stream=stream,
+            **kwargs,
+        )
+    else:
+        response = await litellm.acompletion(
+            model=model,
+            messages=modified_messages,
+            stream=stream,
+            **kwargs,
+        )
 
     # 5. Attach search results to response
     if not stream and isinstance(response, ModelResponse):
