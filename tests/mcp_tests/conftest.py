@@ -6,11 +6,10 @@ import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../.."))  # Adds the parent directory to the system path
 import litellm
 import asyncio
+
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -28,9 +27,7 @@ def setup_and_teardown():
     This fixture reloads litellm before every function. To speed up testing by removing callbacks being chained.
     """
     curr_dir = os.getcwd()  # Get the current working directory
-    sys.path.insert(
-        0, os.path.abspath("../..")
-    )  # Adds the project directory to the system path
+    sys.path.insert(0, os.path.abspath("../.."))  # Adds the project directory to the system path
 
     import litellm
     from litellm import Router
@@ -50,10 +47,16 @@ def setup_and_teardown():
 
 
 def pytest_collection_modifyitems(config, items):
+    # Skip Anthropic-dependent tests when ANTHROPIC_API_KEY is not available.
+    # Fork repos often don't have access to upstream secrets.
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        skip_anthropic = pytest.mark.skip(reason="ANTHROPIC_API_KEY not set")
+        for item in items:
+            if item.name.startswith("test_streaming_responses_api_with_mcp_tools") and "[anthropic]" in item.name:
+                item.add_marker(skip_anthropic)
+
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
-    custom_logger_tests = [
-        item for item in items if "custom_logger" in item.parent.name
-    ]
+    custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
 
     # Sort tests based on their names
