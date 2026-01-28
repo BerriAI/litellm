@@ -244,14 +244,24 @@ class _PROXY_BatchRateLimiter(CustomLogger):
     ) -> BatchFileUsage:
         """
         Count number of requests and tokens in a batch input file.
-        
+
         Args:
             file_id: The file ID to read
             custom_llm_provider: The custom LLM provider to use for token encoding
-            
+
         Returns:
             BatchFileUsage with total_tokens and request_count
         """
+        skip_providers = litellm.skip_batch_token_counting_providers or []
+        if custom_llm_provider in skip_providers:
+            verbose_proxy_logger.debug(
+                f"Skipping batch token counting for provider: {custom_llm_provider}"
+            )
+            return BatchFileUsage(
+                total_tokens=0,
+                request_count=0,
+            )
+
         try:
             # Read file content
             file_content = await litellm.afile_content(
