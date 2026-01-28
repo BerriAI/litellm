@@ -39,6 +39,7 @@ interface SidebarProps {
   setPage: (page: string) => void;
   defaultSelectedKey: string;
   collapsed?: boolean;
+  enabledPagesInternalUsers?: string[] | null;
 }
 
 // Menu item configuration
@@ -59,28 +60,8 @@ interface MenuGroup {
   roles?: string[];
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false }) => {
-  const { userId, accessToken, userRole } = useAuthorized();
-  const { data: organizations } = useOrganizations();
-
-  // Check if user is an org_admin
-  const isOrgAdmin = useMemo(() => {
-    if (!userId || !organizations) return false;
-    return organizations.some((org: Organization) =>
-      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
-    );
-  }, [userId, organizations]);
-
-  // Navigate to page helper
-  const navigateToPage = (page: string) => {
-    const newSearchParams = new URLSearchParams(window.location.search);
-    newSearchParams.set("page", page);
-    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
-    setPage(page);
-  };
-
-  // Menu groups organized by category
-  const menuGroups: MenuGroup[] = [
+// Menu groups organized by category - defined outside component for export
+const menuGroups: MenuGroup[] = [
     {
       groupLabel: "AI GATEWAY",
       items: [
@@ -337,15 +318,53 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
     },
   ];
 
-  // Filter items based on user role
+const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapsed = false, enabledPagesInternalUsers }) => {
+  const { userId, accessToken, userRole } = useAuthorized();
+  const { data: organizations } = useOrganizations();
+
+  // Check if user is an org_admin
+  const isOrgAdmin = useMemo(() => {
+    if (!userId || !organizations) return false;
+    return organizations.some((org: Organization) =>
+      org.members?.some((member) => member.user_id === userId && member.user_role === "org_admin"),
+    );
+  }, [userId, organizations]);
+
+  // Navigate to page helper
+  const navigateToPage = (page: string) => {
+    const newSearchParams = new URLSearchParams(window.location.search);
+    newSearchParams.set("page", page);
+    window.history.pushState(null, "", `?${newSearchParams.toString()}`);
+    setPage(page);
+  };
+
+  // Filter items based on user role and enabled pages for internal users
   const filterItemsByRole = (items: MenuItem[]): MenuItem[] => {
+    const isAdmin = isAdminRole(userRole);
+
     return items
       .filter((item) => {
         // Special handling for organizations menu item - allow org_admins
         if (item.key === "organizations") {
-          return !item.roles || item.roles.includes(userRole) || isOrgAdmin;
+          const hasRoleAccess = !item.roles || item.roles.includes(userRole) || isOrgAdmin;
+          if (!hasRoleAccess) return false;
+
+          // Check enabled pages for internal users (non-admins)
+          if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
+            return enabledPagesInternalUsers.includes(item.page);
+          }
+          return true;
         }
-        return !item.roles || item.roles.includes(userRole);
+
+        // Existing role check
+        if (item.roles && !item.roles.includes(userRole)) return false;
+
+        // Check enabled pages for internal users (non-admins)
+        if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
+          return enabledPagesInternalUsers.includes(item.page);
+        }
+
+        return true;
       })
       .map((item) => ({
         ...item,
@@ -485,3 +504,6 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 };
 
 export default Sidebar;
+
+// Also export menuGroups for advanced use cases
+export { menuGroups };
