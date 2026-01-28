@@ -1610,24 +1610,34 @@ async def _base_vertex_proxy_route(
         vertex_location=vertex_location,
     )
 
-    if vertex_project is None or vertex_location is None:
-        # Check if model is in router config
-        model_id = get_vertex_model_id_from_url(endpoint)
-        if model_id:
-            from litellm.proxy.proxy_server import llm_router
+    # Check if model is in router config - always do this to resolve custom model names
+    model_id = get_vertex_model_id_from_url(endpoint)
+    if model_id:
+        from litellm.proxy.proxy_server import llm_router
 
-            if llm_router:
-                try:
-                    # Use the dedicated pass-through deployment selection method to automatically filter use_in_pass_through=True
-                    deployment = llm_router.get_available_deployment_for_pass_through(model=model_id)
-                    if deployment:
-                        litellm_params = deployment.get("litellm_params", {})
+        if llm_router:
+            try:
+                # Use the dedicated pass-through deployment selection method to automatically filter use_in_pass_through=True
+                deployment = llm_router.get_available_deployment_for_pass_through(model=model_id)
+                if deployment:
+                    litellm_params = deployment.get("litellm_params", {})
+                    if vertex_project is None:
                         vertex_project = litellm_params.get("vertex_project")
+                    if vertex_location is None:
                         vertex_location = litellm_params.get("vertex_location")
-                except Exception as e:
-                    verbose_proxy_logger.debug(
-                        f"Error getting available deployment for model {model_id}: {e}"
-                    )
+
+                    # Replace custom model name with actual Vertex AI model name in the endpoint
+                    # e.g., "gcp/google/gemini-3-pro" -> "gemini-3-pro"
+                    actual_model = litellm_params.get("model", "")
+                    if "/" in actual_model:
+                        actual_model = actual_model.split("/", 1)[1]
+                    if actual_model and model_id != actual_model:
+                        encoded_endpoint = encoded_endpoint.replace(model_id, actual_model)
+                        endpoint = endpoint.replace(model_id, actual_model)
+            except Exception as e:
+                verbose_proxy_logger.debug(
+                    f"Error getting available deployment for model {model_id}: {e}"
+                )
 
     vertex_credentials = passthrough_endpoint_router.get_vertex_credentials(
         project_id=vertex_project,
