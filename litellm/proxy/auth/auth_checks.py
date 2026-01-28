@@ -1016,8 +1016,10 @@ async def _get_fuzzy_user_object(
         )
 
     if response is None and user_email is not None:
+        # Use case-insensitive query to handle emails with different casing
+        # This matches the pattern used in _check_duplicate_user_email
         response = await prisma_client.db.litellm_usertable.find_first(
-            where={"user_email": user_email},
+            where={"user_email": {"equals": user_email, "mode": "insensitive"}},
             include={"organization_memberships": True},
         )
 

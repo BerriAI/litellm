@@ -36,7 +36,7 @@ class EnterpriseRouteChecks:
             if not premium_user:
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"🚨🚨🚨 DISABLING LLM API ENDPOINTS is an Enterprise feature\n🚨 {CommonProxyErrors.not_premium_user.value}",
+                    detail=f"🚨🚨🚨 DISABLING ADMIN ENDPOINTS is an Enterprise feature\n🚨 {CommonProxyErrors.not_premium_user.value}",
                 )
 
         return get_secret_bool("DISABLE_ADMIN_ENDPOINTS") is True

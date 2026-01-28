@@ -21,6 +21,7 @@ from litellm.integrations.custom_batch_logger import CustomBatchLogger
 from litellm.integrations.datadog.datadog_handler import (
     get_datadog_service,
     get_datadog_tags,
+    get_datadog_base_url_from_env,
 )
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -43,24 +44,22 @@ class DataDogLLMObsLogger(CustomBatchLogger):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
-            if os.getenv("DD_API_KEY", None) is None:
-                raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
-            if os.getenv("DD_SITE", None) is None:
-                raise Exception(
-                    "DD_SITE is not set, set 'DD_SITE=<>', example sit = `us5.datadoghq.com`"
-                )
+            # Configure DataDog endpoint (Agent or Direct API)
+            # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
+            dd_agent_host = os.getenv("LITELLM_DD_AGENT_HOST")
 
             self.async_client = get_async_httpx_client(
                 llm_provider=httpxSpecialProvider.LoggingCallback
             )
             self.DD_API_KEY = os.getenv("DD_API_KEY")
-            self.DD_SITE = os.getenv("DD_SITE")
-            self.intake_url = (
-                f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
-            )
 
-            # testing base url
-            dd_base_url = os.getenv("DD_BASE_URL")
+            if dd_agent_host:
+                self._configure_dd_agent(dd_agent_host=dd_agent_host)
+            else:
+                self._configure_dd_direct_api()
+
+            # Optional override for testing
+            dd_base_url = get_datadog_base_url_from_env()
             if dd_base_url:
                 self.intake_url = f"{dd_base_url}/api/intake/llm-obs/v1/trace/spans"
 
@@ -77,6 +76,38 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         except Exception as e:
             verbose_logger.exception(f"DataDogLLMObs: Error initializing - {str(e)}")
             raise e
+
+    def _configure_dd_agent(self, dd_agent_host: str):
+        """
+        Configure the Datadog logger to send traces to the Agent.
+        """
+        # When using the Agent, LLM Observability Intake does NOT require the API Key
+        # Reference: https://docs.datadoghq.com/llm_observability/setup/sdk/#agent-setup
+
+        # Use specific port for LLM Obs (Trace Agent) to avoid conflict with Logs Agent (10518)
+        agent_port = os.getenv("LITELLM_DD_LLM_OBS_PORT", "8126")
+        self.DD_SITE = "localhost"  # Not used for URL construction in agent mode
+        self.intake_url = (
+            f"http://{dd_agent_host}:{agent_port}/api/intake/llm-obs/v1/trace/spans"
+        )
+        verbose_logger.debug(f"DataDogLLMObs: Using DD Agent at {self.intake_url}")
+
+    def _configure_dd_direct_api(self):
+        """
+        Configure the Datadog logger to send traces directly to the Datadog API.
+        """
+        if not self.DD_API_KEY:
+            raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
+
+        self.DD_SITE = os.getenv("DD_SITE")
+        if not self.DD_SITE:
+            raise Exception(
+                "DD_SITE is not set, set 'DD_SITE=<>', example site = `us5.datadoghq.com`"
+            )
+
+        self.intake_url = (
+            f"https://api.{self.DD_SITE}/api/intake/llm-obs/v1/trace/spans"
+        )
 
     def _get_datadog_llm_obs_params(self) -> Dict:
         """
@@ -164,13 +195,14 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
             json_payload = safe_dumps(payload)
 
+            headers = {"Content-Type": "application/json"}
+            if self.DD_API_KEY:
+                headers["DD-API-KEY"] = self.DD_API_KEY
+
             response = await self.async_client.post(
                 url=self.intake_url,
                 content=json_payload,
-                headers={
-                    "DD-API-KEY": self.DD_API_KEY,
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
             )
 
             if response.status_code != 202:
