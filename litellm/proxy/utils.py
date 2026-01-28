@@ -2,6 +2,7 @@ import asyncio
 import copy
 import hashlib
 import json
+import math
 import os
 import smtplib
 import threading
@@ -3082,7 +3083,7 @@ class PrismaClient:
             return None
         try:
             value = float(response_time_ms)
-            return value if value == value and value not in (float("inf"), float("-inf")) else None
+            return value if math.isfinite(value) else None
         except (ValueError, TypeError):
             verbose_proxy_logger.warning(f"Invalid response_time_ms value: {response_time_ms}")
             return None
@@ -3360,17 +3361,20 @@ class ProxyUpdateSpend:
             logs_to_process = prisma_client.spend_log_transactions[:MAX_LOGS_PER_INTERVAL]
             # Remove the logs we're about to process
             prisma_client.spend_log_transactions = prisma_client.spend_log_transactions[len(logs_to_process) :]
+
+        # Sanitize once (outside retries) to avoid repeat work.
+        logs_to_process = cast(List[dict], _sanitize_null_bytes(logs_to_process))
+        base_url = os.getenv("SPEND_LOGS_URL", None)
+        if base_url is not None and not base_url.endswith("/"):
+            base_url += "/"
+
         start_time = time.time()
         try:
             for i in range(n_retry_times + 1):
                 try:
-                    sanitized_logs_to_process = cast(List[dict], _sanitize_null_bytes(logs_to_process))
-                    base_url = os.getenv("SPEND_LOGS_URL", None)
-                    if len(sanitized_logs_to_process) > 0 and base_url is not None and db_writer_client is not None:
-                        if not base_url.endswith("/"):
-                            base_url += "/"
+                    if len(logs_to_process) > 0 and base_url is not None and db_writer_client is not None:
                         verbose_proxy_logger.debug("base_url: {}".format(base_url))
-                        json_data = json.dumps(sanitized_logs_to_process)
+                        json_data = json.dumps(logs_to_process)
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -3381,8 +3385,8 @@ class ProxyUpdateSpend:
                             # Items already removed from queue at start of function
                             pass
                     else:
-                        for j in range(0, len(sanitized_logs_to_process), BATCH_SIZE):
-                            batch = sanitized_logs_to_process[j : j + BATCH_SIZE]
+                        for j in range(0, len(logs_to_process), BATCH_SIZE):
+                            batch = logs_to_process[j : j + BATCH_SIZE]
                             batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
                             await prisma_client.db.litellm_spendlogs.create_many(
                                 data=batch_with_dates, skip_duplicates=True
@@ -3395,12 +3399,10 @@ class ProxyUpdateSpend:
                         async with prisma_client._spend_log_transactions_lock:
                             remaining_count = len(prisma_client.spend_log_transactions)
                         verbose_proxy_logger.debug(
-                            f"{len(sanitized_logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
+                            f"{len(logs_to_process)} logs processed. Remaining in queue: {remaining_count}"
                         )
                     break
                 except DB_CONNECTION_ERROR_TYPES:
-                    if i is None:
-                        i = 0
                     if i >= n_retry_times:
                         raise
                     await asyncio.sleep(2**i)
