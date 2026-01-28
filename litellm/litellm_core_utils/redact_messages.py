@@ -9,7 +9,7 @@
 
 import asyncio
 import copy
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Callable, Optional
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -233,3 +233,22 @@ def redact_user_api_key_info(metadata: dict) -> dict:
             new_metadata[k] = v
 
     return new_metadata
+
+
+def redact_sensitive_keys(
+    data: Any,
+    predicate: Callable[[str], bool],
+) -> Any:
+    """
+    Recursively redact keys matching predicate.
+    """
+    if isinstance(data, list):
+        return [redact_sensitive_keys(item, predicate) for item in data]
+    
+    if not isinstance(data, dict):
+        return data
+    
+    return {
+        key: "scrubbed_by_litellm" if isinstance(key, str) and predicate(key) else redact_sensitive_keys(value, predicate)
+        for key, value in data.items()
+    }
