@@ -247,6 +247,108 @@ async def responses_api(
             version=version,
         )
 
+@router.post(
+    "/v1/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses", "compact"],
+)
+@router.post(
+    "/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses", "compact"],
+)
+@router.post(
+    "/openai/v1/responses/compact",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["responses", "compact"],
+)
+async def responses_compact_api(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
+    """
+    Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact
+
+    Runs a compaction pass over a conversation. Compaction returns encrypted, opaque items and the underlying logic may evolve over time.
+
+    ```bash
+    # Normal request
+    curl -X POST https://api.openai.com/v1/responses/compact \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $OPENAI_API_KEY" \
+    -d '{
+      "model": "gpt-5.1-codex-max",
+      "input": [
+        {
+          "role": "user",
+          "content": "Create a simple landing page for a dog petting café."
+        },
+        {
+          "id": "msg_001",
+          "type": "message",
+          "status": "completed",
+          "content": [
+            {
+              "type": "output_text",
+              "annotations": [],
+              "logprobs": [],
+              "text": "Below is a single file, ready-to-use landing page for a dog petting café:..."
+            }
+          ],
+          "role": "assistant"
+        }
+      ]
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        _read_request_body,
+        general_settings,
+        llm_router,
+        proxy_config,
+        proxy_logging_obj,
+        select_data_generator,
+        user_api_base,
+        user_max_tokens,
+        user_model,
+        user_request_timeout,
+        user_temperature,
+        version,
+    )
+
+    data = await _read_request_body(request=request)
+    
+    # Normal response flow
+    processor = ProxyBaseLLMRequestProcessing(data=data)
+    try:
+        return await processor.base_process_llm_request(
+            request=request,
+            fastapi_response=fastapi_response,
+            user_api_key_dict=user_api_key_dict,
+            route_type="aresponses_compact",
+            proxy_logging_obj=proxy_logging_obj,
+            llm_router=llm_router,
+            general_settings=general_settings,
+            proxy_config=proxy_config,
+            select_data_generator=select_data_generator,
+            model=None,
+            user_model=user_model,
+            user_temperature=user_temperature,
+            user_request_timeout=user_request_timeout,
+            user_max_tokens=user_max_tokens,
+            user_api_base=user_api_base,
+            version=version,
+        )
+    except Exception as e:
+        raise await processor._handle_llm_api_exception(
+            e=e,
+            user_api_key_dict=user_api_key_dict,
+            proxy_logging_obj=proxy_logging_obj,
+            version=version,
+        )
+
+
 
 @router.post(
     "/cursor/chat/completions",
