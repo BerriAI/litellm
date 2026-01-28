@@ -21,11 +21,80 @@ from litellm.llms.github_copilot.responses.transformation import (
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
 
 
+class TestGithubCopilotResponsesAPIRouting:
+    """Test GitHub Copilot Responses API routing based on model name (gpt-5 detection)"""
+
+    def test_github_copilot_gpt5_model_returns_config(self):
+        """Test that GPT-5 models return native responses API config."""
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/gpt-5",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is not None, "Config should not be None for gpt-5"
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/gpt-5.1",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is not None, "Config should not be None for gpt-5.1"
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/gpt-5.2",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is not None, "Config should not be None for gpt-5.2"
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    def test_github_copilot_codex_model_returns_config(self):
+        """Test that codex models (which contain 'gpt-5') return native responses API config."""
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/gpt-5.1-codex",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+
+        assert config is not None, "Config should not be None for codex models"
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+    def test_github_copilot_gpt4_model_returns_none(self):
+        """Test that GPT-4 models return None (use chat completion translation)."""
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/gpt-4o",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None, "Should return None for gpt-4o"
+
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/gpt-4.1",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None, "Should return None for gpt-4.1"
+
+    def test_github_copilot_non_gpt_model_returns_none(self):
+        """Test that non-GPT models return None (use chat completion translation)."""
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model="github_copilot/claude-haiku-4.5",
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+        assert config is None, "Should return None for Claude models"
+
+    def test_github_copilot_model_none_returns_config(self):
+        """Test that model=None returns config (for follow-up operations like GET/DELETE)."""
+        config = ProviderConfigManager.get_provider_responses_api_config(
+            model=None,
+            provider=LlmProviders.GITHUB_COPILOT,
+        )
+
+        assert config is not None, "Config should not be None when model=None (needed for follow-up ops)"
+        assert isinstance(config, GithubCopilotResponsesAPIConfig)
+
+
 class TestGithubCopilotResponsesAPITransformation:
     """Test GitHub Copilot Responses API configuration and transformations"""
 
-    def test_github_copilot_provider_config_registration(self):
-        """Test that GitHub Copilot provider returns GithubCopilotResponsesAPIConfig"""
+    def test_github_copilot_provider_config_for_codex_model(self):
+        """Test that GitHub Copilot provider returns GithubCopilotResponsesAPIConfig for codex models"""
         config = ProviderConfigManager.get_provider_responses_api_config(
             model="github_copilot/gpt-5.1-codex",
             provider=LlmProviders.GITHUB_COPILOT,
@@ -33,7 +102,7 @@ class TestGithubCopilotResponsesAPITransformation:
 
         assert (
             config is not None
-        ), "Config should not be None for GitHub Copilot provider"
+        ), "Config should not be None for GitHub Copilot codex models"
         assert isinstance(
             config, GithubCopilotResponsesAPIConfig
         ), f"Expected GithubCopilotResponsesAPIConfig, got {type(config)}"
