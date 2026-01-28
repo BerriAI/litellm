@@ -111,7 +111,7 @@ def _generate_gcp_iam_access_token(service_account: str) -> str:
         Access token string for GCP IAM authentication
     """
     try:
-        from google.cloud import iam_credentials_v1
+        from google.cloud import iam_credentials_v1  # type: ignore[attr-defined]
     except ImportError:
         raise ImportError(
             "google-cloud-iam is required for GCP IAM Redis authentication. "
@@ -559,4 +559,3 @@ def _pretty_print_redis_config(redis_kwargs: dict) -> None:
         verbose_logger.info(f"Redis configuration: {masked_redis_kwargs}")
     except Exception as e:
         verbose_logger.error(f"Error pretty printing Redis configuration: {e}")
-
