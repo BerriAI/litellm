@@ -1,7 +1,7 @@
 # LiteLLM Makefile
 # Simple Makefile for running tests and basic development tasks
 
-.PHONY: help test test-unit test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety
+.PHONY: help test test-unit test-unit-llms test-unit-proxy test-unit-integrations test-unit-core-utils test-unit-other test-unit-root test-integration test-unit-helm lint format install-dev install-proxy-dev install-test-deps install-helm-unittest check-circular-imports check-import-safety
 
 # Default target
 help:
@@ -22,6 +22,12 @@ help:
 	@echo "  make check-import-safety - Check import safety"
 	@echo "  make test               - Run all tests"
 	@echo "  make test-unit          - Run unit tests (tests/test_litellm)"
+	@echo "  make test-unit-llms     - Run LLM provider tests (~223 files)"
+	@echo "  make test-unit-proxy    - Run proxy tests (~180 files)"
+	@echo "  make test-unit-integrations - Run integration tests (~60 files)"
+	@echo "  make test-unit-core-utils - Run core utils tests (~33 files)"
+	@echo "  make test-unit-other    - Run other tests (caching, responses, etc.)"
+	@echo "  make test-unit-root     - Run root-level tests (~33 files)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 
@@ -83,6 +89,25 @@ test:
 
 test-unit: install-test-deps
 	poetry run pytest tests/test_litellm -x -vv -n 4
+
+# Matrix test targets (matching CI workflow groups)
+test-unit-llms: install-test-deps
+	poetry run pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
+
+test-unit-proxy: install-test-deps
+	poetry run pytest tests/test_litellm/proxy --tb=short -vv -n 4 --durations=20
+
+test-unit-integrations: install-test-deps
+	poetry run pytest tests/test_litellm/integrations --tb=short -vv -n 4 --durations=20
+
+test-unit-core-utils: install-test-deps
+	poetry run pytest tests/test_litellm/litellm_core_utils --tb=short -vv -n 2 --durations=20
+
+test-unit-other: install-test-deps
+	poetry run pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores --tb=short -vv -n 2 --durations=20
+
+test-unit-root: install-test-deps
+	poetry run pytest tests/test_litellm/test_*.py --tb=short -vv -n 2 --durations=20
 
 test-integration:
 	poetry run pytest tests/ -k "not test_litellm"
