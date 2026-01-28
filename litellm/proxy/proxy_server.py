@@ -3540,6 +3540,79 @@ class ProxyConfig:
                 llm_router=llm_router,
             )
 
+    async def _reschedule_spend_log_cleanup_job(self):
+        """
+        Reschedule the spend log cleanup job based on current general_settings.
+        This is called when maximum_spend_logs_retention_period is updated dynamically.
+        If the retention period is None, the job will be removed.
+        """
+        global scheduler, general_settings, prisma_client
+        if scheduler is None:
+            return
+
+        # Remove existing job if it exists
+        try:
+            scheduler.remove_job("spend_log_cleanup_job")
+            verbose_proxy_logger.info("Removed existing spend log cleanup job")
+        except Exception:
+            pass  # Job might not exist, which is fine
+
+        # Schedule new job if retention period is set (not None)
+        retention_period = general_settings.get("maximum_spend_logs_retention_period")
+        if retention_period is not None:
+            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+                SpendLogCleanup,
+            )
+
+            spend_log_cleanup = SpendLogCleanup()
+            cleanup_cron = general_settings.get("maximum_spend_logs_cleanup_cron")
+
+            if cleanup_cron:
+                from apscheduler.triggers.cron import CronTrigger
+
+                try:
+                    cron_trigger = CronTrigger.from_crontab(cleanup_cron)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        cron_trigger,
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup rescheduled with cron: {cleanup_cron}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        f"Invalid maximum_spend_logs_cleanup_cron value: {cleanup_cron}"
+                    )
+            else:
+                # Interval-based scheduling (existing behavior)
+                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+                retention_interval = general_settings.get(
+                    "maximum_spend_logs_retention_interval", "1d"
+                )
+                try:
+                    interval_seconds = duration_in_seconds(retention_interval)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        "interval",
+                        seconds=interval_seconds + random.randint(0, 60),
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup rescheduled with interval: {retention_interval}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value"
+                    )
+
     async def _update_general_settings(self, db_general_settings: Optional[Json]):
         """
         Pull from DB, read general settings value
@@ -3578,6 +3651,32 @@ class ProxyConfig:
         ## UI ACCESS MODE ##
         if "ui_access_mode" in _general_settings:
             general_settings["ui_access_mode"] = _general_settings["ui_access_mode"]
+
+        ## STORE PROMPTS IN SPEND LOGS ##
+        if "store_prompts_in_spend_logs" in _general_settings:
+            value = _general_settings["store_prompts_in_spend_logs"]
+            # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
+            if value is None:
+                general_settings["store_prompts_in_spend_logs"] = None
+            elif isinstance(value, bool):
+                general_settings["store_prompts_in_spend_logs"] = value
+            elif isinstance(value, str):
+                # Case-insensitive string comparison
+                general_settings["store_prompts_in_spend_logs"] = (
+                    value.lower() == "true"
+                )
+            else:
+                # For other types, convert to bool
+                general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
+        if "maximum_spend_logs_retention_period" in _general_settings:
+            old_value = general_settings.get("maximum_spend_logs_retention_period")
+            new_value = _general_settings["maximum_spend_logs_retention_period"]
+            general_settings["maximum_spend_logs_retention_period"] = new_value
+            # Reschedule cleanup job if value changed (including when set to None)
+            if old_value != new_value:
+                await self._reschedule_spend_log_cleanup_job()
 
     def _update_config_fields(
         self,
@@ -4688,7 +4787,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ):
         """Initializes scheduled background jobs"""
-        global store_model_in_db
+        global store_model_in_db, scheduler
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
