@@ -5121,3 +5121,197 @@ async def test_model_list_no_scope_parameter(monkeypatch):
     # Verify router methods were NOT called (normal path)
     mock_router.get_model_names.assert_not_called()
     mock_router.get_model_access_groups.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_store_prompts_in_spend_logs(monkeypatch):
+    """
+    Test that _update_general_settings correctly normalizes store_prompts_in_spend_logs
+    values (handles bool, string, None, and other types).
+    """
+    from unittest.mock import patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: None value
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": None}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is None
+
+    # Test Case 2: bool True
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": True}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is True
+
+    # Test Case 3: bool False
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": False}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is False
+
+    # Test Case 4: string "true" (lowercase)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": "true"}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is True
+
+    # Test Case 5: string "True" (capitalized)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": "True"}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is True
+
+    # Test Case 6: string "TRUE" (uppercase)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": "TRUE"}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is True
+
+    # Test Case 7: string "false" (lowercase)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": "false"}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is False
+
+    # Test Case 8: string "False" (capitalized)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": "False"}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is False
+
+    # Test Case 9: string "FALSE" (uppercase)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": "FALSE"}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is False
+
+    # Test Case 10: other string value (should be False)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": "invalid"}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is False
+
+    # Test Case 11: integer 1 (should be True)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": 1}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is True
+
+    # Test Case 12: integer 0 (should be False)
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs):
+        await proxy_config._update_general_settings(
+            {"store_prompts_in_spend_logs": 0}
+        )
+        assert mock_gs.get("store_prompts_in_spend_logs") is False
+
+
+@pytest.mark.asyncio
+async def test_update_general_settings_maximum_spend_logs_retention_period(monkeypatch):
+    """
+    Test that _update_general_settings correctly handles maximum_spend_logs_retention_period
+    and reschedules cleanup job when value changes.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+
+    # Test Case 1: Setting a new value should reschedule cleanup job
+    mock_reschedule = AsyncMock()
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs), patch.object(
+        proxy_config, "_reschedule_spend_log_cleanup_job", mock_reschedule
+    ):
+        await proxy_config._update_general_settings(
+            {"maximum_spend_logs_retention_period": "7d"}
+        )
+        assert mock_gs.get("maximum_spend_logs_retention_period") == "7d"
+        mock_reschedule.assert_called_once()
+
+    # Test Case 2: Setting the same value should not reschedule
+    mock_reschedule.reset_mock()
+    mock_gs = {"maximum_spend_logs_retention_period": "7d"}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs), patch.object(
+        proxy_config, "_reschedule_spend_log_cleanup_job", mock_reschedule
+    ):
+        await proxy_config._update_general_settings(
+            {"maximum_spend_logs_retention_period": "7d"}
+        )
+        assert mock_gs.get("maximum_spend_logs_retention_period") == "7d"
+        mock_reschedule.assert_not_called()
+
+    # Test Case 3: Changing value should reschedule
+    mock_reschedule.reset_mock()
+    mock_gs = {"maximum_spend_logs_retention_period": "7d"}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs), patch.object(
+        proxy_config, "_reschedule_spend_log_cleanup_job", mock_reschedule
+    ):
+        await proxy_config._update_general_settings(
+            {"maximum_spend_logs_retention_period": "30d"}
+        )
+        assert mock_gs.get("maximum_spend_logs_retention_period") == "30d"
+        mock_reschedule.assert_called_once()
+
+    # Test Case 4: Setting to None should reschedule
+    mock_reschedule.reset_mock()
+    mock_gs = {"maximum_spend_logs_retention_period": "7d"}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs), patch.object(
+        proxy_config, "_reschedule_spend_log_cleanup_job", mock_reschedule
+    ):
+        await proxy_config._update_general_settings(
+            {"maximum_spend_logs_retention_period": None}
+        )
+        assert mock_gs.get("maximum_spend_logs_retention_period") is None
+        mock_reschedule.assert_called_once()
+
+    # Test Case 5: Changing from None to a value should reschedule
+    mock_reschedule.reset_mock()
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs), patch.object(
+        proxy_config, "_reschedule_spend_log_cleanup_job", mock_reschedule
+    ):
+        await proxy_config._update_general_settings(
+            {"maximum_spend_logs_retention_period": "24h"}
+        )
+        assert mock_gs.get("maximum_spend_logs_retention_period") == "24h"
+        mock_reschedule.assert_called_once()
+
+    # Test Case 6: Setting None when already None should not reschedule
+    mock_reschedule.reset_mock()
+    mock_gs = {}
+    with patch("litellm.proxy.proxy_server.general_settings", mock_gs), patch.object(
+        proxy_config, "_reschedule_spend_log_cleanup_job", mock_reschedule
+    ):
+        await proxy_config._update_general_settings(
+            {"maximum_spend_logs_retention_period": None}
+        )
+        assert mock_gs.get("maximum_spend_logs_retention_period") is None
+        mock_reschedule.assert_not_called()
