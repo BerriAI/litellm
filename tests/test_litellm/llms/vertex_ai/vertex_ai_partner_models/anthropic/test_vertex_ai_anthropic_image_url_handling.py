@@ -4,9 +4,6 @@ Tests for Vertex AI Anthropic image URL handling.
 Issue: https://github.com/BerriAI/litellm/issues/18430
 Vertex AI Anthropic models don't support URL sources for images.
 LiteLLM should convert image URLs to base64 when using Vertex AI Anthropic.
-
-Issue: https://github.com/BerriAI/litellm/issues/19891
-Tool messages with image_url should also be converted to base64 for Vertex AI.
 """
 import os
 import sys
