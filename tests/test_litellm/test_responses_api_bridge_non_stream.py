@@ -292,9 +292,9 @@ def test_transform_usage_with_zero_values():
 
 def test_input_tokens_details_requires_cached_tokens():
     """
-    Test that InputTokensDetails requires cached_tokens to be an int (not Optional).
+    Test that InputTokensDetails has cached_tokens as an int with default value 0.
     
-    This is the core requirement that was changed.
+    This ensures backward compatibility while making the field non-optional.
     """
     # Should work with cached_tokens=0
     details1 = InputTokensDetails(cached_tokens=0)
@@ -304,18 +304,18 @@ def test_input_tokens_details_requires_cached_tokens():
     details2 = InputTokensDetails(cached_tokens=100)
     assert details2.cached_tokens == 100
     
-    # Should fail without cached_tokens (this is the breaking change)
-    with pytest.raises((TypeError, ValueError)):
-        InputTokensDetails()  # Missing required field
+    # Should work without cached_tokens (defaults to 0)
+    details3 = InputTokensDetails()
+    assert details3.cached_tokens == 0
     
-    print("✓ InputTokensDetails correctly requires cached_tokens")
+    print("✓ InputTokensDetails correctly defaults cached_tokens to 0")
 
 
 def test_output_tokens_details_requires_reasoning_tokens():
     """
-    Test that OutputTokensDetails requires reasoning_tokens to be an int (not Optional).
+    Test that OutputTokensDetails has reasoning_tokens as an int with default value 0.
     
-    This is the core requirement that was changed.
+    This ensures backward compatibility while making the field non-optional.
     """
     # Should work with reasoning_tokens=0
     details1 = OutputTokensDetails(reasoning_tokens=0)
@@ -325,11 +325,11 @@ def test_output_tokens_details_requires_reasoning_tokens():
     details2 = OutputTokensDetails(reasoning_tokens=100)
     assert details2.reasoning_tokens == 100
     
-    # Should fail without reasoning_tokens (this is the breaking change)
-    with pytest.raises((TypeError, ValueError)):
-        OutputTokensDetails()  # Missing required field
+    # Should work without reasoning_tokens (defaults to 0)
+    details3 = OutputTokensDetails()
+    assert details3.reasoning_tokens == 0
     
-    print("✓ OutputTokensDetails correctly requires reasoning_tokens")
+    print("✓ OutputTokensDetails correctly defaults reasoning_tokens to 0")
 
 
 def test_all_providers_transformation_scenarios():

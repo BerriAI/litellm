@@ -1114,7 +1114,7 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int
+    reasoning_tokens: int = 0
 
     text_tokens: Optional[int] = None
 
@@ -1123,7 +1123,7 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: Optional[int] = None
-    cached_tokens: int
+    cached_tokens: int = 0
     text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
