@@ -37,6 +37,13 @@ from litellm.proxy._experimental.mcp_server.db import (
 )
 from litellm.proxy._types import *
 from litellm.proxy._types import LiteLLM_VerificationToken
+from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+    BulkUpdateKeyRequest,
+    BulkUpdateKeyRequestItem,
+    BulkUpdateKeyResponse,
+    FailedKeyUpdate,
+    SuccessfulKeyUpdate,
+)
 from litellm.proxy.auth.auth_checks import (
     _cache_key_object,
     _delete_cache_key_object,
@@ -1438,6 +1445,211 @@ def is_different_team(
     return data.team_id != existing_key_row.team_id
 
 
+def _validate_max_budget(max_budget: Optional[float]) -> None:
+    """
+    Validate that max_budget is not negative.
+    
+    Args:
+        max_budget: The max_budget value to validate
+        
+    Raises:
+        HTTPException: If max_budget is negative
+    """
+    if max_budget is not None and max_budget < 0:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"max_budget cannot be negative. Received: {max_budget}"
+            },
+        )
+
+
+async def _get_and_validate_existing_key(
+    token: str, prisma_client: Optional[PrismaClient]
+) -> LiteLLM_VerificationToken:
+    """
+    Get existing key from database and validate it exists.
+    
+    Args:
+        token: The key token to look up
+        prisma_client: Prisma client instance
+        
+    Returns:
+        LiteLLM_VerificationToken: The existing key row
+        
+    Raises:
+        HTTPException: If key is not found
+    """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected"},
+        )
+    
+    existing_key_row = await prisma_client.get_data(
+        token=token,
+        table_name="key",
+        query_type="find_unique",
+    )
+    
+    if existing_key_row is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"Key not found: {token}"},
+        )
+    
+    return existing_key_row
+
+
+async def _process_single_key_update(
+    key_update_item: BulkUpdateKeyRequestItem,
+    user_api_key_dict: UserAPIKeyAuth,
+    litellm_changed_by: Optional[str],
+    prisma_client: Optional[PrismaClient],
+    user_api_key_cache: DualCache,
+    proxy_logging_obj: Any,
+    llm_router: Optional[Router],
+) -> Dict[str, Any]:
+    """
+    Process a single key update with all validations and checks.
+    
+    This function encapsulates all the logic for updating a single key,
+    including validation, permission checks, team checks, and database updates.
+    
+    Args:
+        key_update_item: The key update request item
+        user_api_key_dict: The authenticated user's API key info
+        litellm_changed_by: Optional header for tracking who made the change
+        prisma_client: Prisma client instance
+        user_api_key_cache: User API key cache
+        proxy_logging_obj: Proxy logging object
+        llm_router: LLM router instance
+        
+    Returns:
+        Dict containing the updated key information
+        
+    Raises:
+        HTTPException: For various validation and permission errors
+    """
+    # Validate max_budget
+    _validate_max_budget(key_update_item.max_budget)
+    
+    # Get and validate existing key
+    existing_key_row = await _get_and_validate_existing_key(
+        token=key_update_item.key,
+        prisma_client=prisma_client,
+    )
+    
+    # Check team member permissions
+    await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+        user_api_key_dict=user_api_key_dict,
+        route=KeyManagementRoutes.KEY_UPDATE,
+        prisma_client=prisma_client,
+        existing_key_row=existing_key_row,
+        user_api_key_cache=user_api_key_cache,
+    )
+    
+    # Create UpdateKeyRequest from BulkUpdateKeyRequestItem
+    update_key_request = UpdateKeyRequest(
+        key=key_update_item.key,
+        budget_id=key_update_item.budget_id,
+        max_budget=key_update_item.max_budget,
+        team_id=key_update_item.team_id,
+        tags=key_update_item.tags,
+    )
+    
+    # Get team object and check team limits if team_id is provided
+    team_obj: Optional[LiteLLM_TeamTableCachedObj] = None
+    if update_key_request.team_id is not None:
+        team_obj = await get_team_object(
+            team_id=update_key_request.team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+        
+        if team_obj is not None and prisma_client is not None:
+            await _check_team_key_limits(
+                team_table=team_obj,
+                data=update_key_request,
+                prisma_client=prisma_client,
+            )
+    
+    # Validate team change if team is being changed
+    if is_different_team(
+        data=update_key_request, existing_key_row=existing_key_row
+    ):
+        if llm_router is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "LLM router not found. Please set it up by passing in a valid config.yaml or adding models via the UI."
+                },
+            )
+        if team_obj is None:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error": "Team object not found for team change validation"
+                },
+            )
+        validate_key_team_change(
+            key=existing_key_row,
+            team=team_obj,
+            change_initiated_by=user_api_key_dict,
+            llm_router=llm_router,
+        )
+    
+    # Prepare update data
+    non_default_values = await prepare_key_update_data(
+        data=update_key_request, existing_key_row=existing_key_row
+    )
+    
+    # Update key in database
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected"},
+        )
+    
+    _data = {**non_default_values, "token": key_update_item.key}
+    response = await prisma_client.update_data(
+        token=key_update_item.key, data=_data
+    )
+    
+    # Delete cache
+    await _delete_cache_key_object(
+        hashed_token=hash_token(key_update_item.key),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    
+    # Trigger async hook
+    asyncio.create_task(
+        KeyManagementEventHooks.async_key_updated_hook(
+            data=update_key_request,
+            existing_key_row=existing_key_row,
+            response=response,
+            user_api_key_dict=user_api_key_dict,
+            litellm_changed_by=litellm_changed_by,
+        )
+    )
+    
+    if response is None:
+        raise ValueError("Failed to update key got response = None")
+    
+    # Extract and format updated key info
+    updated_key_info = response.get("data", {})
+    if hasattr(updated_key_info, "model_dump"):
+        updated_key_info = updated_key_info.model_dump()
+    elif hasattr(updated_key_info, "dict"):
+        updated_key_info = updated_key_info.dict()
+    
+    updated_key_info.pop("token", None)
+    
+    return updated_key_info
+
+
 @router.post(
     "/key/update", tags=["key management"], dependencies=[Depends(user_api_key_auth)]
 )
@@ -1682,6 +1894,167 @@ async def update_key_fn(
             param=getattr(e, "param", "None"),
             code=status.HTTP_400_BAD_REQUEST,
         )
+
+
+@router.post(
+    "/key/bulk_update",
+    tags=["key management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=BulkUpdateKeyResponse,
+)
+@management_endpoint_wrapper
+async def bulk_update_keys(
+    data: BulkUpdateKeyRequest,
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    litellm_changed_by: Optional[str] = Header(
+        None,
+        description="The litellm-changed-by header enables tracking of actions performed by authorized users on behalf of other users, providing an audit trail for accountability",
+    ),
+):
+    """
+    Bulk update multiple keys at once.
+    
+    This endpoint allows updating multiple keys in a single request. Each key update
+    is processed independently - if some updates fail, others will still succeed.
+    
+    Parameters:
+    - keys: List[BulkUpdateKeyRequestItem] - List of key update requests, each containing:
+        - key: str - The key identifier (token) to update
+        - budget_id: Optional[str] - Budget ID associated with the key
+        - max_budget: Optional[float] - Max budget for key
+        - team_id: Optional[str] - Team ID associated with key
+        - tags: Optional[List[str]] - Tags for organizing keys
+    
+    Returns:
+    - total_requested: int - Total number of keys requested for update
+    - successful_updates: List[SuccessfulKeyUpdate] - List of successfully updated keys with their updated info
+    - failed_updates: List[FailedKeyUpdate] - List of failed updates with key_info and failed_reason
+    
+    Example request:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/key/bulk_update' \
+    --header 'Authorization: Bearer sk-1234' \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "keys": [
+            {
+                "key": "sk-1234",
+                "max_budget": 100.0,
+                "team_id": "team-123",
+                "tags": ["production", "api"]
+            },
+            {
+                "key": "sk-5678",
+                "budget_id": "budget-456",
+                "tags": ["staging"]
+            }
+        ]
+    }'
+    ```
+    """
+    from litellm.proxy.proxy_server import (
+        llm_router,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+    
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error": "Only proxy admins can perform bulk key updates"
+            },
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected"},
+        )
+
+    if not data.keys:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "No keys provided for update"},
+        )
+
+    MAX_BATCH_SIZE = 500
+    if len(data.keys) > MAX_BATCH_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": f"Maximum {MAX_BATCH_SIZE} keys can be updated at once. Found {len(data.keys)} keys."
+            },
+        )
+
+    successful_updates: List[SuccessfulKeyUpdate] = []
+    failed_updates: List[FailedKeyUpdate] = []
+
+    for key_update_item in data.keys:
+        try:
+            # Process single key update using reusable function
+            updated_key_info = await _process_single_key_update(
+                key_update_item=key_update_item,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                proxy_logging_obj=proxy_logging_obj,
+                llm_router=llm_router,
+            )
+
+            successful_updates.append(
+                SuccessfulKeyUpdate(
+                    key=key_update_item.key,
+                    key_info=updated_key_info,
+                )
+            )
+
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Failed to update key {key_update_item.key}: {e}"
+            )
+
+            if isinstance(e, HTTPException):
+                error_detail = e.detail
+                if isinstance(error_detail, dict):
+                    error_message = error_detail.get("error", str(e))
+                else:
+                    error_message = str(error_detail)
+            else:
+                error_message = str(e)
+
+            key_info = None
+            try:
+                existing_key_row = await prisma_client.get_data(
+                    token=key_update_item.key,
+                    table_name="key",
+                    query_type="find_unique",
+                )
+                if existing_key_row is not None:
+                    if hasattr(existing_key_row, "model_dump"):
+                        key_info = existing_key_row.model_dump()
+                    elif hasattr(existing_key_row, "dict"):
+                        key_info = existing_key_row.dict()
+                    if key_info:
+                        key_info.pop("token", None)
+            except Exception:
+                pass
+
+            failed_updates.append(
+                FailedKeyUpdate(
+                    key=key_update_item.key,
+                    key_info=key_info,
+                    failed_reason=error_message,
+                )
+            )
+
+    return BulkUpdateKeyResponse(
+        total_requested=len(data.keys),
+        successful_updates=successful_updates,
+        failed_updates=failed_updates,
+    )
 
 
 def validate_key_team_change(
