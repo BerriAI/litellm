@@ -2,11 +2,11 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { ModelDataTable } from "@/components/model_dashboard/table";
+import { AllModelsDataTable } from "@/components/model_dashboard/all_models_table";
 import { columns } from "@/components/molecules/models/columns";
 import { getDisplayModelName } from "@/components/view_model/model_name_display";
 import { InfoCircleOutlined } from "@ant-design/icons";
-import { PaginationState } from "@tanstack/react-table";
+import { PaginationState, SortingState } from "@tanstack/react-table";
 import { Grid, Select, SelectItem, TabPanel, Text } from "@tremor/react";
 import { Skeleton, Spin } from "antd";
 import debounce from "lodash/debounce";
@@ -49,6 +49,7 @@ const AllModelsTab = ({
     pageIndex: 0,
     pageSize: 50,
   });
+  const [sorting, setSorting] = useState<SortingState>([]);
 
   // Debounce search input
   const debouncedUpdateSearch = useMemo(
@@ -72,12 +73,33 @@ const AllModelsTab = ({
   // Determine teamId to pass to the query - only pass if not "personal"
   const teamIdForQuery = currentTeam === "personal" ? undefined : currentTeam.team_id;
 
+  // Convert sorting state to sortBy and sortOrder for API
+  const sortBy = useMemo(() => {
+    if (sorting.length === 0) return undefined;
+    const sort = sorting[0];
+    // Map column IDs to server-side field names
+    // The server expects field names like "model_name", "created_at", etc.
+    const columnIdToServerField: Record<string, string> = {
+      input_cost: "costs", // Map input_cost column to "costs" for server-side sorting
+      model_info_db_model: "status", // Map model_info.db_model column to "status" for server-side sorting
+    };
+    return columnIdToServerField[sort.id] || sort.id;
+  }, [sorting]);
+
+  const sortOrder = useMemo(() => {
+    if (sorting.length === 0) return undefined;
+    const sort = sorting[0];
+    return sort.desc ? "desc" : "asc";
+  }, [sorting]);
+
   const { data: rawModelData, isLoading: isLoadingModelsInfo } = useModelsInfo(
     currentPage,
     pageSize,
     debouncedSearch || undefined,
     undefined,
-    teamIdForQuery
+    teamIdForQuery,
+    sortBy,
+    sortOrder
   );
   const isLoading = isLoadingModelsInfo || isLoadingModelCostMap;
 
@@ -139,6 +161,7 @@ const AllModelsTab = ({
 
   useEffect(() => {
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+    setCurrentPage(1);
   }, [selectedModelGroup, selectedModelAccessGroupFilter]);
 
   // Reset pagination when team changes
@@ -146,6 +169,12 @@ const AllModelsTab = ({
     setCurrentPage(1);
     setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
   }, [teamIdForQuery]);
+
+  // Reset pagination when sorting changes
+  useEffect(() => {
+    setCurrentPage(1);
+    setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
+  }, [sorting]);
 
   const resetFilters = () => {
     setModelNameSearch("");
@@ -155,6 +184,7 @@ const AllModelsTab = ({
     setModelViewMode("current_team");
     setCurrentPage(1);
     setPagination({ pageIndex: 0, pageSize: 50 });
+    setSorting([]);
   };
 
   return (
@@ -439,7 +469,7 @@ const AllModelsTab = ({
               </div>
             </div>
 
-            <ModelDataTable
+            <AllModelsDataTable
               columns={columns(
                 userRole,
                 userId,
@@ -453,7 +483,9 @@ const AllModelsTab = ({
                 setExpandedRows,
               )}
               data={filteredData}
-              isLoading={false}
+              isLoading={isLoadingModelsInfo}
+              sorting={sorting}
+              onSortingChange={setSorting}
               pagination={pagination}
               onPaginationChange={setPagination}
               enablePagination={true}

@@ -93,30 +93,50 @@ else:
 router = APIRouter()
 
 
+def normalize_email(email: Optional[str]) -> Optional[str]:
+    """
+    Normalize email address to lowercase for consistent storage and comparison.
+    
+    Email addresses should be treated as case-insensitive for SSO purposes,
+    even though RFC 5321 technically allows case-sensitive local parts.
+    This prevents issues where SSO providers return emails with different casing
+    than what's stored in the database.
+    
+    Args:
+        email: Email address to normalize, can be None
+        
+    Returns:
+        Lowercased email address, or None if input is None
+    """
+    if email is None:
+        return None
+    return email.lower() if isinstance(email, str) else email
+
+
 def determine_role_from_groups(
     user_groups: List[str],
     role_mappings: "RoleMappings",
 ) -> Optional[LitellmUserRoles]:
     """
     Determine the highest privilege role for a user based on their groups.
-    
+
     Role hierarchy (highest to lowest):
     - proxy_admin
     - proxy_admin_viewer
     - internal_user
     - internal_user_viewer
-    
+
     Args:
         user_groups: List of group names from the SSO token
         role_mappings: RoleMappings configuration object
-        
+
     Returns:
         The highest privilege role found, or default_role if no matches, or None
     """
     if not role_mappings.roles:
         # No role mappings configured, return default_role
         return role_mappings.default_role
-    
+
     # Role hierarchy (highest to lowest)
     role_hierarchy = [
         LitellmUserRoles.PROXY_ADMIN,
@@ -124,20 +144,22 @@ def determine_role_from_groups(
         LitellmUserRoles.INTERNAL_USER,
         LitellmUserRoles.INTERNAL_USER_VIEW_ONLY,
     ]
-    
+
     # Convert user_groups to a set for efficient lookup
     user_groups_set = set(user_groups) if isinstance(user_groups, list) else set()
-    
+
     # Find the highest privilege role the user belongs to
     for role in role_hierarchy:
         if role in role_mappings.roles:
             role_groups = role_mappings.roles[role]
-            if isinstance(role_groups, list) and user_groups_set.intersection(set(role_groups)):
+            if isinstance(role_groups, list) and user_groups_set.intersection(
+                set(role_groups)
+            ):
                 verbose_proxy_logger.debug(
                     f"User groups {user_groups} matched role '{role.value}' via groups: {role_groups}"
                 )
                 return role
-    
+
     # No matching groups found, return default_role
     verbose_proxy_logger.debug(
         f"User groups {user_groups} did not match any role mappings, using default_role: {role_mappings.default_role}"
@@ -326,9 +348,7 @@ def generic_response_convertor(
         "GENERIC_USER_PROVIDER_ATTRIBUTE", "provider"
     )
 
-    generic_user_role_attribute_name = os.getenv(
-        "GENERIC_USER_ROLE_ATTRIBUTE", "role"
-    )
+    generic_user_role_attribute_name = os.getenv("GENERIC_USER_ROLE_ATTRIBUTE", "role")
 
     verbose_proxy_logger.debug(
         f" generic_user_id_attribute_name: {generic_user_id_attribute_name}\n generic_user_email_attribute_name: {generic_user_email_attribute_name}"
@@ -345,12 +365,15 @@ def generic_response_convertor(
     # Determine user role based on role_mappings if available
     # Only apply role_mappings for GENERIC SSO provider
     user_role: Optional[LitellmUserRoles] = None
-    
-    if role_mappings is not None and role_mappings.provider.lower() in ["generic", "okta"]:
+
+    if role_mappings is not None and role_mappings.provider.lower() in [
+        "generic",
+        "okta",
+    ]:
         # Use role_mappings to determine role from groups
         group_claim = role_mappings.group_claim
         user_groups_raw: Any = get_nested_value(response, group_claim)
-        
+
         # Handle different formats: could be a list, string (comma-separated), or single value
         user_groups: List[str] = []
         if isinstance(user_groups_raw, list):
@@ -361,7 +384,7 @@ def generic_response_convertor(
         elif user_groups_raw is not None:
             # Single value
             user_groups = [str(user_groups_raw)]
-        
+
         if user_groups:
             user_role = determine_role_from_groups(user_groups, role_mappings)
             verbose_proxy_logger.debug(
@@ -373,10 +396,12 @@ def generic_response_convertor(
             verbose_proxy_logger.debug(
                 f"No groups found in '{group_claim}', using default_role: {role_mappings.default_role}"
             )
-    
+
     # Fallback to existing logic if role_mappings not used
     if user_role is None:
-        user_role_from_sso = get_nested_value(response, generic_user_role_attribute_name)
+        user_role_from_sso = get_nested_value(
+            response, generic_user_role_attribute_name
+        )
         if user_role_from_sso is not None:
             role = get_litellm_user_role(user_role_from_sso)
             if role is not None:
@@ -390,7 +415,7 @@ def generic_response_convertor(
         display_name=get_nested_value(
             response, generic_user_display_name_attribute_name
         ),
-        email=get_nested_value(response, generic_user_email_attribute_name),
+        email=normalize_email(get_nested_value(response, generic_user_email_attribute_name)),
         first_name=get_nested_value(response, generic_user_first_name_attribute_name),
         last_name=get_nested_value(response, generic_user_last_name_attribute_name),
         provider=get_nested_value(response, generic_provider_attribute_name),
@@ -399,7 +424,9 @@ def generic_response_convertor(
     )
 
 
-def _setup_generic_sso_env_vars(generic_client_id: str, redirect_url: str) -> Tuple[str, List[str], str, str, str, bool]:
+def _setup_generic_sso_env_vars(
+    generic_client_id: str, redirect_url: str
+) -> Tuple[str, List[str], str, str, str, bool]:
     """Setup and validate Generic SSO environment variables."""
     generic_client_secret = os.getenv("GENERIC_CLIENT_SECRET", None)
     generic_scope = os.getenv("GENERIC_SCOPE", "openid email profile").split(" ")
@@ -492,7 +519,43 @@ async def _setup_role_mappings() -> Optional["RoleMappings"]:
         verbose_proxy_logger.debug(
             f"Could not load role_mappings from database: {e}. Continuing with existing role logic."
         )
+     
+    generic_role_mappings = os.getenv("GENERIC_ROLE_MAPPINGS_ROLES", None)
+    generic_role_mappings_group_claim = os.getenv(
+        "GENERIC_ROLE_MAPPINGS_GROUP_CLAIM", None
+    )
+    generic_role_mappoings_default_role = os.getenv(
+        "GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE", None
+    )
+    if generic_role_mappings is not None:
+        verbose_proxy_logger.debug(
+        "Found role_mappings for generic provider in environment variables"
+    )  
+        import ast
 
+        try:
+            generic_user_role_mappings_data: Dict[
+                LitellmUserRoles, List[str]
+            ] = ast.literal_eval(generic_role_mappings)
+            if isinstance(generic_user_role_mappings_data, dict):
+                from litellm.types.proxy.management_endpoints.ui_sso import (
+                    RoleMappings,
+                )
+
+                role_mappings_data = {
+                    "provider": "generic",
+                    "group_claim": generic_role_mappings_group_claim,
+                    "default_role": generic_role_mappoings_default_role,
+                    "roles": generic_user_role_mappings_data,
+                }
+
+                role_mappings = RoleMappings(**role_mappings_data)
+                verbose_proxy_logger.debug(
+                    f"Loaded role_mappings from environments for provider '{role_mappings.provider}'."
+                )
+                return role_mappings
+        except TypeError as e:
+            verbose_proxy_logger.warning(f"Error decoding role mappings from environment variables: {e}. Continuing with existing role logic.")
     return role_mappings
 
 
@@ -529,7 +592,7 @@ async def get_generic_sso_response(
 
     # Get role_mappings from SSO settings if available
     role_mappings = await _setup_role_mappings()
-    
+
     def response_convertor(response, client):
         nonlocal received_response  # return for user debugging
         received_response = response
@@ -688,7 +751,7 @@ async def get_user_info_from_db(
             if _id is not None and isinstance(_id, str):
                 potential_user_ids.append(_id)
 
-        user_email = (
+        user_email = normalize_email(
             getattr(result, "email", None)
             if not isinstance(result, dict)
             else result.get("email", None)
@@ -763,8 +826,8 @@ def _build_sso_user_update_data(
 
     Returns:
         dict: Update data containing user_email and optionally user_role if valid
-    """
-    update_data: dict = {"user_email": user_email}
+        """
+    update_data: dict = {"user_email": normalize_email(user_email)}
 
     # Get SSO role from result and include if valid
     sso_role = getattr(result, "user_role", None)
@@ -1217,20 +1280,24 @@ async def insert_sso_user(
     role_mappings_configured = False
     try:
         from litellm.proxy.utils import get_prisma_client_or_throw
-        
+
         prisma_client = get_prisma_client_or_throw(
             "Prisma client is None, connect a database to your proxy"
         )
-        
+
         # Get SSO config from dedicated table
         sso_db_record = await prisma_client.db.litellm_ssoconfig.find_unique(
             where={"id": "sso_config"}
         )
-        
+
         if sso_db_record and sso_db_record.sso_settings:
             sso_settings_dict = dict(sso_db_record.sso_settings)
             role_mappings_data = sso_settings_dict.get("role_mappings")
             role_mappings_configured = role_mappings_data is not None
+        generic_user_role_mappings = os.getenv("GENERIC_USER_ROLE_MAPPINGS", None)
+        if generic_user_role_mappings is not None:
+            role_mappings_configured = True
+
     except Exception as e:
         # If we can't check role_mappings, continue with existing logic
         verbose_proxy_logger.debug(
@@ -1240,7 +1307,10 @@ async def insert_sso_user(
     # Apply default_internal_user_params
     if litellm.default_internal_user_params:
         # If role_mappings is configured and user_role is already set from SSO, preserve it
-        if role_mappings_configured and user_defined_values.get("user_role") is not None:
+        if (
+            role_mappings_configured
+            and user_defined_values.get("user_role") is not None
+        ):
             # Preserve the SSO-extracted role, but apply other defaults
             preserved_role = user_defined_values.get("user_role")
             user_defined_values.update(litellm.default_internal_user_params)  # type: ignore
@@ -1266,7 +1336,7 @@ async def insert_sso_user(
 
     new_user_request = NewUserRequest(
         user_id=user_defined_values["user_id"],
-        user_email=user_defined_values["user_email"],
+        user_email=normalize_email(user_defined_values["user_email"]),
         user_role=user_defined_values["user_role"],  # type: ignore
         max_budget=user_defined_values["max_budget"],
         budget_duration=user_defined_values["budget_duration"],
@@ -1931,7 +2001,7 @@ class SSOAuthenticationHandler:
         """
         Gets the user email and id from the OpenID result after validating the email domain
         """
-        user_email: Optional[str] = getattr(result, "email", None)
+        user_email: Optional[str] = normalize_email(getattr(result, "email", None))
         user_id: Optional[str] = (
             getattr(result, "id", None) if result is not None else None
         )
@@ -1970,7 +2040,7 @@ class SSOAuthenticationHandler:
                 "GENERIC_USER_ROLE_ATTRIBUTE", "role"
             )
             user_id = getattr(result, "id", None)
-            user_email = getattr(result, "email", None)
+            user_email = normalize_email(getattr(result, "email", None))
             if user_role is None:
                 _role_from_attr = getattr(result, generic_user_role_attribute_name, None)  # type: ignore
                 if _role_from_attr is not None:
@@ -2363,7 +2433,7 @@ class MicrosoftSSOHandler:
         response = response or {}
         verbose_proxy_logger.debug(f"Microsoft SSO Callback Response: {response}")
         openid_response = CustomOpenID(
-            email=response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail"),
+            email=normalize_email(response.get(MICROSOFT_USER_EMAIL_ATTRIBUTE) or response.get("mail")),
             display_name=response.get(MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE),
             provider="microsoft",
             id=response.get(MICROSOFT_USER_ID_ATTRIBUTE),

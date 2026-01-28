@@ -134,6 +134,112 @@ async def _resolve_embedding_config_from_db(
 
 
 ########################################################
+# Helper Functions
+########################################################
+async def create_vector_store_in_db(
+    vector_store_id: str,
+    custom_llm_provider: str,
+    prisma_client,
+    vector_store_name: Optional[str] = None,
+    vector_store_description: Optional[str] = None,
+    vector_store_metadata: Optional[Dict] = None,
+    litellm_params: Optional[Dict] = None,
+    litellm_credential_name: Optional[str] = None,
+) -> LiteLLM_ManagedVectorStore:
+    """
+    Helper function to create a vector store in the database.
+    
+    This function handles:
+    - Checking if vector store already exists
+    - Creating the vector store in the database
+    - Adding it to the vector store registry
+    
+    Returns:
+        LiteLLM_ManagedVectorStore: The created vector store object
+        
+    Raises:
+        HTTPException: If vector store already exists or database error occurs
+    """
+    from litellm.types.router import GenericLiteLLMParams
+    
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail="Database not connected")
+    
+    # Check if vector store already exists
+    existing_vector_store = (
+        await prisma_client.db.litellm_managedvectorstorestable.find_unique(
+            where={"vector_store_id": vector_store_id}
+        )
+    )
+    if existing_vector_store is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Vector store with ID {vector_store_id} already exists",
+        )
+    
+    # Prepare data for database
+    data_to_create: Dict[str, Any] = {
+        "vector_store_id": vector_store_id,
+        "custom_llm_provider": custom_llm_provider,
+    }
+    
+    if vector_store_name is not None:
+        data_to_create["vector_store_name"] = vector_store_name
+    if vector_store_description is not None:
+        data_to_create["vector_store_description"] = vector_store_description
+    if vector_store_metadata is not None:
+        data_to_create["vector_store_metadata"] = safe_dumps(vector_store_metadata)
+    if litellm_credential_name is not None:
+        data_to_create["litellm_credential_name"] = litellm_credential_name
+    
+    # Handle litellm_params - always provide at least an empty dict
+    if litellm_params:
+        # Auto-resolve embedding config if embedding model is provided but config is not
+        embedding_model = litellm_params.get("litellm_embedding_model")
+        if embedding_model and not litellm_params.get("litellm_embedding_config"):
+            resolved_config = await _resolve_embedding_config_from_db(
+                embedding_model=embedding_model,
+                prisma_client=prisma_client
+            )
+            if resolved_config:
+                litellm_params["litellm_embedding_config"] = resolved_config
+                verbose_proxy_logger.info(
+                    f"Auto-resolved embedding config for model {embedding_model}"
+                )
+        
+        litellm_params_dict = GenericLiteLLMParams(
+            **litellm_params
+        ).model_dump(exclude_none=True)
+        data_to_create["litellm_params"] = safe_dumps(litellm_params_dict)
+    else:
+        # Provide empty dict if no litellm_params provided
+        data_to_create["litellm_params"] = safe_dumps({})
+    
+    # Create in database
+    _new_vector_store = (
+        await prisma_client.db.litellm_managedvectorstorestable.create(
+            data=data_to_create
+        )
+    )
+    
+    new_vector_store: LiteLLM_ManagedVectorStore = LiteLLM_ManagedVectorStore(
+        **_new_vector_store.model_dump()
+    )
+    
+    # Add vector store to registry
+    if litellm.vector_store_registry is not None:
+        litellm.vector_store_registry.add_vector_store_to_registry(
+            vector_store=new_vector_store
+        )
+    
+    verbose_proxy_logger.info(
+        f"Vector store {vector_store_id} created in database successfully"
+    )
+    
+    return new_vector_store
+
+
+########################################################
 # Management Endpoints
 ########################################################
 @router.post(
@@ -156,70 +262,33 @@ async def new_vector_store(
     - vector_store_metadata: Optional[Dict] - Additional metadata for the vector store
     """
     from litellm.proxy.proxy_server import prisma_client
-    from litellm.types.router import GenericLiteLLMParams
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Check if vector store already exists
-        existing_vector_store = (
-            await prisma_client.db.litellm_managedvectorstorestable.find_unique(
-                where={"vector_store_id": vector_store.get("vector_store_id")}
-            )
-        )
-        if existing_vector_store is not None:
+        vector_store_id = vector_store.get("vector_store_id")
+        custom_llm_provider = vector_store.get("custom_llm_provider")
+        
+        if not vector_store_id or not custom_llm_provider:
             raise HTTPException(
                 status_code=400,
-                detail=f"Vector store with ID {vector_store.get('vector_store_id')} already exists",
+                detail="vector_store_id and custom_llm_provider are required"
             )
-
-        if vector_store.get("vector_store_metadata") is not None:
-            vector_store["vector_store_metadata"] = safe_dumps(
-                vector_store.get("vector_store_metadata")
-            )
-
-        # Safely handle JSON serialization of litellm_params
-        litellm_params_json: Optional[str] = None
-        _input_litellm_params: dict = vector_store.get("litellm_params", {}) or {}
-        if _input_litellm_params is not None:
-            # Auto-resolve embedding config if embedding model is provided but config is not
-            embedding_model = _input_litellm_params.get("litellm_embedding_model")
-            if embedding_model and not _input_litellm_params.get("litellm_embedding_config"):
-                resolved_config = await _resolve_embedding_config_from_db(
-                    embedding_model=embedding_model,
-                    prisma_client=prisma_client
-                )
-                if resolved_config:
-                    _input_litellm_params["litellm_embedding_config"] = resolved_config
-                    verbose_proxy_logger.info(
-                        f"Auto-resolved embedding config for model {embedding_model}"
-                    )
-            
-            litellm_params_dict = GenericLiteLLMParams(
-                **_input_litellm_params
-            ).model_dump(exclude_none=True)
-            litellm_params_json = safe_dumps(litellm_params_dict)
-            del vector_store["litellm_params"]
-
-        _new_vector_store = (
-            await prisma_client.db.litellm_managedvectorstorestable.create(
-                data={
-                    **vector_store,
-                    "litellm_params": litellm_params_json,
-                }
-            )
+        
+        # Extract and validate metadata
+        metadata = vector_store.get("vector_store_metadata")
+        validated_metadata: Optional[Dict] = None
+        if metadata is not None and isinstance(metadata, dict):
+            validated_metadata = metadata
+        
+        new_vector_store = await create_vector_store_in_db(
+            vector_store_id=vector_store_id,
+            custom_llm_provider=custom_llm_provider,
+            prisma_client=prisma_client,
+            vector_store_name=vector_store.get("vector_store_name"),
+            vector_store_description=vector_store.get("vector_store_description"),
+            vector_store_metadata=validated_metadata,
+            litellm_params=vector_store.get("litellm_params"),
+            litellm_credential_name=vector_store.get("litellm_credential_name"),
         )
-
-        new_vector_store: LiteLLM_ManagedVectorStore = LiteLLM_ManagedVectorStore(
-            **_new_vector_store.model_dump()
-        )
-
-        # Add vector store to registry
-        if litellm.vector_store_registry is not None:
-            litellm.vector_store_registry.add_vector_store_to_registry(
-                vector_store=new_vector_store
-            )
 
         return {
             "status": "success",

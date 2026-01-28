@@ -558,6 +558,16 @@ class LiteLLMProxyRequestSetup:
         #########################################################################################
         # Finally update the requests metadata with the `metadata_from_headers`
         #########################################################################################
+        agent_id_from_header = headers.get("x-litellm-agent-id")
+        trace_id_from_header = headers.get("x-litellm-trace-id")
+        if agent_id_from_header:
+            metadata_from_headers["agent_id"] = agent_id_from_header
+            verbose_proxy_logger.debug(f"Extracted agent_id from header: {agent_id_from_header}")
+        
+        if trace_id_from_header:
+            metadata_from_headers["trace_id"] = trace_id_from_header
+            verbose_proxy_logger.debug(f"Extracted trace_id from header: {trace_id_from_header}")
+
         if isinstance(data[_metadata_variable_name], dict):
             data[_metadata_variable_name].update(metadata_from_headers)
         return data
@@ -846,7 +856,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     # Add headers to metadata for guardrails to access (fixes #17477)
     # Guardrails use metadata["headers"] to access request headers (e.g., User-Agent)
-    if _metadata_variable_name in data and isinstance(data[_metadata_variable_name], dict):
+    if _metadata_variable_name in data and isinstance(
+        data[_metadata_variable_name], dict
+    ):
         data[_metadata_variable_name]["headers"] = _headers
 
     # check for forwardable headers
@@ -1002,7 +1014,9 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
 
     # User spend, budget - used by prometheus.py
     # Follow same pattern as team and API key budgets
-    data[_metadata_variable_name]["user_api_key_user_spend"] = user_api_key_dict.user_spend
+    data[_metadata_variable_name][
+        "user_api_key_user_spend"
+    ] = user_api_key_dict.user_spend
     data[_metadata_variable_name][
         "user_api_key_user_max_budget"
     ] = user_api_key_dict.user_max_budget
@@ -1029,8 +1043,8 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ## [Enterprise Only]
     # Add User-IP Address
     requester_ip_address = ""
-    if premium_user is True:
-        # Only set the IP Address for Enterprise Users
+    if True:  # Always set the IP Address if available
+        # logic for tracking IP Address
 
         # logic for tracking IP Address
         if (
@@ -1049,6 +1063,16 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         ):
             requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
+
+    # Add User-Agent
+    user_agent = ""
+    if (
+        request is not None
+        and hasattr(request, "headers")
+        and "user-agent" in request.headers
+    ):
+        user_agent = request.headers["user-agent"]
+    data[_metadata_variable_name]["user_agent"] = user_agent
 
     # Check if using tag based routing
     tags = LiteLLMProxyRequestSetup.add_request_tag_to_metadata(
@@ -1532,7 +1556,9 @@ def add_guardrails_from_policy_engine(
         f"policy_count={len(registry.get_all_policies())}"
     )
     if not registry.is_initialized():
-        verbose_proxy_logger.debug("Policy engine not initialized, skipping policy matching")
+        verbose_proxy_logger.debug(
+            "Policy engine not initialized, skipping policy matching"
+        )
         return
 
     # Build context from request
@@ -1550,13 +1576,17 @@ def add_guardrails_from_policy_engine(
     # Get matching policies via attachments
     matching_policy_names = PolicyMatcher.get_matching_policies(context=context)
 
-    verbose_proxy_logger.debug(f"Policy engine: matched policies via attachments: {matching_policy_names}")
+    verbose_proxy_logger.debug(
+        f"Policy engine: matched policies via attachments: {matching_policy_names}"
+    )
 
     # Combine attachment-based policies with dynamic request body policies
     all_policy_names = set(matching_policy_names)
     if request_body_policies and isinstance(request_body_policies, list):
         all_policy_names.update(request_body_policies)
-        verbose_proxy_logger.debug(f"Policy engine: added dynamic policies from request body: {request_body_policies}")
+        verbose_proxy_logger.debug(
+            f"Policy engine: added dynamic policies from request body: {request_body_policies}"
+        )
 
     if not all_policy_names:
         return
@@ -1567,7 +1597,9 @@ def add_guardrails_from_policy_engine(
         context=context,
     )
 
-    verbose_proxy_logger.debug(f"Policy engine: applied policies (conditions matched): {applied_policy_names}")
+    verbose_proxy_logger.debug(
+        f"Policy engine: applied policies (conditions matched): {applied_policy_names}"
+    )
 
     # Track applied policies in metadata for response headers
     for policy_name in applied_policy_names:
@@ -1578,7 +1610,9 @@ def add_guardrails_from_policy_engine(
     # Resolve guardrails from matching policies
     resolved_guardrails = PolicyResolver.resolve_guardrails_for_context(context=context)
 
-    verbose_proxy_logger.debug(f"Policy engine: resolved guardrails: {resolved_guardrails}")
+    verbose_proxy_logger.debug(
+        f"Policy engine: resolved guardrails: {resolved_guardrails}"
+    )
 
     if not resolved_guardrails:
         return

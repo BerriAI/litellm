@@ -2007,12 +2007,12 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId, sortBy, sortOrder);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
@@ -2026,6 +2026,12 @@ export const modelInfoCall = async (accessToken: string, userID: string, userRol
     }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());
+    }
+    if (sortBy && sortBy.trim()) {
+      params.append("sortBy", sortBy.trim());
+    }
+    if (sortOrder && sortOrder.trim()) {
+      params.append("sortOrder", sortOrder.trim());
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -6944,6 +6950,64 @@ export const vectorStoreUpdateCall = async (accessToken: string, formValues: Rec
     return await response.json();
   } catch (error) {
     console.error("Error updating vector store:", error);
+    throw error;
+  }
+};
+
+export const ragIngestCall = async (
+  accessToken: string,
+  file: File,
+  customLlmProvider: string,
+  vectorStoreId?: string,
+  vectorStoreName?: string,
+  vectorStoreDescription?: string,
+  providerSpecificParams?: Record<string, any>
+): Promise<any> => {
+  try {
+    let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const ingestOptions: any = {
+      ingest_options: {
+        vector_store: {
+          custom_llm_provider: customLlmProvider,
+          ...(vectorStoreId && { vector_store_id: vectorStoreId }),
+          ...(providerSpecificParams && providerSpecificParams),
+        },
+      },
+    };
+
+    // Add litellm_vector_store_params if name or description provided
+    if (vectorStoreName || vectorStoreDescription) {
+      ingestOptions.ingest_options.litellm_vector_store_params = {};
+      if (vectorStoreName) {
+        ingestOptions.ingest_options.litellm_vector_store_params.vector_store_name = vectorStoreName;
+      }
+      if (vectorStoreDescription) {
+        ingestOptions.ingest_options.litellm_vector_store_params.vector_store_description = vectorStoreDescription;
+      }
+    }
+
+    formData.append("request", JSON.stringify(ingestOptions));
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error?.message || error.detail || "Failed to ingest document");
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error("Error ingesting document:", error);
     throw error;
   }
 };
