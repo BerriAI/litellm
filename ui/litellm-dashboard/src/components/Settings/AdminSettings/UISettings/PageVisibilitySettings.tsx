@@ -1,7 +1,6 @@
 "use client";
 
 import { getAvailablePages } from "@/components/page_utils";
-import NotificationManager from "@/components/molecules/notifications_manager";
 import { Button, Checkbox, Collapse, Space, Tag, Typography } from "antd";
 import { useMemo, useState } from "react";
 
