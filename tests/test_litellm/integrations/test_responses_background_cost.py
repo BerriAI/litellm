@@ -3,6 +3,7 @@ Integration tests for responses API background cost tracking
 """
 
 import asyncio
+import importlib.util
 import os
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -49,11 +50,9 @@ class TestResponsesBackgroundCostTracking:
             output=[],
             usage=None,
         )
-        
+
         # Add hidden params with model_id (simulating what base_process_llm_request does)
-        response._hidden_params = {
-            "model_id": "model-deployment-id-123"
-        }
+        response._hidden_params = {"model_id": "model-deployment-id-123"}
 
         # Mock request data
         data = {
@@ -72,7 +71,7 @@ class TestResponsesBackgroundCostTracking:
                 # Get model_id from hidden params
                 hidden_params = getattr(response, "_hidden_params", {}) or {}
                 model_id = hidden_params.get("model_id", None)
-                
+
                 if model_id:
                     # Store in managed objects table using response.id directly
                     await mock_managed_files_obj.store_unified_object_id(
@@ -95,9 +94,7 @@ class TestResponsesBackgroundCostTracking:
         assert call_args[1]["user_api_key_dict"] == user_api_key_dict
 
     @pytest.mark.asyncio
-    async def test_no_storage_for_non_background_requests(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_no_storage_for_non_background_requests(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that non-background requests are not stored"""
         # Create a mock response
         response = ResponsesAPIResponse(
@@ -129,9 +126,7 @@ class TestResponsesBackgroundCostTracking:
         mock_managed_files_obj.store_unified_object_id.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_storage_for_completed_responses(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_no_storage_for_completed_responses(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that completed responses are not stored"""
         # Create a mock response with completed status
         response = ResponsesAPIResponse(
@@ -163,9 +158,7 @@ class TestResponsesBackgroundCostTracking:
         mock_managed_files_obj.store_unified_object_id.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_no_storage_without_model_id(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_no_storage_without_model_id(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that responses without model_id in hidden params are not stored"""
         # Create a mock response without hidden params
         response = ResponsesAPIResponse(
@@ -191,7 +184,7 @@ class TestResponsesBackgroundCostTracking:
             if response.status in ["queued", "in_progress"]:
                 hidden_params = getattr(response, "_hidden_params", {}) or {}
                 model_id = hidden_params.get("model_id", None)
-                
+
                 if model_id:  # This will be False
                     await mock_managed_files_obj.store_unified_object_id(
                         unified_object_id=response.id,
@@ -206,14 +199,10 @@ class TestResponsesBackgroundCostTracking:
         mock_managed_files_obj.store_unified_object_id.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_error_handling_in_storage(
-        self, mock_managed_files_obj, mock_proxy_logging_obj
-    ):
+    async def test_error_handling_in_storage(self, mock_managed_files_obj, mock_proxy_logging_obj):
         """Test that errors during storage are handled gracefully"""
         # Mock store_unified_object_id to raise an exception
-        mock_managed_files_obj.store_unified_object_id = AsyncMock(
-            side_effect=Exception("Database error")
-        )
+        mock_managed_files_obj.store_unified_object_id = AsyncMock(side_effect=Exception("Database error"))
 
         response = ResponsesAPIResponse(
             id="resp_error",
@@ -240,7 +229,7 @@ class TestResponsesBackgroundCostTracking:
                 if response.status in ["queued", "in_progress"]:
                     hidden_params = getattr(response, "_hidden_params", {}) or {}
                     model_id = hidden_params.get("model_id", None)
-                    
+
                     if model_id:
                         await mock_managed_files_obj.store_unified_object_id(
                             unified_object_id=response.id,
@@ -258,6 +247,13 @@ class TestResponsesBackgroundCostTracking:
         assert mock_managed_files_obj.store_unified_object_id.called
 
 
+_LITELLM_ENTERPRISE_AVAILABLE = importlib.util.find_spec("litellm_enterprise") is not None
+
+
+@pytest.mark.skipif(
+    not _LITELLM_ENTERPRISE_AVAILABLE,
+    reason="litellm_enterprise is not installed (enterprise-only background cost tracking)",
+)
 class TestCheckResponsesCost:
     """Tests for the CheckResponsesCost polling class"""
 
@@ -299,18 +295,14 @@ class TestCheckResponsesCost:
         assert checker.llm_router == mock_llm_router
 
     @pytest.mark.asyncio
-    async def test_check_responses_cost_no_jobs(
-        self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router
-    ):
+    async def test_check_responses_cost_no_jobs(self, mock_proxy_logging_obj, mock_prisma_client, mock_llm_router):
         """Test polling when there are no jobs"""
         from litellm_enterprise.proxy.common_utils.check_responses_cost import (
             CheckResponsesCost,
         )
 
         # Mock find_many to return empty list
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[])
 
         checker = CheckResponsesCost(
             proxy_logging_obj=mock_proxy_logging_obj,
@@ -345,9 +337,7 @@ class TestCheckResponsesCost:
         mock_job.created_by = "test-user"
 
         # Mock find_many to return the job
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
 
         # Mock update_many
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
@@ -380,9 +370,7 @@ class TestCheckResponsesCost:
 
             # Verify update_many was called to mark job as completed
             mock_prisma_client.db.litellm_managedobjecttable.update_many.assert_called_once()
-            call_args = (
-                mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args
-            )
+            call_args = mock_prisma_client.db.litellm_managedobjecttable.update_many.call_args
             assert call_args[1]["where"]["id"]["in"] == ["job-123"]
             assert call_args[1]["data"]["status"] == "completed"
 
@@ -401,9 +389,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_failed"
         mock_job.created_by = "test-user"
 
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
 
         # Create a failed response
@@ -445,9 +431,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_in_progress"
         mock_job.created_by = "test-user"
 
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
 
         # Create an in-progress response
@@ -489,9 +473,7 @@ class TestCheckResponsesCost:
         mock_job.unified_object_id = "resp_error"
         mock_job.created_by = "test-user"
 
-        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(
-            return_value=[mock_job]
-        )
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
         mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock()
 
         checker = CheckResponsesCost(
