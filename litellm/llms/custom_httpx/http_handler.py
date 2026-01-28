@@ -848,8 +848,10 @@ class AsyncHTTPHandler:
             "keepalive_timeout": AIOHTTP_KEEPALIVE_TIMEOUT,
             "ttl_dns_cache": AIOHTTP_TTL_DNS_CACHE,
             "enable_cleanup_closed": True,
+            "force_close": False,  # Critical: allows connection reuse and prevents starvation
             **connector_kwargs,
         }
+        # Allow 0 for unlimited connections (previous behavior before v1.80.8)
         if AIOHTTP_CONNECTOR_LIMIT > 0:
             transport_connector_kwargs["limit"] = AIOHTTP_CONNECTOR_LIMIT
         if AIOHTTP_CONNECTOR_LIMIT_PER_HOST > 0:
