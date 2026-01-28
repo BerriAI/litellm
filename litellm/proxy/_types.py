@@ -471,6 +471,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model_group/info",
         "/health",
         "/key/list",
+        "/key/aliases",
         "/user/filter/ui",
         "/models",
         "/v1/models",
