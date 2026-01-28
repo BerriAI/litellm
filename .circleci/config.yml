@@ -3478,8 +3478,22 @@ jobs:
                 ls dist/
                 twine upload --verbose dist/*
             else
-                echo "Version ${VERSION} of package is already published on PyPI. Skipping PyPI publish."
-                circleci step halt
+                echo "Version ${VERSION} of package is already published on PyPI."
+                
+                # Check if corresponding Docker nightly image exists
+                NIGHTLY_TAG="v${VERSION}-nightly"
+                echo "Checking for Docker nightly image: litellm/litellm:${NIGHTLY_TAG}"
+                
+                # Check Docker Hub for the nightly image
+                if curl -s "https://hub.docker.com/v2/repositories/litellm/litellm/tags/${NIGHTLY_TAG}" | grep -q "name"; then
+                    echo "Docker nightly image ${NIGHTLY_TAG} exists. This release was already completed successfully."
+                    echo "Skipping PyPI publish and continuing to ensure Docker images are up to date."
+                    circleci step halt
+                else
+                    echo "ERROR: PyPI package ${VERSION} exists but Docker nightly image ${NIGHTLY_TAG} does not exist!"
+                    echo "This indicates an incomplete release. Please investigate."
+                    exit 1
+                fi
             fi
       - run:
           name: Trigger Github Action for new Docker Container + Trigger Load Testing
