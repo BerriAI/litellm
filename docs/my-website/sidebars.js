@@ -280,10 +280,11 @@ const sidebars = {
               type: "category",
               label: "UI User/Team Management",
               items: [
-                "proxy/ui_access_control",
+            "proxy/access_control",
                 "proxy/public_teams",
                 "proxy/self_serve",
                 "proxy/ui/bulk_edit_users",
+                "proxy/ui/page_visibility",
               ]
             },
             {
