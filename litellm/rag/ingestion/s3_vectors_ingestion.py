@@ -483,17 +483,20 @@ class S3VectorsRAGIngestion(BaseRAGIngestion, BaseAWSLLM):
         # Prepare vectors for PutVectors API
         vectors = []
         for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+            # Build metadata dict
+            metadata: Dict[str, str] = {
+                "source_text": chunk,  # Non-filterable (for reference)
+                "chunk_index": str(i),  # Filterable
+            }
+            
+            if filename:
+                metadata["filename"] = filename  # Filterable
+            
             vector_obj = {
                 "key": f"{filename}_{i}" if filename else f"chunk_{i}",
                 "data": {"float32": embedding},
-                "metadata": {
-                    "source_text": chunk,  # Non-filterable (for reference)
-                    "chunk_index": str(i),  # Filterable
-                },
+                "metadata": metadata,
             }
-
-            if filename:
-                vector_obj["metadata"]["filename"] = filename  # Filterable
 
             vectors.append(vector_obj)
 

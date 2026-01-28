@@ -81,16 +81,20 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         """Sync version - generates embedding synchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
         # If not in that format, try to construct it from litellm_params
+        bucket_name: str
+        index_name: str
+        
         if ":" in vector_store_id:
             bucket_name, index_name = vector_store_id.split(":", 1)
         else:
             # Try to get bucket_name from litellm_params
-            bucket_name = litellm_params.get("vector_bucket_name")
-            if not bucket_name:
+            bucket_name_from_params = litellm_params.get("vector_bucket_name")
+            if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
                     "or vector_bucket_name must be provided in litellm_params"
                 )
+            bucket_name = bucket_name_from_params
             index_name = vector_store_id
 
         if isinstance(query, list):
@@ -129,16 +133,20 @@ class S3VectorsVectorStoreConfig(BaseVectorStoreConfig, BaseAWSLLM):
         """Async version - generates embedding asynchronously."""
         # For S3 Vectors, vector_store_id should be in format: bucket_name:index_name
         # If not in that format, try to construct it from litellm_params
+        bucket_name: str
+        index_name: str
+        
         if ":" in vector_store_id:
             bucket_name, index_name = vector_store_id.split(":", 1)
         else:
             # Try to get bucket_name from litellm_params
-            bucket_name = litellm_params.get("vector_bucket_name")
-            if not bucket_name:
+            bucket_name_from_params = litellm_params.get("vector_bucket_name")
+            if not bucket_name_from_params or not isinstance(bucket_name_from_params, str):
                 raise ValueError(
                     "vector_store_id must be in format 'bucket_name:index_name' for S3 Vectors, "
                     "or vector_bucket_name must be provided in litellm_params"
                 )
+            bucket_name = bucket_name_from_params
             index_name = vector_store_id
 
         if isinstance(query, list):

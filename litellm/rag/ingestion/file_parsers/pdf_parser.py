@@ -20,14 +20,14 @@ def extract_text_from_pdf(file_content: bytes) -> Optional[str]:
         Extracted text or None if extraction fails
     """
     try:
+        from io import BytesIO
+
         # Try pypdf first (most common)
         try:
-            from io import BytesIO
-
-            from pypdf import PdfReader
+            from pypdf import PdfReader as PypdfReader
             
             pdf_file = BytesIO(file_content)
-            reader = PdfReader(pdf_file)
+            reader = PypdfReader(pdf_file)
             
             text_parts = []
             for page in reader.pages:
@@ -45,12 +45,10 @@ def extract_text_from_pdf(file_content: bytes) -> Optional[str]:
             
         # Fallback to PyPDF2
         try:
-            from io import BytesIO
-
-            from PyPDF2 import PdfReader
+            from PyPDF2 import PdfReader as PyPDF2Reader
             
             pdf_file = BytesIO(file_content)
-            reader = PdfReader(pdf_file)
+            reader = PyPDF2Reader(pdf_file)
             
             text_parts = []
             for page in reader.pages:
