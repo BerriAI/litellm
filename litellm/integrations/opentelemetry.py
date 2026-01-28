@@ -17,6 +17,10 @@ from litellm.types.utils import (
     StandardCallbackDynamicParams,
     StandardLoggingPayload,
 )
+from litellm.integrations._types.open_inference import (
+    OpenInferenceSpanKindValues,
+    SpanAttributes,
+)
 
 # OpenTelemetry imports moved to individual functions to avoid import errors when not installed
 
@@ -660,6 +664,9 @@ class OpenTelemetry(CustomLogger):
             self._maybe_log_raw_request(
                 kwargs, response_obj, start_time, end_time, span
             )
+            # Ensure proxy-request parent span is annotated with the actual operation kind
+            if parent_span is not None and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME:
+                self.set_attributes(parent_span, kwargs, response_obj)
         else:
             # Do not create primary span (keep hierarchy shallow when parent exists)
             from opentelemetry.trace import Status, StatusCode
@@ -988,9 +995,13 @@ class OpenTelemetry(CustomLogger):
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
         try:
-            from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore[attr-defined]  # OTEL < 1.39.0
+            from opentelemetry.sdk._logs import (
+                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL < 1.39.0
+            )
         except ImportError:
-            from opentelemetry.sdk._logs._internal import LogRecord as SdkLogRecord  # OTEL >= 1.39.0
+            from opentelemetry.sdk._logs._internal import (
+                LogRecord as SdkLogRecord,  # OTEL >= 1.39.0
+            )
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
@@ -1104,6 +1115,12 @@ class OpenTelemetry(CustomLogger):
                 name="guardrail",
                 start_time=self._to_ns(start_time_datetime),
                 context=context,
+            )
+
+            self.safe_set_attribute(
+                span=guardrail_span,
+                key=SpanAttributes.OPENINFERENCE_SPAN_KIND,
+                value=OpenInferenceSpanKindValues.GUARDRAIL.value,
             )
 
             self.safe_set_attribute(
@@ -1605,6 +1622,7 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
+            self.handle_callback_failure(callback_name= self.callback_name)  
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )

@@ -274,11 +274,19 @@ const sidebars = {
             "proxy/custom_sso",
             "proxy/ai_hub",
             "proxy/model_compare_ui",
-            "proxy/public_teams",
-            "proxy/self_serve",
-            "proxy/ui/bulk_edit_users",
             "proxy/ui_credentials",
             "tutorials/scim_litellm",
+            {
+              type: "category",
+              label: "UI User/Team Management",
+              items: [
+            "proxy/access_control",
+                "proxy/public_teams",
+                "proxy/self_serve",
+                "proxy/ui/bulk_edit_users",
+                "proxy/ui/page_visibility",
+              ]
+            },
             {
               type: "category",
               label: "UI Usage Tracking",
@@ -364,6 +372,7 @@ const sidebars = {
           label: "Load Balancing, Routing, Fallbacks",
           href: "https://docs.litellm.ai/docs/routing-load-balancing",
         },
+        "traffic_mirroring",
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
@@ -775,6 +784,7 @@ const sidebars = {
         "providers/oci",
         "providers/ollama",
         "providers/openrouter",
+        "providers/sarvam",
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",
@@ -843,6 +853,7 @@ const sidebars = {
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
+        "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
         "completion/model_alias",
@@ -879,6 +890,7 @@ const sidebars = {
         "scheduler",
         "proxy/auto_routing",
         "proxy/load_balancing",
+        "proxy/keys_teams_router_settings",
         "proxy/provider_budget_routing",
         "proxy/reliability",
         "proxy/fallback_management",
@@ -1017,6 +1029,7 @@ const sidebars = {
       items: [
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
+        "troubleshoot/spend_queue_warnings",
       ],
     },
   ],

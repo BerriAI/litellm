@@ -161,9 +161,11 @@ def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
     [
         "/v1beta/models/gemini-2.5-flash:countTokens",
         "/v1beta/models/gemini-2.0-flash:generateContent",
+        "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
         "/v1beta/models/gemini-1.5-pro:streamGenerateContent",
         "/models/gemini-2.5-flash:countTokens",
         "/models/gemini-2.0-flash:generateContent",
+        "/models/bedrock/claude-sonnet-3.7:generateContent",
         "/models/gemini-1.5-pro:streamGenerateContent",
     ],
 )
@@ -187,9 +189,11 @@ def test_virtual_key_llm_api_routes_allows_google_routes(route):
         "/v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
         "/v1beta/models/gemini-2.5-flash-exp:countTokens",
         "/v1beta/models/custom-model-name-123:streamGenerateContent",
+        "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
         "/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
         "/models/gemini-2.5-flash-exp:countTokens",
         "/models/custom-model-name-123:streamGenerateContent",
+        "/models/bedrock/claude-sonnet-3.7:generateContent",
     ],
 )
 def test_google_routes_with_dynamic_model_names_recognized_as_llm_api_route(route):

@@ -11,7 +11,7 @@ import datetime
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast, Callable
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -42,6 +42,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     add_server_prefix_to_name,
     get_server_prefix,
     is_tool_name_prefixed,
+    merge_mcp_headers,
     normalize_server_name,
     split_server_prefix_from_name,
     validate_mcp_server_name,
@@ -62,7 +63,20 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
 )
-from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name
+
+try:
+    from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name  # type: ignore
+except ImportError:
+    SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
+
+    def validate_tool_name(name: str):
+        from pydantic import BaseModel
+
+        class MockResult(BaseModel):
+            is_valid: bool = True
+            warnings: list = []
+
+        return MockResult()
 
 
 # Probe includes characters on both sides of the separator to mimic real prefixed tool names.
@@ -89,7 +103,9 @@ def _warn_on_server_name_fields(
         if result.is_valid:
             return
 
-        warning_text = "; ".join(result.warnings) if result.warnings else "Validation failed"
+        warning_text = (
+            "; ".join(result.warnings) if result.warnings else "Validation failed"
+        )
         verbose_logger.warning(
             "MCP server '%s' has invalid %s '%s': %s",
             server_id,
@@ -100,7 +116,6 @@ def _warn_on_server_name_fields(
 
     _warn("alias", alias)
     _warn("server_name", server_name)
-
 
 
 def _deserialize_json_dict(data: Any) -> Optional[Dict[str, str]]:
@@ -372,7 +387,7 @@ class MCPServerManager:
             server_prefix = get_server_prefix(server)
 
             # Build headers from server configuration
-            headers = {}
+            headers: Dict[str, str] = {}
 
             # Add authentication headers if configured
             if server.authentication_token:
@@ -385,10 +400,18 @@ class MCPServerManager:
                 elif server.auth_type == MCPAuth.basic:
                     headers["Authorization"] = f"Basic {server.authentication_token}"
 
-            # Add any extra headers from server config
-            # Note: extra_headers is a List[str] of header names to forward, not a dict
-            # For OpenAPI tools, we'll just use the authentication headers
-            # If extra_headers were needed, they would be processed separately
+            # Add any static headers from server config.
+            #
+            # Note: `extra_headers` on MCPServer is a List[str] of header names to forward
+            # from the client request (not available in this OpenAPI tool generation step).
+            # `static_headers` is a dict of concrete headers to always send.
+            headers = (
+                merge_mcp_headers(
+                    extra_headers=headers,
+                    static_headers=server.static_headers,
+                )
+                or {}
+            )
 
             verbose_logger.debug(
                 f"Using headers for OpenAPI tools (excluding sensitive values): "
@@ -1819,6 +1842,7 @@ class MCPServerManager:
         oauth2_headers: Optional[Dict[str, str]],
         raw_headers: Optional[Dict[str, str]],
         proxy_logging_obj: Optional[ProxyLogging],
+        host_progress_callback: Optional[Callable] = None,
     ) -> CallToolResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -1903,7 +1927,7 @@ class MCPServerManager:
         )
 
         async def _call_tool_via_client(client, params):
-            return await client.call_tool(params)
+            return await client.call_tool(params, host_progress_callback=host_progress_callback)
 
         tasks.append(
             asyncio.create_task(_call_tool_via_client(client, call_tool_params))
@@ -1940,6 +1964,8 @@ class MCPServerManager:
         proxy_logging_obj: Optional[ProxyLogging] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        host_progress_callback: Optional[Callable] = None,
+
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
@@ -2015,6 +2041,7 @@ class MCPServerManager:
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
                 proxy_logging_obj=proxy_logging_obj,
+                host_progress_callback=host_progress_callback,
             )
 
         # For OpenAPI tools, await outside the client context

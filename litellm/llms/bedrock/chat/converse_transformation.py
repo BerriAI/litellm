@@ -298,6 +298,39 @@ class AmazonConverseConfig(BaseConfig):
         # Check if the model is specifically Nova Lite 2
         return "nova-2-lite" in model_without_region
 
+    def _map_web_search_options(
+        self,
+        web_search_options: dict,
+        model: str
+    ) -> Optional[BedrockToolBlock]:
+        """
+        Map web_search_options to Nova grounding systemTool.
+
+        Nova grounding (web search) is only supported on Amazon Nova models.
+        Returns None for non-Nova models.
+
+        Args:
+            web_search_options: The web_search_options dict from the request
+            model: The model identifier string
+
+        Returns:
+            BedrockToolBlock with systemTool for Nova models, None otherwise
+
+        Reference: https://docs.aws.amazon.com/nova/latest/userguide/grounding.html
+        """
+        # Only Nova models support nova_grounding
+        # Model strings can be like: "amazon.nova-pro-v1:0", "us.amazon.nova-pro-v1:0", etc.
+        if "nova" not in model.lower():
+            verbose_logger.debug(
+                f"web_search_options passed but model {model} is not a Nova model. "
+                "Nova grounding is only supported on Amazon Nova models."
+            )
+            return None
+
+        # Nova doesn't support search_context_size or user_location params
+        # (unlike Anthropic), so we just enable grounding with no options
+        return BedrockToolBlock(systemTool={"name": "nova_grounding"})
+
     def _transform_reasoning_effort_to_reasoning_config(
         self, reasoning_effort: str
     ) -> dict:
@@ -437,6 +470,10 @@ class AmazonConverseConfig(BaseConfig):
             )
         ):
             supported_params.append("tools")
+
+        # Nova models support web_search_options (mapped to nova_grounding systemTool)
+        if base_model.startswith("amazon.nova"):
+            supported_params.append("web_search_options")
 
         if litellm.utils.supports_tool_choice(
             model=model, custom_llm_provider=self.custom_llm_provider
@@ -729,6 +766,13 @@ class AmazonConverseConfig(BaseConfig):
                     bedrock_tier = "default"  # Bedrock doesn't support "auto"
                 if bedrock_tier in ("default", "flex", "priority"):
                     optional_params["serviceTier"] = {"type": bedrock_tier}
+
+            if param == "web_search_options" and value and isinstance(value, dict):                                                                                 
+                grounding_tool = self._map_web_search_options(value, model)                                                                                         
+                if grounding_tool is not None:                                                                                                                      
+                    optional_params = self._add_tools_to_optional_params(                                                                                           
+                        optional_params=optional_params, tools=[grounding_tool]                                                                                     
+                    )  
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
         # Nova Lite 2 handles token budgeting differently through reasoningConfig
@@ -1388,20 +1432,23 @@ class AmazonConverseConfig(BaseConfig):
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
+        Optional[List[CitationsContentBlock]],
     ]:
         """
-        Translate the message content to a string and a list of tool calls and reasoning content blocks
+        Translate the message content to a string and a list of tool calls, reasoning content blocks, and citations.
 
         Returns:
             content_str: str
             tools: List[ChatCompletionToolCallChunk]
             reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]]
+            citationsContentBlocks: Optional[List[CitationsContentBlock]] - Citations from Nova grounding
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
         reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
             None
         )
+        citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
         for idx, content in enumerate(content_blocks):
             """
             - Content is either a tool response or text
@@ -1446,10 +1493,15 @@ class AmazonConverseConfig(BaseConfig):
                 if reasoningContentBlocks is None:
                     reasoningContentBlocks = []
                 reasoningContentBlocks.append(content["reasoningContent"])
+            # Handle Nova grounding citations content
+            if "citationsContent" in content:
+                if citationsContentBlocks is None:
+                    citationsContentBlocks = []
+                citationsContentBlocks.append(content["citationsContent"])
 
-        return content_str, tools, reasoningContentBlocks
+        return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
-    def _transform_response(
+    def _transform_response( # noqa: PLR0915
         self,
         model: str,
         response: httpx.Response,
@@ -1525,18 +1577,27 @@ class AmazonConverseConfig(BaseConfig):
         reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
             None
         )
+        citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
 
         if message is not None:
             (
                 content_str,
                 tools,
                 reasoningContentBlocks,
+                citationsContentBlocks,
             ) = self._translate_message_content(message["content"])
 
+        # Initialize provider_specific_fields if we have any special content blocks
+        provider_specific_fields: dict = {}
         if reasoningContentBlocks is not None:
-            chat_completion_message["provider_specific_fields"] = {
-                "reasoningContentBlocks": reasoningContentBlocks,
-            }
+            provider_specific_fields["reasoningContentBlocks"] = reasoningContentBlocks
+        if citationsContentBlocks is not None:
+            provider_specific_fields["citationsContent"] = citationsContentBlocks
+
+        if provider_specific_fields:
+            chat_completion_message["provider_specific_fields"] = provider_specific_fields
+
+        if reasoningContentBlocks is not None:
             chat_completion_message["reasoning_content"] = (
                 self._transform_reasoning_content(reasoningContentBlocks)
             )

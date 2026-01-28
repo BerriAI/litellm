@@ -73,6 +73,7 @@ class SupportedDBObjectType(str, enum.Enum):
     MODELS = "models"
     MCP = "mcp"
     GUARDRAILS = "guardrails"
+    POLICIES = "policies"
     VECTOR_STORES = "vector_stores"
     PASS_THROUGH_ENDPOINTS = "pass_through_endpoints"
     PROMPTS = "prompts"
@@ -424,12 +425,12 @@ class LiteLLMRoutes(enum.Enum):
     ]
 
     google_routes = [
-        "/v1beta/models/{model_name}:countTokens",
-        "/v1beta/models/{model_name}:generateContent",
-        "/v1beta/models/{model_name}:streamGenerateContent",
-        "/models/{model_name}:countTokens",
-        "/models/{model_name}:generateContent",
-        "/models/{model_name}:streamGenerateContent",
+        "/v1beta/models/{model_name:path}:countTokens",
+        "/v1beta/models/{model_name:path}:generateContent",
+        "/v1beta/models/{model_name:path}:streamGenerateContent",
+        "/models/{model_name:path}:countTokens",
+        "/models/{model_name:path}:generateContent",
+        "/models/{model_name:path}:streamGenerateContent",
         # Google Interactions API
         "/interactions",
         "/v1beta/interactions",
@@ -844,10 +845,18 @@ class GenerateRequestBase(LiteLLMPydanticObjectBase):
     model_rpm_limit: Optional[dict] = None
     model_tpm_limit: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     blocked: Optional[bool] = None
     aliases: Optional[dict] = {}
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
+
+    @field_validator("max_budget", mode="before")
+    @classmethod
+    def check_max_budget(cls, v):
+        if v == "":
+            return None
+        return v
 
 
 class AllowedVectorStoreIndexItem(LiteLLMPydanticObjectBase):
@@ -1477,6 +1486,7 @@ class NewTeamRequest(TeamBase):
     model_aliases: Optional[dict] = None
     tags: Optional[list] = None
     guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     prompts: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     allowed_passthrough_routes: Optional[list] = None
@@ -1526,6 +1536,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     blocked: Optional[bool] = None
     budget_duration: Optional[str] = None
     guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     """
 
     team_id: str  # required
@@ -1541,6 +1552,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     tags: Optional[list] = None
     model_aliases: Optional[dict] = None
     guardrails: Optional[List[str]] = None
+    policies: Optional[List[str]] = None
     object_permission: Optional[LiteLLM_ObjectPermissionBase] = None
     team_member_budget: Optional[float] = None
     team_member_budget_duration: Optional[str] = None
@@ -2060,6 +2072,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
         None,
         description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
+    )
+    store_prompts_in_spend_logs: Optional[bool] = Field(
+        None,
+        description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    maximum_spend_logs_retention_period: Optional[str] = Field(
+        None,
+        description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
 
 
@@ -3416,6 +3436,8 @@ class LitellmMetadataFromRequestHeaders(TypedDict, total=False):
     """
 
     spend_logs_metadata: Optional[dict]
+    agent_id: Optional[str]
+    trace_id: Optional[str]
 
 
 class JWTKeyItem(TypedDict, total=False):
@@ -3499,6 +3521,7 @@ LiteLLM_ManagementEndpoint_MetadataFields = [
 
 LiteLLM_ManagementEndpoint_MetadataFields_Premium = [
     "guardrails",
+    "policies",
     "tags",
     "team_member_key_duration",
     "prompts",
