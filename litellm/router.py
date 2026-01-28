@@ -7147,15 +7147,7 @@ class Router:
         if model_id in self.model_names or self.has_model_id(model_id):
             return model_id
 
-        # Strategy 2: Check with provider prefix (e.g., "vertex_ai/veo-3.0-generate-preview")
-        if custom_llm_provider:
-            full_model_name = f"{custom_llm_provider}/{model_id}"
-            if full_model_name in self.model_names or self.has_model_id(
-                full_model_name
-            ):
-                return full_model_name
-
-        # Strategy 3: Search through router's model_list to find by litellm_params.model
+        # Strategy 2: Search through router's model_list to find by litellm_params.model
         all_models = self.get_model_list(model_name=None)
         if not all_models:
             return None
