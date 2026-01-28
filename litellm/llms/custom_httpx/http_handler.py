@@ -50,9 +50,21 @@ try:
 except Exception:
     version = "0.0.0"
 
-headers = {
-    "User-Agent": f"litellm/{version}",
-}
+def get_default_headers() -> dict:
+    """
+    Get default headers for HTTP requests.
+
+    - Default: `User-Agent: litellm/{version}`
+    - Override: set `LITELLM_USER_AGENT` to fully override the header value.
+    """
+    user_agent = os.environ.get("LITELLM_USER_AGENT")
+    if user_agent is not None:
+        return {"User-Agent": user_agent}
+
+    return {"User-Agent": f"litellm/{version}"}
+
+# Initialize headers (User-Agent)
+headers = get_default_headers()
 
 # https://www.python-httpx.org/advanced/timeouts
 _DEFAULT_TIMEOUT = httpx.Timeout(timeout=5.0, connect=5.0)
@@ -371,13 +383,16 @@ class AsyncHTTPHandler:
             shared_session=shared_session,
         )
 
+        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
+        default_headers = get_default_headers()
+
         return httpx.AsyncClient(
             transport=transport,
             event_hooks=event_hooks,
             timeout=timeout,
             verify=ssl_config,
             cert=cert,
-            headers=headers,
+            headers=default_headers,
             follow_redirects=True,
         )
 
@@ -899,6 +914,9 @@ class HTTPHandler:
         # /path/to/client.pem
         cert = os.getenv("SSL_CERTIFICATE", litellm.ssl_certificate)
 
+        # Get default headers (User-Agent, overridable via LITELLM_USER_AGENT)
+        default_headers = get_default_headers() if not disable_default_headers else None
+
         if client is None:
             transport = self._create_sync_transport()
 
@@ -908,7 +926,7 @@ class HTTPHandler:
                 timeout=timeout,
                 verify=ssl_config,
                 cert=cert,
-                headers=headers if not disable_default_headers else None,
+                headers=default_headers,
                 follow_redirects=True,
             )
         else:
