@@ -28,6 +28,13 @@ def get_supported_openai_params(  # noqa: PLR0915
         try:
             custom_llm_provider = litellm.get_llm_provider(model=model)[1]
         except BadRequestError:
+            # Provider not found - check if model is in model_cost before returning None
+            if model in litellm.model_cost:
+                model_info = litellm.model_cost[model]
+                if isinstance(model_info, dict):
+                    supported_params = model_info.get("supported_openai_params")
+                    if supported_params is not None and isinstance(supported_params, list):
+                        return supported_params
             return None
 
     if custom_llm_provider in LlmProvidersSet:
@@ -300,5 +307,13 @@ def get_supported_openai_params(  # noqa: PLR0915
             return None
         elif request_type == "transcription":
             return None
+
+    # Fallback: Check model_cost for custom models 
+    if model in litellm.model_cost:
+        model_info = litellm.model_cost[model]
+        if isinstance(model_info, dict):
+            supported_params = model_info.get("supported_openai_params")
+            if supported_params is not None and isinstance(supported_params, list):
+                return supported_params
 
     return None
