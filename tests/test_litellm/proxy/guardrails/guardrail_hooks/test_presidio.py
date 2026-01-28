@@ -17,9 +17,10 @@ from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
     _OPTIONAL_PresidioPIIMasking,
+    _replace_pii_tokens_in_text,
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
-from litellm.types.utils import Choices, Message, ModelResponse
+from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices
 
 
 @pytest.fixture
@@ -426,6 +427,278 @@ async def test_no_messages_field(presidio_guardrail, mock_user_api_key, mock_cac
     print("✓ No messages field test passed")
 
 
+# --- _replace_pii_tokens_in_text (output_parse_pii unmasking) ---
+
+
+def test_replace_pii_tokens_exact_replace():
+    """Exact placeholder keys are replaced with original values."""
+    text = "Hello <PERSON> and <EMAIL>."
+    pii_tokens = {"<PERSON>": "Jane", "<EMAIL>": "jane@example.com"}
+    result = _replace_pii_tokens_in_text(text, pii_tokens)
+    assert result == "Hello Jane and jane@example.com."
+
+
+def test_replace_pii_tokens_longest_key_first():
+    """Longer keys are replaced first so <PERSON>uuid is replaced before <PERSON>."""
+    text = "User <PERSON>a1b2c3 and <PERSON>."
+    pii_tokens = {
+        "<PERSON>": "Unknown",
+        "<PERSON>a1b2c3": "Alice",
+    }
+    result = _replace_pii_tokens_in_text(text, pii_tokens)
+    assert result == "User Alice and Unknown."
+
+
+def test_replace_pii_tokens_corrupted_uuid_placeholder():
+    """LLM-corrupted uuid-style placeholders (key + trailing letters) are unmasked."""
+    # e.g. <PERSON>...fa9d -> <PERSON>...fa9den
+    text = "Contact <PERSON>abc-123-def-456-ghi789fa9den for details."
+    pii_tokens = {
+        "<PERSON>abc-123-def-456-ghi789fa9d": "Jane Doe",
+    }
+    result = _replace_pii_tokens_in_text(text, pii_tokens)
+    assert result == "Contact Jane Doe for details."
+
+
+def test_replace_pii_tokens_empty_dict_returns_unchanged():
+    """Empty pii_tokens returns text unchanged."""
+    text = "Hello <PERSON>."
+    result = _replace_pii_tokens_in_text(text, {})
+    assert result == text
+
+
+@pytest.mark.asyncio
+async def test_post_call_uses_request_scoped_pii_tokens_not_instance(mock_user_api_key):
+    """Post_call uses only data['_presidio_pii_tokens'] and does not fall back to self.pii_tokens."""
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="test_guardrail",
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    # Intentionally set instance pii_tokens to a different (stale) value
+    presidio.pii_tokens = {"<PERSON>": "WrongPerson"}
+    # Request-scoped mapping (what pre_call would have stored)
+    data = {
+        "_presidio_pii_tokens": {
+            "test_guardrail": {"<PERSON>": "Jane Doe"},
+        },
+    }
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(role="assistant", content="Hello <PERSON>!"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+    result = await presidio.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+    assert result.choices[0].message.content == "Hello Jane Doe!"
+    # Proves we did not use self.pii_tokens ("WrongPerson")
+    assert "WrongPerson" not in result.choices[0].message.content
+
+
+@pytest.mark.asyncio
+async def test_pre_call_stores_pii_tokens_in_data_when_output_parse_pii(
+    mock_user_api_key, mock_cache
+):
+    """Pre_call stores _presidio_pii_tokens in data when output_parse_pii is True."""
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="pre_call_test",
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    # Simulate check_pii having recorded placeholders
+    async def mock_check_pii(text, output_parse_pii, presidio_config, request_data):
+        presidio.pii_tokens["<PERSON>"] = "Alice"
+        return text
+    presidio.check_pii = mock_check_pii
+    data = {
+        "messages": [{"role": "user", "content": "Hello Alice"}],
+        "model": "gpt-4",
+    }
+    result = await presidio.async_pre_call_hook(
+        user_api_key_dict=mock_user_api_key,
+        cache=mock_cache,
+        data=data,
+        call_type="completion",
+    )
+    assert result is not None
+    assert "_presidio_pii_tokens" in result
+    assert "pre_call_test" in result["_presidio_pii_tokens"]
+    assert result["_presidio_pii_tokens"]["pre_call_test"] == {"<PERSON>": "Alice"}
+
+
+@pytest.mark.asyncio
+async def test_post_call_multiple_choices_unmask(mock_user_api_key):
+    """Post_call unmasks content in every choice (response.choices loop)."""
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="multi_choice_guard",
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    data = {
+        "_presidio_pii_tokens": {
+            "multi_choice_guard": {"<PERSON>": "Alice", "<EMAIL>": "alice@test.com"},
+        },
+    }
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(role="assistant", content="Hello <PERSON>!"),
+                index=0,
+                finish_reason="stop",
+            ),
+            Choices(
+                message=Message(role="assistant", content="Email: <EMAIL>"),
+                index=1,
+                finish_reason="stop",
+            ),
+        ],
+    )
+    result = await presidio.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+    assert result.choices[0].message.content == "Hello Alice!"
+    assert result.choices[1].message.content == "Email: alice@test.com"
+
+
+@pytest.mark.asyncio
+async def test_post_call_pii_tokens_missing_guardrail_name_returns_unchanged(
+    mock_user_api_key,
+):
+    """When _presidio_pii_tokens exists but has no key for this guardrail, response is returned unchanged."""
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="my_guard",
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    # data has _presidio_pii_tokens but no "my_guard" key (or empty dict for my_guard)
+    data = {"_presidio_pii_tokens": {}}
+    response = ModelResponse(
+        id="1",
+        object="chat.completion",
+        created=0,
+        model="gpt-test",
+        choices=[
+            Choices(
+                message=Message(role="assistant", content="Hello <PERSON>!"),
+                index=0,
+                finish_reason="stop",
+            )
+        ],
+    )
+    result = await presidio.async_post_call_success_hook(
+        data=data,
+        user_api_key_dict=mock_user_api_key,
+        response=response,
+    )
+    assert result.choices[0].message.content == "Hello <PERSON>!"
+    # Same when another guardrail has tokens but not ours (my_guard not in dict)
+    data2 = {"_presidio_pii_tokens": {"other_guardrail": {"<PERSON>": "Bob"}}}
+    result2 = await presidio.async_post_call_success_hook(
+        data=data2,
+        user_api_key_dict=mock_user_api_key,
+        response=ModelResponse(
+            id="2",
+            object="chat.completion",
+            created=0,
+            model="gpt-test",
+            choices=[
+                Choices(
+                    message=Message(role="assistant", content="Hi <PERSON>"),
+                    index=0,
+                    finish_reason="stop",
+                )
+            ],
+        ),
+    )
+    assert result2.choices[0].message.content == "Hi <PERSON>"
+
+
+@pytest.mark.asyncio
+async def test_streaming_post_call_corrupted_uuid_placeholder_unmask(mock_user_api_key):
+    """Streaming response with LLM-corrupted uuid placeholder is unmasked correctly."""
+    presidio = _OPTIONAL_PresidioPIIMasking(
+        guardrail_name="stream_guard",
+        mock_testing=True,
+        output_parse_pii=True,
+    )
+    # Corrupted placeholder: key + "en" -> should unmask to "Jane Doe"
+    request_data = {
+        "_presidio_pii_tokens": {
+            "stream_guard": {
+                "<PERSON>abc-123-def-456-ghi789fa9d": "Jane Doe",
+            },
+        },
+    }
+
+    async def mock_stream():
+        # Simulate chunks that together form: "Contact <PERSON>abc-123-def-456-ghi789fa9den for details."
+        yield ModelResponseStream(
+            id="chunk1",
+            created=0,
+            model="gpt-test",
+            choices=[
+                StreamingChoices(
+                    delta=Delta(content="Contact "),
+                    index=0,
+                )
+            ],
+        )
+        yield ModelResponseStream(
+            id="chunk2",
+            created=0,
+            model="gpt-test",
+            choices=[
+                StreamingChoices(
+                    delta=Delta(content="<PERSON>abc-123-def-456-ghi789fa9den"),
+                    index=0,
+                )
+            ],
+        )
+        yield ModelResponseStream(
+            id="chunk3",
+            created=0,
+            model="gpt-test",
+            choices=[
+                StreamingChoices(
+                    delta=Delta(content=" for details."),
+                    index=0,
+                )
+            ],
+        )
+
+    collected = []
+    async for chunk in presidio.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=mock_user_api_key,
+        response=mock_stream(),
+        request_data=request_data,
+    ):
+        if chunk.choices and hasattr(chunk.choices[0], "delta") and chunk.choices[0].delta and getattr(chunk.choices[0].delta, "content", None):
+            collected.append(chunk.choices[0].delta.content or "")
+        elif chunk.choices and hasattr(chunk.choices[0], "message") and getattr(chunk.choices[0].message, "content", None):
+            collected.append(chunk.choices[0].message.content or "")
+
+    full_content = "".join(collected)
+    assert full_content == "Contact Jane Doe for details."
+    assert "fa9den" not in full_content
+
+
 @pytest.mark.asyncio
 async def test_logging_hook_multimodal_message_format(presidio_guardrail):
     """
@@ -737,7 +1010,7 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     assert len(created) == 1
     assert created[0].apply_to_output is True
 
-    # both -> expect two callbacks (input + output)
+    # both without output_parse_pii -> expect two callbacks (input + output)
     created.clear()
     params_both = LitellmParams(
         guardrail="presidio", mode="pre_call", presidio_filter_scope="both"
@@ -746,6 +1019,18 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
     assert len(created) == 2
     assert any(not c.apply_to_output for c in created)
     assert any(c.apply_to_output for c in created)
+
+    # both with output_parse_pii -> single callback (pre_call + post_call), no output-mask
+    created.clear()
+    params_both_output_parse = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        presidio_filter_scope="both",
+        output_parse_pii=True,
+    )
+    cb = initialize_presidio(params_both_output_parse, guardrail_dict)
+    assert len(created) == 1
+    assert created[0].apply_to_output is False
 
 
 @pytest.mark.asyncio
