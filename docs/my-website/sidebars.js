@@ -266,40 +266,6 @@ const sidebars = {
         },
         {
           type: "category",
-          label: "Admin UI",
-          items: [
-            "proxy/ui",
-            "proxy/admin_ui_sso",
-            "proxy/custom_root_ui",
-            "proxy/custom_sso",
-            "proxy/ai_hub",
-            "proxy/model_compare_ui",
-            "proxy/public_teams",
-            "proxy/self_serve",
-            "proxy/ui/bulk_edit_users",
-            "proxy/ui_credentials",
-            "tutorials/scim_litellm",
-            {
-              type: "category",
-              label: "UI Usage Tracking",
-              items: [
-                "proxy/customer_usage",
-                "proxy/endpoint_activity"
-              ]
-            },
-            {
-              type: "category",
-              label: "UI Logs",
-              items: [
-                "proxy/ui_logs",
-                "proxy/ui_logs_sessions",
-                "proxy/deleted_keys_teams"
-              ]
-            }
-          ],
-        },
-        {
-          type: "category",
           label: "Architecture",
           items: [
             "proxy/architecture",
@@ -428,6 +394,31 @@ const sidebars = {
           ],
         },
       ]
+    },
+    {
+      type: "category",
+      label: "UI Dashboard",
+      items: [
+        "proxy/ui",
+        "proxy/admin_ui_sso",
+        "proxy/custom_root_ui",
+        "proxy/custom_sso",
+        "proxy/ai_hub",
+        "proxy/model_compare_ui",
+        "proxy/public_teams",
+        "proxy/self_serve",
+        "proxy/ui/bulk_edit_users",
+        "proxy/ui_credentials",
+        "tutorials/scim_litellm",
+        {
+          type: "category",
+          label: "UI Logs",
+          items: [
+            "proxy/ui_logs",
+            "proxy/ui_logs_sessions"
+          ]
+        }
+      ],
     },
     {
       type: "category",
