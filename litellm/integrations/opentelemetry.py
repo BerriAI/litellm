@@ -995,11 +995,11 @@ class OpenTelemetry(CustomLogger):
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
         try:
-            from opentelemetry.sdk._logs import (
-                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL < 1.39.0
+            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]
+                LogRecord as SdkLogRecord,  # OTEL < 1.39.0
             )
         except ImportError:
-            from opentelemetry.sdk._logs._internal import (
+            from opentelemetry.sdk._logs._internal import (  # type: ignore[attr-defined]
                 LogRecord as SdkLogRecord,  # OTEL >= 1.39.0
             )
 
@@ -1622,7 +1622,7 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
-            self.handle_callback_failure(callback_name= self.callback_name)  
+            self.handle_callback_failure(callback_name=self.callback_name or "opentelemetry")
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
