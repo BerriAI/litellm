@@ -352,6 +352,10 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
     }
 
     return items
+      .map((item) => ({
+        ...item,
+        children: item.children ? filterItemsByRole(item.children) : undefined,
+      }))
       .filter((item) => {
         // Special handling for organizations menu item - allow org_admins
         if (item.key === "organizations") {
@@ -372,17 +376,24 @@ const Sidebar: React.FC<SidebarProps> = ({ setPage, defaultSelectedKey, collapse
 
         // Check enabled pages for internal users (non-admins)
         if (!isAdmin && enabledPagesInternalUsers !== null && enabledPagesInternalUsers !== undefined) {
+          // If item has children, check if any children are visible
+          if (item.children && item.children.length > 0) {
+            const hasVisibleChildren = item.children.some((child) => 
+              enabledPagesInternalUsers.includes(child.page)
+            );
+            if (hasVisibleChildren) {
+              console.log(`[LeftNav] Parent "${item.page}" (${item.key}): VISIBLE (has visible children)`);
+              return true;
+            }
+          }
+          
           const isIncluded = enabledPagesInternalUsers.includes(item.page);
           console.log(`[LeftNav] Page "${item.page}" (${item.key}): ${isIncluded ? "VISIBLE" : "HIDDEN"}`);
           return isIncluded;
         }
 
         return true;
-      })
-      .map((item) => ({
-        ...item,
-        children: item.children ? filterItemsByRole(item.children) : undefined,
-      }));
+      });
   };
 
   // Build menu items with groups
