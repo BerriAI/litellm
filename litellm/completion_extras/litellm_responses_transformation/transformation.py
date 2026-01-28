@@ -301,6 +301,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         from litellm.types.utils import CallTypes
 
         setattr(litellm_logging_obj, "call_type", CallTypes.responses.value)
+        
+        # Extract additional_drop_params from litellm_params or optional_params
+        additional_drop_params = litellm_params.get(
+            "additional_drop_params"
+        ) or optional_params.get("additional_drop_params")
 
         request_data = {
             "model": api_model,
@@ -308,6 +313,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             "litellm_logging_obj": litellm_logging_obj,
             **litellm_params,
             "client": client,
+            "additional_drop_params": additional_drop_params,
         }
 
         verbose_logger.debug(
