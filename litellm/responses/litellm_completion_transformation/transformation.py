@@ -1656,40 +1656,48 @@ class LiteLLMCompletionResponsesConfig:
         # Translate prompt_tokens_details to input_tokens_details
         if hasattr(usage, "prompt_tokens_details") and usage.prompt_tokens_details is not None:
             prompt_details = usage.prompt_tokens_details
-            input_details_dict: Dict[str, Optional[int]] = {}
 
-            if hasattr(prompt_details, "cached_tokens") and prompt_details.cached_tokens is not None:
-                input_details_dict["cached_tokens"] = prompt_details.cached_tokens
-            else:
-                input_details_dict["cached_tokens"] = 0
+            cached_tokens = (
+                prompt_details.cached_tokens
+                if hasattr(prompt_details, "cached_tokens") and prompt_details.cached_tokens is not None
+                else 0
+            )
+            text_tokens = (
+                prompt_details.text_tokens
+                if hasattr(prompt_details, "text_tokens") and prompt_details.text_tokens is not None
+                else None
+            )
+            audio_tokens = (
+                prompt_details.audio_tokens
+                if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None
+                else None
+            )
 
-            if hasattr(prompt_details, "text_tokens") and prompt_details.text_tokens is not None:
-                input_details_dict["text_tokens"] = prompt_details.text_tokens
-
-            if hasattr(prompt_details, "audio_tokens") and prompt_details.audio_tokens is not None:
-                input_details_dict["audio_tokens"] = prompt_details.audio_tokens
-
-            if input_details_dict:
-                response_usage.input_tokens_details = InputTokensDetails(  # type: ignore[arg-type]
-                    **input_details_dict
-                )
+            response_usage.input_tokens_details = InputTokensDetails(
+                cached_tokens=cached_tokens,
+                text_tokens=text_tokens,
+                audio_tokens=audio_tokens,
+            )
 
         # Translate completion_tokens_details to output_tokens_details
         if hasattr(usage, "completion_tokens_details") and usage.completion_tokens_details is not None:
             completion_details = usage.completion_tokens_details
-            output_details_dict: Dict[str, Optional[int]] = {}
-            if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
-                output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
-            else:
-                output_details_dict["reasoning_tokens"] = 0
 
-            if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
-                output_details_dict["text_tokens"] = completion_details.text_tokens
+            reasoning_tokens = (
+                completion_details.reasoning_tokens
+                if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None
+                else 0
+            )
+            text_tokens = (
+                completion_details.text_tokens
+                if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None
+                else None
+            )
 
-            if output_details_dict:
-                response_usage.output_tokens_details = OutputTokensDetails(  # type: ignore[arg-type]
-                    **output_details_dict
-                )
+            response_usage.output_tokens_details = OutputTokensDetails(
+                reasoning_tokens=reasoning_tokens,
+                text_tokens=text_tokens,
+            )
 
         return response_usage
 

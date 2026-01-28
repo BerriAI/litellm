@@ -1559,14 +1559,14 @@ def convert_to_anthropic_tool_result(
             if content["type"] == "text":
                 # Only include cache_control if explicitly set and not None
                 # to avoid sending "cache_control": null which breaks some API channels
-                text_content: AnthropicMessagesToolResultContent = {
+                text_content: Dict[str, Any] = {
                     "type": "text",
                     "text": content["text"],
                 }
                 cache_control_value = content.get("cache_control")
                 if cache_control_value is not None:
                     text_content["cache_control"] = cache_control_value
-                anthropic_content_list.append(text_content)
+                anthropic_content_list.append(cast(AnthropicMessagesToolResultContent, text_content))
             elif content["type"] == "image_url":
                 format = content["image_url"].get("format") if isinstance(content["image_url"], dict) else None
                 _anthropic_image_param = create_anthropic_image_param(content["image_url"], format=format)
