@@ -249,7 +249,12 @@ def _override_openai_response_model(
     LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
     That internal identifier should not be returned to clients in the OpenAI `model` field.
 
-    Logs an error when the downstream response model differs, then overwrites it.
+    Note: This is intentionally verbose. A model mismatch is a useful signal that an internal
+    model identifier is being stamped/preserved somewhere in the request/response pipeline.
+    We log mismatches as warnings (and then restamp to the client-requested value) so these
+    paths stay observable for maintainers/operators without breaking client compatibility.
+
+    Errors are reserved for cases where the proxy cannot read/override the response model field.
     """
     if not requested_model:
         return
@@ -257,7 +262,7 @@ def _override_openai_response_model(
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
         if downstream_model != requested_model:
-            verbose_proxy_logger.error(
+            verbose_proxy_logger.warning(
                 "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
                 log_context,
                 requested_model,
@@ -266,15 +271,6 @@ def _override_openai_response_model(
         response_obj["model"] = requested_model
         return
 
-    downstream_model = getattr(response_obj, "model", None)
-    if downstream_model != requested_model:
-        verbose_proxy_logger.error(
-            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
-            log_context,
-            requested_model,
-            downstream_model,
-        )
-
     if not hasattr(response_obj, "model"):
         verbose_proxy_logger.error(
             "%s: cannot override response model; missing `model` attribute. response_type=%s",
@@ -282,6 +278,15 @@ def _override_openai_response_model(
             type(response_obj),
         )
         return
+
+    downstream_model = getattr(response_obj, "model", None)
+    if downstream_model != requested_model:
+        verbose_proxy_logger.warning(
+            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
+            log_context,
+            requested_model,
+            downstream_model,
+        )
 
     try:
         setattr(response_obj, "model", requested_model)

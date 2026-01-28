@@ -4505,7 +4505,11 @@ async def async_data_generator(
                 str_so_far_parts.append(response_str)
 
             # Always return the client-requested model name (not provider-prefixed internal identifiers)
-            # on streaming chunks. Log an error on the first mismatch to make debugging obvious.
+            # on streaming chunks.
+            #
+            # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
+            # internal provider/deployment identifier is leaking into the public API, and helps
+            # maintainers/operators catch regressions while preserving OpenAI-compatible output.
             if requested_model_from_client and isinstance(chunk, (BaseModel, dict)):
                 if isinstance(chunk, dict):
                     downstream_model = chunk.get("model")
@@ -4515,7 +4519,7 @@ async def async_data_generator(
                     not model_mismatch_logged
                     and downstream_model != requested_model_from_client
                 ):
-                    verbose_proxy_logger.error(
+                    verbose_proxy_logger.warning(
                         "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
                         request_data.get("litellm_call_id"),
                         requested_model_from_client,
