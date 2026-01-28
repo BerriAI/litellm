@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Final, List, Optional, Sequence, Tuple, Union
 from datetime import datetime, timedelta, timezone
 from threading import Lock
 from pathlib import Path
@@ -10,6 +10,7 @@ import tempfile
 
 from litellm import sap_service_key
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm._logging import verbose_logger
 
 AUTH_ENDPOINT_SUFFIX = "/oauth/token"
 
@@ -28,8 +29,10 @@ def _get_home() -> str:
     return os.getenv(HOME_PATH_ENV_VAR, DEFAULT_HOME_PATH)
 
 
-def _get_nested(d: Dict[str, Any], path: Sequence[str]) -> Any:
+def _get_nested(d: Union[Dict[str, Any], str], path: Sequence[str]) -> Any:
     cur: Any = d
+    if isinstance(cur, str):
+        cur = json.loads(cur)
     for k in path:
         if not isinstance(cur, dict) or k not in cur:
             raise KeyError(".".join(path))
@@ -151,32 +154,48 @@ def _resolve_value(
     kwargs: Dict[str, Any],
     env: Dict[str, str],
     config: Dict[str, Any],
-    service_like: Optional[Dict[str, Any]],
+    service_like: Optional[Union[Dict[str, Any], str]],
+    vcap_service: Optional[Dict[str, Any]]
 ) -> Optional[str]:
     # 1) explicit kwargs
     if cred.name in kwargs and kwargs[cred.name] is not None:
         return kwargs[cred.name]
 
-    # 2) environment variables (primary name)
+    # 2) service-like source (AICORE_SERVICE_KEY first, else VCAP)
+    if service_like and cred.vcap_key:
+        try:
+            val = _get_nested(service_like, cred.vcap_key)
+            if val is not None:
+                return val
+        except KeyError:
+            verbose_logger.debug(f"Unable to find {cred.name} in service key")
+            return None
+        except json.JSONDecodeError:
+            raise KeyError("service key variable is not valid JSON. Please fix or remove it!")
+
+    # 3) environment variables (primary name)
     env_key = _env_name(cred.name)
     if env_key in env and env[env_key] is not None:
         return env[env_key]
 
-    # 3) config file (accept both prefixed and plain keys)
+    # 4) VCAP service
+    if vcap_service and cred.vcap_key:
+        try:
+            val = _get_nested(vcap_service, ("credentials",) + cred.vcap_key)
+            if val is not None:
+                return val
+        except KeyError:
+            verbose_logger.debug(f"Unable to find {cred.name} in vcap service")
+            return None
+        except json.JSONDecodeError:
+            raise KeyError("vcap service variable is not valid JSON. Please fix or remove it!")
+
+    # 5) config file (accept both prefixed and plain keys)
     for key in (env_key, cred.name):
         if key in config and config[key] is not None:
             return config[key]
 
-    # 4) service-like source (AICORE_SERVICE_KEY first, else VCAP)
-    if service_like and cred.vcap_key:
-        try:
-            val = _get_nested(service_like, ("credentials",) + cred.vcap_key)
-            if val is not None:
-                return val
-        except KeyError:
-            pass
-
-    # 5) default
+    # 6) default
     return cred.default
 
 
@@ -184,25 +203,23 @@ def fetch_credentials(service_key: Optional[str] = None, profile: Optional[str] 
     """
     Resolution order per key:
       kwargs
+      > service key
       > env (AICORE_<NAME>)
+      > vcap service key
       > config (AICORE_<NAME> or plain <name>)
-      > service-like source from JSON in $AICORE_SERVICE_KEY (same structure as a VCAP service object)
-        falling back to service entry in $VCAP_SERVICES with label 'aicore'
       > default
     """
     config = init_conf(profile)
-    env = os.environ  # snapshot for testability
-    service_like = None
+    env = dict(os.environ)  # snapshot for testability
 
-    if not config:
-        # Prefer AICORE_SERVICE_KEY if present; otherwise fall back to the VCAP service.
-        service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR) or _get_vcap_service(
-            VCAP_AICORE_SERVICE_NAME
-        )
+
+    service_like = service_key or sap_service_key or _load_json_env(SERVICE_KEY_ENV_VAR)
+    vcap_service = _get_vcap_service(VCAP_AICORE_SERVICE_NAME)
 
     out: Dict[str, str] = {}
     for cred in CREDENTIAL_VALUES:
-        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like)  # type: ignore
+        value = _resolve_value(cred, kwargs=kwargs, env=env, config=config, service_like=service_like,
+                               vcap_service=vcap_service)
         if value is None:
             continue
         if cred.transform_fn:
@@ -254,7 +271,9 @@ def get_token_creator(
     # Sanity check
     if not auth_url or not client_id:
         raise ValueError(
-            "fetch_credentials did not return valid 'auth_url' or 'client_id'"
+            "SAP AI Core credentials not found."
+            "Please provide credentials by setting appropriate environment variables "
+            "(e.g. AICORE_CLIENT_ID, AICORE_CLIENT_SECRET, etc.)"
         )
 
     modes = [
@@ -264,6 +283,7 @@ def get_token_creator(
     ]
     if sum(bool(m) for m in modes) != 1:
         raise ValueError(
+            "SAP AI Core credentials are incomplete."
             "Invalid credentials: provide exactly one of client_secret, "
             "(cert_str & key_str), or (cert_file_path & key_file_path)."
         )
