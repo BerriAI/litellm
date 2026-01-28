@@ -1110,21 +1110,21 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             #########################################################
             # Resolve end-user id + budgets
             #########################################################
-            end_user_id: Optional[str] = None
+            resolved_end_user_id: Optional[str] = None
             if use_key_user_id_as_end_user and valid_token.user_id:
-                end_user_id = valid_token.user_id
+                resolved_end_user_id = valid_token.user_id
                 # Ensure downstream hooks / spend logging that read `kwargs.get("user")`
                 # see the derived end-user id (and prevent client spoofing).
-                request_data["user"] = end_user_id
+                request_data["user"] = resolved_end_user_id
             else:
-                end_user_id = request_end_user_id
+                resolved_end_user_id = request_end_user_id
 
-            if end_user_id:
+            if resolved_end_user_id:
                 try:
-                    end_user_params["end_user_id"] = end_user_id
+                    end_user_params["end_user_id"] = resolved_end_user_id
 
                     _end_user_object = await get_end_user_object(
-                        end_user_id=end_user_id,
+                        end_user_id=resolved_end_user_id,
                         prisma_client=prisma_client,
                         user_api_key_cache=user_api_key_cache,
                         parent_otel_span=parent_otel_span,
@@ -1139,7 +1139,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             _apply_budget_limits_to_end_user_params(
                                 end_user_params=end_user_params,
                                 budget_info=_end_user_object.litellm_budget_table,
-                                end_user_id=end_user_id,
+                                end_user_id=resolved_end_user_id,
                             )
                     elif litellm.max_end_user_budget_id is not None:
                         # End user doesn't exist yet, but apply default budget limits if configured
@@ -1156,7 +1156,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                             _apply_budget_limits_to_end_user_params(
                                 end_user_params=end_user_params,
                                 budget_info=default_budget,
-                                end_user_id=end_user_id,
+                                end_user_id=resolved_end_user_id,
                             )
                 except Exception as e:
                     if isinstance(e, litellm.BudgetExceededError):
@@ -1166,7 +1166,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             valid_token.end_user_id = end_user_params.get("end_user_id")
             valid_token.end_user_tpm_limit = end_user_params.get("end_user_tpm_limit")
             valid_token.end_user_rpm_limit = end_user_params.get("end_user_rpm_limit")
-            valid_token.allowed_model_region = end_user_params.get("allowed_model_region")
+            valid_token.allowed_model_region = end_user_params.get(
+                "allowed_model_region"
+            )
 
             _ = await common_checks(
                 request=request,
