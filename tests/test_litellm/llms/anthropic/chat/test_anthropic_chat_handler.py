@@ -1,3 +1,4 @@
+import json
 from unittest.mock import MagicMock
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
@@ -1133,3 +1134,223 @@ def test_container_absent_when_not_provided():
         assert (
             "container" not in model_response.choices[0].delta.provider_specific_fields
         ), "container should not be present when not provided in delta"
+
+
+# Tests for streaming tool call accumulation (Issue #19858)
+def test_get_accumulated_tool_arguments_with_chunks():
+    """Test accumulation of multiple partial_json chunks"""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    # Add multiple partial chunks that combine to valid JSON
+    iterator.content_blocks.append(
+        {"delta": {"type": "input_json_delta", "partial_json": '{"path": "file'}}
+    )
+    iterator.content_blocks.append(
+        {"delta": {"type": "input_json_delta", "partial_json": '.txt", "content": "'}}
+    )
+    iterator.content_blocks.append(
+        {"delta": {"type": "input_json_delta", "partial_json": "hello"}}
+    )
+    iterator.content_blocks.append(
+        {"delta": {"type": "input_json_delta", "partial_json": '"}'}}
+    )
+
+    result = iterator._get_accumulated_tool_arguments()
+    parsed = json.loads(result)
+    assert parsed["path"] == "file.txt"
+    assert parsed["content"] == "hello"
+
+
+def test_get_accumulated_tool_arguments_empty():
+    """Test with no partial_json chunks returns empty JSON object"""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    result = iterator._get_accumulated_tool_arguments()
+    assert result == "{}"
+    parsed = json.loads(result)
+    assert parsed == {}
+
+
+def test_tool_call_complete_arguments_at_stop():
+    """Test that tool call is emitted at content_block_stop with complete args"""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_123",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "write_to_file",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"path": "'},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": "plan.md"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '", "content": "'},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": "hello"},
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 50},
+        },
+    ]
+
+    tool_calls_at_stop = []
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed and parsed.choices:
+            if parsed.choices[0].delta and parsed.choices[0].delta.tool_calls:
+                if chunk.get("type") == "content_block_stop":
+                    tool_calls_at_stop.extend(parsed.choices[0].delta.tool_calls)
+
+    assert len(tool_calls_at_stop) == 1
+    tool_call = tool_calls_at_stop[0]
+    assert tool_call["id"] == "toolu_01"
+    parsed_args = json.loads(tool_call["function"]["arguments"])
+    assert parsed_args["path"] == "plan.md"
+    assert parsed_args["content"] == "hello"
+
+
+def test_multiple_sequential_tool_calls():
+    """Test that multiple tool calls in sequence work correctly"""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    chunks = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_456",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 100, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_01",
+                "name": "delete_file",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": '{"path": "old.txt"}'},
+        },
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_02",
+                "name": "apply_diff",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 1,
+            "delta": {"type": "input_json_delta", "partial_json": '{"path": "file.py"}'},
+        },
+        {"type": "content_block_stop", "index": 1},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use"},
+            "usage": {"output_tokens": 100},
+        },
+    ]
+
+    tool_calls = []
+    for chunk in chunks:
+        parsed = iterator.chunk_parser(chunk)
+        if parsed and parsed.choices:
+            if parsed.choices[0].delta and parsed.choices[0].delta.tool_calls:
+                tool_calls.extend(parsed.choices[0].delta.tool_calls)
+
+    # Both tools should be emitted with complete arguments
+    assert len(tool_calls) == 2
+    assert tool_calls[0]["function"]["name"] == "delete_file"
+    assert tool_calls[1]["function"]["name"] == "apply_diff"
+
+
+def test_pending_tool_call_cleared_after_stop():
+    """Test that pending_tool_call is cleared after content_block_stop"""
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(), sync_stream=True, json_mode=False
+    )
+
+    chunks = [
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+                "type": "tool_use",
+                "id": "toolu_test",
+                "name": "test_tool",
+                "input": {},
+            },
+        },
+        {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {"type": "input_json_delta", "partial_json": "{}"},
+        },
+        {"type": "content_block_stop", "index": 0},
+    ]
+
+    # Before processing: no pending tool call
+    assert iterator.pending_tool_call is None
+
+    # Process chunks
+    for chunk in chunks:
+        iterator.chunk_parser(chunk)
+
+    # After content_block_stop: pending_tool_call should be cleared
+    assert iterator.pending_tool_call is None

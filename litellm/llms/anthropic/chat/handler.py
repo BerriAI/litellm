@@ -512,11 +512,25 @@ class ModelResponseIterator:
         # See: https://github.com/BerriAI/litellm/issues/17737
         self.web_search_results: List[Dict[str, Any]] = []
 
+        # Store pending tool call from content_block_start to emit in content_block_stop
+        # with complete accumulated arguments. Fixes: https://github.com/BerriAI/litellm/issues/19858
+        self.pending_tool_call: Optional[ChatCompletionToolCallChunk] = None
+
+    def _get_accumulated_tool_arguments(self) -> str:
+        """
+        Get accumulated tool call arguments from content_blocks.
+        Used to emit complete tool calls with all partial_json chunks combined.
+        """
+        args = ""
+        for block in self.content_blocks:
+            if block["delta"]["type"] == "input_json_delta":
+                args += block["delta"].get("partial_json", "")  # type: ignore
+        return args if args else "{}"
+
     def check_empty_tool_call_args(self) -> bool:
         """
         Check if the tool call block so far has been an empty string
         """
-        args = ""
         # if text content block -> skip
         if len(self.content_blocks) == 0:
             return False
@@ -527,13 +541,7 @@ class ModelResponseIterator:
         ):
             return False
 
-        for block in self.content_blocks:
-            if block["delta"]["type"] == "input_json_delta":
-                args += block["delta"].get("partial_json", "")  # type: ignore
-
-        if len(args) == 0:
-            return True
-        return False
+        return self._get_accumulated_tool_arguments() == "{}"
 
     def _handle_usage(self, anthropic_usage_chunk: Union[dict, UsageDelta]) -> Usage:
         return AnthropicConfig().calculate_usage(
@@ -561,22 +569,10 @@ class ModelResponseIterator:
         if "text" in content_block["delta"]:
             text = content_block["delta"]["text"]
         elif "partial_json" in content_block["delta"]:
-            # Only emit tool calls if we're in a tool_use or server_tool_use block
-            # web_search_tool_result blocks also have input_json_delta but should not be treated as tool calls
-            # See: https://github.com/BerriAI/litellm/issues/17254
-            if self.current_content_block_type in ("tool_use", "server_tool_use"):
-                tool_use = cast(
-                    ChatCompletionToolCallChunk,
-                    {
-                        "id": None,
-                        "type": "function",
-                        "function": {
-                            "name": None,
-                            "arguments": content_block["delta"]["partial_json"],
-                        },
-                        "index": self.tool_index,
-                    },
-                )
+            # Accumulate partial JSON but don't emit yet
+            # Only emit when content_block_stop is received with complete arguments
+            # This fixes: https://github.com/BerriAI/litellm/issues/19858
+            pass
         elif "citation" in content_block["delta"]:
             provider_specific_fields["citation"] = content_block["delta"]["citation"]
         elif (
@@ -709,6 +705,9 @@ class ModelResponseIterator:
                         caller_data = content_block_start["content_block"]["caller"]
                         if caller_data:
                             tool_use["caller"] = cast(Dict[str, Any], caller_data)  # type: ignore[typeddict-item]
+                    # Store for emission in content_block_stop with accumulated arguments
+                    # Fixes: https://github.com/BerriAI/litellm/issues/19858
+                    self.pending_tool_call = tool_use
                 elif (
                     content_block_start["content_block"]["type"] == "redacted_thinking"
                 ):
@@ -755,19 +754,12 @@ class ModelResponseIterator:
 
             elif type_chunk == "content_block_stop":
                 ContentBlockStop(**chunk)  # type: ignore
-                # check if tool call content block - only for tool_use and server_tool_use blocks
-                if self.current_content_block_type in ("tool_use", "server_tool_use"):
-                    is_empty = self.check_empty_tool_call_args()
-                    if is_empty:
-                        tool_use = ChatCompletionToolCallChunk(
-                            id=None,  # type: ignore[typeddict-item]
-                            type="function",
-                            function=ChatCompletionToolCallFunctionChunk(
-                                name=None,  # type: ignore[typeddict-item]
-                                arguments="{}",
-                            ),
-                            index=self.tool_index,
-                        )
+                # Emit pending tool call with accumulated arguments from all deltas
+                # Fixes: https://github.com/BerriAI/litellm/issues/19858
+                if self.pending_tool_call is not None:
+                    self.pending_tool_call["function"]["arguments"] = self._get_accumulated_tool_arguments()
+                    tool_use = self.pending_tool_call
+                    self.pending_tool_call = None
                 # Reset response_format tool tracking when block stops
                 self.is_response_format_tool = False
                 # Reset current content block type
