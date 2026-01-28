@@ -1638,11 +1638,19 @@ class Logging(LiteLLMLoggingBaseClass):
                     "standard_logging_object"
                 )
             ) is not None:
-                standard_logging_payload["response"] = (
+                response_dict = (
                     result.model_dump()
                     if hasattr(result, "model_dump")
                     else dict(result)
                 )
+                # Ensure usage is properly included with transformed chat format
+                if transformed_usage is not None:
+                    response_dict["usage"] = (
+                        transformed_usage.model_dump()
+                        if hasattr(transformed_usage, "model_dump")
+                        else dict(transformed_usage)
+                    )
+                standard_logging_payload["response"] = response_dict
         elif isinstance(result, TranscriptionResponse):
             from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
                 TranscriptionUsageObjectTransformation,
@@ -4540,6 +4548,10 @@ class StandardLoggingPayloadSetup:
             )
         elif isinstance(usage, Usage):
             return usage
+        elif isinstance(usage, ResponseAPIUsage):
+            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                usage
+            )
         elif isinstance(usage, dict):
             if ResponseAPILoggingUtils._is_response_api_usage(usage):
                 return (
