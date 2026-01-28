@@ -19,6 +19,14 @@ interface BlockedWord {
   description?: string;
 }
 
+interface ContentCategory {
+  id: string;
+  category: string;
+  enabled: boolean;
+  action: "BLOCK" | "MASK";
+  severity_threshold?: string;
+}
+
 interface GuardrailSettings {
   content_filter_settings?: {
     prebuilt_patterns: Array<{
@@ -37,7 +45,7 @@ interface ContentFilterManagerProps {
   guardrailSettings: GuardrailSettings | null;
   isEditing: boolean;
   accessToken: string | null;
-  onDataChange?: (patterns: Pattern[], blockedWords: BlockedWord[]) => void;
+  onDataChange?: (patterns: Pattern[], blockedWords: BlockedWord[], contentCategories?: ContentCategory[]) => void;
   onUnsavedChanges?: (hasChanges: boolean) => void;
 }
 
@@ -51,8 +59,10 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
 }) => {
   const [selectedPatterns, setSelectedPatterns] = useState<Pattern[]>([]);
   const [blockedWords, setBlockedWords] = useState<BlockedWord[]>([]);
+  const [contentCategories, setContentCategories] = useState<ContentCategory[]>([]);
   const [originalPatterns, setOriginalPatterns] = useState<Pattern[]>([]);
   const [originalBlockedWords, setOriginalBlockedWords] = useState<BlockedWord[]>([]);
+  const [originalContentCategories, setOriginalContentCategories] = useState<ContentCategory[]>([]);
 
   // Load data from guardrail on mount or when guardrailData changes
   useEffect(() => {
@@ -85,21 +95,37 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
       setBlockedWords([]);
       setOriginalBlockedWords([]);
     }
+
+    if (guardrailData?.litellm_params?.categories) {
+      const categories = guardrailData.litellm_params.categories.map((c: any, index: number) => ({
+        id: `category-${index}`,
+        category: c.category,
+        enabled: c.enabled !== false,
+        action: c.action || "BLOCK",
+        severity_threshold: c.severity_threshold || "medium",
+      }));
+      setContentCategories(categories);
+      setOriginalContentCategories(categories);
+    } else {
+      setContentCategories([]);
+      setOriginalContentCategories([]);
+    }
   }, [guardrailData]);
 
   // Notify parent component when data changes
   useEffect(() => {
     if (onDataChange) {
-      onDataChange(selectedPatterns, blockedWords);
+      onDataChange(selectedPatterns, blockedWords, contentCategories);
     }
-  }, [selectedPatterns, blockedWords, onDataChange]);
+  }, [selectedPatterns, blockedWords, contentCategories, onDataChange]);
 
   // Detect unsaved changes
   const hasUnsavedChanges = React.useMemo(() => {
     const hasPatternChanges = JSON.stringify(selectedPatterns) !== JSON.stringify(originalPatterns);
     const hasWordChanges = JSON.stringify(blockedWords) !== JSON.stringify(originalBlockedWords);
-    return hasPatternChanges || hasWordChanges;
-  }, [selectedPatterns, blockedWords, originalPatterns, originalBlockedWords]);
+    const hasCategoryChanges = JSON.stringify(contentCategories) !== JSON.stringify(originalContentCategories);
+    return hasPatternChanges || hasWordChanges || hasCategoryChanges;
+  }, [selectedPatterns, blockedWords, contentCategories, originalPatterns, originalBlockedWords, originalContentCategories]);
 
   useEffect(() => {
     if (isEditing && onUnsavedChanges) {
@@ -114,7 +140,14 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
 
   // Read-only display mode
   if (!isEditing) {
-    return <ContentFilterDisplay patterns={selectedPatterns} blockedWords={blockedWords} readOnly={true} />;
+    return (
+      <ContentFilterDisplay
+        patterns={selectedPatterns}
+        blockedWords={blockedWords}
+        contentCategories={contentCategories}
+        readOnly={true}
+      />
+    );
   }
 
   // Edit mode
@@ -160,7 +193,11 @@ const ContentFilterManager: React.FC<ContentFilterManagerProps> = ({
 export default ContentFilterManager;
 
 // Helper function to format data for API
-export const formatContentFilterDataForAPI = (patterns: Pattern[], blockedWords: BlockedWord[]) => {
+export const formatContentFilterDataForAPI = (
+  patterns: Pattern[],
+  blockedWords: BlockedWord[],
+  contentCategories: ContentCategory[] = [],
+) => {
   return {
     patterns: patterns.map((p) => ({
       pattern_type: p.type === "prebuilt" ? "prebuilt" : "regex",
@@ -173,6 +210,12 @@ export const formatContentFilterDataForAPI = (patterns: Pattern[], blockedWords:
       keyword: w.keyword,
       action: w.action,
       description: w.description,
+    })),
+    categories: contentCategories.map((c) => ({
+      category: c.category,
+      enabled: c.enabled,
+      action: c.action,
+      severity_threshold: c.severity_threshold,
     })),
   };
 };
