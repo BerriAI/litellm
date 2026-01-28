@@ -133,7 +133,6 @@ const menuGroups: MenuGroup[] = [
               page: "vector-stores",
               label: "Vector Stores",
               icon: <DatabaseOutlined />,
-              roles: all_admin_roles,
             },
           ],
         },
