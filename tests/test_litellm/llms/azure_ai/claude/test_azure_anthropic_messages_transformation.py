@@ -283,3 +283,82 @@ class TestProviderConfigManagerAzureAnthropicMessages:
         )
 
         assert config is None
+
+
+class TestAzureAnthropicMessagesResponseTransformation:
+    """Test response transformation for Azure AI Anthropic Messages API"""
+
+    def test_transform_anthropic_messages_response_adds_total_tokens(self):
+        """Test that transform_anthropic_messages_response adds total_tokens to usage.
+
+        Azure AI Anthropic returns usage without total_tokens, but the logging
+        utilities expect it for ResponseAPIUsage. This test verifies that
+        total_tokens is calculated and added.
+        """
+        import json
+        from unittest.mock import MagicMock
+
+        config = AzureAnthropicMessagesConfig()
+
+        # Mock response without total_tokens (like Azure AI Anthropic returns)
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hello!"}],
+            "model": "claude-haiku-4-5",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                # Note: no total_tokens
+            },
+        }
+        mock_response.status_code = 200
+
+        mock_logging_obj = MagicMock()
+
+        result = config.transform_anthropic_messages_response(
+            model="claude-haiku-4-5",
+            raw_response=mock_response,
+            logging_obj=mock_logging_obj,
+        )
+
+        assert result["usage"]["total_tokens"] == 150  # 100 + 50
+
+    def test_transform_anthropic_messages_response_preserves_existing_total_tokens(
+        self,
+    ):
+        """Test that existing total_tokens is preserved if already present."""
+        from unittest.mock import MagicMock
+
+        config = AzureAnthropicMessagesConfig()
+
+        # Mock response with total_tokens already present
+        mock_response = MagicMock()
+        mock_response.json.return_value = {
+            "id": "msg_123",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Hello!"}],
+            "model": "claude-haiku-4-5",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "total_tokens": 200,  # Already present (maybe different value)
+            },
+        }
+        mock_response.status_code = 200
+
+        mock_logging_obj = MagicMock()
+
+        result = config.transform_anthropic_messages_response(
+            model="claude-haiku-4-5",
+            raw_response=mock_response,
+            logging_obj=mock_logging_obj,
+        )
+
+        # Verify existing total_tokens is preserved (AnthropicMessagesResponse is a TypedDict)
+        assert result["usage"]["total_tokens"] == 200
