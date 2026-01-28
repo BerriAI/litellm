@@ -219,7 +219,7 @@ const Navbar: React.FC<NavbarProps> = ({
                     style={{ animationDuration: "2s" }}
                     title="Happy Holidays!"
                   >
-                    🎄
+                    ❄️
                   </span>
                 </div>
               </Link>

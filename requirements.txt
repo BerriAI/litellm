@@ -68,6 +68,7 @@ jsonschema>=4.23.0,<5.0.0 # validating json schema - aligned with openapi-core +
 websockets==15.0.1 # for realtime API
 soundfile==0.12.1 # for audio file processing
 openapi-core==0.21.0 # for OpenAPI compliance tests
+pypdf>=6.6.2 # for PDF text extraction in RAG ingestion
 
 ########################
 # LITELLM ENTERPRISE DEPENDENCIES
