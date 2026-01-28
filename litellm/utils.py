@@ -2064,6 +2064,7 @@ def _is_async_request(
         or kwargs.get("atext_completion", False) is True
         or kwargs.get("atranscription", False) is True
         or kwargs.get("arerank", False) is True
+        or kwargs.get("aresponses", False) is True
         or kwargs.get("_arealtime", False) is True
         or kwargs.get("acreate_batch", False) is True
         or kwargs.get("acreate_fine_tuning_job", False) is True
