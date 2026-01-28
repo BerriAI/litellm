@@ -10,7 +10,28 @@ sys.path.insert(
 
 from unittest.mock import MagicMock
 
-from litellm.proxy.route_llm_request import route_request
+from litellm.proxy.route_llm_request import _kwargs_for_llm, route_request
+
+
+def test_kwargs_for_llm_strips_presidio_pii_tokens():
+    """_kwargs_for_llm removes _presidio_pii_tokens so it is not sent to the LLM provider."""
+    data = {
+        "model": "gpt-4",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "_presidio_pii_tokens": {"guardrail_1": {"<PERSON>": "Jane"}},
+    }
+    result = _kwargs_for_llm(data)
+    assert "model" in result
+    assert "messages" in result
+    assert "_presidio_pii_tokens" not in result
+    assert result.get("_presidio_pii_tokens") is None
+
+
+def test_kwargs_for_llm_preserves_other_keys():
+    """_kwargs_for_llm leaves all other keys unchanged."""
+    data = {"model": "gpt-4", "temperature": 0.7, "api_key": "sk-xxx"}
+    result = _kwargs_for_llm(data)
+    assert result == data
 
 
 @pytest.mark.parametrize(

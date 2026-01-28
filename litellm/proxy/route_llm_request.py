@@ -83,6 +83,15 @@ def get_team_id_from_data(data: dict) -> Optional[str]:
     return None
 
 
+# Keys that are only for proxy/guardrail use and must not be sent to the LLM API
+_INTERNAL_REQUEST_KEYS = frozenset({"_presidio_pii_tokens"})
+
+
+def _kwargs_for_llm(data: dict) -> dict:
+    """Strip internal proxy keys so they are not sent to the LLM provider."""
+    return {k: v for k, v in data.items() if k not in _INTERNAL_REQUEST_KEYS}
+
+
 def add_shared_session_to_data(data: dict) -> None:
     """
     Add shared aiohttp session for connection reuse (prevents cold starts).
@@ -176,10 +185,35 @@ async def route_request(
         if "generationConfig" in data and "config" not in data:
             data["config"] = data.pop("generationConfig")
     if "api_key" in data or "api_base" in data:
+        kwargs = _kwargs_for_llm(data)
         if llm_router is not None:
-            return getattr(llm_router, f"{route_type}")(**data)
+            return getattr(llm_router, f"{route_type}")(**kwargs)
         else:
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**kwargs)
+
+    elif "user_config" in data:
+        router_config = data.pop("user_config")
+        user_router = litellm.Router(**router_config)
+        # When user_config is present with batch completion (model "a,b"), use
+        # user_router.abatch_completion so batch still works with the user's config.
+        if (
+            route_type == "acompletion"
+            and data.get("model", "") is not None
+            and "," in data.get("model", "")
+        ):
+            if data.get("fastest_response", False):
+                ret_val = user_router.abatch_completion_fastest_response(
+                    **_kwargs_for_llm(data)
+                )
+            else:
+                models = [m.strip() for m in data.pop("model").split(",")]
+                ret_val = user_router.abatch_completion(
+                    models=models, **_kwargs_for_llm(data)
+                )
+        else:
+            ret_val = getattr(user_router, f"{route_type}")(**_kwargs_for_llm(data))
+        user_router.discard()
+        return ret_val
 
     elif (
         route_type == "acompletion"
@@ -187,26 +221,13 @@ async def route_request(
         and "," in data.get("model", "")
         and llm_router is not None
     ):
-        # Handle batch completions with comma-separated models BEFORE user_config check
-        # This ensures batch completion logic is applied even when user_config is set
+        kwargs = _kwargs_for_llm(data)
         if data.get("fastest_response", False):
-            return llm_router.abatch_completion_fastest_response(**data)
+            return llm_router.abatch_completion_fastest_response(**kwargs)
         else:
             models = [model.strip() for model in data.pop("model").split(",")]
-            return llm_router.abatch_completion(models=models, **data)
+            return llm_router.abatch_completion(models=models, **kwargs)
 
-    elif "user_config" in data:
-        router_config = data.pop("user_config")
-
-        # Filter router_config to only include valid Router.__init__ arguments
-        # This prevents TypeError when invalid parameters are stored in the database
-        valid_args = litellm.Router.get_valid_args()
-        filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
-
-        user_router = litellm.Router(**filtered_config)
-        ret_val = getattr(user_router, f"{route_type}")(**data)
-        user_router.discard()
-        return ret_val
     elif llm_router is not None:
         # Skip model-based routing for container operations
         if route_type in [
@@ -220,7 +241,7 @@ async def route_request(
             "adelete_container_file",
             "aretrieve_container_file_content",
         ]:
-            return getattr(llm_router, f"{route_type}")(**data)
+            return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
         # Interactions API: create with agent, get/delete/cancel don't need model routing
         if route_type in [
             "acreate_interaction",
@@ -228,7 +249,7 @@ async def route_request(
             "adelete_interaction",
             "acancel_interaction",
         ]:
-            return getattr(llm_router, f"{route_type}")(**data)
+            return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
         if route_type in [
             "avideo_list",
             "avideo_status",
@@ -245,7 +266,7 @@ async def route_request(
             "aingest",
         ] and (data.get("model") is None or data.get("model") == ""):
             # These endpoints don't need a model, use custom_llm_provider directly
-            return getattr(litellm, f"{route_type}")(**data)
+            return getattr(litellm, f"{route_type}")(**_kwargs_for_llm(data))
 
         team_model_name = (
             llm_router.map_team_model(data["model"], team_id)
@@ -254,33 +275,38 @@ async def route_request(
         )
         if team_model_name is not None:
             data["model"] = team_model_name
-            return getattr(llm_router, f"{route_type}")(**data)
+            return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
 
         elif data["model"] in router_model_names or llm_router.has_model_id(
             data["model"]
         ):
-            return getattr(llm_router, f"{route_type}")(**data)
+            return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
 
         elif (
             llm_router.model_group_alias is not None
             and data["model"] in llm_router.model_group_alias
         ):
-            return getattr(llm_router, f"{route_type}")(**data)
+            return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
+
+        elif data["model"] in llm_router.deployment_names:
+            return getattr(llm_router, f"{route_type}")(
+                **_kwargs_for_llm(data), specific_deployment=True
+            )
 
         elif data["model"] not in router_model_names:
             # Check wildcards before checking deployment_names
             # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
-                return getattr(litellm, f"{route_type}")(**data)
+                return getattr(litellm, f"{route_type}")(**_kwargs_for_llm(data))
             elif (
                 llm_router.default_deployment is not None
                 or len(llm_router.pattern_router.patterns) > 0
             ):
-                return getattr(llm_router, f"{route_type}")(**data)
+                return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
             elif data["model"] in llm_router.deployment_names:
                 # Only match deployment_names if no wildcard matched
                 return getattr(llm_router, f"{route_type}")(
-                    **data, specific_deployment=True
+                    **_kwargs_for_llm(data), specific_deployment=True
                 )
             elif route_type in [
                 "amoderation",
@@ -308,7 +334,7 @@ async def route_request(
                 "aretrieve_container_file_content",
             ]:
                 # These endpoints can work with or without model parameter
-                return getattr(llm_router, f"{route_type}")(**data)
+                return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
             elif route_type in [
                 "avideo_status",
                 "avideo_content",
@@ -316,15 +342,15 @@ async def route_request(
             ]:
                 # Video endpoints: If model is provided (e.g., from decoded video_id), try router first
                 try:
-                    return getattr(llm_router, f"{route_type}")(**data)
+                    return getattr(llm_router, f"{route_type}")(**_kwargs_for_llm(data))
                 except Exception:
                     # If router fails (e.g., model not found in router), fall back to direct call
-                    return getattr(litellm, f"{route_type}")(**data)
+                    return getattr(litellm, f"{route_type}")(**_kwargs_for_llm(data))
 
     elif user_model is not None:
-        return getattr(litellm, f"{route_type}")(**data)
+        return getattr(litellm, f"{route_type}")(**_kwargs_for_llm(data))
     elif route_type == "allm_passthrough_route":
-        return getattr(litellm, f"{route_type}")(**data)
+        return getattr(litellm, f"{route_type}")(**_kwargs_for_llm(data))
 
     # if no route found then it's a bad request
     route_name = ROUTE_ENDPOINT_MAPPING.get(route_type, route_type)

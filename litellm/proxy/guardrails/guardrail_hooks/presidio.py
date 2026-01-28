@@ -11,6 +11,7 @@
 import asyncio
 import threading
 import json
+import re
 from datetime import datetime
 from contextlib import asynccontextmanager
 from typing import (
@@ -60,6 +61,35 @@ from litellm.utils import (
     ModelResponseStream,
     StreamingChoices,
 )
+
+
+# Max trailing alphabetic chars to allow when matching corrupted uuid-style placeholders
+# (e.g. LLM outputs "<PERSON>...fa9den" instead of "<PERSON>...fa9d"). Tune down (e.g. 3–5)
+# if LLM rarely adds more than a few chars to reduce false matches.
+_MAX_TRAILING_CHARS_CORRUPTED_PLACEHOLDER = 15
+
+
+def _replace_pii_tokens_in_text(text: str, pii_tokens: Dict[str, str]) -> str:
+    """
+    Replace PII placeholders in text with original values. Handles LLM corruption
+    of uuid-style placeholders (e.g. <PERSON>uuid becomes <PERSON>uiden) by
+    matching key + optional trailing alphabetic chars.
+    """
+    if not pii_tokens:
+        return text
+    # Do regex pass first for uuid-style keys so "key+trailing" is replaced in one go.
+    # If we did exact replace first, we'd replace the key and leave trailing chars (e.g. "Jane Doeen").
+    for key, value in pii_tokens.items():
+        if "-" in key and len(key) > 20:  # uuid-style key
+            pattern = (
+                re.escape(key)
+                + rf"[a-zA-Z]{{1,{_MAX_TRAILING_CHARS_CORRUPTED_PLACEHOLDER}}}"
+            )
+            text = re.sub(pattern, value, text)
+    # Replace longer keys first so "<PERSON>uuid" is replaced before "<PERSON>"
+    for key, value in sorted(pii_tokens.items(), key=lambda x: -len(x[0])):
+        text = text.replace(key, value)
+    return text
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -389,12 +419,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                             start:end
                         ]  # get text it'll replace
 
-                    new_text = new_text[:start] + replacement + new_text[end:]
-                    entity_type = item.get("entity_type", None)
-                    if entity_type is not None:
-                        masked_entity_count[entity_type] = (
-                            masked_entity_count.get(entity_type, 0) + 1
-                        )
+                        new_text = new_text[:start] + replacement + new_text[end:]
+                        entity_type = item.get("entity_type", None)
+                        if entity_type is not None:
+                            masked_entity_count[entity_type] = (
+                                masked_entity_count.get(entity_type, 0) + 1
+                            )
+                # When output_parse_pii is True, return new_text so the LLM sees
+                # unique placeholders (e.g. <PERSON>, <PERSON>uuid) and we can
+                # replace each correctly in the response. Otherwise the API's
+                # redacted_text["text"] repeats the same token for every entity.
+                if output_parse_pii:
+                    return new_text
                 return redacted_text["text"]
             else:
                 raise Exception(f"Invalid anonymizer response: {redacted_text}")
@@ -552,6 +588,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
 
         try:
+            if self.output_parse_pii:
+                self.pii_tokens.clear()  # avoid cross-request carryover
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
@@ -615,6 +653,12 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 f"Presidio PII Masking: Redacted pii message: {data['messages']}"
             )
             data["messages"] = messages
+            # Store pii_tokens in request data so post_call can unmask using the same
+            # request's mappings (guardrail instance is shared across requests).
+            if self.output_parse_pii and self.pii_tokens:
+                data.setdefault("_presidio_pii_tokens", {})[
+                    self.guardrail_name
+                ] = dict(self.pii_tokens)
             return data
         except Exception as e:
             raise e
@@ -747,17 +791,41 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if self.output_parse_pii is False and litellm.output_parse_pii is False:
             return response
 
+        # Use only request-scoped pii_tokens; do not fall back to self.pii_tokens
+        # or we may use stale mappings from a previous request (e.g. wrong name).
+        pii_tokens = data.get("_presidio_pii_tokens", {}).get(
+            self.guardrail_name, {}
+        )
+        if not pii_tokens:
+            return response
+
         if isinstance(response, ModelResponse) and not isinstance(
             response.choices[0], StreamingChoices
         ):  # /chat/completions requests
-            if isinstance(response.choices[0].message.content, str):
-                verbose_proxy_logger.debug(
-                    f"self.pii_tokens: {self.pii_tokens}; initial response: {response.choices[0].message.content}"
-                )
-                for key, value in self.pii_tokens.items():
-                    response.choices[0].message.content = response.choices[
-                        0
-                    ].message.content.replace(key, value)
+            for choice in response.choices:
+                if not hasattr(choice, "message"):
+                    continue
+                content = getattr(choice.message, "content", None)
+                if content is None:
+                    continue
+                if isinstance(content, str):
+                    verbose_proxy_logger.debug(
+                        "PII output parse: pii_tokens=%s; initial response=%s",
+                        pii_tokens,
+                        content,
+                    )
+                    choice.message.content = _replace_pii_tokens_in_text(
+                        content, pii_tokens
+                    )
+                elif isinstance(content, list):
+                    for item in content:
+                        if not isinstance(item, dict):
+                            continue
+                        text_value = item.get("text")
+                        if text_value is not None:
+                            item["text"] = _replace_pii_tokens_in_text(
+                                text_value, pii_tokens
+                            )
         return response
 
     async def _mask_output_response(
@@ -889,8 +957,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
                 return
 
+        # Use only request-scoped pii_tokens; do not fall back to self.pii_tokens
+        # or we may use stale mappings from a previous request.
+        pii_tokens = request_data.get("_presidio_pii_tokens", {}).get(
+            self.guardrail_name, {}
+        )
         # If PII unmasking not needed, just pass through the original stream
-        if not (self.output_parse_pii and self.pii_tokens):
+        if not (self.output_parse_pii and pii_tokens):
             async for chunk in response:
                 yield chunk
             return
@@ -924,8 +997,9 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return
 
             # Apply PII unmasking to the complete content
-            for token, original_text in self.pii_tokens.items():
-                collected_content = collected_content.replace(token, original_text)
+            collected_content = _replace_pii_tokens_in_text(
+                collected_content, pii_tokens
+            )
 
             # Reconstruct the response with unmasked content
             mock_response = MockResponseIterator(
@@ -994,6 +1068,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         texts = inputs.get("texts", [])
 
+        if input_type == "request" and self.output_parse_pii:
+            self.pii_tokens.clear()  # avoid cross-request carryover (unified path)
         new_texts = []
         for text in texts:
             modified_text = await self.check_pii(
@@ -1004,6 +1080,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             )
             new_texts.append(modified_text)
         inputs["texts"] = new_texts
+        # When using unified guardrail path, pre_call uses apply_guardrail instead of
+        # async_pre_call_hook; store pii_tokens in request_data so post_call can unmask.
+        if (
+            input_type == "request"
+            and self.output_parse_pii
+            and self.pii_tokens
+            and request_data is not None
+        ):
+            request_data.setdefault("_presidio_pii_tokens", {})[
+                self.guardrail_name
+            ] = dict(self.pii_tokens)
         return inputs
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
