@@ -1,4 +1,5 @@
 import re
+from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, get_type_hints
 
@@ -684,7 +685,7 @@ def convert_anyof_null_to_nullable(schema, depth=0):
     if anyof is not None:
         contains_null = False
         for atype in anyof:
-            if atype == {"type": "null"}:
+            if isinstance(atype, dict) and atype.get("type") == "null":
                 # remove null type
                 anyof.remove(atype)
                 contains_null = True
@@ -801,8 +802,38 @@ def _convert_schema_types(schema, depth=0):
     if "type" in schema:
         type_val = schema["type"]
         if isinstance(type_val, list) and len(type_val) > 1:
-            # Convert ["string", "number"] -> {"anyOf": [{"type": "STRING"}, {"type": "NUMBER"}]}
-            schema["anyOf"] = [{"type": t} for t in type_val if isinstance(t, str)]
+            # Convert type arrays to anyOf format            
+            # Fields that are specific to object/array types and should move into anyOf
+            type_specific_fields = {"properties", "required", "additionalProperties", "items", "minItems", "maxItems", "minProperties", "maxProperties"}
+            
+            any_of: List[Dict[str, Any]] = []
+            for t in type_val:
+                if not isinstance(t, str):
+                    continue
+                if t == "null":
+                    # Keep null entry minimal so we can strip it later.
+                    any_of.append({"type": "null"})
+                    continue
+                
+                # For object/array types, include type-specific fields
+                if t in ("object", "array"):
+                    item_schema = {"type": t}
+                    # Move type-specific fields into this anyOf item
+                    for field in type_specific_fields:
+                        if field in schema:
+                            item_schema[field] = deepcopy(schema[field])
+                    any_of.append(item_schema)
+                else:
+                    # For primitive types, only include the type
+                    any_of.append({"type": t})
+            
+            # Remove type-specific fields from parent if we moved them into anyOf
+            has_object_or_array = any(t in ("object", "array") for t in type_val if isinstance(t, str))
+            if has_object_or_array:
+                for field in type_specific_fields:
+                    schema.pop(field, None)
+            
+            schema["anyOf"] = any_of
             schema.pop("type")
         elif isinstance(type_val, list) and len(type_val) == 1:
             schema["type"] = type_val[0]
