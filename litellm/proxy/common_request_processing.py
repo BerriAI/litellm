@@ -616,7 +616,7 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
-    async def base_process_llm_request(  # noqa: PLR0915
+    async def base_process_llm_request(
         self,
         request: Request,
         fastapi_response: Response,
@@ -752,13 +752,15 @@ class ProxyBaseLLMRequestProcessing:
             model_info = litellm_metadata.get("model_info", {}) or {}
             model_id = model_info.get("id", "") or ""
 
-        cache_key = hidden_params.get("cache_key", None) or ""
-        api_base = hidden_params.get("api_base", None) or ""
-        response_cost = hidden_params.get("response_cost", None) or ""
-        fastest_response_batch_completion = hidden_params.get(
-            "fastest_response_batch_completion", None
+        cache_key, api_base, response_cost = (
+            hidden_params.get("cache_key", None) or "",
+            hidden_params.get("api_base", None) or "",
+            hidden_params.get("response_cost", None) or "",
         )
-        additional_headers: dict = hidden_params.get("additional_headers", {}) or {}
+        fastest_response_batch_completion, additional_headers = (
+            hidden_params.get("fastest_response_batch_completion", None),
+            hidden_params.get("additional_headers", {}) or {},
+        )
 
         # Post Call Processing
         if llm_router is not None:
