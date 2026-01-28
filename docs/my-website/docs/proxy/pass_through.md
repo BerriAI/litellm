@@ -107,6 +107,7 @@ general_settings:
   pass_through_endpoints:
     - path: "/v1/rerank"                                  # Route on LiteLLM Proxy
       target: "https://api.cohere.com/v1/rerank"          # Target endpoint
+      auth: true                                          # Require virtual key (Enterprise)
       headers:                                            # Headers to forward
         Authorization: "bearer os.environ/COHERE_API_KEY"
         content-type: application/json
@@ -199,6 +200,52 @@ general_settings:
 | `include_subpath: false` (default) | Only `/custom-api` is forwarded |
 | `include_subpath: true` | `/custom-api`, `/custom-api/v1/chat`, `/custom-api/anything` are all forwarded |
 
+---
+
+## Authentication & Access Control✨ 
+
+Control who can access your pass-through endpoints using LiteLLM's virtual key authentication.
+
+:::info
+
+✨ This is an Enterprise only feature [Get Started with Enterprise here](https://www.litellm.ai/#pricing)
+
+:::
+
+### Enable Authentication on Pass-Through Endpoints
+
+When `auth: true` is set, the endpoint requires a valid LiteLLM virtual key with access to that pass-through endpoint. 
+
+#### Config.yaml Example
+
+```yaml
+general_settings:
+  master_key: sk-1234
+  pass_through_endpoints:
+    - path: "/v1/rerank"
+      target: "https://api.cohere.com/v1/rerank"
+      auth: true  # Require LiteLLM virtual key authentication
+      headers:
+        Authorization: "bearer os.environ/COHERE_API_KEY"
+      forward_headers: true
+```
+
+
+### Virtual Key Access to Pass-Through Endpoints
+
+Use `allowed_passthrough_routes` to grant access to pass-through endpoints with a virtual key. 
+
+**Example: Generate a key with access to specific pass-through endpoints**
+
+```shell
+curl 'http://localhost:4000/key/generate' \
+  --header 'Authorization: Bearer <master-key>' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "allowed_passthrough_routes": ["/v1/rerank", "/bria/*"],
+    "max_budget": 100
+  }'
+```
 ---
 
 ## Advanced: Custom Adapters
