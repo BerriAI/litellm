@@ -665,7 +665,10 @@ class OpenTelemetry(CustomLogger):
                 kwargs, response_obj, start_time, end_time, span
             )
             # Ensure proxy-request parent span is annotated with the actual operation kind
-            if parent_span is not None and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME:
+            if (
+                parent_span is not None
+                and parent_span.name == LITELLM_PROXY_REQUEST_SPAN_NAME
+            ):
                 self.set_attributes(parent_span, kwargs, response_obj)
         else:
             # Do not create primary span (keep hierarchy shallow when parent exists)
@@ -994,10 +997,13 @@ class OpenTelemetry(CustomLogger):
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
+
         try:
             from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore[attr-defined]  # OTEL < 1.39.0
         except ImportError:
-            from opentelemetry.sdk._logs._internal import LogRecord as SdkLogRecord  # OTEL >= 1.39.0
+            from opentelemetry.sdk._logs._internal import (
+                LogRecord as SdkLogRecord,
+            )  # OTEL >= 1.39.0
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
@@ -1708,6 +1714,7 @@ class OpenTelemetry(CustomLogger):
 
     def set_raw_request_attributes(self, span: Span, kwargs, response_obj):
         try:
+            self.set_attributes(span, kwargs, response_obj)
             kwargs.get("optional_params", {})
             litellm_params = kwargs.get("litellm_params", {}) or {}
             custom_llm_provider = litellm_params.get("custom_llm_provider", "Unknown")

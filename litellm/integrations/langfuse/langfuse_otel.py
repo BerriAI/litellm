@@ -8,9 +8,8 @@ from litellm.integrations.arize import _utils
 from litellm.integrations.langfuse.langfuse_otel_attributes import (
     LangfuseLLMObsOTELAttributes,
 )
-from litellm.integrations.opentelemetry import OpenTelemetry
+from litellm.integrations.opentelemetry import OpenTelemetry, OpenTelemetryConfig
 from litellm.types.integrations.langfuse_otel import (
-    LangfuseOtelConfig,
     LangfuseSpanAttributes,
 )
 from litellm.types.utils import StandardCallbackDynamicParams
@@ -313,7 +312,7 @@ class LangfuseOtelLogger(OpenTelemetry):
         )
 
     @staticmethod
-    def get_langfuse_otel_config() -> LangfuseOtelConfig:
+    def get_langfuse_otel_config() -> "OpenTelemetryConfig":
         """
         Retrieves the Langfuse OpenTelemetry configuration based on environment variables.
 
@@ -323,7 +322,7 @@ class LangfuseOtelLogger(OpenTelemetry):
             LANGFUSE_HOST: Optional. Custom Langfuse host URL. Defaults to US cloud.
 
         Returns:
-            LangfuseOtelConfig: A Pydantic model containing Langfuse OTEL configuration.
+            OpenTelemetryConfig: A Pydantic model containing Langfuse OTEL configuration.
 
         Raises:
             ValueError: If required keys are missing.
@@ -359,8 +358,10 @@ class LangfuseOtelLogger(OpenTelemetry):
         # os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"] = endpoint
         # os.environ["OTEL_EXPORTER_OTLP_HEADERS"] = otlp_auth_headers
 
-        return LangfuseOtelConfig(
-            otlp_auth_headers=otlp_auth_headers, protocol="otlp_http"
+        return OpenTelemetryConfig(
+            exporter="otlp_http",
+            endpoint=endpoint,
+            headers=otlp_auth_headers,
         )
 
     @staticmethod
