@@ -125,7 +125,7 @@ class AlertingHangingRequestCheck:
             # NOTE: This class historically only checked for a missing request_status marker,
             # which could send "Requests are hanging" alerts for in-flight requests that
             # were still within the configured threshold window.
-            time_since_start = time.time() - float(hanging_request_data.start_time)
+            time_since_start = time.time() - hanging_request_data.start_time
             if time_since_start < alerting_threshold_seconds:
                 continue
 
