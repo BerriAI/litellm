@@ -121,9 +121,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         # Loop-bound session cache for background threads
         self._loop_sessions: Dict[asyncio.AbstractEventLoop, aiohttp.ClientSession] = {}
 
-        # Result cache to avoid redundant network calls
-        self.pii_cache = DualCache()
-
         if mock_testing is True:  # for testing purposes only
             return
 
@@ -488,13 +485,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """
         Calls Presidio Analyze + Anonymize endpoints for PII Analysis + Masking
         """
-        # Cache check
-        cache_key = f"presidio:pii:{text}:{output_parse_pii}:{presidio_config}:{self.pii_entities_config}"
-        cached_result = self.pii_cache.get_cache(cache_key)
-        if cached_result is not None:
-            verbose_proxy_logger.debug("PII Cache Hit for text: %s", text)
-            return cached_result
-
         start_time = datetime.now()
         analyze_results: Optional[Union[List[PresidioAnalyzeResponseItem], Dict]] = None
         status: GuardrailStatus = "success"
@@ -532,7 +522,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     output_parse_pii=output_parse_pii,
                     masked_entity_count=masked_entity_count,
                 )
-                self.pii_cache.set_cache(cache_key, anonymized_text)
                 return anonymized_text
             return redacted_text["text"]
         except Exception as e:
