@@ -1387,6 +1387,7 @@ if TYPE_CHECKING:
     from .llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig
     from .llms.volcengine.responses.transformation import VolcEngineResponsesAPIConfig as VolcEngineResponsesAPIConfig
     from .llms.manus.responses.transformation import ManusResponsesAPIConfig as ManusResponsesAPIConfig
+    from .llms.azure_ai.responses.transformation import AzureAIStudioResponsesAPIConfig as AzureAIStudioResponsesAPIConfig
     from .llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig as GoogleAIStudioInteractionsConfig
     from .llms.openai.chat.o_series_transformation import OpenAIOSeriesConfig as OpenAIOSeriesConfig, OpenAIOSeriesConfig as OpenAIO1Config
     from .llms.anthropic.skills.transformation import AnthropicSkillsConfig as AnthropicSkillsConfig

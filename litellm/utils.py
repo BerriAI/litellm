@@ -8223,6 +8223,8 @@ class ProviderConfigManager:
             return litellm.VolcEngineResponsesAPIConfig()
         elif litellm.LlmProviders.MANUS == provider:
             return litellm.ManusResponsesAPIConfig()
+        elif litellm.LlmProviders.AZURE_AI == provider:
+            return litellm.AzureAIStudioResponsesAPIConfig()
         return None
 
     @staticmethod
