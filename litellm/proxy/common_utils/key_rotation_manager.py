@@ -4,7 +4,7 @@ Key Rotation Manager - Automated key rotation based on rotation schedules
 Handles finding keys that need rotation based on their individual schedules.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List
 
 from litellm._logging import verbose_proxy_logger
@@ -13,6 +13,7 @@ from litellm.proxy._types import (
     GenerateKeyResponse,
     LiteLLM_VerificationToken,
     RegenerateKeyRequest,
+    UserAPIKeyAuth,
 )
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.management_endpoints.key_management_endpoints import (
@@ -21,6 +22,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
 )
 from litellm.proxy.utils import PrismaClient
 
+DEFAULT_GRACE_PERIOD_MINUTES = 30
 
 class KeyRotationManager:
     """
@@ -113,20 +115,18 @@ class KeyRotationManager:
 
     async def _rotate_key(self, key: LiteLLM_VerificationToken):
         """
-        Rotate a single key using existing regenerate_key_fn and call the rotation hook
+        Rotate a single key with zero-downtime grace period support.
+        Old key hash is preserved and remains valid until the grace period expires. 
+        Both the old and new keys are valid during the grace period.
         """
-        # Create regenerate request
+        old_token_hash = key.token
         regenerate_request = RegenerateKeyRequest(
             key=key.token or "",
-            key_alias=key.key_alias,  # Pass key alias to ensure correct secret is updated in AWS Secrets Manager
+            key_alias=key.key_alias,
         )
-
-        # Create a system user for key rotation
-        from litellm.proxy._types import UserAPIKeyAuth
 
         system_user = UserAPIKeyAuth.get_litellm_internal_jobs_user_api_key_auth()
 
-        # Use existing regenerate key function
         response = await regenerate_key_fn(
             data=regenerate_request,
             user_api_key_dict=system_user,
@@ -141,17 +141,25 @@ class KeyRotationManager:
         ):
             # Calculate next rotation time using helper function
             now = datetime.now(timezone.utc)
+            grace_minutes = key.grace_period_minutes or DEFAULT_GRACE_PERIOD_MINUTES
+            grace_expiry = now + timedelta(minutes=grace_minutes)
+
             next_rotation_time = _calculate_key_rotation_time(key.rotation_interval)
+
             await self.prisma_client.db.litellm_verificationtoken.update(
                 where={"token": response.token_id},
                 data={
                     "rotation_count": (key.rotation_count or 0) + 1,
                     "last_rotation_at": now,
                     "key_rotation_at": next_rotation_time,
+                    "auto_rotate": key.auto_rotate,
+                    "rotation_interval": key.rotation_interval,
+                    "grace_period_minutes": grace_minutes,
+                    "previous_token": old_token_hash,
+                    "previous_token_expires": grace_expiry,
                 },
             )
 
-        # Call the existing rotation hook for notifications, audit logs, etc.
         if isinstance(response, GenerateKeyResponse):
             await KeyManagementEventHooks.async_key_rotated_hook(
                 data=regenerate_request,
@@ -160,3 +168,26 @@ class KeyRotationManager:
                 user_api_key_dict=system_user,
                 litellm_changed_by=LITELLM_INTERNAL_JOBS_SERVICE_ACCOUNT_NAME,
             )
+
+    async def cleanup_expired_grace_period_tokens(self):
+        """
+        Remove previous tokens when grace period expires
+        """
+        now = datetime.now(timezone.utc)
+        try:
+            result = await self.prisma_client.db.litellm_verificationtoken.update_many(
+                where={
+                    "previous_token": {"not": None},
+                    "previous_token_expires": {"lt": now},
+                },
+                data={
+                    "previous_token": None,
+                    "previous_token_expires": None,
+                },
+            )
+            if result > 0:
+                verbose_proxy_logger.debug(
+                    f"Removed {result} tokens whose grace period has expired."
+                )
+        except Exception as e:
+            verbose_proxy_logger.error(f"Failed to cleanup expired grace period tokens : {e}")

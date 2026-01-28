@@ -11,6 +11,7 @@ Run checks for:
 import asyncio
 import re
 import time
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union, cast
 
 from fastapi import HTTPException, Request, status
@@ -1724,6 +1725,12 @@ async def get_key_object(
     )
 
     if _valid_token is None:
+        _valid_token = await _check_previous_token_grace_period(
+            hashed_token=hashed_token,
+            prisma_client=prisma_client,
+        )
+
+    if _valid_token is None:
         raise ProxyException(
             message="Authentication Error, Invalid proxy server token passed. key={}, not found in db. Create key via `/key/generate` call.".format(
                 hashed_token
@@ -1745,6 +1752,27 @@ async def get_key_object(
 
     return _response
 
+async def _check_previous_token_grace_period(hashed_token: str, prisma_client: PrismaClient) -> Optional[BaseModel]:
+    """
+    Check if hashed_token matches a previous_token that is still within its grace period.
+    Returns the key record if valid, None otherwise.
+    """
+    now = datetime.now(timezone.utc)
+    try:
+        key_record = await prisma_client.db.litellm_verificationtoken.find_first(
+            where= {
+                "previous_token": hashed_token,
+                "previous_token_expires": {"gte": now},
+            }
+        )
+        if key_record is not None:
+            verbose_proxy_logger.info(
+                f"Key authenticated via grace period (expires: {key_record.previous_token_expires})"
+            )
+            return key_record
+    except Exception as e:
+        verbose_proxy_logger.debug(f"Grace period lookup failed: {e}")
+        return
 
 @log_db_metrics
 async def get_object_permission(

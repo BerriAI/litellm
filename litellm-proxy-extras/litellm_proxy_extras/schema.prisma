@@ -301,9 +301,13 @@ model LiteLLM_VerificationToken {
     rotation_interval String?   // How often to rotate (e.g., "30d", "90d")
     last_rotation_at DateTime?  // When this key was last rotated
     key_rotation_at  DateTime?  // When this key should next be rotated
+    previous_token String?  // Hash of previous key (valid during grace period)
+    previous_token_expires DateTime? // When previous key becomes invalid
+    grace_period_minutes Int? @default(30) // Grace period duration for key rotation
     litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
     litellm_organization_table LiteLLM_OrganizationTable?   @relation(fields: [organization_id], references: [organization_id])
     object_permission LiteLLM_ObjectPermissionTable?   @relation(fields: [object_permission_id], references: [object_permission_id])
+    @@index([previous_token])
 }
 
 // Audit table for deleted keys - preserves spend and key information for historical tracking
@@ -347,6 +351,9 @@ model LiteLLM_DeletedVerificationToken {
     rotation_interval       String?
     last_rotation_at        DateTime?
     key_rotation_at         DateTime?
+    previous_token          String?
+    previous_token_expires  DateTime?
+    grace_period_minutes    Int? @default(30)
     
     // Deletion metadata
     deleted_at              DateTime  @default(now()) @map("deleted_at")
