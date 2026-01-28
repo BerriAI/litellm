@@ -78,6 +78,10 @@ export default function PageVisibilitySettings({
         <Typography.Text type="secondary" style={{ fontSize: "12px", fontStyle: "italic" }}>
           By default, all pages are visible to internal users. Select specific pages to restrict visibility.
         </Typography.Text>
+        <Typography.Text type="secondary" style={{ fontSize: "12px", color: "#8b5cf6" }}>
+          Note: Only pages accessible to internal user roles are shown here. Admin-only pages are excluded as they
+          cannot be made visible to internal users regardless of this setting.
+        </Typography.Text>
       </Space>
 
       <Collapse
