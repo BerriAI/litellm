@@ -80,6 +80,10 @@ import dotenv
 litellm_mode = os.getenv("LITELLM_MODE", "DEV")  # "PRODUCTION", "DEV"
 if litellm_mode == "DEV":
     dotenv.load_dotenv()
+
+# Import default_encoding to ensure environment variables are initialized at import time
+from litellm.litellm_core_utils import default_encoding  # noqa: F401
+
 ####################################################
 if set_verbose:
     _turn_on_debug()

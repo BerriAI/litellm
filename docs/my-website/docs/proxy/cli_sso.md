@@ -28,6 +28,37 @@ EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
 
 :::
 
+### Configuration
+
+#### JWT Token Expiration
+
+By default, CLI authentication tokens expire after **24 hours**. You can customize this expiration time by setting the `LITELLM_CLI_JWT_EXPIRATION_HOURS` environment variable when starting your LiteLLM Proxy:
+
+```bash
+# Set CLI JWT tokens to expire after 48 hours
+export LITELLM_CLI_JWT_EXPIRATION_HOURS=48
+export EXPERIMENTAL_UI_LOGIN="True"
+litellm --config config.yaml
+```
+
+Or in a single command:
+
+```bash
+LITELLM_CLI_JWT_EXPIRATION_HOURS=48 EXPERIMENTAL_UI_LOGIN="True" litellm --config config.yaml
+```
+
+**Examples:**
+- `LITELLM_CLI_JWT_EXPIRATION_HOURS=12` - Tokens expire after 12 hours
+- `LITELLM_CLI_JWT_EXPIRATION_HOURS=168` - Tokens expire after 7 days (168 hours)
+- `LITELLM_CLI_JWT_EXPIRATION_HOURS=720` - Tokens expire after 30 days (720 hours)
+
+:::tip
+You can check your current token's age and expiration status using:
+```bash
+litellm-proxy whoami
+```
+:::
+
 ### Steps
 
 1. **Install the CLI**

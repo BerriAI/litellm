@@ -23,6 +23,15 @@ def _is_above_128k(tokens: float) -> bool:
     return False
 
 
+def get_billable_input_tokens(usage: Usage) -> int:
+    """
+    Returns the number of billable input tokens.
+    Subtracts cached tokens from prompt tokens if applicable.
+    """
+    details = _parse_prompt_tokens_details(usage)
+    return usage.prompt_tokens - details["cache_hit_tokens"]
+
+
 def select_cost_metric_for_model(
     model_info: ModelInfo,
 ) -> Literal["cost_per_character", "cost_per_token"]:
@@ -190,7 +199,6 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-
                     prompt_base_cost = cast(
                         float, _get_cost_per_unit(model_info, key, prompt_base_cost)
                     )
@@ -566,14 +574,28 @@ def generic_cost_per_token(  # noqa: PLR0915
     if usage.prompt_tokens_details:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)
 
-    ## EDGE CASE - text tokens not set inside PromptTokensDetails
+    ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
+    ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
+    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
+    ## Ref: https://github.com/BerriAI/litellm/issues/19680, #14874, #14875
 
-    if prompt_tokens_details["text_tokens"] == 0:
+    cache_hit = prompt_tokens_details["cache_hit_tokens"]
+    text_tokens = prompt_tokens_details["text_tokens"]
+    audio_tokens = prompt_tokens_details["audio_tokens"]
+    cache_creation = prompt_tokens_details["cache_creation_tokens"]
+    image_tokens = prompt_tokens_details["image_tokens"]
+
+    # Check for double-counting: sum of details > prompt_tokens means overlap
+    total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
+
+    if text_tokens == 0 or has_double_counting:
         text_tokens = (
             usage.prompt_tokens
-            - prompt_tokens_details["cache_hit_tokens"]
-            - prompt_tokens_details["audio_tokens"]
-            - prompt_tokens_details["cache_creation_tokens"]
+            - cache_hit
+            - audio_tokens
+            - cache_creation
+            - image_tokens
         )
         prompt_tokens_details["text_tokens"] = text_tokens
 
@@ -619,7 +641,11 @@ def generic_cost_per_token(  # noqa: PLR0915
             # Calculate text tokens as remainder when we have a breakdown
             # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
             text_tokens = max(
-                0, usage.completion_tokens - reasoning_tokens - audio_tokens - image_tokens
+                0,
+                usage.completion_tokens
+                - reasoning_tokens
+                - audio_tokens
+                - image_tokens,
             )
         else:
             # No breakdown at all, all tokens are text tokens

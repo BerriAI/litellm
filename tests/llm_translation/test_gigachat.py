@@ -5,9 +5,7 @@ Tests message transformation, parameter handling, and response transformation.
 Run with: pytest tests/llm_translation/test_gigachat.py -v
 """
 
-import json
 import pytest
-from unittest.mock import Mock, MagicMock
 
 
 class TestGigaChatMessageTransformation:
@@ -16,6 +14,7 @@ class TestGigaChatMessageTransformation:
     @pytest.fixture
     def config(self):
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
+
         return GigaChatConfig()
 
     def test_simple_user_message(self, config):
@@ -52,20 +51,46 @@ class TestGigaChatMessageTransformation:
 
         assert result[0]["role"] == "function"
 
+    def test_tool_content_convertation_non_string_value(self, config):
+        """Non string tool content should be serialized"""
+        messages = [{"role": "tool", "content": {"output": 42}}]
+        result = config._transform_messages(messages)
+
+        assert result[0]["content"] == '{"output": 42}'
+
+    def test_tool_content_convertation_json_string_value(self, config):
+        """JSON string tool content left unchanged"""
+        valid_json = '{"output": "red car"}'
+        messages = [{"role": "tool", "content": valid_json}]
+        result = config._transform_messages(messages)
+
+        assert result[0]["content"] == valid_json
+
+    def test_tool_content_convertation_random_string_value(self, config):
+        """Non JSON tool content should be serialized"""
+        messages = [{"role": "tool", "content": "random string"}]
+        result = config._transform_messages(messages)
+
+        assert result[0]["content"] == '"random string"'
+
     def test_tool_calls_to_function_call(self, config):
         """tool_calls should be converted to function_call"""
-        messages = [{
-            "role": "assistant",
-            "content": "",
-            "tool_calls": [{
-                "id": "call_123",
-                "type": "function",
-                "function": {
-                    "name": "get_weather",
-                    "arguments": '{"city": "Moscow"}'
-                }
-            }]
-        }]
+        messages = [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": '{"city": "Moscow"}',
+                        },
+                    }
+                ],
+            }
+        ]
         result = config._transform_messages(messages)
 
         assert "function_call" in result[0]
@@ -94,6 +119,7 @@ class TestGigaChatCollapseUserMessages:
     @pytest.fixture
     def config(self):
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
+
         return GigaChatConfig()
 
     def test_no_collapse_single_message(self, config):
@@ -136,23 +162,24 @@ class TestGigaChatToolsTransformation:
     @pytest.fixture
     def config(self):
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
+
         return GigaChatConfig()
 
     def test_single_tool_conversion(self, config):
         """Single tool should be converted correctly"""
-        tools = [{
-            "type": "function",
-            "function": {
-                "name": "get_weather",
-                "description": "Get weather for a city",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "city": {"type": "string"}
-                    }
-                }
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get weather for a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"city": {"type": "string"}},
+                    },
+                },
             }
-        }]
+        ]
         result = config._convert_tools_to_functions(tools)
 
         assert len(result) == 1
@@ -162,8 +189,22 @@ class TestGigaChatToolsTransformation:
     def test_multiple_tools_conversion(self, config):
         """Multiple tools should all be converted"""
         tools = [
-            {"type": "function", "function": {"name": "func1", "description": "First", "parameters": {"type": "object", "properties": {}}}},
-            {"type": "function", "function": {"name": "func2", "description": "Second", "parameters": {"type": "object", "properties": {}}}},
+            {
+                "type": "function",
+                "function": {
+                    "name": "func1",
+                    "description": "First",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "func2",
+                    "description": "Second",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            },
         ]
         result = config._convert_tools_to_functions(tools)
 
@@ -178,6 +219,7 @@ class TestGigaChatParamsTransformation:
     @pytest.fixture
     def config(self):
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
+
         return GigaChatConfig()
 
     def test_temperature_zero_becomes_top_p_zero(self, config):
@@ -229,10 +271,10 @@ class TestGigaChatParamsTransformation:
                         "type": "object",
                         "properties": {
                             "name": {"type": "string"},
-                            "age": {"type": "integer"}
-                        }
-                    }
-                }
+                            "age": {"type": "integer"},
+                        },
+                    },
+                },
             }
         }
         result = config.map_openai_params(
@@ -283,6 +325,7 @@ class TestGigaChatTransformRequest:
     @pytest.fixture
     def config(self):
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
+
         return GigaChatConfig()
 
     def test_basic_request(self, config):
@@ -335,6 +378,7 @@ class TestGigaChatSupportedParams:
     @pytest.fixture
     def config(self):
         from litellm.llms.gigachat.chat.transformation import GigaChatConfig
+
         return GigaChatConfig()
 
     def test_supported_params(self, config):
