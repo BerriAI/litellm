@@ -716,3 +716,39 @@ class StandardBuiltInToolCostTracking:
         if tool.get("type", None) == "file_search":
             return True
         return False
+
+    @staticmethod
+    def get_built_in_tools_from_kwargs(
+        kwargs: Dict,
+    ) -> Tuple[Optional[WebSearchOptions], Optional[FileSearchTool]]:
+        """
+        Extract web_search_options and file_search from kwargs in a single pass.
+        """
+        web_search_options: Optional[WebSearchOptions] = None
+        file_search: Optional[FileSearchTool] = None
+
+        # Check direct web_search_options first
+        web_search_options_dict = kwargs.get("web_search_options")
+        if web_search_options_dict:
+            web_search_options = WebSearchOptions(**web_search_options_dict)
+
+        # Get tools once
+        tools = kwargs.get("tools")
+        if not tools:
+            return web_search_options, file_search
+
+        # Single iteration through tools
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+
+            if web_search_options is None and StandardBuiltInToolCostTracking._is_web_search_tool_call(tool):
+                web_search_options = WebSearchOptions(**tool)
+
+            if file_search is None and StandardBuiltInToolCostTracking._is_file_search_tool_call(tool):
+                file_search = FileSearchTool(**tool)
+
+            if web_search_options is not None and file_search is not None:
+                break
+
+        return web_search_options, file_search
