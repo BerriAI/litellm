@@ -12,7 +12,7 @@ import { RequestResponsePanel } from "./RequestResponsePanel";
 import { ErrorViewer } from "./ErrorViewer";
 import { internalUserRoles } from "../../utils/roles";
 import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { Tooltip } from "antd";
+import { Button, Tooltip } from "antd";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "../templates/key_info_view";
 import { SessionView } from "./SessionView";
@@ -31,6 +31,8 @@ import { truncateString } from "@/utils/textUtils";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import NewBadge from "../common_components/NewBadge";
+import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
+import { SettingOutlined } from "@ant-design/icons";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -91,6 +93,7 @@ export default function SpendLogsTable({
 
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -526,6 +529,13 @@ export default function SpendLogsTable({
                   "Request Logs"
                 )}
               </h1>
+              {!selectedSessionId && (
+                <Button
+                  icon={<SettingOutlined />}
+                  onClick={() => setIsSpendLogsSettingsModalVisible(true)}
+                  title="Spend Logs Settings"
+                />
+              )}
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
@@ -551,6 +561,11 @@ export default function SpendLogsTable({
                   options={logFilterOptions}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
+                />
+                <SpendLogsSettingsModal
+                  isVisible={isSpendLogsSettingsModalVisible}
+                  onCancel={() => setIsSpendLogsSettingsModalVisible(false)}
+                  onSuccess={() => setIsSpendLogsSettingsModalVisible(false)}
                 />
                 <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
                   <div className="border-b px-6 py-4 w-full max-w-full box-border">
