@@ -13,15 +13,18 @@ FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
 
 
 def test_oauth_detection_in_common_utils():
-    """Test 1: OAuth token detection in common_utils"""
+    """Test 1: OAuth token detection in common_utils returns marker"""
     from litellm.llms.anthropic.common_utils import optionally_handle_anthropic_oauth
 
     headers = {"authorization": f"Bearer {FAKE_OAUTH_TOKEN}"}
     updated_headers, extracted_api_key = optionally_handle_anthropic_oauth(headers, None)
 
-    assert extracted_api_key == FAKE_OAUTH_TOKEN
+    # With the marker approach, we return a marker not the actual token
+    assert extracted_api_key == "_oauth_", "Should return OAuth marker instead of token"
     assert updated_headers["anthropic-beta"] == "oauth-2025-04-20"
     assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
+    # The original Authorization header should remain intact
+    assert headers["authorization"] == f"Bearer {FAKE_OAUTH_TOKEN}"
 
 
 def test_oauth_integration_in_validate_environment():
@@ -33,7 +36,7 @@ def test_oauth_integration_in_validate_environment():
 
     updated_headers = config.validate_environment(
         headers=headers,
-        model="claude-3-haiku-20240307",
+        model="anthropic/claude-3-haiku-20240307",
         messages=[{"role": "user", "content": "Hello"}],
         optional_params={},
         litellm_params={},
@@ -41,12 +44,13 @@ def test_oauth_integration_in_validate_environment():
         api_base=None,
     )
 
-    assert updated_headers["x-api-key"] == FAKE_OAUTH_TOKEN
+    # x-api-key should be set to the marker, NOT the OAuth token
+    assert updated_headers["x-api-key"] == "_oauth_", "x-api-key should be marker, not OAuth token"
     assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
 
 
 def test_oauth_detection_in_messages_transformation():
-    """Test 3: OAuth detection in messages transformation"""
+    """Test 3: OAuth detection in messages transformation should not set x-api-key"""
     from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
         AnthropicMessagesConfig,
     )
@@ -56,7 +60,7 @@ def test_oauth_detection_in_messages_transformation():
 
     updated_headers, _ = config.validate_anthropic_messages_environment(
         headers=headers,
-        model="claude-3-haiku-20240307",
+        model="anthropic/claude-3-haiku-20240307",
         messages=[{"role": "user", "content": "Hello"}],
         optional_params={},
         litellm_params={},
@@ -64,7 +68,9 @@ def test_oauth_detection_in_messages_transformation():
         api_base=None,
     )
 
-    assert updated_headers["x-api-key"] == FAKE_OAUTH_TOKEN
+    # IMPORTANT: x-api-key should NOT be set when using OAuth
+    # This prevents OAuth token leakage to third-party providers
+    assert "x-api-key" not in updated_headers, "x-api-key should NOT be set for OAuth requests"
     assert "oauth-2025-04-20" in updated_headers["anthropic-beta"]
     assert updated_headers["anthropic-dangerous-direct-browser-access"] == "true"
 
