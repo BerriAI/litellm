@@ -854,48 +854,89 @@ class NomaGuardrail(CustomGuardrail):
         return NomaGuardrailConfigModel
 
     async def async_post_call_streaming_iterator_hook(
-        self,
-        user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-        request_data: dict,
+            self,
+            user_api_key_dict: UserAPIKeyAuth,
+            response: Any,
+            request_data: dict,
     ) -> AsyncGenerator[ModelResponseStream, None]:
-        """Process streaming response chunks with Noma guardrail."""
+        """
+        Processes streaming response chunks using a SLIDING WINDOW.
+        Yields chunks immediately to minimize TTFT and performs
+        background Noma scans on the accumulating text.
+        """
+        accumulated_text = ""
+        last_scanned_index = 0
+        window_size_chars = 250  # Scan roughly every 50-70 words
+        current_scan_task = None
 
-        all_chunks: List[ModelResponseStream] = []
         async for chunk in response:
-            all_chunks.append(chunk)
-
-        if not all_chunks:
-            return
-
-        assembled_model_response: Optional[
-            Union[ModelResponse, TextCompletionResponse]
-        ] = stream_chunk_builder(chunks=all_chunks)
-
-        if isinstance(assembled_model_response, ModelResponse):
-            try:
-                processed_response = await self._check_llm_response(
-                    request_data,
-                    assembled_model_response,
-                    user_api_key_dict,
-                    GuardrailEventHooks.post_call,
-                )
-            except NomaBlockedMessage:
-                raise
-            except Exception as e:
-                if self.block_failures:
-                    raise
-                verbose_proxy_logger.error(
-                    f"Noma streaming post-call hook failed: {str(e)}"
-                )
-                for chunk in all_chunks:
-                    yield chunk
-                return
-
-            mock_response = MockResponseIterator(model_response=processed_response)
-            async for chunk in mock_response:
-                yield chunk
-            return
-
-        for chunk in all_chunks:
+            # 1. Yield the chunk immediately for low TTFT
             yield chunk
+
+            # 2. Extract text and accumulate
+            if (
+                    hasattr(chunk, "choices")
+                    and chunk.choices
+                    and chunk.choices[0].delta.content
+            ):
+                accumulated_text += chunk.choices[0].delta.content
+
+            # 3. Check if window is ready for a scan
+            current_text_len = len(accumulated_text)
+            if (current_text_len - last_scanned_index) >= window_size_chars:
+                # Prepare payload for the current window
+                payload_text = accumulated_text[last_scanned_index:]
+
+                # Check if previous scan is still running; we don't want to overlap too many
+                if current_scan_task is None or current_scan_task.done():
+                    # Update tracking
+                    last_scanned_index = current_text_len
+
+                    # 4. Trigger background scan
+                    # Note: We use a wrapper to handle exceptions without crashing the yield loop
+                    current_scan_task = asyncio.create_task(
+                        self._process_llm_response_check(
+                            request_data=request_data,
+                            response=self.create_guardrail_blocked_response(payload_text),
+                            user_auth=user_api_key_dict,
+                            event_type=GuardrailEventHooks.during_call
+                        )
+                    )
+
+            # 5. Check if a previous scan has finished and returned a block
+            if current_scan_task and current_scan_task.done():
+                try:
+                    # If this raises NomaBlockedMessage, the stream terminates here
+                    current_scan_task.result()
+                except NomaBlockedMessage as e:
+                    verbose_proxy_logger.error("Noma sliding window detected violation. Terminating stream.")
+                    raise e
+                except Exception as e:
+                    verbose_proxy_logger.error(f"Noma background scan failed: {str(e)}")
+                    if self.block_failures:
+                        raise e
+
+        # Final Scan: Ensure the last bit of text is scanned if not already
+        if len(accumulated_text) > last_scanned_index:
+            try:
+                await self._process_llm_response_check(
+                    request_data=request_data,
+                    response=self.create_guardrail_blocked_response(accumulated_text[last_scanned_index:]),
+                    user_auth=user_api_key_dict,
+                    event_type=GuardrailEventHooks.post_call
+                )
+            except NomaBlockedMessage as e:
+                raise e
+
+    def create_guardrail_blocked_response(self, response_text: str) -> ModelResponse:
+        """Helper to create a standard ModelResponse object for background scanning."""
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        return ModelResponse(
+            choices=[
+                Choices(
+                    message=Message(content=response_text),
+                )
+            ],
+            model="noma-guardrail",
+        )
