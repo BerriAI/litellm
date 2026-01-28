@@ -183,7 +183,7 @@ describe("VectorStoreTable", () => {
     it("should render fallback for missing name", () => {
       renderComponent();
       const fallbackElements = screen.getAllByText("-");
-      expect(fallbackElements.length).toBe(3); // One for missing name, one for missing description, one for missing files
+      expect(fallbackElements.length).toBe(5); // One for missing name, one for missing description, three for missing files (one per store)
     });
 
     it("should wrap name in tooltip", () => {
@@ -203,7 +203,7 @@ describe("VectorStoreTable", () => {
     it("should render fallback for missing description", () => {
       renderComponent();
       const fallbackElements = screen.getAllByText("-");
-      expect(fallbackElements.length).toBe(3); // One for missing name, one for missing description, one for missing files
+      expect(fallbackElements.length).toBe(5); // One for missing name, one for missing description, three for missing files (one per store)
     });
 
     it("should wrap description in tooltip", () => {

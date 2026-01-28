@@ -101,3 +101,50 @@ def test_hosted_vllm_supports_reasoning_effort():
         drop_params=False,
     )
     assert optional_params["reasoning_effort"] == "high"
+
+
+def test_hosted_vllm_supports_thinking():
+    """
+    Test that hosted_vllm supports the 'thinking' parameter.
+
+    Anthropic-style thinking is converted to OpenAI-style reasoning_effort
+    since vLLM is OpenAI-compatible.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/19761
+    """
+    config = HostedVLLMChatConfig()
+    supported_params = config.get_supported_openai_params(
+        model="hosted_vllm/GLM-4.6-FP8"
+    )
+    assert "thinking" in supported_params
+
+    # Test thinking with low budget_tokens -> "minimal" (for < 2000)
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 1024}},
+        optional_params={},
+        model="hosted_vllm/GLM-4.6-FP8",
+        drop_params=False,
+    )
+    assert "thinking" not in optional_params  # thinking should NOT be passed
+    assert optional_params["reasoning_effort"] == "minimal"
+
+    # Test thinking with high budget_tokens -> "high"
+    optional_params = config.map_openai_params(
+        non_default_params={"thinking": {"type": "enabled", "budget_tokens": 15000}},
+        optional_params={},
+        model="hosted_vllm/GLM-4.6-FP8",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "high"
+
+    # Test that existing reasoning_effort is not overwritten
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "enabled", "budget_tokens": 15000},
+            "reasoning_effort": "low",
+        },
+        optional_params={},
+        model="hosted_vllm/GLM-4.6-FP8",
+        drop_params=False,
+    )
+    assert optional_params["reasoning_effort"] == "low"

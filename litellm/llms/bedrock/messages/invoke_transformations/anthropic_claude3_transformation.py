@@ -178,6 +178,33 @@ class AmazonAnthropicClaudeMessagesConfig(
         ]
         return any(pattern in model_lower for pattern in opus_4_5_patterns)
 
+    def _supports_tool_search_on_bedrock(self, model: str) -> bool:
+        """
+        Check if the model supports tool search on Bedrock.
+
+        On Amazon Bedrock, server-side tool search is supported on Claude Opus 4.5
+        and Claude Sonnet 4.5 with the tool-search-tool-2025-10-19 beta header.
+
+        Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+
+        Args:
+            model: The model name
+
+        Returns:
+            True if the model supports tool search on Bedrock
+        """
+        model_lower = model.lower()
+
+        # Supported models for tool search on Bedrock
+        supported_patterns = [
+            # Opus 4.5
+            "opus-4.5", "opus_4.5", "opus-4-5", "opus_4_5",
+            # Sonnet 4.5
+            "sonnet-4.5", "sonnet_4.5", "sonnet-4-5", "sonnet_4_5",
+        ]
+
+        return any(pattern in model_lower for pattern in supported_patterns)
+
     def _filter_unsupported_beta_headers_for_bedrock(
         self, model: str, beta_set: set
     ) -> None:
@@ -186,13 +213,14 @@ class AmazonAnthropicClaudeMessagesConfig(
 
         Extended thinking beta headers are only supported on specific Claude 4+ models.
         Advanced tool use headers are not supported on Bedrock Invoke API, but need to be
-        translated to Bedrock-specific headers for Claude Opus 4.5.
+        translated to Bedrock-specific headers for models that support tool search
+        (Claude Opus 4.5, Sonnet 4.5).
         This prevents 400 "invalid beta flag" errors on Bedrock.
 
         Note: Bedrock Invoke API fails with a 400 error when unsupported beta headers
         are sent, returning: {"message":"invalid beta flag"}
 
-        Translation for Claude Opus 4.5:
+        Translation for models supporting tool search (Opus 4.5, Sonnet 4.5):
         - advanced-tool-use-2025-11-20 -> tool-search-tool-2025-10-19 + tool-examples-2025-10-29
 
         Args:
@@ -226,10 +254,11 @@ class AmazonAnthropicClaudeMessagesConfig(
         # Remove all filtered headers
         for beta in beta_headers_to_remove:
             beta_set.discard(beta)
-        
-        # 3. Translate advanced-tool-use to Bedrock-specific headers for Claude Opus 4.5
+
+        # 3. Translate advanced-tool-use to Bedrock-specific headers for models that support tool search
         # Ref: https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-anthropic-claude-messages-request-response.html
-        if has_advanced_tool_use and self._is_claude_opus_4_5(model):
+        # Ref: https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool
+        if has_advanced_tool_use and self._supports_tool_search_on_bedrock(model):
             beta_set.add("tool-search-tool-2025-10-19")
             beta_set.add("tool-examples-2025-10-29")
 

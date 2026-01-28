@@ -1327,6 +1327,13 @@ COROUTINE_CHECKER_MAX_SIZE_IN_MEMORY = int(
 DEFAULT_CHUNK_SIZE = int(os.getenv("DEFAULT_CHUNK_SIZE", 1000))
 DEFAULT_CHUNK_OVERLAP = int(os.getenv("DEFAULT_CHUNK_OVERLAP", 200))
 
+########################### S3 Vectors RAG Constants ###########################
+S3_VECTORS_DEFAULT_DIMENSION = int(os.getenv("S3_VECTORS_DEFAULT_DIMENSION", 1024))
+S3_VECTORS_DEFAULT_DISTANCE_METRIC = str(
+    os.getenv("S3_VECTORS_DEFAULT_DISTANCE_METRIC", "cosine")
+)
+S3_VECTORS_DEFAULT_NON_FILTERABLE_METADATA_KEYS = ["source_text"]
+
 ########################### Microsoft SSO Constants ###########################
 MICROSOFT_USER_EMAIL_ATTRIBUTE = str(
     os.getenv("MICROSOFT_USER_EMAIL_ATTRIBUTE", "userPrincipalName")

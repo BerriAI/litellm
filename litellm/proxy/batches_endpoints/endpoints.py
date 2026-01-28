@@ -542,14 +542,26 @@ async def list_batches(
             route_type="alist_batches",
         )
 
-        model_param = (
+        # Try to use managed objects table for listing batches (returns encoded IDs)
+        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
+            verbose_proxy_logger.debug(
+                "Using managed objects table for batch listing"
+            )
+            response = await managed_files_obj.list_user_batches(
+                user_api_key_dict=user_api_key_dict,
+                limit=limit,
+                after=after,
+                provider=provider,
+                target_model_names=target_model_names,
+                llm_router=llm_router,
+            )
+        elif (model_param := (
             data.get("model")
             or request.query_params.get("model")
             or request.headers.get("x-litellm-model")
-        )
-        
-        # SCENARIO 2: Use model-based routing from header/query/body
-        if model_param:
+        )):
+            # SCENARIO 2: Use model-based routing from header/query/body
             credentials = get_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_param,
