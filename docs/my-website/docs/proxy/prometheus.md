@@ -130,7 +130,12 @@ Monitor failures while shipping logs to downstream callbacks like `s3_v3` cold s
 
 | Metric Name          | Description                          |
 |----------------------|--------------------------------------|
-| `litellm_callback_logging_failures_metric` | Total number of failed attempts to emit logs to a configured callback. Labels: `"callback_name"`. Use this to alert on callback delivery issues such as repeated failures when writing to `s3_v3`. |
+| `litellm_callback_logging_failures_metric` | Total number of failed attempts to emit logs to a configured callback. Labels: `"callback_name"`. Use this to alert on callback delivery issues such as repeated failures when writing to `s3_v3`, `langfuse`, or `langfuse_otel` and other otel providers |
+
+**Supported Callbacks:**
+- `S3Logger` - S3 v2 cold storage failures
+- `langfuse` - Langfuse logging failures
+- `otel` -  OpenTelemetry logging failures
 
 ## LLM Provider Metrics
 
