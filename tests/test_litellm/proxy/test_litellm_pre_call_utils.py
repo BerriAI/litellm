@@ -1182,6 +1182,109 @@ def test_get_sanitized_user_information_from_key_includes_guardrails_metadata():
     assert result["user_api_key_auth_metadata"]["other_field"] == "value"
 
 
+def test_get_sanitized_user_information_from_key_redacts_secret_keys():
+    """
+    Test that get_sanitized_user_information_from_key redacts sensitive fields like langfuse_secret_key
+    from the metadata before logging.
+
+    Related issue: langfuse_secret_key was being logged in trace metadata
+    """
+    user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key-hash",
+        key_alias="test-alias",
+        user_id="test-user",
+        metadata={
+            "logging": [
+                {
+                    "callback_name": "langfuse",
+                    "callback_type": "success",
+                    "callback_vars": {
+                        "langfuse_host": "https://cloud.langfuse.com",
+                        "langfuse_public_key": "pk-lf-test-public-key",
+                        "langfuse_secret_key": "sk-lf-super-secret-key",
+                    },
+                }
+            ],
+            "guardrails": ["presidio"],
+            "other_field": "value",
+        },
+    )
+
+    result = LiteLLMProxyRequestSetup.get_sanitized_user_information_from_key(
+        user_api_key_dict=user_api_key_dict
+    )
+
+    assert result["user_api_key_auth_metadata"] is not None
+
+    # Check that non-sensitive fields are preserved
+    assert result["user_api_key_auth_metadata"]["guardrails"] == ["presidio"]
+    assert result["user_api_key_auth_metadata"]["other_field"] == "value"
+
+    # Check that logging structure is preserved
+    logging_config = result["user_api_key_auth_metadata"]["logging"]
+    assert len(logging_config) == 1
+    assert logging_config[0]["callback_name"] == "langfuse"
+    assert logging_config[0]["callback_type"] == "success"
+
+    # Check that public key is NOT redacted
+    callback_vars = logging_config[0]["callback_vars"]
+    assert callback_vars["langfuse_host"] == "https://cloud.langfuse.com"
+    assert callback_vars["langfuse_public_key"] == "pk-lf-test-public-key"
+
+    # Check that secret key IS redacted
+    assert callback_vars["langfuse_secret_key"] == "redacted"
+
+
+def test_sanitize_metadata_for_logging_handles_nested_secrets():
+    """
+    Test that _sanitize_metadata_for_logging handles deeply nested secret keys
+    """
+    metadata = {
+        "level1": {
+            "level2": {
+                "langfuse_secret": "secret-value",
+                "safe_key": "safe-value",
+            }
+        },
+        "api_key": "should-be-redacted",
+        "normal_field": "normal-value",
+    }
+
+    result = LiteLLMProxyRequestSetup._sanitize_metadata_for_logging(metadata)
+
+    assert result["level1"]["level2"]["langfuse_secret"] == "redacted"
+    assert result["level1"]["level2"]["safe_key"] == "safe-value"
+    assert result["api_key"] == "redacted"
+    assert result["normal_field"] == "normal-value"
+
+
+def test_sanitize_metadata_for_logging_handles_none():
+    """
+    Test that _sanitize_metadata_for_logging handles None input
+    """
+    result = LiteLLMProxyRequestSetup._sanitize_metadata_for_logging(None)
+    assert result is None
+
+
+def test_sanitize_metadata_for_logging_handles_lists():
+    """
+    Test that _sanitize_metadata_for_logging handles lists with dicts containing secrets
+    """
+    metadata = {
+        "callbacks": [
+            {"name": "callback1", "secret_key": "secret1"},
+            {"name": "callback2", "api_key": "secret2"},
+        ]
+    }
+
+    result = LiteLLMProxyRequestSetup._sanitize_metadata_for_logging(metadata)
+
+    assert result["callbacks"][0]["name"] == "callback1"
+    assert result["callbacks"][0]["secret_key"] == "redacted"
+    assert result["callbacks"][1]["name"] == "callback2"
+    assert result["callbacks"][1]["api_key"] == "redacted"
+
+
 @pytest.mark.asyncio
 async def test_team_guardrails_append_to_key_guardrails():
     """
