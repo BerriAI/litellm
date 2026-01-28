@@ -107,7 +107,3 @@ LAZY_LOADING_IMPROVEMENTS.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
-
-# Local agent/tool artifacts
-registered_agents.json
-task_agent_mapping.json
