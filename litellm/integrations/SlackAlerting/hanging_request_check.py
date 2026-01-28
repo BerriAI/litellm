@@ -8,6 +8,7 @@ Notes:
 """
 
 import asyncio
+import time
 from typing import TYPE_CHECKING, Any, Optional
 
 import litellm
@@ -37,10 +38,7 @@ class AlertingHangingRequestCheck:
     ):
         self.slack_alerting_object = slack_alerting_object
         self.hanging_request_cache = InMemoryCache(
-            default_ttl=int(
-                self.slack_alerting_object.alerting_threshold
-                + HANGING_ALERT_BUFFER_TIME_SECONDS
-            ),
+            default_ttl=int(self.slack_alerting_object.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS),
         )
 
     async def add_request_to_hanging_request_check(
@@ -57,9 +55,7 @@ class AlertingHangingRequestCheck:
         model = request_data.get("model", "")
         api_base: Optional[str] = None
 
-        if request_data.get("deployment", None) is not None and isinstance(
-            request_data["deployment"], dict
-        ):
+        if request_data.get("deployment", None) is not None and isinstance(request_data["deployment"], dict):
             api_base = litellm.get_api_base(
                 model=model,
                 optional_params=request_data["deployment"].get("litellm_params", {}),
@@ -76,10 +72,7 @@ class AlertingHangingRequestCheck:
         await self.hanging_request_cache.async_set_cache(
             key=hanging_request_data.request_id,
             value=hanging_request_data,
-            ttl=int(
-                self.slack_alerting_object.alerting_threshold
-                + HANGING_ALERT_BUFFER_TIME_SECONDS
-            ),
+            ttl=int(self.slack_alerting_object.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS),
         )
         return
 
@@ -102,21 +95,17 @@ class AlertingHangingRequestCheck:
         )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[HangingRequestData] = (
-                await self.hanging_request_cache.async_get_cache(
-                    key=request_id,
-                )
+            hanging_request_data: Optional[HangingRequestData] = await self.hanging_request_cache.async_get_cache(
+                key=request_id,
             )
 
             if hanging_request_data is None:
                 continue
 
-            request_status = (
-                await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                    key="request_status:{}".format(hanging_request_data.request_id),
-                    litellm_parent_otel_span=None,
-                    local_only=True,
-                )
+            request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
+                key="request_status:{}".format(hanging_request_data.request_id),
+                litellm_parent_otel_span=None,
+                local_only=True,
             )
             # this means the request status was either success or fail
             # and is not hanging
@@ -127,12 +116,30 @@ class AlertingHangingRequestCheck:
                 )
                 continue
 
+            # Prevent errant alerts before alerting_threshold has elapsed.
+            # NOTE: This class historically only checked for a missing request_status marker,
+            # which could send "Requests are hanging" alerts for in-flight requests that
+            # were still within the configured threshold window.
+            start_time: Optional[float] = getattr(hanging_request_data, "start_time", None)
+            if start_time is not None:
+                time_since_start = time.time() - float(start_time)
+                if time_since_start < float(self.slack_alerting_object.alerting_threshold):
+                    continue
+
+            # Avoid repeated alerts for the same request.
+            if getattr(hanging_request_data, "alert_sent", False) is True:
+                continue
+
             ################
             # Send the Alert on Slack
             ################
-            await self.send_hanging_request_alert(
-                hanging_request_data=hanging_request_data
-            )
+            await self.send_hanging_request_alert(hanging_request_data=hanging_request_data)
+
+            # Mark as alerted to avoid repeated messages for the same request_id.
+            try:
+                hanging_request_data.alert_sent = True
+            except Exception:
+                pass
 
         return
 
