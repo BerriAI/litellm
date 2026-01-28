@@ -62,7 +62,7 @@ describe("DocumentsTable", () => {
     render(<DocumentsTable documents={mockDocuments} onRemove={onRemove} />);
 
     expect(screen.getByText(/1000.00 KB/)).toBeInTheDocument();
-    expect(screen.getByText(/2.00 MB/)).toBeInTheDocument();
+    expect(screen.getByText(/1.95 MB/)).toBeInTheDocument();
     expect(screen.getByText(/500.00 KB/)).toBeInTheDocument();
   });
 
