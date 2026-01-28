@@ -27,7 +27,7 @@ export const vectorStoreProviderLogoMap: Record<string, string> = {
   [VectorStoreProviders.OpenAI]: `${asset_logos_folder}openai_small.svg`,
   [VectorStoreProviders.Azure]: `${asset_logos_folder}microsoft_azure.svg`,
   [VectorStoreProviders.Milvus]: `${asset_logos_folder}milvus.svg`,
-  [VectorStoreProviders.S3Vectors]: `${asset_logos_folder}aws.svg`,
+  [VectorStoreProviders.S3Vectors]: `${asset_logos_folder}s3_vector.png`,
 };
 
 // Define field types for provider-specific configurations
