@@ -576,6 +576,19 @@ class LiteLLMProxyRequestSetup:
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> StandardLoggingUserAPIKeyMetadata:
+        from litellm.proxy.proxy_server import general_settings
+
+        # By default, end-user ("customer") tracking is client-supplied via request body/headers.
+        # If `general_settings.use_key_user_id_as_end_user` is enabled, we treat the key's
+        # `user_id` as the end-user identifier for spend logging + budget enforcement.
+        derived_end_user_id = user_api_key_dict.end_user_id
+        if (
+            general_settings.get("use_key_user_id_as_end_user", False) is True
+            and derived_end_user_id is None
+            and user_api_key_dict.user_id is not None
+        ):
+            derived_end_user_id = user_api_key_dict.user_id
+
         user_api_key_logged_metadata = StandardLoggingUserAPIKeyMetadata(
             user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
             user_api_key_alias=user_api_key_dict.key_alias,
@@ -585,7 +598,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_user_id=user_api_key_dict.user_id,
             user_api_key_org_id=user_api_key_dict.org_id,
             user_api_key_team_alias=user_api_key_dict.team_alias,
-            user_api_key_end_user_id=user_api_key_dict.end_user_id,
+            user_api_key_end_user_id=derived_end_user_id,
             user_api_key_user_email=user_api_key_dict.user_email,
             user_api_key_request_route=user_api_key_dict.request_route,
             user_api_key_budget_reset_at=(
@@ -878,6 +891,28 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         if "user" not in data:
             data["user"] = user
 
+    # If configured, always derive end-user id from the authenticated key (and prevent client spoofing).
+    # Note: auth code may set `request_data["user"]`, but the actual request forwarded to LiteLLM
+    # is `data` (built separately). So enforce here for consistency across spend logging/callbacks.
+    if (
+        general_settings
+        and general_settings.get("use_key_user_id_as_end_user", False) is True
+    ):
+        derived_end_user_id = user_api_key_dict.end_user_id or user_api_key_dict.user_id
+        if derived_end_user_id:
+            data["user"] = derived_end_user_id
+            if user_api_key_dict.end_user_id is None:
+                user_api_key_dict.end_user_id = derived_end_user_id
+
+    # Debug: trace end-user attribution path (safe, no prompts logged)
+    verbose_proxy_logger.debug(
+        "[pre_call] end-user attribution route=%s auth_user_id=%s auth_end_user_id=%s request_user=%s",
+        request.url.path if request and request.url else None,
+        getattr(user_api_key_dict, "user_id", None),
+        getattr(user_api_key_dict, "end_user_id", None),
+        data.get("user"),
+    )
+
     data["secret_fields"] = SecretFields(raw_headers=dict(request.headers))
 
     ## Dynamic api version (Azure OpenAI endpoints) ##
@@ -940,6 +975,17 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         user_api_key_dict=user_api_key_dict,
         _metadata_variable_name=_metadata_variable_name,
     )
+    try:
+        _md = data.get(_metadata_variable_name, {}) if isinstance(data, dict) else {}
+        verbose_proxy_logger.debug(
+            "[pre_call] metadata end-user fields route=%s user_api_key_end_user_id=%s user_api_key_user_id=%s",
+            request.url.path if request and request.url else None,
+            _md.get("user_api_key_end_user_id"),
+            _md.get("user_api_key_user_id"),
+        )
+    except Exception:
+        # Logging must never break requests
+        pass
     data[_metadata_variable_name]["litellm_api_version"] = version
 
     if general_settings is not None:
