@@ -795,6 +795,13 @@ class ProxyBaseLLMRequestProcessing:
                 litellm_logging_obj=logging_obj,
                 **additional_headers,
             )
+
+            # Preserve the original client-requested model (pre-alias mapping) for downstream
+            # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
+            # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
+            # what the client sent.
+            if requested_model_from_client:
+                self.data["_litellm_client_requested_model"] = requested_model_from_client
             if route_type == "allm_passthrough_route":
                 # Check if response is an async generator
                 if self._is_streaming_response(response):

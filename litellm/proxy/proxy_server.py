@@ -4579,11 +4579,13 @@ async def async_data_generator(
         # Use a list to accumulate response segments to avoid O(n^2) string concatenation
         str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
-        requested_model_from_client = request_data.get("model")
+        # Prefer the original client-requested model (pre-alias mapping) when available, since
+        # pre-call processing can rewrite `request_data["model"]` for aliasing/routing purposes.
+        requested_model_from_client = request_data.get("_litellm_client_requested_model")
+        if not isinstance(requested_model_from_client, str):
+            requested_model_from_client = request_data.get("model")
         requested_model_from_client = (
-            requested_model_from_client
-            if isinstance(requested_model_from_client, str)
-            else ""
+            requested_model_from_client if isinstance(requested_model_from_client, str) else ""
         )
         model_mismatch_logged = False
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(

@@ -161,3 +161,57 @@ async def test_proxy_streaming_chunks_do_not_return_provider_prefixed_model(monk
     payload = json.loads(first[len("data: ") :].strip())
     assert payload["model"] == client_model
     assert not payload["model"].startswith("hosted_vllm/")
+
+
+@pytest.mark.asyncio
+async def test_proxy_streaming_chunks_use_client_requested_model_before_alias_mapping(monkeypatch):
+    """
+    Regression test for alias mapping on streaming:
+
+    - `common_processing_pre_call_logic` can rewrite `request_data["model"]` via model_alias_map / key-specific aliases.
+    - Non-streaming responses are restamped using the original client-requested model (captured before the rewrite).
+    - Streaming chunks must do the same to avoid mismatched `model` values between streaming and non-streaming.
+    """
+    client_model_alias = "alias-model"
+    canonical_model = "vllm-model"
+    internal_model = f"hosted_vllm/{canonical_model}"
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy import proxy_server
+
+    async def _iterator_hook(
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator,
+        request_data: dict,
+    ):
+        yield _make_model_response_stream_chunk(model=internal_model)
+
+    monkeypatch.setattr(proxy_server.proxy_logging_obj, "async_post_call_streaming_iterator_hook", _iterator_hook)
+    monkeypatch.setattr(
+        proxy_server.proxy_logging_obj,
+        "async_post_call_streaming_hook",
+        AsyncMock(side_effect=lambda **kwargs: kwargs["response"]),
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-1234")
+
+    gen = proxy_server.async_data_generator(
+        response=MagicMock(),
+        user_api_key_dict=user_api_key_dict,
+        request_data={
+            "model": canonical_model,
+            "_litellm_client_requested_model": client_model_alias,
+        },
+    )
+
+    chunks = []
+    async for item in gen:
+        chunks.append(item)
+
+    assert len(chunks) >= 2
+    first = chunks[0]
+    assert first.startswith("data: ")
+
+    payload = json.loads(first[len("data: ") :].strip())
+    assert payload["model"] == client_model_alias
+    assert not payload["model"].startswith("hosted_vllm/")
