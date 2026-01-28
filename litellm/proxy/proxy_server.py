@@ -4476,6 +4476,13 @@ async def async_data_generator(
         # Use a list to accumulate response segments to avoid O(n^2) string concatenation
         str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
+        requested_model_from_client = request_data.get("model")
+        requested_model_from_client = (
+            requested_model_from_client
+            if isinstance(requested_model_from_client, str)
+            else ""
+        )
+        model_mismatch_logged = False
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -4497,17 +4504,39 @@ async def async_data_generator(
                 response_str = litellm.get_response_string(response_obj=chunk)
                 str_so_far_parts.append(response_str)
 
-            # Ensure the proxy returns the client-requested model name (not provider-prefixed
-            # internal identifiers) on streaming chunks.
-            client_requested_model = request_data.get("model")
-            if isinstance(client_requested_model, str) and client_requested_model:
-                try:
-                    if hasattr(chunk, "model"):
-                        chunk.model = client_requested_model  # type: ignore[attr-defined]
-                    elif isinstance(chunk, dict) and "model" in chunk:
-                        chunk["model"] = client_requested_model
-                except Exception:
-                    pass
+            # Always return the client-requested model name (not provider-prefixed internal identifiers)
+            # on streaming chunks. Log an error on the first mismatch to make debugging obvious.
+            if requested_model_from_client and isinstance(chunk, (BaseModel, dict)):
+                if isinstance(chunk, dict):
+                    downstream_model = chunk.get("model")
+                else:
+                    downstream_model = getattr(chunk, "model", None)
+                if (
+                    not model_mismatch_logged
+                    and downstream_model != requested_model_from_client
+                ):
+                    verbose_proxy_logger.error(
+                        "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+                        request_data.get("litellm_call_id"),
+                        requested_model_from_client,
+                        downstream_model,
+                    )
+                    model_mismatch_logged = True
+
+                if isinstance(chunk, dict):
+                    chunk["model"] = requested_model_from_client
+                else:
+                    try:
+                        setattr(chunk, "model", requested_model_from_client)
+                    except Exception as e:
+                        verbose_proxy_logger.error(
+                            "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
+                            request_data.get("litellm_call_id"),
+                            requested_model_from_client,
+                            type(chunk),
+                            str(e),
+                            exc_info=True,
+                        )
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)

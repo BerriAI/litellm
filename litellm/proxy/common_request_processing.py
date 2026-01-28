@@ -237,6 +237,65 @@ async def create_response(
     )
 
 
+def _override_openai_response_model(
+    *,
+    response_obj: Any,
+    requested_model: str,
+    log_context: str,
+) -> None:
+    """
+    Force the OpenAI-compatible `model` field in the response to match what the client requested.
+
+    LiteLLM internally prefixes some provider/deployment model identifiers (e.g. `hosted_vllm/...`).
+    That internal identifier should not be returned to clients in the OpenAI `model` field.
+
+    Logs an error when the downstream response model differs, then overwrites it.
+    """
+    if not requested_model:
+        return
+
+    if isinstance(response_obj, dict):
+        downstream_model = response_obj.get("model")
+        if downstream_model != requested_model:
+            verbose_proxy_logger.error(
+                "%s: response model mismatch - requested=%r downstream=%r. Overriding response['model'] to requested model.",
+                log_context,
+                requested_model,
+                downstream_model,
+            )
+        response_obj["model"] = requested_model
+        return
+
+    downstream_model = getattr(response_obj, "model", None)
+    if downstream_model != requested_model:
+        verbose_proxy_logger.error(
+            "%s: response model mismatch - requested=%r downstream=%r. Overriding response.model to requested model.",
+            log_context,
+            requested_model,
+            downstream_model,
+        )
+
+    if not hasattr(response_obj, "model"):
+        verbose_proxy_logger.error(
+            "%s: cannot override response model; missing `model` attribute. response_type=%s",
+            log_context,
+            type(response_obj),
+        )
+        return
+
+    try:
+        setattr(response_obj, "model", requested_model)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "%s: failed to override response.model=%r on response_type=%s. error=%s",
+            log_context,
+            requested_model,
+            type(response_obj),
+            str(e),
+            exc_info=True,
+        )
+
+
 def _get_cost_breakdown_from_logging_obj(
     litellm_logging_obj: Optional[LiteLLMLoggingObj],
 ) -> Tuple[Optional[float], Optional[float], Optional[float], Optional[float]]:
@@ -625,6 +684,9 @@ class ProxyBaseLLMRequestProcessing:
         """
         Common request processing logic for both chat completions and responses API endpoints
         """
+        requested_model_from_client: Optional[str] = (
+            self.data.get("model") if isinstance(self.data.get("model"), str) else None
+        )
         if verbose_proxy_logger.isEnabledFor(logging.DEBUG):
             verbose_proxy_logger.debug(
                 "Request received by LiteLLM:\n{}".format(
@@ -647,13 +709,6 @@ class ProxyBaseLLMRequestProcessing:
             model=model,
             route_type=route_type,
             llm_router=llm_router,
-        )
-
-        # Preserve the client-facing model name for the response. Router/deployments may use
-        # provider-prefixed internal model identifiers (e.g. `hosted_vllm/...`) which should
-        # not be leaked back to clients.
-        client_requested_model: Optional[str] = (
-            self.data.get("model") if isinstance(self.data.get("model"), str) else None
         )
 
         tasks = []
@@ -792,16 +847,14 @@ class ProxyBaseLLMRequestProcessing:
             data=self.data, user_api_key_dict=user_api_key_dict, response=response
         )
 
-        # Ensure the proxy returns the client-requested model name (not provider-prefixed
-        # internal identifiers) for OpenAI-compatible responses.
-        if client_requested_model:
-            try:
-                if hasattr(response, "model"):
-                    response.model = client_requested_model  # type: ignore[attr-defined]
-                elif isinstance(response, dict) and "model" in response:
-                    response["model"] = client_requested_model
-            except Exception:
-                pass
+        # Always return the client-requested model name (not provider-prefixed internal identifiers)
+        # for OpenAI-compatible responses.
+        if requested_model_from_client:
+            _override_openai_response_model(
+                response_obj=response,
+                requested_model=requested_model_from_client,
+                log_context=f"litellm_call_id={logging_obj.litellm_call_id}",
+            )
 
         hidden_params = (
             getattr(response, "_hidden_params", {}) or {}
