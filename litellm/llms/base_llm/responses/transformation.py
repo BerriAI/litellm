@@ -27,6 +27,10 @@ else:
 
 
 class BaseResponsesAPIConfig(ABC):
+    # Some OpenAI-compatible backends may not expose /responses yet. Providers that
+    # want to fall back to the chat-completions bridge on 404/405/501 can opt in.
+    supports_fallback_to_chat: bool = False
+
     def __init__(self):
         pass
 

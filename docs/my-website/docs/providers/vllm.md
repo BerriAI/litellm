@@ -10,7 +10,7 @@ LiteLLM supports all models on VLLM.
 | Description | vLLM is a fast and easy-to-use library for LLM inference and serving. [Docs](https://docs.vllm.ai/en/latest/index.html) |
 | Provider Route on LiteLLM | `hosted_vllm/` (for OpenAI compatible server), `vllm/` ([DEPRECATED] for vLLM sdk usage) |
 | Provider Doc | [vLLM ↗](https://docs.vllm.ai/en/latest/index.html) |
-| Supported Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/rerank`, `/audio/transcriptions` |
+| Supported Endpoints | `/chat/completions`, `/embeddings`, `/completions`, `/rerank`, `/audio/transcriptions`, `/v1/responses` |
 
 
 # Quick Start
@@ -149,6 +149,86 @@ Here's how to call an OpenAI-Compatible Endpoint with the LiteLLM Proxy Server
 
   </TabItem>
   </Tabs>
+
+
+## Responses API
+
+vLLM now supports the Responses API for multi-turn conversations. Models like GPT-OSS work great with this.
+
+:::info
+Use Responses API when you need:
+- Multi-turn conversations with automatic state management
+- Long context handling with compaction
+- Background task support
+
+[See full Responses API docs →](../response_api.md)
+:::
+
+<Tabs>
+<TabItem value="sdk" label="SDK">
+
+```python
+from litellm import responses
+import os
+
+os.environ["HOSTED_VLLM_API_BASE"] = "http://localhost:8000"
+
+response = responses(
+    model="hosted_vllm/gpt-oss-120b",
+    input="what's the weather like?",
+)
+print(response)
+```
+
+### Streaming
+
+```python
+from litellm import responses
+
+response = responses(
+    model="hosted_vllm/gpt-oss-120b",
+    input="tell me a story",
+    stream=True,
+    api_base="http://localhost:8000"
+)
+
+for chunk in response:
+    print(chunk)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Add to config.yaml
+
+```yaml
+model_list:
+  - model_name: gpt-oss
+    litellm_params:
+      model: hosted_vllm/gpt-oss-120b
+      api_base: http://localhost:8000
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Call it
+
+```bash
+curl http://0.0.0.0:4000/v1/responses \
+  -H "Authorization: Bearer sk-1234" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gpt-oss",
+    "input": "whats the weather like?"
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 
 ## Embeddings
