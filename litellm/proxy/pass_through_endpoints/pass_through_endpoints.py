@@ -604,6 +604,7 @@ async def pass_through_request(  # noqa: PLR0915
     cost_per_request: Optional[float] = None,
     custom_llm_provider: Optional[str] = None,
     guardrails_config: Optional[dict] = None,
+    async_client: Optional[httpx.AsyncClient] = None,
 ):
     """
     Pass through endpoint handler, makes the httpx request for pass-through endpoints and ensures logging hooks are called
@@ -719,11 +720,12 @@ async def pass_through_request(  # noqa: PLR0915
             data=_parsed_body,
             call_type="pass_through_endpoint",
         )
-        async_client_obj = get_async_httpx_client(
-            llm_provider=httpxSpecialProvider.PassThroughEndpoint,
-            params={"timeout": 600},
-        )
-        async_client = async_client_obj.client
+        if async_client is None:
+            async_client_obj = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+                params={"timeout": 600},
+            )
+            async_client = async_client_obj.client
         passthrough_logging_payload = PassthroughStandardLoggingPayload(
             url=str(url),
             request_body=_parsed_body,
@@ -1081,6 +1083,7 @@ def create_pass_through_route(
     is_streaming_request: Optional[bool] = False,
     query_params: Optional[dict] = None,
     guardrails: Optional[Dict[str, Any]] = None,
+    async_client: Optional[httpx.AsyncClient] = None,
 ):
     # check if target is an adapter.py or a url
     from litellm._uuid import uuid
@@ -1208,6 +1211,7 @@ def create_pass_through_route(
                 cost_per_request=cast(Optional[float], param_cost_per_request),
                 custom_llm_provider=custom_llm_provider,
                 guardrails_config=cast(Optional[dict], param_guardrails),
+                async_client=async_client,
             )
 
     return endpoint_func
