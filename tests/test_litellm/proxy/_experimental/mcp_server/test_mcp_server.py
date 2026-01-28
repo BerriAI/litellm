@@ -1257,6 +1257,7 @@ async def test_call_mcp_tool_user_unauthorized_access():
                 },
                 user_api_key_auth=mock_user_auth,
                 mcp_auth_header="Bearer test_token",
+                mcp_servers=["restricted_server"],
             )
 
         # Verify the exception details
@@ -1604,24 +1605,24 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     ):
         # Return tools WITH prefix (as they come from MCP server)
         tool1 = MagicMock()
-        tool1.name = "GITMCP-fetch_litellm_documentation"  # Prefixed
+        tool1.name = "fetch_litellm_documentation"  # Prefixed
         tool1.description = "Fetch docs"
         tool1.inputSchema = {}
 
         tool2 = MagicMock()
         tool2.name = (
-            "GITMCP-search_litellm_documentation"  # Prefixed, not in allowed list
+            "search_litellm_documentation"  # Prefixed, not in allowed list
         )
         tool2.description = "Search docs"
         tool2.inputSchema = {}
 
         tool3 = MagicMock()
-        tool3.name = "GITMCP-search_litellm_code"  # Prefixed
+        tool3.name = "search_litellm_code"  # Prefixed
         tool3.description = "Search code"
         tool3.inputSchema = {}
 
         tool4 = MagicMock()
-        tool4.name = "GITMCP-fetch_generic_url_content"  # Prefixed, not in allowed list
+        tool4.name = "fetch_generic_url_content"  # Prefixed, not in allowed list
         tool4.description = "Fetch URL"
         tool4.inputSchema = {}
 
@@ -1645,8 +1646,8 @@ async def test_list_tools_strips_prefix_when_matching_permissions():
     tool_names = sorted([t.name for t in tools])
     # Tools still have prefixes in the output, but were filtered correctly
     assert tool_names == [
-        "GITMCP-fetch_litellm_documentation",
-        "GITMCP-search_litellm_code",
+        "fetch_litellm_documentation",
+        "search_litellm_code",
     ]
 
 
