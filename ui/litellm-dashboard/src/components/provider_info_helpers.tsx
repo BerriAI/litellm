@@ -211,6 +211,11 @@ export const getPlaceholder = (selectedProvider: string): string => {
   }
 };
 
+const isValidModelName = (modelName: string): boolean => {
+  const resolutionOnlyPattern = /^\d{3,4}-x-\d{3,4}\/dall-e-[23]$/;
+  return !resolutionOnlyPattern.test(modelName);
+};
+
 export const getProviderModels = (provider: Providers, modelMap: any): Array<string> => {
   let providerKey = provider;
   console.log(`Provider key: ${providerKey}`);
@@ -227,7 +232,9 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
           litellmProvider === custom_llm_provider ||
           (typeof litellmProvider === "string" && litellmProvider.includes(custom_llm_provider))
         ) {
-          providerModels.push(key);
+          if (isValidModelName(key)) {
+            providerModels.push(key);
+          }
         }
       }
     });
@@ -242,7 +249,9 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
           "litellm_provider" in (value as object) &&
           (value as any)["litellm_provider"] === "cohere_chat"
         ) {
-          providerModels.push(key);
+          if (isValidModelName(key)) {
+            providerModels.push(key);
+          }
         }
       });
     }
@@ -258,11 +267,13 @@ export const getProviderModels = (provider: Providers, modelMap: any): Array<str
           "litellm_provider" in (value as object) &&
           (value as any)["litellm_provider"] === "sagemaker_chat"
         ) {
-          providerModels.push(key);
+          if (isValidModelName(key)) {
+            providerModels.push(key);
+          }
         }
       });
     }
   }
 
-  return providerModels;
+  return providerModels.sort();
 };
