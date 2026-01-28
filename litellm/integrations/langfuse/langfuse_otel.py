@@ -17,17 +17,8 @@ from litellm.types.utils import StandardCallbackDynamicParams
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.integrations.opentelemetry import (
-        OpenTelemetryConfig as _OpenTelemetryConfig,
-    )
-    from litellm.types.integrations.arize import Protocol as _Protocol
-
-    Protocol = _Protocol
-    OpenTelemetryConfig = _OpenTelemetryConfig
     Span = Union[_Span, Any]
 else:
-    Protocol = Any
-    OpenTelemetryConfig = Any
     Span = Any
 
 
