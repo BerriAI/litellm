@@ -364,6 +364,7 @@ const sidebars = {
           label: "Load Balancing, Routing, Fallbacks",
           href: "https://docs.litellm.ai/docs/routing-load-balancing",
         },
+        "traffic_mirroring",
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
@@ -775,6 +776,7 @@ const sidebars = {
         "providers/oci",
         "providers/ollama",
         "providers/openrouter",
+        "providers/sarvam",
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",

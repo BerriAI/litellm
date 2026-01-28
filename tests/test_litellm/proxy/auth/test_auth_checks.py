@@ -28,6 +28,7 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_vector_stores,
+    _get_fuzzy_user_object,
     _get_team_db_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_soft_budget_check,
@@ -1331,3 +1332,42 @@ async def test_virtual_key_max_budget_alert_check_scenarios(
     assert (
         alert_triggered == expect_alert
     ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, max_budget={max_budget}"
+
+
+@pytest.mark.asyncio
+async def test_get_fuzzy_user_object_case_insensitive_email():
+    """Test that _get_fuzzy_user_object uses case-insensitive email lookup"""
+    # Setup mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+
+    # Mock user data with mixed case email
+    test_user = LiteLLM_UserTable(
+        user_id="test_123",
+        sso_user_id=None,
+        user_email="Test@Example.com",  # Mixed case in DB
+        organization_memberships=[],
+        max_budget=None,
+    )
+
+    # Test: SSO ID not found, find by email with different casing
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
+
+    # Search with lowercase email (different from DB)
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma,
+        sso_user_id=None,
+        user_email="test@example.com",  # Lowercase search
+    )
+
+    # Verify user was found despite case difference
+    assert result == test_user
+
+    # Verify the query used case-insensitive mode
+    mock_prisma.db.litellm_usertable.find_first.assert_called_once()
+    call_args = mock_prisma.db.litellm_usertable.find_first.call_args
+    assert call_args.kwargs["where"]["user_email"]["equals"] == "test@example.com"
+    assert call_args.kwargs["where"]["user_email"]["mode"] == "insensitive"
+    assert call_args.kwargs["include"] == {"organization_memberships": True}
