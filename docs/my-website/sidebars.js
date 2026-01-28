@@ -274,11 +274,18 @@ const sidebars = {
             "proxy/custom_sso",
             "proxy/ai_hub",
             "proxy/model_compare_ui",
-            "proxy/public_teams",
-            "proxy/self_serve",
-            "proxy/ui/bulk_edit_users",
             "proxy/ui_credentials",
             "tutorials/scim_litellm",
+            {
+              type: "category",
+              label: "UI User/Team Management",
+              items: [
+                "proxy/ui_access_control",
+                "proxy/public_teams",
+                "proxy/self_serve",
+                "proxy/ui/bulk_edit_users",
+              ]
+            },
             {
               type: "category",
               label: "UI Usage Tracking",
