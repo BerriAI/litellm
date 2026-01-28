@@ -3653,10 +3653,9 @@
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.4e-05,
         "supported_endpoints": [
-            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -23892,8 +23891,11 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.4e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "supported_modalities": [
             "text",
             "image"
@@ -30461,6 +30463,7 @@
         "supports_web_search": true
     },
     "xai/grok-3": {
+        "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30475,6 +30478,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-beta": {
+        "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30489,6 +30493,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-fast-beta": {
+        "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30503,6 +30508,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-fast-latest": {
+        "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30517,6 +30523,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-latest": {
+        "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30531,6 +30538,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30546,6 +30554,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-beta": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30561,6 +30570,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-fast": {
+        "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30576,6 +30586,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-fast-beta": {
+        "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30591,6 +30602,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-fast-latest": {
+        "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30606,6 +30618,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-latest": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
