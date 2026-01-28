@@ -746,8 +746,15 @@ def function_setup(  # noqa: PLR0915
             for callback in all_callbacks:
                 # check if callback is a string - e.g. "lago", "openmeter"
                 if isinstance(callback, str):
-                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(  # type: ignore
-                        callback,
+                    from litellm import _custom_logger_compatible_callbacks_literal
+
+                    # Only attempt to init known custom-logger-compatible callbacks
+                    if callback not in litellm._known_custom_logger_compatible_callbacks:
+                        # _init_custom_logger_compatible_class would return None anyway
+                        continue
+
+                    callback = litellm.litellm_core_utils.litellm_logging._init_custom_logger_compatible_class(
+                        cast(_custom_logger_compatible_callbacks_literal, callback),
                         internal_usage_cache=None,
                         llm_router=None,  # type: ignore
                     )
