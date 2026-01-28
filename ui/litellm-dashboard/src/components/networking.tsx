@@ -2007,12 +2007,12 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId, sortBy, sortOrder);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
@@ -2026,6 +2026,12 @@ export const modelInfoCall = async (accessToken: string, userID: string, userRol
     }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());
+    }
+    if (sortBy && sortBy.trim()) {
+      params.append("sortBy", sortBy.trim());
+    }
+    if (sortOrder && sortOrder.trim()) {
+      params.append("sortOrder", sortOrder.trim());
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -5330,6 +5336,66 @@ export const getProxyUISettings = async (accessToken: string) => {
   }
 };
 
+export const getUISettings = async (accessToken: string) => {
+  /**
+   * Get UI-specific configuration flags from the database
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      console.error("Failed to get UI settings:", errorMessage);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get UI settings:", error);
+    return null;
+  }
+};
+
+export const updateUISettings = async (accessToken: string, settings: any) => {
+  /**
+   * Update UI-specific configuration flags in the database
+   * Only proxy admins can update these settings
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/update/ui_settings` : `/update/ui_settings`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update UI settings:", error);
+    throw error;
+  }
+};
+
 export const getGuardrailsList = async (accessToken: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/v2/guardrails/list` : `/v2/guardrails/list`;
@@ -6954,7 +7020,8 @@ export const ragIngestCall = async (
   customLlmProvider: string,
   vectorStoreId?: string,
   vectorStoreName?: string,
-  vectorStoreDescription?: string
+  vectorStoreDescription?: string,
+  providerSpecificParams?: Record<string, any>
 ): Promise<any> => {
   try {
     let url = proxyBaseUrl ? `${proxyBaseUrl}/rag/ingest` : `/rag/ingest`;
@@ -6967,6 +7034,7 @@ export const ragIngestCall = async (
         vector_store: {
           custom_llm_provider: customLlmProvider,
           ...(vectorStoreId && { vector_store_id: vectorStoreId }),
+          ...(providerSpecificParams && providerSpecificParams),
         },
       },
     };

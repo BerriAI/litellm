@@ -4,20 +4,22 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Mapping, Optional, Union
 
 from openai._models import BaseModel as OpenAIObject
-from openai.types.audio.transcription_create_params import FileTypes as FileTypes  # type: ignore
+from openai.types.audio.transcription_create_params import (
+    FileTypes as FileTypes,  # type: ignore
+)
 from openai.types.chat.chat_completion import ChatCompletion as ChatCompletion
 from openai.types.completion_usage import (
     CompletionTokensDetails,
     CompletionUsage,
     PromptTokensDetails,
 )
+from openai.types.moderation import Categories as Categories
 from openai.types.moderation import (
-    Categories as Categories,
     CategoryAppliedInputTypes as CategoryAppliedInputTypes,
-    CategoryScores as CategoryScores,
 )
+from openai.types.moderation import CategoryScores as CategoryScores
+from openai.types.moderation_create_response import Moderation as Moderation
 from openai.types.moderation_create_response import (
-    Moderation as Moderation,
     ModerationCreateResponse as ModerationCreateResponse,
 )
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -3075,6 +3077,7 @@ class LlmProviders(str, Enum):
     LLAMA = "meta_llama"
     NSCALE = "nscale"
     PG_VECTOR = "pg_vector"
+    S3_VECTORS = "s3_vectors"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
