@@ -94,6 +94,11 @@ class AlertingHangingRequestCheck:
             n=MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
         )
 
+        hanging_request_ttl_seconds = int(
+            self.slack_alerting_object.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS
+        )
+        alerting_threshold_seconds = float(self.slack_alerting_object.alerting_threshold)
+
         for request_id in hanging_requests:
             hanging_request_data: Optional[HangingRequestData] = await self.hanging_request_cache.async_get_cache(
                 key=request_id,
@@ -120,14 +125,12 @@ class AlertingHangingRequestCheck:
             # NOTE: This class historically only checked for a missing request_status marker,
             # which could send "Requests are hanging" alerts for in-flight requests that
             # were still within the configured threshold window.
-            start_time: Optional[float] = getattr(hanging_request_data, "start_time", None)
-            if start_time is not None:
-                time_since_start = time.time() - float(start_time)
-                if time_since_start < float(self.slack_alerting_object.alerting_threshold):
-                    continue
+            time_since_start = time.time() - float(hanging_request_data.start_time)
+            if time_since_start < alerting_threshold_seconds:
+                continue
 
             # Avoid repeated alerts for the same request.
-            if getattr(hanging_request_data, "alert_sent", False) is True:
+            if hanging_request_data.alert_sent:
                 continue
 
             ################
@@ -136,10 +139,14 @@ class AlertingHangingRequestCheck:
             await self.send_hanging_request_alert(hanging_request_data=hanging_request_data)
 
             # Mark as alerted to avoid repeated messages for the same request_id.
-            try:
-                hanging_request_data.alert_sent = True
-            except Exception:
-                pass
+            hanging_request_data.alert_sent = True
+
+            # Persist updated object back into cache (do not rely on object reference semantics).
+            await self.hanging_request_cache.async_set_cache(
+                key=request_id,
+                value=hanging_request_data,
+                ttl=hanging_request_ttl_seconds,
+            )
 
         return
 
