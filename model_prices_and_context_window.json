@@ -20627,6 +20627,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192
@@ -20641,6 +20642,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192
@@ -20655,6 +20657,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192
@@ -23539,7 +23542,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.02e-06,
         "supports_function_calling": true,
-        "supports_prompt_caching": false,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -24234,6 +24237,7 @@
         "output_cost_per_token": 1.75e-06,
         "source": "https://openrouter.ai/z-ai/glm-4.6",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -24247,6 +24251,7 @@
         "output_cost_per_token": 1.9e-06,
         "source": "https://openrouter.ai/z-ai/glm-4.6:exacto",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -30885,11 +30890,14 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
     "zai/glm-4.6": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.2e-06,
         "litellm_provider": "zai",
@@ -30897,6 +30905,8 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
