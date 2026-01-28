@@ -20,6 +20,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    ContentFilterCategoryConfig,
+)
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -547,9 +550,27 @@ class ContentFilterConfigModel(BaseModel):
     blocked_words_file: Optional[str] = Field(
         default=None, description="Path to YAML file containing blocked_words list"
     )
+    categories: Optional[List[ContentFilterCategoryConfig]] = Field(
+        default=None,
+        description="List of prebuilt categories to enable (harmful_*, bias_*)",
+    )
+    severity_threshold: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to block (high, medium, low)",
+    )
+    pattern_redaction_format: Optional[str] = Field(
+        default=None,
+        description="Format string for pattern redaction (use {pattern_name} placeholder)",
+    )
+    keyword_redaction_tag: Optional[str] = Field(
+        default=None,
+        description="Tag to use for keyword redaction",
+    )
 
 
-class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
+class BaseLitellmParams(
+    ContentFilterConfigModel
+):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
     )
@@ -630,7 +651,6 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         description="Whether to fail the request if Model Armor encounters an error",
     )
 
-    # Generic Guardrail API params
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Additional provider-specific parameters for generic guardrail APIs",
@@ -657,7 +677,6 @@ class LitellmParams(
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     JavelinGuardrailConfigModel,
-    ContentFilterConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,

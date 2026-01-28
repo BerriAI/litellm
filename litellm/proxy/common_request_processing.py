@@ -650,11 +650,15 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         tasks = []
+        # Start the moderation check (during_call_hook) as early as possible
+        # This gives it a head start to mask/validate input while the proxy handles routing
         tasks.append(
-            proxy_logging_obj.during_call_hook(
-                data=self.data,
-                user_api_key_dict=user_api_key_dict,
-                call_type=route_type,  # type: ignore
+            asyncio.create_task(
+                proxy_logging_obj.during_call_hook(
+                    data=self.data,
+                    user_api_key_dict=user_api_key_dict,
+                    call_type=route_type,  # type: ignore
+                )
             )
         )
 
