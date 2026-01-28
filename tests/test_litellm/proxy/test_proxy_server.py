@@ -4014,6 +4014,279 @@ async def test_model_info_v2_filter_by_team_id(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sort_by,sort_order,expected_order",
+    [
+        # Test model_name sorting
+        ("model_name", "asc", ["a-model", "b-model", "z-model"]),
+        ("model_name", "desc", ["z-model", "b-model", "a-model"]),
+        # Test created_at sorting
+        ("created_at", "asc", ["old-model", "mid-model", "new-model"]),
+        ("created_at", "desc", ["new-model", "mid-model", "old-model"]),
+        # Test updated_at sorting
+        ("updated_at", "asc", ["old-updated", "mid-updated", "new-updated"]),
+        ("updated_at", "desc", ["new-updated", "mid-updated", "old-updated"]),
+        # Test costs sorting
+        ("costs", "asc", ["low-cost", "mid-cost", "high-cost"]),
+        ("costs", "desc", ["high-cost", "mid-cost", "low-cost"]),
+        # Test status sorting (False/config models come before True/db models in asc)
+        ("status", "asc", ["config-model-1", "config-model-2", "db-model"]),
+        ("status", "desc", ["db-model", "config-model-1", "config-model-2"]),
+    ],
+)
+async def test_model_info_v2_sorting(monkeypatch, sort_by, sort_order, expected_order):
+    """
+    Test sorting functionality for /v2/model/info endpoint.
+    Tests all sortBy fields (model_name, created_at, updated_at, costs, status)
+    with both asc and desc sort orders.
+    """
+    from datetime import datetime, timedelta
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Create base time for date comparisons
+    base_time = datetime(2024, 1, 1, 12, 0, 0)
+
+    # Create mock models with different values for each sort field
+    mock_models = []
+
+    if sort_by == "model_name":
+        # Models with different names
+        mock_models = [
+            {
+                "model_name": "z-model",
+                "litellm_params": {"model": "z-model"},
+                "model_info": {"id": "z-model"},
+            },
+            {
+                "model_name": "a-model",
+                "litellm_params": {"model": "a-model"},
+                "model_info": {"id": "a-model"},
+            },
+            {
+                "model_name": "b-model",
+                "litellm_params": {"model": "b-model"},
+                "model_info": {"id": "b-model"},
+            },
+        ]
+    elif sort_by == "created_at":
+        # Models with different created_at timestamps
+        mock_models = [
+            {
+                "model_name": "new-model",
+                "litellm_params": {"model": "new-model"},
+                "model_info": {
+                    "id": "new-model",
+                    "created_at": (base_time + timedelta(days=3)).isoformat(),
+                },
+            },
+            {
+                "model_name": "old-model",
+                "litellm_params": {"model": "old-model"},
+                "model_info": {
+                    "id": "old-model",
+                    "created_at": (base_time - timedelta(days=3)).isoformat(),
+                },
+            },
+            {
+                "model_name": "mid-model",
+                "litellm_params": {"model": "mid-model"},
+                "model_info": {
+                    "id": "mid-model",
+                    "created_at": base_time.isoformat(),
+                },
+            },
+        ]
+    elif sort_by == "updated_at":
+        # Models with different updated_at timestamps
+        mock_models = [
+            {
+                "model_name": "new-updated",
+                "litellm_params": {"model": "new-updated"},
+                "model_info": {
+                    "id": "new-updated",
+                    "updated_at": (base_time + timedelta(days=3)).isoformat(),
+                },
+            },
+            {
+                "model_name": "old-updated",
+                "litellm_params": {"model": "old-updated"},
+                "model_info": {
+                    "id": "old-updated",
+                    "updated_at": (base_time - timedelta(days=3)).isoformat(),
+                },
+            },
+            {
+                "model_name": "mid-updated",
+                "litellm_params": {"model": "mid-updated"},
+                "model_info": {
+                    "id": "mid-updated",
+                    "updated_at": base_time.isoformat(),
+                },
+            },
+        ]
+    elif sort_by == "costs":
+        # Models with different costs (input_cost + output_cost)
+        mock_models = [
+            {
+                "model_name": "high-cost",
+                "litellm_params": {"model": "high-cost"},
+                "model_info": {
+                    "id": "high-cost",
+                    "input_cost_per_token": 0.00005,
+                    "output_cost_per_token": 0.00015,
+                },
+            },
+            {
+                "model_name": "low-cost",
+                "litellm_params": {"model": "low-cost"},
+                "model_info": {
+                    "id": "low-cost",
+                    "input_cost_per_token": 0.00001,
+                    "output_cost_per_token": 0.00003,
+                },
+            },
+            {
+                "model_name": "mid-cost",
+                "litellm_params": {"model": "mid-cost"},
+                "model_info": {
+                    "id": "mid-cost",
+                    "input_cost_per_token": 0.00003,
+                    "output_cost_per_token": 0.00007,
+                },
+            },
+        ]
+    elif sort_by == "status":
+        # Models with different db_model status (False = config, True = db)
+        mock_models = [
+            {
+                "model_name": "db-model",
+                "litellm_params": {"model": "db-model"},
+                "model_info": {"id": "db-model", "db_model": True},
+            },
+            {
+                "model_name": "config-model-1",
+                "litellm_params": {"model": "config-model-1"},
+                "model_info": {"id": "config-model-1", "db_model": False},
+            },
+            {
+                "model_name": "config-model-2",
+                "litellm_params": {"model": "config-model-2"},
+                "model_info": {"id": "config-model-2", "db_model": False},
+            },
+        ]
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.model_list = mock_models
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test sorting with specified sortBy and sortOrder
+        response = client.get(
+            "/v2/model/info", params={"sortBy": sort_by, "sortOrder": sort_order}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data["data"]) == len(expected_order)
+
+        # Verify models are in expected order
+        actual_order = [m["model_name"] for m in data["data"]]
+        assert actual_order == expected_order, (
+            f"Sorting failed for sortBy={sort_by}, sortOrder={sort_order}. "
+            f"Expected: {expected_order}, Got: {actual_order}"
+        )
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
+async def test_model_info_v2_sorting_invalid_sort_order(monkeypatch):
+    """
+    Test that invalid sortOrder values return a 400 error.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
+
+    # Create mock models
+    mock_models = [
+        {
+            "model_name": "test-model",
+            "litellm_params": {"model": "test-model"},
+            "model_info": {"id": "test-model"},
+        }
+    ]
+
+    # Mock llm_router
+    mock_router = MagicMock()
+    mock_router.model_list = mock_models
+
+    # Mock prisma_client
+    mock_prisma_client = MagicMock()
+
+    # Mock proxy_config.get_config
+    mock_get_config = AsyncMock(return_value={})
+
+    # Mock user authentication
+    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
+    mock_user_api_key_dict.user_id = "test-user"
+    mock_user_api_key_dict.api_key = "test-key"
+    mock_user_api_key_dict.team_models = []
+    mock_user_api_key_dict.models = []
+
+    # Apply monkeypatches
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", mock_router)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr(proxy_config, "get_config", mock_get_config)
+
+    # Override auth dependency
+    original_overrides = app.dependency_overrides.copy()
+    app.dependency_overrides[user_api_key_auth] = lambda: mock_user_api_key_dict
+
+    client = TestClient(app)
+    try:
+        # Test invalid sortOrder
+        response = client.get(
+            "/v2/model/info", params={"sortBy": "model_name", "sortOrder": "invalid"}
+        )
+        assert response.status_code == 400
+        data = response.json()
+        assert "Invalid sortOrder" in data["detail"]
+
+    finally:
+        app.dependency_overrides = original_overrides
+
+
+@pytest.mark.asyncio
 async def test_apply_search_filter_to_models(monkeypatch):
     """
     Test the _apply_search_filter_to_models helper function.
