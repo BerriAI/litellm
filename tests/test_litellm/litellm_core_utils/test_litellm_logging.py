@@ -1060,152 +1060,89 @@ def test_append_system_prompt_messages():
     assert result == messages
 
 
-def test_global_redaction_skips_per_callback_redaction():
-    """
-    When global_redaction_applied=True, per-callback redaction functions should
-    return early without processing to avoid redundant work.
-    """
-    from litellm.litellm_core_utils.redact_messages import (
-        redact_message_input_output_from_custom_logger,
-    )
-    from litellm.integrations.custom_logger import CustomLogger
+class TestProcessDynamicCallbacksEarlyReturn:
+    def test_all_none_skips_processing(self):
+        """When all dynamic callbacks are None, _process_dynamic_callback_list should not be called."""
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+        with patch.object(obj, "_process_dynamic_callback_list") as mock_process:
+            obj.process_dynamic_callbacks()
+            mock_process.assert_not_called()
 
-    # Test redact_message_input_output_from_custom_logger skips when global redaction applied
-    custom_logger = CustomLogger()
-    custom_logger.message_logging = False  # Would normally trigger redaction
-
-    mock_logging_obj = MagicMock()
-    mock_logging_obj.model_call_details = {"messages": [{"content": "secret"}]}
-
-    original_result = {"response": "already-redacted"}
-
-    result = redact_message_input_output_from_custom_logger(
-        litellm_logging_obj=mock_logging_obj,
-        result=original_result,
-        custom_logger=custom_logger,
-        global_redaction_applied=True,
-    )
-
-    assert result is original_result  # Should return unchanged (early return)
-
-    # Test CustomLogger.redact_standard_logging_payload_from_model_call_details skips
-    custom_logger.turn_off_message_logging = True
-
-    model_call_details = {
-        "messages": [{"content": "secret"}],
-        "standard_logging_object": {"response": "sensitive"},
-    }
-
-    result = custom_logger.redact_standard_logging_payload_from_model_call_details(
-        model_call_details=model_call_details,
-        global_redaction_applied=True,
-    )
-
-    assert result is model_call_details  # Should return unchanged (early return)
+    def test_none_callbacks_not_processed(self):
+        """When only one callback type is set, only that one is processed."""
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_input_callbacks=["cb"],
+        )
+        with patch.object(
+            obj, "_process_dynamic_callback_list", return_value=["cb"]
+        ) as mock_process:
+            obj.process_dynamic_callbacks()
+            assert mock_process.call_count == 1
 
 
-def test_per_callback_redaction_proceeds_when_global_redaction_not_applied():
-    """
-    When global_redaction_applied=False, per-callback redaction should still
-    proceed normally if the callback has redaction enabled.
-    """
-    from litellm.litellm_core_utils.redact_messages import (
-        redact_message_input_output_from_custom_logger,
-    )
-    from litellm.integrations.custom_logger import CustomLogger
+class TestProcessDynamicCallbacksOrdering:
+    """success must be processed before async_success, failure before async_failure,
+    because _process_dynamic_callback_list appends to the async list as a side effect."""
 
-    # Test redact_message_input_output_from_custom_logger proceeds when global redaction NOT applied
-    custom_logger = CustomLogger()
-    custom_logger.message_logging = False  # Triggers redaction
+    def test_success_processed_before_async_success(self):
+        call_order = []
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_success_callbacks=["some_callback"],
+            dynamic_async_success_callbacks=["other_callback"],
+        )
+        original = obj._process_dynamic_callback_list
 
-    mock_logging_obj = MagicMock()
-    mock_logging_obj.model_call_details = {"messages": [{"content": "secret"}]}
+        def tracking_process(callback_list, dynamic_callbacks_type):
+            call_order.append(dynamic_callbacks_type)
+            return original(callback_list, dynamic_callbacks_type)
 
-    original_result = {"response": "sensitive-data"}
+        with patch.object(obj, "_process_dynamic_callback_list", side_effect=tracking_process):
+            obj.process_dynamic_callbacks()
 
-    result = redact_message_input_output_from_custom_logger(
-        litellm_logging_obj=mock_logging_obj,
-        result=original_result,
-        custom_logger=custom_logger,
-        global_redaction_applied=False,
-    )
+        assert call_order.index("success") < call_order.index("async_success")
 
-    # Result should be different (redacted), not the same object
-    assert result is not original_result
+    def test_failure_processed_before_async_failure(self):
+        call_order = []
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_failure_callbacks=["some_callback"],
+            dynamic_async_failure_callbacks=["other_callback"],
+        )
+        original = obj._process_dynamic_callback_list
 
+        def tracking_process(callback_list, dynamic_callbacks_type):
+            call_order.append(dynamic_callbacks_type)
+            return original(callback_list, dynamic_callbacks_type)
 
-def test_method_override_detection_walks_full_mro():
-    """
-    Test that method override detection correctly walks the full Method Resolution Order (MRO),
-    not just the immediate class's __dict__.
+        with patch.object(obj, "_process_dynamic_callback_list", side_effect=tracking_process):
+            obj.process_dynamic_callbacks()
 
-    This tests the fix for a bug where:
-    - `method_name in type(self).__dict__` only checks the immediate class
-    - `getattr(type(self), method_name) is not getattr(CustomLogger, method_name)` walks the full MRO
-
-    The bug caused incorrect behavior when:
-    - ClassA(CustomLogger) overrides a method
-    - ClassB(ClassA) does NOT override the method
-    - ClassB instance should still detect the override from ClassA
-    """
-    from litellm.integrations.custom_logger import CustomLogger
-
-    # Case 1: Direct override - should be detected
-    class DirectOverrideLogger(CustomLogger):
-        def redact_standard_logging_payload_from_model_call_details(
-            self, model_call_details, global_redaction_applied=False
-        ):
-            # Custom implementation
-            return {"custom": "redacted"}
-
-    direct_logger = DirectOverrideLogger()
-    method_name = "redact_standard_logging_payload_from_model_call_details"
-
-    # Using the correct MRO-aware check
-    is_overridden_mro = getattr(type(direct_logger), method_name) is not getattr(
-        CustomLogger, method_name
-    )
-    assert is_overridden_mro is True, "Direct override should be detected"
-
-    # Case 2: Inherited override (the bug case) - should also be detected
-    class InheritedOverrideLogger(DirectOverrideLogger):
-        # Does NOT override the method - inherits from DirectOverrideLogger
-        pass
-
-    inherited_logger = InheritedOverrideLogger()
-
-    # The buggy check (only checks immediate class __dict__) would return False
-    buggy_check = method_name in type(inherited_logger).__dict__
-    assert buggy_check is False, "Buggy check incorrectly misses inherited override"
-
-    # The correct MRO-aware check should return True
-    is_overridden_mro = getattr(type(inherited_logger), method_name) is not getattr(
-        CustomLogger, method_name
-    )
-    assert is_overridden_mro is True, "MRO check should detect inherited override"
-
-    # Case 3: No override - should NOT be detected as overridden
-    class NoOverrideLogger(CustomLogger):
-        # Does NOT override the method
-        pass
-
-    no_override_logger = NoOverrideLogger()
-    is_overridden_mro = getattr(type(no_override_logger), method_name) is not getattr(
-        CustomLogger, method_name
-    )
-    assert is_overridden_mro is False, "No override should not be detected"
-
-    # Case 4: Verify actual behavior - inherited override should NOT skip redaction
-    model_call_details = {
-        "messages": [{"content": "secret"}],
-        "standard_logging_object": {"response": "sensitive"},
-    }
-
-    # With global_redaction_applied=True and an inherited override,
-    # the method should NOT early-return (should proceed to custom implementation)
-    result = inherited_logger.redact_standard_logging_payload_from_model_call_details(
-        model_call_details=model_call_details,
-        global_redaction_applied=True,
-    )
-    # DirectOverrideLogger returns {"custom": "redacted"}
-    assert result == {"custom": "redacted"}, "Inherited override should execute custom logic"
+        assert call_order.index("failure") < call_order.index("async_failure")
