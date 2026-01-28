@@ -828,6 +828,7 @@ asyncio.run(router_acompletion())
 ```
 
 </TabItem>
+</Tabs>
 
 ## Traffic Mirroring / Silent Experiments
 
