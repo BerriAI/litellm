@@ -22,6 +22,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.integrations.posthog import (
     POSTHOG_MAX_BATCH_SIZE,
     PostHogEventPayload,
@@ -88,9 +89,12 @@ class PostHogLogger(CustomBatchLogger):
             payload = self._create_posthog_payload([event_payload], api_key)
             capture_url = f"{api_url.rstrip('/')}/batch/"
 
+            # Serialize payload using safe_dumps to handle non-JSON-serializable objects
+            json_payload = safe_dumps(payload)
+
             response = self.sync_client.post(
                 url=capture_url,
-                json=payload,
+                content=json_payload,
                 headers=headers,
             )
             response.raise_for_status()
@@ -338,9 +342,12 @@ class PostHogLogger(CustomBatchLogger):
                 payload = self._create_posthog_payload(events, api_key)
                 capture_url = f"{api_url.rstrip('/')}/batch/"
 
+                # Serialize payload using safe_dumps to handle non-JSON-serializable objects
+                json_payload = safe_dumps(payload)
+
                 response = await self.async_client.post(
                     url=capture_url,
-                    json=payload,
+                    content=json_payload,
                     headers=headers,
                 )
                 response.raise_for_status()
@@ -417,9 +424,12 @@ class PostHogLogger(CustomBatchLogger):
                 payload = self._create_posthog_payload(events, api_key)
                 capture_url = f"{api_url.rstrip('/')}/batch/"
 
+                # Serialize payload using safe_dumps to handle non-JSON-serializable objects
+                json_payload = safe_dumps(payload)
+
                 response = self.sync_client.post(
                     url=capture_url,
-                    json=payload,
+                    content=json_payload,
                     headers=headers,
                 )
                 response.raise_for_status()
