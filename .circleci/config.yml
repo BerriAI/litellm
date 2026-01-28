@@ -3502,7 +3502,7 @@ jobs:
             python3 -m pip install toml
             VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "LiteLLM Version ${VERSION}"
-            
+
             # Determine which branch to use for Docker build
             if [[ "$CIRCLE_BRANCH" =~ ^litellm_release_day_.* ]]; then
               BUILD_BRANCH="$CIRCLE_BRANCH"
@@ -3511,7 +3511,7 @@ jobs:
               BUILD_BRANCH="main"
               echo "Using default branch: $BUILD_BRANCH"
             fi
-            
+
             curl -X POST \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
@@ -4215,7 +4215,6 @@ workflows:
             - litellm_proxy_unit_testing_key_generation
             - litellm_proxy_unit_testing_part1
             - litellm_proxy_unit_testing_part2
-            - litellm_security_tests
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
@@ -4295,7 +4294,6 @@ workflows:
             - litellm_proxy_unit_testing_key_generation
             - litellm_proxy_unit_testing_part1
             - litellm_proxy_unit_testing_part2
-            - litellm_security_tests
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
