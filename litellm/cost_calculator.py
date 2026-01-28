@@ -1831,10 +1831,38 @@ def batch_cost_calculator(
     total_prompt_cost = 0.0
     total_completion_cost = 0.0
     if input_cost_per_token_batches:
-        total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
+        # Subtract cached tokens from prompt_tokens before calculating cost
+        # Fixes issue where cached tokens are being charged again
+        # Ref: https://github.com/BerriAI/litellm/issues/19680
+        actual_prompt_tokens = usage.prompt_tokens
+        
+        # Check for provider-specific cache_read_input_tokens (e.g., Anthropic, OpenAI)
+        if hasattr(usage, 'cache_read_input_tokens') and usage.cache_read_input_tokens:
+            actual_prompt_tokens -= usage.cache_read_input_tokens
+        # Also check for nested prompt_tokens_details.cached_tokens (e.g., z.ai, Bedrock, Gemini)
+        elif hasattr(usage, 'prompt_tokens_details') and usage.prompt_tokens_details:
+            if hasattr(usage.prompt_tokens_details, 'cached_tokens') and usage.prompt_tokens_details.cached_tokens:
+                actual_prompt_tokens -= usage.prompt_tokens_details.cached_tokens
+        
+        # Use actual_prompt_tokens (prompt_tokens - cached_tokens) for cost calculation
+        total_prompt_cost = actual_prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
+        # Subtract cached tokens from prompt_tokens before calculating cost
+        # Fixes issue where cached tokens are being charged again
+        # Ref: https://github.com/BerriAI/litellm/issues/19680
+        actual_prompt_tokens = usage.prompt_tokens
+        
+        # Check for provider-specific cache_read_input_tokens (e.g., Anthropic, OpenAI)
+        if hasattr(usage, 'cache_read_input_tokens') and usage.cache_read_input_tokens:
+            actual_prompt_tokens -= usage.cache_read_input_tokens
+        # Also check for nested prompt_tokens_details.cached_tokens (e.g., z.ai, Bedrock, Gemini)
+        elif hasattr(usage, 'prompt_tokens_details') and usage.prompt_tokens_details:
+            if hasattr(usage.prompt_tokens_details, 'cached_tokens') and usage.prompt_tokens_details.cached_tokens:
+                actual_prompt_tokens -= usage.prompt_tokens_details.cached_tokens
+        
+        # Use actual_prompt_tokens (prompt_tokens - cached_tokens) for cost calculation
         total_prompt_cost = (
-            usage.prompt_tokens * (input_cost_per_token) / 2
+            actual_prompt_tokens * (input_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
     if output_cost_per_token_batches:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
