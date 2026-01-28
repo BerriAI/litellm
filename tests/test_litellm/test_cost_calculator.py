@@ -1607,3 +1607,86 @@ def test_gemini_without_cache_tokens_details():
     assert usage.prompt_tokens_details.text_tokens >= 0
 
     print("✅ Gemini without cacheTokensDetails works correctly")
+
+
+def test_gemini_implicit_caching_cost_calculation():
+    """
+    Test for Issue #16341: Gemini implicit cached tokens not counted in spend log
+
+    When Gemini uses implicit caching, it returns cachedContentTokenCount but NOT
+    cacheTokensDetails. In this case, we should subtract cachedContentTokenCount
+    from text_tokens to correctly calculate costs.
+
+    See: https://github.com/BerriAI/litellm/issues/16341
+    """
+    from litellm import completion_cost
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+    from litellm.types.utils import Choices, Message, ModelResponse
+
+    # Simulate Gemini response with implicit caching (cachedContentTokenCount only)
+    completion_response = {
+        "usageMetadata": {
+            "promptTokenCount": 10000,
+            "candidatesTokenCount": 5,
+            "totalTokenCount": 10005,
+            "cachedContentTokenCount": 8000,  # Implicit caching - no cacheTokensDetails
+            "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 10000}],
+            "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 5}],
+        }
+    }
+
+    usage = VertexGeminiConfig._calculate_usage(completion_response)
+
+    # Verify parsing
+    assert (
+        usage.cache_read_input_tokens == 8000
+    ), f"cache_read_input_tokens should be 8000, got {usage.cache_read_input_tokens}"
+    assert (
+        usage.prompt_tokens_details.cached_tokens == 8000
+    ), f"cached_tokens should be 8000, got {usage.prompt_tokens_details.cached_tokens}"
+
+    # CRITICAL: text_tokens should be (10000 - 8000) = 2000, NOT 10000
+    # This is the fix for issue #16341
+    assert (
+        usage.prompt_tokens_details.text_tokens == 2000
+    ), f"text_tokens should be 2000 (10000 - 8000), got {usage.prompt_tokens_details.text_tokens}"
+
+    # Verify cost calculation uses cached token pricing
+    response = ModelResponse(
+        id="mock-id",
+        model="gemini-2.0-flash",
+        choices=[
+            Choices(
+                index=0,
+                message=Message(role="assistant", content="Hello!"),
+                finish_reason="stop",
+            )
+        ],
+        usage=usage,
+    )
+
+    cost = completion_cost(
+        completion_response=response,
+        model="gemini-2.0-flash",
+        custom_llm_provider="gemini",
+    )
+
+    # Get model pricing for verification
+    import litellm
+
+    model_info = litellm.get_model_info("gemini/gemini-2.0-flash")
+    input_cost = model_info.get("input_cost_per_token", 0)
+    cache_read_cost = model_info.get("cache_read_input_token_cost", input_cost)
+    output_cost = model_info.get("output_cost_per_token", 0)
+
+    # Expected cost: (2000 * input) + (8000 * cache_read) + (5 * output)
+    expected_cost = (2000 * input_cost) + (8000 * cache_read_cost) + (5 * output_cost)
+
+    assert abs(cost - expected_cost) < 1e-9, (
+        f"Cost calculation is wrong. Got ${cost:.6f}, expected ${expected_cost:.6f}. "
+        f"Cached tokens may not be using reduced pricing."
+    )
+
+    print("✅ Issue #16341 fix verified: Gemini implicit caching cost calculated correctly")
