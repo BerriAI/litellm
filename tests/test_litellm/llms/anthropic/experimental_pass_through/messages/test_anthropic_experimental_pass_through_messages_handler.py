@@ -129,6 +129,10 @@ async def test_bedrock_converse_budget_tokens_preserved():
                 messages=[{"role": "user", "content": "What is 2+2?"}],
                 model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
                 thinking={"budget_tokens": 1024, "type": "enabled"},
+                # Provide dummy AWS creds so request signing doesn't fail in unit tests.
+                aws_access_key_id="test-aws-access-key-id",
+                aws_secret_access_key="test-aws-secret-access-key",
+                aws_region_name="us-east-1",
             )
         except Exception:
             pass  # Expected due to mock response format

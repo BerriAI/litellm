@@ -1089,7 +1089,14 @@ LITELLM_CLI_SOURCE_IDENTIFIER = "litellm-cli"
 LITELLM_CLI_SESSION_TOKEN_PREFIX = "litellm-session-token"
 CLI_SSO_SESSION_CACHE_KEY_PREFIX = "cli_sso_session"
 CLI_JWT_TOKEN_NAME = "cli-jwt-token"
-CLI_JWT_EXPIRATION_HOURS = int(os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", 24))
+# Support both legacy env var name and the constant-name env var.
+# `test_all_numeric_constants_can_be_overridden` expects env vars to match constant names.
+CLI_JWT_EXPIRATION_HOURS = int(
+    os.getenv(
+        "CLI_JWT_EXPIRATION_HOURS",
+        os.getenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", 24),
+    )
+)
 
 ########################### DB CRON JOB NAMES ###########################
 DB_SPEND_UPDATE_JOB_NAME = "db_spend_update_job"
