@@ -14,6 +14,7 @@ tests:
       - equal:
           path: spec.selector.matchLabels
           value:
+            app.kubernetes.io/component: proxy
             app.kubernetes.io/name: litellm
             app.kubernetes.io/instance: RELEASE-NAME
 
