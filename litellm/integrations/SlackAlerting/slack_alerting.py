@@ -1171,11 +1171,8 @@ Model Info:
     ):
         from litellm.proxy.proxy_server import CommonProxyErrors, premium_user
 
-        if premium_user is not True:
-            if email_logo_url is not None or email_support_contact is not None:
-                raise ValueError(
-                    f"Trying to Customize Email Alerting\n {CommonProxyErrors.not_premium_user.value}"
-                )
+        # Allow basic branding (logo, support contact) for all users
+        # This was a regression in behavior reported in #19860
         return
 
     async def send_key_created_or_user_invited_email(
