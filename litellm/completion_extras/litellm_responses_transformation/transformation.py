@@ -629,11 +629,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             if item_type == "file":
                                 # Convert document format (file) to Responses API format (input_file)
                                 # See: https://docs.litellm.ai/docs/completion/document_understanding
+                                # OpenAI Responses API format:
+                                # - URL: {"type": "input_file", "file_url": "https://..."} (filename optional)
+                                # - Base64: {"type": "input_file", "filename": "...", "file_data": "data:...;base64,..."} (filename required)
                                 file_info = item.get("file") or {}
                                 converted = {
                                     "type": "input_file",
                                     "file_url": file_info.get("file_id"),
                                     "file_data": file_info.get("file_data"),
+                                    "filename": file_info.get("filename"),
                                 }
                                 # Remove None values
                                 converted = {
