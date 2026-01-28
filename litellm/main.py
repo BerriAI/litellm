@@ -7247,6 +7247,24 @@ def stream_chunk_builder(  # noqa: PLR0915
                 usage, "cost", logging_obj._response_cost_calculator(result=response)
             )
 
+        # Propagate _hidden_params from streaming chunks to final response
+        # This ensures headers like llm_provider-x-ms-region are preserved for callbacks
+        # Fixes: https://github.com/BerriAI/litellm/issues/19930
+        if chunks and hasattr(chunks[0], "_hidden_params"):
+            first_chunk_hidden_params = getattr(chunks[0], "_hidden_params", {})
+            if first_chunk_hidden_params:
+                if not hasattr(response, "_hidden_params"):
+                    response._hidden_params = {}
+                # Copy additional_headers if present
+                if "additional_headers" in first_chunk_hidden_params:
+                    response._hidden_params["additional_headers"] = (
+                        first_chunk_hidden_params["additional_headers"]
+                    )
+                # Copy other hidden params that should be preserved
+                for key in ["model_id", "api_base", "custom_llm_provider"]:
+                    if key in first_chunk_hidden_params:
+                        response._hidden_params[key] = first_chunk_hidden_params[key]
+
         return response
     except Exception as e:
         verbose_logger.exception(
