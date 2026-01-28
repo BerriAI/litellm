@@ -1,6 +1,7 @@
 # What is this?
 ## Common Utility file for Logging handler
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
+import contextvars
 import copy
 import datetime
 import json
@@ -3047,7 +3048,9 @@ class Logging(LiteLLMLoggingBaseClass):
         if self._should_run_sync_callbacks_for_async_calls() is False:
             return
 
+        ctx = contextvars.copy_context()
         executor.submit(
+            ctx.run,
             self.success_handler,
             result,
             start_time,
