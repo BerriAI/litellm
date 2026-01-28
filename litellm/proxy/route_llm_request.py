@@ -201,6 +201,11 @@ async def route_request(
         # Filter router_config to only include valid Router.__init__ arguments
         # This prevents TypeError when invalid parameters are stored in the database
         valid_args = litellm.Router.get_valid_args()
+        
+        # Handle common typo for enable_pre_call_check (Singular -> Plural)
+        if "enable_pre_call_check" in router_config and "enable_pre_call_checks" not in router_config: 
+            router_config["enable_pre_call_checks"] = router_config.pop("enable_pre_call_check")
+
         filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
 
         user_router = litellm.Router(**filtered_config)
