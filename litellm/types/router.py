@@ -241,6 +241,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         aws_region_name: Optional[str] = None,
         ## IBM WATSONX ##
         watsonx_region_name: Optional[str] = None,
+        input_cost_per_request: Optional[float] = None,
         input_cost_per_token: Optional[float] = None,
         output_cost_per_token: Optional[float] = None,
         input_cost_per_second: Optional[float] = None,
@@ -437,6 +438,7 @@ class DeploymentTypedDict(TypedDict, total=False):
 SPECIAL_MODEL_INFO_PARAMS = [
     "input_cost_per_token",
     "output_cost_per_token",
+    "input_cost_per_request",
     "input_cost_per_character",
     "output_cost_per_character",
 ]

@@ -436,6 +436,10 @@ def cost_per_token(  # noqa: PLR0915
             prompt_tokens_cost_usd_dollar = (
                 model_info["input_cost_per_token"] * prompt_tokens
             )
+        elif model_info.get("input_cost_per_request", 0) > 0:
+            prompt_tokens_cost_usd_dollar = model_info["input_cost_per_request"] * (
+                number_of_queries or 1
+            )
         elif (
             model_info.get("input_cost_per_second", None) is not None
             and response_time_ms is not None

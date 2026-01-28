@@ -2345,6 +2345,7 @@ class LoggedLiteLLMParams(TypedDict, total=False):
     acompletion: Optional[bool]
     preset_cache_key: Optional[str]
     no_log: Optional[bool]
+    input_cost_per_request: Optional[float] = None
     input_cost_per_second: Optional[float]
     input_cost_per_token: Optional[float]
     output_cost_per_token: Optional[float]
