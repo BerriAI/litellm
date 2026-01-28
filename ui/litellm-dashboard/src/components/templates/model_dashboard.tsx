@@ -13,7 +13,6 @@ import {
   Title,
 } from "@tremor/react";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { CredentialItem, credentialListCall, CredentialsResponse } from "../networking";
 
 import { handleAddModelSubmit } from "../add_model/handle_add_model_submit";
@@ -1139,23 +1138,23 @@ const OldModelDashboard: React.FC<ModelDashboardProps> = ({
                                 {currentTeam === "personal" ? (
                                   <span>
                                     To access these models: Create a Virtual Key without selecting a team on the{" "}
-                                    <Link
+                                    <a
                                       href="/?login=success&page=api-keys"
                                       className="text-gray-600 hover:text-gray-800 underline"
                                     >
                                       Virtual Keys page
-                                    </Link>
+                                    </a>
                                   </span>
                                 ) : (
                                   <span>
                                     To access these models: Create a Virtual Key and select Team as &quot;
                                     {currentTeam}&quot; on the{" "}
-                                    <Link
+                                    <a
                                       href="/?login=success&page=api-keys"
                                       className="text-gray-600 hover:text-gray-800 underline"
                                     >
                                       Virtual Keys page
-                                    </Link>
+                                    </a>
                                   </span>
                                 )}
                               </div>
