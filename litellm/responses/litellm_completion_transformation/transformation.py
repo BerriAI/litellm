@@ -1660,6 +1660,8 @@ class LiteLLMCompletionResponsesConfig:
 
             if hasattr(prompt_details, "cached_tokens") and prompt_details.cached_tokens is not None:
                 input_details_dict["cached_tokens"] = prompt_details.cached_tokens
+            else:
+                input_details_dict["cached_tokens"] = 0
 
             if hasattr(prompt_details, "text_tokens") and prompt_details.text_tokens is not None:
                 input_details_dict["text_tokens"] = prompt_details.text_tokens
@@ -1678,6 +1680,8 @@ class LiteLLMCompletionResponsesConfig:
             output_details_dict: Dict[str, Optional[int]] = {}
             if hasattr(completion_details, "reasoning_tokens") and completion_details.reasoning_tokens is not None:
                 output_details_dict["reasoning_tokens"] = completion_details.reasoning_tokens
+            else:
+                output_details_dict["reasoning_tokens"] = 0
 
             if hasattr(completion_details, "text_tokens") and completion_details.text_tokens is not None:
                 output_details_dict["text_tokens"] = completion_details.text_tokens

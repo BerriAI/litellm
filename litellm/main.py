@@ -599,15 +599,8 @@ async def acompletion(  # noqa: PLR0915
         # Add the context to the function
         ctx = contextvars.copy_context()
         func_with_context = partial(ctx.run, func)
-
-        if timeout is not None and isinstance(timeout, (int, float)):
-            timeout_value = float(timeout)
-            init_response = await asyncio.wait_for(
-                loop.run_in_executor(None, func_with_context), timeout=timeout_value
-            )
-        else:
-            init_response = await loop.run_in_executor(None, func_with_context)
-
+            
+        init_response = await loop.run_in_executor(None, func_with_context)
         if isinstance(init_response, dict) or isinstance(
             init_response, ModelResponse
         ):  ## CACHING SCENARIO
@@ -615,11 +608,7 @@ async def acompletion(  # noqa: PLR0915
                 response = ModelResponse(**init_response)
             response = init_response
         elif asyncio.iscoroutine(init_response):
-            if timeout is not None and isinstance(timeout, (int, float)):
-                timeout_value = float(timeout)
-                response = await asyncio.wait_for(init_response, timeout=timeout_value)
-            else:
-                response = await init_response
+            response = await init_response
         else:
             response = init_response  # type: ignore
 
@@ -636,15 +625,6 @@ async def acompletion(  # noqa: PLR0915
                 loop=loop
             )  # sets the logging event loop if the user does sync streaming (e.g. on proxy for sagemaker calls)
         return response
-    except asyncio.TimeoutError:
-        custom_llm_provider = custom_llm_provider or "openai"
-        from litellm.exceptions import Timeout
-
-        raise Timeout(
-            message=f"Request timed out after {timeout} seconds",
-            model=model,
-            llm_provider=custom_llm_provider,
-        )
     except Exception as e:
         custom_llm_provider = custom_llm_provider or "openai"
         raise exception_type(

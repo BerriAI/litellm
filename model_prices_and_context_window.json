@@ -3653,10 +3653,9 @@
         "max_input_tokens": 128000,
         "max_output_tokens": 16384,
         "max_tokens": 16384,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.4e-05,
         "supported_endpoints": [
-            "/v1/chat/completions",
             "/v1/responses"
         ],
         "supported_modalities": [
@@ -13522,7 +13521,7 @@
         "supports_vision": true,
         "supports_web_search": true
     },
-    "gemini-robotics-er-1.5-preview": {
+    "gemini/gemini-robotics-er-1.5-preview": {
         "cache_read_input_token_cost": 0,
         "input_cost_per_token": 3e-07,
         "input_cost_per_audio_token": 1e-06,
@@ -20628,6 +20627,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192
@@ -20642,6 +20642,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 1000000,
         "max_output_tokens": 8192
@@ -20656,6 +20657,7 @@
         "supports_function_calling": true,
         "supports_tool_choice": true,
         "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_system_messages": true,
         "max_input_tokens": 200000,
         "max_output_tokens": 8192
@@ -23540,7 +23542,7 @@
         "mode": "chat",
         "output_cost_per_token": 1.02e-06,
         "supports_function_calling": true,
-        "supports_prompt_caching": false,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -23892,8 +23894,11 @@
         "max_input_tokens": 400000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "chat",
+        "mode": "responses",
         "output_cost_per_token": 1.4e-05,
+        "supported_endpoints": [
+            "/v1/responses"
+        ],
         "supported_modalities": [
             "text",
             "image"
@@ -24232,6 +24237,7 @@
         "output_cost_per_token": 1.75e-06,
         "source": "https://openrouter.ai/z-ai/glm-4.6",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -24245,6 +24251,7 @@
         "output_cost_per_token": 1.9e-06,
         "source": "https://openrouter.ai/z-ai/glm-4.6:exacto",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
@@ -30461,6 +30468,7 @@
         "supports_web_search": true
     },
     "xai/grok-3": {
+        "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30475,6 +30483,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-beta": {
+        "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30489,6 +30498,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-fast-beta": {
+        "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30503,6 +30513,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-fast-latest": {
+        "cache_read_input_token_cost": 1.25e-06,
         "input_cost_per_token": 5e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30517,6 +30528,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-latest": {
+        "cache_read_input_token_cost": 7.5e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30531,6 +30543,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30546,6 +30559,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-beta": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30561,6 +30575,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-fast": {
+        "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30576,6 +30591,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-fast-beta": {
+        "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30591,6 +30607,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-fast-latest": {
+        "cache_read_input_token_cost": 1.5e-07,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30606,6 +30623,7 @@
         "supports_web_search": true
     },
     "xai/grok-3-mini-latest": {
+        "cache_read_input_token_cost": 7.5e-08,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
@@ -30872,11 +30890,14 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },
     "zai/glm-4.6": {
+        "cache_creation_input_token_cost": 0,
+        "cache_read_input_token_cost": 1.1e-07,
         "input_cost_per_token": 6e-07,
         "output_cost_per_token": 2.2e-06,
         "litellm_provider": "zai",
@@ -30884,6 +30905,8 @@
         "max_output_tokens": 128000,
         "mode": "chat",
         "supports_function_calling": true,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true,
         "source": "https://docs.z.ai/guides/overview/pricing"
     },

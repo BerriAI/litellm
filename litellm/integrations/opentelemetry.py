@@ -950,7 +950,9 @@ class OpenTelemetry(CustomLogger):
             SdkLogRecord = _SdkLogRecordInternal
         except Exception:
             try:
-                from opentelemetry.sdk._logs import LogRecord as _SdkLogRecordLegacy  # type: ignore[attr-defined]
+                from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]
+                    LogRecord as _SdkLogRecordLegacy,
+                )
 
                 SdkLogRecord = _SdkLogRecordLegacy
             except Exception:
@@ -1528,6 +1530,7 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
+            self.handle_callback_failure(callback_name=self.callback_name)
             verbose_logger.exception("OpenTelemetry logging error in set_attributes %s", str(e))
 
     def _cast_as_primitive_value_type(self, value) -> Union[str, bool, int, float]:
