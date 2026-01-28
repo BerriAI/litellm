@@ -1,11 +1,11 @@
-import { render, screen, waitFor } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi, Mock } from "vitest";
-import SpendLogsSettingsModal from "./SpendLogsSettingsModal";
 import { useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
+import { screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../../../tests/test-utils";
+import SpendLogsSettingsModal from "./SpendLogsSettingsModal";
 
 vi.mock("@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs");
 vi.mock("@/components/molecules/notifications_manager", () => ({
@@ -50,7 +50,7 @@ describe("SpendLogsSettingsModal", () => {
 
   it("should render form fields with initial values", () => {
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
-    
+
     expect(screen.getByText("Store Prompts in Spend Logs")).toBeInTheDocument();
     expect(screen.getByLabelText("Maximum Spend Logs Retention Period (Optional)")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("e.g., 7d, 30d")).toBeInTheDocument();
@@ -58,7 +58,7 @@ describe("SpendLogsSettingsModal", () => {
 
   it("should render cancel and save buttons", () => {
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
-    
+
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save Settings" })).toBeInTheDocument();
   });
@@ -114,7 +114,7 @@ describe("SpendLogsSettingsModal", () => {
       options?.onSuccess?.();
       return { message: "Success" };
     });
-    
+
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const switchElement = screen.getByRole("switch");
@@ -144,7 +144,7 @@ describe("SpendLogsSettingsModal", () => {
       options?.onSuccess?.();
       return { message: "Success" };
     });
-    
+
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const saveButton = screen.getByRole("button", { name: "Save Settings" });
@@ -168,7 +168,7 @@ describe("SpendLogsSettingsModal", () => {
       options?.onSuccess?.();
       return { message: "Success" };
     });
-    
+
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const saveButton = screen.getByRole("button", { name: "Save Settings" });
@@ -185,7 +185,7 @@ describe("SpendLogsSettingsModal", () => {
     const error = new Error("Network error");
     mockMutateAsync.mockRejectedValue(error);
     mockParseErrorMessage.mockReturnValue("Network error");
-    
+
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const saveButton = screen.getByRole("button", { name: "Save Settings" });
@@ -204,7 +204,7 @@ describe("SpendLogsSettingsModal", () => {
       return Promise.reject(error);
     });
     mockParseErrorMessage.mockReturnValue("Backend error");
-    
+
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const saveButton = screen.getByRole("button", { name: "Save Settings" });
@@ -266,7 +266,7 @@ describe("SpendLogsSettingsModal", () => {
       options?.onSuccess?.();
       return { message: "Success" };
     });
-    
+
     const { rerender } = renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const switchElement = screen.getByRole("switch");
@@ -286,7 +286,7 @@ describe("SpendLogsSettingsModal", () => {
     });
 
     rerender(<SpendLogsSettingsModal {...defaultProps} />);
-    
+
     await waitFor(() => {
       const updatedSwitchElement = screen.getByRole("switch");
       const updatedRetentionInput = screen.getByPlaceholderText("e.g., 7d, 30d");
@@ -302,7 +302,7 @@ describe("SpendLogsSettingsModal", () => {
       options?.onSuccess?.();
       return { message: "Success" };
     });
-    
+
     renderWithProviders(<SpendLogsSettingsModal isVisible={true} onCancel={mockOnCancel} />);
 
     const saveButton = screen.getByRole("button", { name: "Save Settings" });
@@ -315,7 +315,7 @@ describe("SpendLogsSettingsModal", () => {
 
   it("should not render modal when isVisible is false", () => {
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} isVisible={false} />);
-    
+
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -326,7 +326,7 @@ describe("SpendLogsSettingsModal", () => {
       options?.onSuccess?.();
       return { message: "Success" };
     });
-    
+
     renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const switchElement = screen.getByRole("switch");
