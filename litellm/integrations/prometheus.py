@@ -1029,11 +1029,6 @@ class PrometheusLogger(CustomLogger):
         # set latency metrics
         self._set_latency_metrics(
             kwargs=kwargs,
-            model=model,
-            user_api_key=user_api_key,
-            user_api_key_alias=user_api_key_alias,
-            user_api_team=user_api_team,
-            user_api_team_alias=user_api_team_alias,
             # why type ignore below?
             # 1. We just checked if isinstance(standard_logging_payload, dict). Pyright complains.
             # 2. Pyright does not allow us to run isinstance(standard_logging_payload, StandardLoggingPayload) <- this would be ideal
@@ -1290,11 +1285,6 @@ class PrometheusLogger(CustomLogger):
     def _set_latency_metrics(
         self,
         kwargs: dict,
-        model: Optional[str],
-        user_api_key: Optional[str],
-        user_api_key_alias: Optional[str],
-        user_api_team: Optional[str],
-        user_api_team_alias: Optional[str],
         enum_values: UserAPIKeyLabelValues,
     ):
         # latency metrics
@@ -1310,13 +1300,15 @@ class PrometheusLogger(CustomLogger):
             time_to_first_token_seconds is not None
             and kwargs.get("stream", False) is True  # only emit for streaming requests
         ):
-            self.litellm_llm_api_time_to_first_token_metric.labels(
-                model,
-                user_api_key,
-                user_api_key_alias,
-                user_api_team,
-                user_api_team_alias,
-            ).observe(time_to_first_token_seconds)
+            _labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_llm_api_time_to_first_token_metric"
+                ),
+                enum_values=enum_values,
+            )
+            self.litellm_llm_api_time_to_first_token_metric.labels(**_labels).observe(
+                time_to_first_token_seconds
+            )
         else:
             verbose_logger.debug(
                 "Time to first token metric not emitted, stream option in model_parameters is not True"
