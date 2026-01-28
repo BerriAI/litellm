@@ -405,13 +405,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## **Proxy Admin Controls**
 
-### ✨ Monitoring Guardrails
+### Monitoring Guardrails
 
 Monitor which guardrails were executed and whether they passed or failed. e.g. guardrail going rogue and failing requests we don't intend to fail
-
-:::info
-
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
