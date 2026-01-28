@@ -64,6 +64,14 @@ def pytest_collection_modifyitems(config, items):
             if item.name.startswith("test_streaming_responses_api_with_mcp_tools") and "[anthropic]" in item.name:
                 item.add_marker(skip_anthropic)
 
+    # Skip OpenAI-dependent tests when OPENAI_API_KEY is not available.
+    # This test makes REAL LLM calls.
+    if not os.getenv("OPENAI_API_KEY"):
+        skip_openai = pytest.mark.skip(reason="OPENAI_API_KEY not set")
+        for item in items:
+            if item.name.startswith("test_streaming_responses_api_with_mcp_tools") and "[openai]" in item.name:
+                item.add_marker(skip_openai)
+
     # Separate tests in 'test_amazing_proxy_custom_logger.py' and other tests
     custom_logger_tests = [item for item in items if "custom_logger" in item.parent.name]
     other_tests = [item for item in items if "custom_logger" not in item.parent.name]
