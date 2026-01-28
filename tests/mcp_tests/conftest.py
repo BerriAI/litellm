@@ -42,6 +42,15 @@ def setup_and_teardown():
     yield
 
     # Teardown code (executes after the yield point)
+    # Ensure we stop background logging worker tasks bound to this event loop.
+    # Otherwise, pytest may close the loop with pending tasks ("Event loop is closed").
+    try:
+        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+        loop.run_until_complete(GLOBAL_LOGGING_WORKER.stop())
+    except Exception:
+        pass
+
     loop.close()  # Close the loop created earlier
     asyncio.set_event_loop(None)  # Remove the reference to the loop
 
