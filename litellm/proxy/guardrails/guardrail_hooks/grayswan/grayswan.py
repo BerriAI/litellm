@@ -12,6 +12,7 @@ from litellm.integrations.custom_guardrail import (
     ModifyResponseException
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -212,7 +213,7 @@ class GraySwanGuardrail(CustomGuardrail):
             )
 
         # Prepare and send payload
-        payload = self._prepare_payload(messages, dynamic_body)
+        payload = self._prepare_payload(messages, dynamic_body, request_data)
         if payload is None:
             return inputs
 
@@ -533,7 +534,7 @@ class GraySwanGuardrail(CustomGuardrail):
         }
 
     def _prepare_payload(
-        self, messages: List[Dict[str, str]], dynamic_body: dict
+        self, messages: List[Dict[str, str]], dynamic_body: dict, request_data: dict
     ) -> Optional[Dict[str, Any]]:
         payload: Dict[str, Any] = {"messages": messages}
 
@@ -553,9 +554,13 @@ class GraySwanGuardrail(CustomGuardrail):
         if "metadata" in dynamic_body:
             payload["metadata"] = dynamic_body["metadata"]
 
-        # Pass through arbitrary metadata when provided via dynamic extra_body.
-        if "metadata" in dynamic_body:
-            payload["metadata"] = dynamic_body["metadata"]
+        litellm_metadata = request_data.get("litellm_metadata")
+        if isinstance(litellm_metadata, dict) and litellm_metadata:
+            cleaned_litellm_metadata = dict(litellm_metadata)
+            # cleaned_litellm_metadata.pop("user_api_key_auth", None)
+            sanitized = safe_json_loads(safe_dumps(cleaned_litellm_metadata), default={})
+            if isinstance(sanitized, dict) and sanitized:
+                payload["litellm_metadata"] = sanitized
 
         return payload
 
