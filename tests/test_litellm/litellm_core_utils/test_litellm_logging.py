@@ -1058,3 +1058,91 @@ def test_append_system_prompt_messages():
         kwargs=None, messages=messages
     )
     assert result == messages
+
+
+class TestProcessDynamicCallbacksEarlyReturn:
+    def test_all_none_skips_processing(self):
+        """When all dynamic callbacks are None, _process_dynamic_callback_list should not be called."""
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+        with patch.object(obj, "_process_dynamic_callback_list") as mock_process:
+            obj.process_dynamic_callbacks()
+            mock_process.assert_not_called()
+
+    def test_none_callbacks_not_processed(self):
+        """When only one callback type is set, only that one is processed."""
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_input_callbacks=["cb"],
+        )
+        with patch.object(
+            obj, "_process_dynamic_callback_list", return_value=["cb"]
+        ) as mock_process:
+            obj.process_dynamic_callbacks()
+            assert mock_process.call_count == 1
+
+
+class TestProcessDynamicCallbacksOrdering:
+    """success must be processed before async_success, failure before async_failure,
+    because _process_dynamic_callback_list appends to the async list as a side effect."""
+
+    def test_success_processed_before_async_success(self):
+        call_order = []
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_success_callbacks=["some_callback"],
+            dynamic_async_success_callbacks=["other_callback"],
+        )
+        original = obj._process_dynamic_callback_list
+
+        def tracking_process(callback_list, dynamic_callbacks_type):
+            call_order.append(dynamic_callbacks_type)
+            return original(callback_list, dynamic_callbacks_type)
+
+        with patch.object(obj, "_process_dynamic_callback_list", side_effect=tracking_process):
+            obj.process_dynamic_callbacks()
+
+        assert call_order.index("success") < call_order.index("async_success")
+
+    def test_failure_processed_before_async_failure(self):
+        call_order = []
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_failure_callbacks=["some_callback"],
+            dynamic_async_failure_callbacks=["other_callback"],
+        )
+        original = obj._process_dynamic_callback_list
+
+        def tracking_process(callback_list, dynamic_callbacks_type):
+            call_order.append(dynamic_callbacks_type)
+            return original(callback_list, dynamic_callbacks_type)
+
+        with patch.object(obj, "_process_dynamic_callback_list", side_effect=tracking_process):
+            obj.process_dynamic_callbacks()
+
+        assert call_order.index("failure") < call_order.index("async_failure")
