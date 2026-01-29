@@ -726,21 +726,31 @@ async def _get_user_info_for_proxy_admin():
 
     from litellm.proxy.proxy_server import prisma_client
 
-    sql_query = """
-        SELECT 
-            (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
-            (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard' OR k.team_id IS NULL) as keys
-    """
     if prisma_client is None:
         raise Exception(
             "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
         )
 
-    results = await prisma_client.db.query_raw(sql_query)
-
-    verbose_proxy_logger.debug("results_keys: %s", results)
-
-    _keys_in_db: List = results[0]["keys"] or []
+    if getattr(prisma_client, "dialect", "postgresql") == "postgresql":
+        sql_query = """
+            SELECT 
+                (SELECT json_agg(t.*) FROM "LiteLLM_TeamTable" t) as teams,
+                (SELECT json_agg(k.*) FROM "LiteLLM_VerificationToken" k WHERE k.team_id != 'litellm-dashboard' OR k.team_id IS NULL) as keys
+        """
+        results = await prisma_client.db.query_raw(sql_query)
+        _keys_in_db: List = results[0]["keys"] or []
+        _teams_in_db: List = results[0]["teams"] or []
+    else:
+        # SQLite fallback: Fetching separately
+        _teams_in_db = await prisma_client.db.litellm_teamtable.find_many()
+        _keys_in_db = await prisma_client.db.litellm_verificationtoken.find_many(
+            where={
+                "NOT": {"team_id": "litellm-dashboard"},
+            }
+        )
+        # Convert Prisma models to dicts if needed, or LiteLLM_VerificationToken will handle them
+        _keys_in_db = [k.dict() if hasattr(k, "dict") else k for k in _keys_in_db]
+        _teams_in_db = [t.dict() if hasattr(t, "dict") else t for t in _teams_in_db]
     # cast all keys to LiteLLM_VerificationToken
     keys_in_db = []
     for key in _keys_in_db:

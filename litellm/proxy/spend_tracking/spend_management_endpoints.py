@@ -207,16 +207,29 @@ async def get_global_activity_internal_user(
     if user_id is None:
         raise HTTPException(status_code=500, detail={"error": "No user_id found"})
 
-    sql_query = """
-    SELECT
-        date_trunc('day', "startTime") AS date,
-        COUNT(*) AS api_requests,
-        SUM(total_tokens) AS total_tokens
-    FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
-    AND "user" = $3
-    GROUP BY date_trunc('day', "startTime")
-    """
+    dialect = getattr(prisma_client, "dialect", "postgresql")
+    if dialect == "postgresql":
+        sql_query = """
+        SELECT
+            date_trunc('day', "startTime") AS date,
+            COUNT(*) AS api_requests,
+            SUM(total_tokens) AS total_tokens
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+        AND "user" = $3
+        GROUP BY date_trunc('day', "startTime")
+        """
+    else:
+        sql_query = """
+        SELECT
+            date("startTime") AS date,
+            COUNT(*) AS api_requests,
+            SUM(total_tokens) AS total_tokens
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime" >= $1 AND "startTime" < date($2, '+1 day')
+        AND "user" = $3
+        GROUP BY date("startTime")
+        """
     db_response = await prisma_client.db.query_raw(
         sql_query, start_date, end_date, user_id
     )
@@ -291,15 +304,27 @@ async def get_global_activity(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-            sql_query = """
-            SELECT
-                date_trunc('day', "startTime") AS date,
-                COUNT(*) AS api_requests,
-                SUM(total_tokens) AS total_tokens
-            FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
-            GROUP BY date_trunc('day', "startTime")
-            """
+            dialect = getattr(prisma_client, "dialect", "postgresql")
+            if dialect == "postgresql":
+                sql_query = """
+                SELECT
+                    date_trunc('day', "startTime") AS date,
+                    COUNT(*) AS api_requests,
+                    SUM(total_tokens) AS total_tokens
+                FROM "LiteLLM_SpendLogs"
+                WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                GROUP BY date_trunc('day', "startTime")
+                """
+            else:
+                sql_query = """
+                SELECT
+                    date("startTime") AS date,
+                    COUNT(*) AS api_requests,
+                    SUM(total_tokens) AS total_tokens
+                FROM "LiteLLM_SpendLogs"
+                WHERE "startTime" >= $1 AND "startTime" < date($2, '+1 day')
+                GROUP BY date("startTime")
+                """
             db_response = await prisma_client.db.query_raw(
                 sql_query, start_date_obj, end_date_obj
             )
@@ -349,17 +374,31 @@ async def get_global_activity_model_internal_user(
     if user_id is None:
         raise HTTPException(status_code=500, detail={"error": "No user_id found"})
 
-    sql_query = """
-    SELECT
-        model_group,
-        date_trunc('day', "startTime") AS date,
-        COUNT(*) AS api_requests,
-        SUM(total_tokens) AS total_tokens
-    FROM "LiteLLM_SpendLogs"
-    WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
-    AND "user" = $3
-    GROUP BY model_group, date_trunc('day', "startTime")
-    """
+    dialect = getattr(prisma_client, "dialect", "postgresql")
+    if dialect == "postgresql":
+        sql_query = """
+        SELECT
+            model_group,
+            date_trunc('day', "startTime") AS date,
+            COUNT(*) AS api_requests,
+            SUM(total_tokens) AS total_tokens
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+        AND "user" = $3
+        GROUP BY model_group, date_trunc('day', "startTime")
+        """
+    else:
+        sql_query = """
+        SELECT
+            model_group,
+            date("startTime") AS date,
+            COUNT(*) AS api_requests,
+            SUM(total_tokens) AS total_tokens
+        FROM "LiteLLM_SpendLogs"
+        WHERE "startTime" >= $1 AND "startTime" < date($2, '+1 day')
+        AND "user" = $3
+        GROUP BY model_group, date("startTime")
+        """
     db_response = await prisma_client.db.query_raw(
         sql_query, start_date, end_date, user_id
     )
@@ -457,16 +496,29 @@ async def get_global_activity_model(
                 user_api_key_dict, start_date_obj, end_date_obj
             )
         else:
-            sql_query = """
-            SELECT
-                model_group,
-                date_trunc('day', "startTime") AS date,
-                COUNT(*) AS api_requests,
-                SUM(total_tokens) AS total_tokens
-            FROM "LiteLLM_SpendLogs"
-            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
-            GROUP BY model_group, date_trunc('day', "startTime")
-            """
+            dialect = getattr(prisma_client, "dialect", "postgresql")
+            if dialect == "postgresql":
+                sql_query = """
+                SELECT
+                    model_group,
+                    date_trunc('day', "startTime") AS date,
+                    COUNT(*) AS api_requests,
+                    SUM(total_tokens) AS total_tokens
+                FROM "LiteLLM_SpendLogs"
+                WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                GROUP BY model_group, date_trunc('day', "startTime")
+                """
+            else:
+                sql_query = """
+                SELECT
+                    model_group,
+                    date("startTime") AS date,
+                    COUNT(*) AS api_requests,
+                    SUM(total_tokens) AS total_tokens
+                FROM "LiteLLM_SpendLogs"
+                WHERE "startTime" >= $1 AND "startTime" < date($2, '+1 day')
+                GROUP BY model_group, date("startTime")
+                """
             db_response = await prisma_client.db.query_raw(
                 sql_query, start_date_obj, end_date_obj
             )
@@ -1006,43 +1058,89 @@ async def get_global_spend_report(
             verbose_proxy_logger.debug("Getting /spend for api_key: %s", api_key)
             if api_key.startswith("sk-"):
                 api_key = hash_token(token=api_key)
-            sql_query = """
-                WITH SpendByModelApiKey AS (
+            
+            dialect = getattr(prisma_client, "dialect", "postgresql")
+            if dialect == "postgresql":
+                sql_query = """
+                    WITH SpendByModelApiKey AS (
+                        SELECT
+                            sl.api_key,
+                            sl.model,
+                            SUM(sl.spend) AS model_cost,
+                            SUM(sl.prompt_tokens) AS model_input_tokens,
+                            SUM(sl.completion_tokens) AS model_output_tokens
+                        FROM
+                            "LiteLLM_SpendLogs" sl
+                        WHERE
+                            sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.api_key = $3
+                        GROUP BY
+                            sl.api_key,
+                            sl.model
+                    )
                     SELECT
-                        sl.api_key,
-                        sl.model,
-                        SUM(sl.spend) AS model_cost,
-                        SUM(sl.prompt_tokens) AS model_input_tokens,
-                        SUM(sl.completion_tokens) AS model_output_tokens
+                        api_key,
+                        SUM(model_cost) AS total_cost,
+                        SUM(model_input_tokens) AS total_input_tokens,
+                        SUM(model_output_tokens) AS total_output_tokens,
+                        jsonb_agg(jsonb_build_object(
+                            'model', model,
+                            'total_cost', model_cost,
+                            'total_input_tokens', model_input_tokens,
+                            'total_output_tokens', model_output_tokens
+                        )) AS model_details
                     FROM
-                        "LiteLLM_SpendLogs" sl
-                    WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.api_key = $3
+                        SpendByModelApiKey
                     GROUP BY
-                        sl.api_key,
-                        sl.model
+                        api_key
+                    ORDER BY
+                        total_cost DESC;
+                """
+                db_response = await prisma_client.db.query_raw(
+                    sql_query, start_date_obj, end_date_obj, api_key
                 )
-                SELECT
-                    api_key,
-                    SUM(model_cost) AS total_cost,
-                    SUM(model_input_tokens) AS total_input_tokens,
-                    SUM(model_output_tokens) AS total_output_tokens,
-                    jsonb_agg(jsonb_build_object(
-                        'model', model,
-                        'total_cost', model_cost,
-                        'total_input_tokens', model_input_tokens,
-                        'total_output_tokens', model_output_tokens
-                    )) AS model_details
-                FROM
-                    SpendByModelApiKey
-                GROUP BY
-                    api_key
-                ORDER BY
-                    total_cost DESC;
-            """
-            db_response = await prisma_client.db.query_raw(
-                sql_query, start_date_obj, end_date_obj, api_key
-            )
+            else:
+                # SQLite fallback
+                end_date_full = end_date_obj + timedelta(days=1)
+                logs = await prisma_client.db.litellm_spendlogs.find_many(
+                    where={
+                        "startTime": {"gte": start_date_obj, "lt": end_date_full},
+                        "api_key": api_key,
+                    }
+                )
+                from collections import defaultdict
+                agg = defaultdict(lambda: {"model_cost": 0, "model_input_tokens": 0, "model_output_tokens": 0})
+                for log in logs:
+                    m = log.model
+                    agg[m]["model_cost"] += log.spend or 0
+                    agg[m]["model_input_tokens"] += log.prompt_tokens or 0
+                    agg[m]["model_output_tokens"] += log.completion_tokens or 0
+                
+                if not agg:
+                    return []
+                
+                model_details = []
+                total_cost = 0
+                total_input_tokens = 0
+                total_output_tokens = 0
+                for model, data in agg.items():
+                    model_details.append({
+                        "model": model,
+                        "total_cost": data["model_cost"],
+                        "total_input_tokens": data["model_input_tokens"],
+                        "total_output_tokens": data["model_output_tokens"]
+                    })
+                    total_cost += data["model_cost"]
+                    total_input_tokens += data["model_input_tokens"]
+                    total_output_tokens += data["model_output_tokens"]
+                
+                db_response = [{
+                    "api_key": api_key,
+                    "total_cost": total_cost,
+                    "total_input_tokens": total_input_tokens,
+                    "total_output_tokens": total_output_tokens,
+                    "model_details": model_details
+                }]
+
             if db_response is None:
                 return []
 
@@ -1051,43 +1149,89 @@ async def get_global_spend_report(
             verbose_proxy_logger.debug(
                 "Getting /spend for internal_user_id: %s", internal_user_id
             )
-            sql_query = """
-                WITH SpendByModelApiKey AS (
+            dialect = getattr(prisma_client, "dialect", "postgresql")
+            if dialect == "postgresql":
+                sql_query = """
+                    WITH SpendByModelApiKey AS (
+                        SELECT
+                            sl.api_key,
+                            sl.model,
+                            SUM(sl.spend) AS model_cost,
+                            SUM(sl.prompt_tokens) AS model_input_tokens,
+                            SUM(sl.completion_tokens) AS model_output_tokens
+                        FROM
+                            "LiteLLM_SpendLogs" sl
+                        WHERE
+                            sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.user = $3
+                        GROUP BY
+                            sl.api_key,
+                            sl.model
+                    )
                     SELECT
-                        sl.api_key,
-                        sl.model,
-                        SUM(sl.spend) AS model_cost,
-                        SUM(sl.prompt_tokens) AS model_input_tokens,
-                        SUM(sl.completion_tokens) AS model_output_tokens
+                        api_key,
+                        SUM(model_cost) AS total_cost,
+                        SUM(model_input_tokens) AS total_input_tokens,
+                        SUM(model_output_tokens) AS total_output_tokens,
+                        jsonb_agg(jsonb_build_object(
+                            'model', model,
+                            'total_cost', model_cost,
+                            'total_input_tokens', model_input_tokens,
+                            'total_output_tokens', model_output_tokens
+                        )) AS model_details
                     FROM
-                        "LiteLLM_SpendLogs" sl
-                    WHERE
-                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\') AND sl.user = $3
+                        SpendByModelApiKey
                     GROUP BY
-                        sl.api_key,
-                        sl.model
+                        api_key
+                    ORDER BY
+                        total_cost DESC;
+                """
+                db_response = await prisma_client.db.query_raw(
+                    sql_query, start_date_obj, end_date_obj, internal_user_id
                 )
-                SELECT
-                    api_key,
-                    SUM(model_cost) AS total_cost,
-                    SUM(model_input_tokens) AS total_input_tokens,
-                    SUM(model_output_tokens) AS total_output_tokens,
-                    jsonb_agg(jsonb_build_object(
-                        'model', model,
-                        'total_cost', model_cost,
-                        'total_input_tokens', model_input_tokens,
-                        'total_output_tokens', model_output_tokens
-                    )) AS model_details
-                FROM
-                    SpendByModelApiKey
-                GROUP BY
-                    api_key
-                ORDER BY
-                    total_cost DESC;
-            """
-            db_response = await prisma_client.db.query_raw(
-                sql_query, start_date_obj, end_date_obj, internal_user_id
-            )
+            else:
+                # SQLite fallback
+                end_date_full = end_date_obj + timedelta(days=1)
+                logs = await prisma_client.db.litellm_spendlogs.find_many(
+                    where={
+                        "startTime": {"gte": start_date_obj, "lt": end_date_full},
+                        "user": internal_user_id,
+                    }
+                )
+                from collections import defaultdict
+                # group by api_key, model
+                agg_per_key_model = defaultdict(lambda: {"cost": 0, "input": 0, "output": 0})
+                for log in logs:
+                    agg_per_key_model[(log.api_key, log.model)]["cost"] += log.spend or 0
+                    agg_per_key_model[(log.api_key, log.model)]["input"] += log.prompt_tokens or 0
+                    agg_per_key_model[(log.api_key, log.model)]["output"] += log.completion_tokens or 0
+                
+                if not agg_per_key_model:
+                    return []
+                
+                # group by api_key
+                final_agg = defaultdict(lambda: {"total_cost": 0, "total_input": 0, "total_output": 0, "model_details": []})
+                for (api_key, model), data in agg_per_key_model.items():
+                    final_agg[api_key]["total_cost"] += data["cost"]
+                    final_agg[api_key]["total_input"] += data["input"]
+                    final_agg[api_key]["total_output"] += data["output"]
+                    final_agg[api_key]["model_details"].append({
+                        "model": model,
+                        "total_cost": data["cost"],
+                        "total_input_tokens": data["input"],
+                        "total_output_tokens": data["output"]
+                    })
+                
+                db_response = []
+                for api_key, data in final_agg.items():
+                    db_response.append({
+                        "api_key": api_key,
+                        "total_cost": data["total_cost"],
+                        "total_input_tokens": data["total_input"],
+                        "total_output_tokens": data["total_output"],
+                        "model_details": data["model_details"]
+                    })
+                db_response = sorted(db_response, key=lambda x: x["total_cost"], reverse=True)
+
             if db_response is None:
                 return []
 
@@ -1099,165 +1243,294 @@ async def get_global_spend_report(
         if group_by == "team":
             # first get data from spend logs -> SpendByModelApiKey
             # then read data from "SpendByModelApiKey" to format the response obj
-            sql_query = """
+            dialect = getattr(prisma_client, "dialect", "postgresql")
+            if dialect == "postgresql":
+                sql_query = """
 
-            WITH SpendByModelApiKey AS (
-                SELECT
-                    date_trunc('day', sl."startTime") AS group_by_day,
-                    COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
-                    sl.model,
-                    sl.api_key,
-                    SUM(sl.spend) AS model_api_spend,
-                    SUM(sl.total_tokens) AS model_api_tokens
-                FROM 
-                    "LiteLLM_SpendLogs" sl
-                LEFT JOIN 
-                    "LiteLLM_TeamTable" tt 
-                ON 
-                    sl.team_id = tt.team_id
-                WHERE
-                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
-                GROUP BY
-                    date_trunc('day', sl."startTime"),
-                    tt.team_alias,
-                    sl.model,
-                    sl.api_key
-            )
-                SELECT
-                    group_by_day,
-                    jsonb_agg(jsonb_build_object(
-                        'team_name', team_name,
-                        'total_spend', total_spend,
-                        'metadata', metadata
-                    )) AS teams
-                FROM (
+                WITH SpendByModelApiKey AS (
+                    SELECT
+                        date_trunc('day', sl."startTime") AS group_by_day,
+                        COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+                        sl.model,
+                        sl.api_key,
+                        SUM(sl.spend) AS model_api_spend,
+                        SUM(sl.total_tokens) AS model_api_tokens
+                    FROM 
+                        "LiteLLM_SpendLogs" sl
+                    LEFT JOIN 
+                        "LiteLLM_TeamTable" tt 
+                    ON 
+                        sl.team_id = tt.team_id
+                    WHERE
+                        sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                    GROUP BY
+                        date_trunc('day', sl."startTime"),
+                        tt.team_alias,
+                        sl.model,
+                        sl.api_key
+                )
                     SELECT
                         group_by_day,
-                        team_name,
-                        SUM(model_api_spend) AS total_spend,
                         jsonb_agg(jsonb_build_object(
-                            'model', model,
-                            'api_key', api_key,
-                            'spend', model_api_spend,
-                            'total_tokens', model_api_tokens
-                        )) AS metadata
-                    FROM 
-                        SpendByModelApiKey
+                            'team_name', team_name,
+                            'total_spend', total_spend,
+                            'metadata', metadata
+                        )) AS teams
+                    FROM (
+                        SELECT
+                            group_by_day,
+                            team_name,
+                            SUM(model_api_spend) AS total_spend,
+                            jsonb_agg(jsonb_build_object(
+                                'model', model,
+                                'api_key', api_key,
+                                'spend', model_api_spend,
+                                'total_tokens', model_api_tokens
+                            )) AS metadata
+                        FROM 
+                            SpendByModelApiKey
+                        GROUP BY
+                            group_by_day,
+                            team_name
+                    ) AS aggregated
                     GROUP BY
-                        group_by_day,
-                        team_name
-                ) AS aggregated
-                GROUP BY
-                    group_by_day
-                ORDER BY
-                    group_by_day;
-                """
+                        group_by_day
+                    ORDER BY
+                        group_by_day;
+                    """
 
-            db_response = await prisma_client.db.query_raw(
-                sql_query, start_date_obj, end_date_obj
-            )
+                db_response = await prisma_client.db.query_raw(
+                    sql_query, start_date_obj, end_date_obj
+                )
+            else:
+                # SQLite fallback
+                end_date_full = start_date_obj + timedelta(days=1)
+                logs = await prisma_client.db.litellm_spendlogs.find_many(
+                    where={
+                        "startTime": {"gte": start_date_obj, "lt": end_date_full},
+                    },
+                    include={"liteLLM_teamtable": True},
+                )
+                from collections import defaultdict
+                # group_by_day -> team_name -> metadata
+                agg = defaultdict(lambda: defaultdict(lambda: {"total_spend": 0, "metadata": defaultdict(lambda: {"spend": 0, "tokens": 0})}))
+                for log in logs:
+                    day = log.startTime.strftime("%Y-%m-%d")
+                    team_name = (log.liteLLM_teamtable.team_alias if log.liteLLM_teamtable else None) or "Unassigned Team"
+                    agg[day][team_name]["total_spend"] += log.spend or 0
+                    meta_key = (log.model, log.api_key)
+                    agg[day][team_name]["metadata"][meta_key]["spend"] += log.spend or 0
+                    agg[day][team_name]["metadata"][meta_key]["tokens"] += log.total_tokens or 0
+                
+                db_response = []
+                for day, teams_data in sorted(agg.items()):
+                    teams_list = []
+                    for team_name, data in teams_data.items():
+                        metadata = []
+                        for (model, api_key), m_data in data["metadata"].items():
+                            metadata.append({
+                                'model': model,
+                                'api_key': api_key,
+                                'spend': m_data['spend'],
+                                'total_tokens': m_data['tokens']
+                            })
+                        teams_list.append({
+                            'team_name': team_name,
+                            'total_spend': data['total_spend'],
+                            'metadata': metadata
+                        })
+                    db_response.append({
+                        'group_by_day': day,
+                        'teams': teams_list
+                    })
+
             if db_response is None:
                 return []
 
             return db_response
 
         elif group_by == "customer":
-            sql_query = """
+            dialect = getattr(prisma_client, "dialect", "postgresql")
+            if dialect == "postgresql":
+                sql_query = """
 
-            WITH SpendByModelApiKey AS (
-                SELECT
-                    date_trunc('day', sl."startTime") AS group_by_day,
-                    sl.end_user AS customer,
-                    sl.model,
-                    sl.api_key,
-                    SUM(sl.spend) AS model_api_spend,
-                    SUM(sl.total_tokens) AS model_api_tokens
-                FROM
-                    "LiteLLM_SpendLogs" sl
-                WHERE
-                    sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
-                GROUP BY
-                    date_trunc('day', sl."startTime"),
-                    customer,
-                    sl.model,
-                    sl.api_key
-            )
-            SELECT
-                group_by_day,
-                jsonb_agg(jsonb_build_object(
-                    'customer', customer,
-                    'total_spend', total_spend,
-                    'metadata', metadata
-                )) AS customers
-            FROM
-                (
-                    SELECT
-                        group_by_day,
-                        customer,
-                        SUM(model_api_spend) AS total_spend,
-                        jsonb_agg(jsonb_build_object(
-                            'model', model,
-                            'api_key', api_key,
-                            'spend', model_api_spend,
-                            'total_tokens', model_api_tokens
-                        )) AS metadata
-                    FROM
-                        SpendByModelApiKey
-                    GROUP BY
-                        group_by_day,
-                        customer
-                ) AS aggregated
-            GROUP BY
-                group_by_day
-            ORDER BY
-                group_by_day;
-                """
-
-            db_response = await prisma_client.db.query_raw(
-                sql_query, start_date_obj, end_date_obj
-            )
-            if db_response is None:
-                return []
-
-            return db_response
-        elif group_by == "api_key":
-            sql_query = """
                 WITH SpendByModelApiKey AS (
                     SELECT
-                        sl.api_key,
+                        date_trunc('day', sl."startTime") AS group_by_day,
+                        sl.end_user AS customer,
                         sl.model,
-                        SUM(sl.spend) AS model_cost,
-                        SUM(sl.prompt_tokens) AS model_input_tokens,
-                        SUM(sl.completion_tokens) AS model_output_tokens
+                        sl.api_key,
+                        SUM(sl.spend) AS model_api_spend,
+                        SUM(sl.total_tokens) AS model_api_tokens
                     FROM
                         "LiteLLM_SpendLogs" sl
                     WHERE
                         sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
                     GROUP BY
-                        sl.api_key,
-                        sl.model
+                        date_trunc('day', sl."startTime"),
+                        customer,
+                        sl.model,
+                        sl.api_key
                 )
                 SELECT
-                    api_key,
-                    SUM(model_cost) AS total_cost,
-                    SUM(model_input_tokens) AS total_input_tokens,
-                    SUM(model_output_tokens) AS total_output_tokens,
+                    group_by_day,
                     jsonb_agg(jsonb_build_object(
-                        'model', model,
-                        'total_cost', model_cost,
-                        'total_input_tokens', model_input_tokens,
-                        'total_output_tokens', model_output_tokens
-                    )) AS model_details
+                        'customer', customer,
+                        'total_spend', total_spend,
+                        'metadata', metadata
+                    )) AS customers
                 FROM
-                    SpendByModelApiKey
+                    (
+                        SELECT
+                            group_by_day,
+                            customer,
+                            SUM(model_api_spend) AS total_spend,
+                            jsonb_agg(jsonb_build_object(
+                                'model', model,
+                                'api_key', api_key,
+                                'spend', model_api_spend,
+                                'total_tokens', model_api_tokens
+                            )) AS metadata
+                        FROM
+                            SpendByModelApiKey
+                        GROUP BY
+                            group_by_day,
+                            customer
+                    ) AS aggregated
                 GROUP BY
-                    api_key
+                    group_by_day
                 ORDER BY
-                    total_cost DESC;
-            """
-            db_response = await prisma_client.db.query_raw(
-                sql_query, start_date_obj, end_date_obj
-            )
+                    group_by_day;
+                    """
+
+                db_response = await prisma_client.db.query_raw(
+                    sql_query, start_date_obj, end_date_obj
+                )
+            else:
+                # SQLite fallback
+                end_date_full = start_date_obj + timedelta(days=1)
+                logs = await prisma_client.db.litellm_spendlogs.find_many(
+                    where={
+                        "startTime": {"gte": start_date_obj, "lt": end_date_full},
+                    }
+                )
+                from collections import defaultdict
+                # group_by_day -> customer -> metadata
+                agg = defaultdict(lambda: defaultdict(lambda: {"total_spend": 0, "metadata": defaultdict(lambda: {"spend": 0, "tokens": 0})}))
+                for log in logs:
+                    day = log.startTime.strftime("%Y-%m-%d")
+                    customer = log.end_user or ""
+                    agg[day][customer]["total_spend"] += log.spend or 0
+                    meta_key = (log.model, log.api_key)
+                    agg[day][customer]["metadata"][meta_key]["spend"] += log.spend or 0
+                    agg[day][customer]["metadata"][meta_key]["tokens"] += log.total_tokens or 0
+                
+                db_response = []
+                for day, customers_data in sorted(agg.items()):
+                    customers_list = []
+                    for customer, data in customers_data.items():
+                        metadata = []
+                        for (model, api_key), m_data in data["metadata"].items():
+                            metadata.append({
+                                'model': model,
+                                'api_key': api_key,
+                                'spend': m_data['spend'],
+                                'total_tokens': m_data['tokens']
+                            })
+                        customers_list.append({
+                            'customer': customer,
+                            'total_spend': data['total_spend'],
+                            'metadata': metadata
+                        })
+                    db_response.append({
+                        'group_by_day': day,
+                        'customers': customers_list
+                    })
+
+            if db_response is None:
+                return []
+
+            return db_response
+        elif group_by == "api_key":
+            dialect = getattr(prisma_client, "dialect", "postgresql")
+            if dialect == "postgresql":
+                sql_query = """
+                    WITH SpendByModelApiKey AS (
+                        SELECT
+                            sl.api_key,
+                            sl.model,
+                            SUM(sl.spend) AS model_cost,
+                            SUM(sl.prompt_tokens) AS model_input_tokens,
+                            SUM(sl.completion_tokens) AS model_output_tokens
+                        FROM
+                            "LiteLLM_SpendLogs" sl
+                        WHERE
+                            sl."startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+                        GROUP BY
+                            sl.api_key,
+                            sl.model
+                    )
+                    SELECT
+                        api_key,
+                        SUM(model_cost) AS total_cost,
+                        SUM(model_input_tokens) AS total_input_tokens,
+                        SUM(model_output_tokens) AS total_output_tokens,
+                        jsonb_agg(jsonb_build_object(
+                            'model', model,
+                            'total_cost', model_cost,
+                            'total_input_tokens', model_input_tokens,
+                            'total_output_tokens', model_output_tokens
+                        )) AS model_details
+                    FROM
+                        SpendByModelApiKey
+                    GROUP BY
+                        api_key
+                    ORDER BY
+                        total_cost DESC;
+                """
+                db_response = await prisma_client.db.query_raw(
+                    sql_query, start_date_obj, end_date_obj
+                )
+            else:
+                # SQLite fallback
+                end_date_full = start_date_obj + timedelta(days=1)
+                logs = await prisma_client.db.litellm_spendlogs.find_many(
+                    where={
+                        "startTime": {"gte": start_date_obj, "lt": end_date_full},
+                    }
+                )
+                from collections import defaultdict
+                # group by api_key, model
+                agg_per_key_model = defaultdict(lambda: {"cost": 0, "input": 0, "output": 0})
+                for log in logs:
+                    agg_per_key_model[(log.api_key, log.model)]["cost"] += log.spend or 0
+                    agg_per_key_model[(log.api_key, log.model)]["input"] += log.prompt_tokens or 0
+                    agg_per_key_model[(log.api_key, log.model)]["output"] += log.completion_tokens or 0
+                
+                # group by api_key
+                final_agg = defaultdict(lambda: {"total_cost": 0, "total_input": 0, "total_output": 0, "model_details": []})
+                for (api_key, model), data in agg_per_key_model.items():
+                    final_agg[api_key]["total_cost"] += data["cost"]
+                    final_agg[api_key]["total_input"] += data["input"]
+                    final_agg[api_key]["total_output"] += data["output"]
+                    final_agg[api_key]["model_details"].append({
+                        "model": model,
+                        "total_cost": data["cost"],
+                        "total_input_tokens": data["input"],
+                        "total_output_tokens": data["output"]
+                    })
+                
+                db_response = []
+                for api_key, data in final_agg.items():
+                    db_response.append({
+                        "api_key": api_key,
+                        "total_cost": data["total_cost"],
+                        "total_input_tokens": data["total_input"],
+                        "total_output_tokens": data["total_output"],
+                        "model_details": data["model_details"]
+                    })
+                db_response = sorted(db_response, key=lambda x: x["total_cost"], reverse=True)
+
             if db_response is None:
                 return []
 
@@ -1288,11 +1561,19 @@ async def global_get_all_tag_names():
                 "Database not connected. Connect a database to your proxy - https://docs.litellm.ai/docs/simple_proxy#managing-auth---virtual-keys"
             )
 
-        sql_query = """
-        SELECT DISTINCT
-            jsonb_array_elements_text(request_tags) AS individual_request_tag
-        FROM "LiteLLM_SpendLogs";
-        """
+        dialect = getattr(prisma_client, "dialect", "postgresql")
+        if dialect == "postgresql":
+            sql_query = """
+            SELECT DISTINCT
+                jsonb_array_elements_text(request_tags) AS individual_request_tag
+            FROM "LiteLLM_SpendLogs";
+            """
+        else:
+            sql_query = """
+            SELECT DISTINCT
+                json_each.value AS individual_request_tag
+            FROM "LiteLLM_SpendLogs", json_each(request_tags);
+            """
 
         db_response = await prisma_client.db.query_raw(sql_query)
         if db_response is None:
@@ -1417,33 +1698,61 @@ async def _get_spend_report_for_time_range(
         return None
 
     try:
-        sql_query = """
-        SELECT
-            t.team_alias,
-            SUM(s.spend) AS total_spend
-        FROM
-            "LiteLLM_SpendLogs" s
-        LEFT JOIN
-            "LiteLLM_TeamTable" t ON s.team_id = t.team_id
-        WHERE
-            s."startTime" >= $1::date AND s."startTime" < ($2::date + INTERVAL '1 day')
-        GROUP BY
-            t.team_alias
-        ORDER BY
-            total_spend DESC;
-        """
+        dialect = getattr(prisma_client, "dialect", "postgresql")
+        if dialect == "postgresql":
+            sql_query = """
+            SELECT
+                t.team_alias,
+                SUM(s.spend) AS total_spend
+            FROM
+                "LiteLLM_SpendLogs" s
+            LEFT JOIN
+                "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+            WHERE
+                s."startTime" >= $1::date AND s."startTime" < ($2::date + INTERVAL '1 day')
+            GROUP BY
+                t.team_alias
+            ORDER BY
+                total_spend DESC;
+            """
+        else:
+            sql_query = """
+            SELECT
+                t.team_alias,
+                SUM(s.spend) AS total_spend
+            FROM
+                "LiteLLM_SpendLogs" s
+            LEFT JOIN
+                "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+            WHERE
+                s."startTime" >= $1 AND s."startTime" < date($2, '+1 day')
+            GROUP BY
+                t.team_alias
+            ORDER BY
+                total_spend DESC;
+            """
         response = await prisma_client.db.query_raw(sql_query, start_date, end_date)
 
-        # get spend per tag for today
-        sql_query = """
-        SELECT 
-        jsonb_array_elements_text(request_tags) AS individual_request_tag,
-        SUM(spend) AS total_spend
-        FROM "LiteLLM_SpendLogs"
-        WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
-        GROUP BY individual_request_tag
-        ORDER BY total_spend DESC;
-        """
+        if dialect == "postgresql":
+            sql_query = """
+            SELECT 
+            jsonb_array_elements_text(request_tags) AS individual_request_tag,
+            SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs"
+            WHERE "startTime" >= $1::timestamptz AND "startTime" < ($2::timestamptz + INTERVAL \'1 day\')
+            GROUP BY individual_request_tag
+            ORDER BY total_spend DESC;
+            """
+        else:
+            sql_query = """
+            SELECT 
+                json_each.value AS individual_request_tag,
+                SUM(spend) AS total_spend
+            FROM "LiteLLM_SpendLogs", json_each(request_tags)
+            WHERE "startTime" >= $1 AND "startTime" < date($2, '+1 day')
+            GROUP BY individual_request_tag
+            ORDER BY total_spend DESC;
+            """
 
         spend_per_tag = await prisma_client.db.query_raw(
             sql_query, start_date, end_date
@@ -2702,21 +3011,39 @@ async def global_spend_end_users(data: Optional[GlobalEndUsersSpend] = None):
     startTime = startTime or datetime.now() - timedelta(days=30)
     endTime = endTime or datetime.now()
 
-    sql_query = """
-SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
-FROM "LiteLLM_SpendLogs"
-WHERE "startTime" >= $1::timestamptz
-  AND "startTime" < $2::timestamptz
-  AND (
-    CASE
-      WHEN $3::TEXT IS NULL THEN TRUE
-      ELSE api_key = $3
-    END
-  )
-GROUP BY end_user
-ORDER BY total_spend DESC
-LIMIT 100
-    """
+    dialect = getattr(prisma_client, "dialect", "postgresql")
+    if dialect == "postgresql":
+        sql_query = """
+    SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" >= $1::timestamptz
+      AND "startTime" < $2::timestamptz
+      AND (
+        CASE
+          WHEN $3::TEXT IS NULL THEN TRUE
+          ELSE api_key = $3
+        END
+      )
+    GROUP BY end_user
+    ORDER BY total_spend DESC
+    LIMIT 100
+        """
+    else:
+        sql_query = """
+    SELECT end_user, COUNT(*) AS total_count, SUM(spend) AS total_spend
+    FROM "LiteLLM_SpendLogs"
+    WHERE "startTime" >= $1
+      AND "startTime" < $2
+      AND (
+        CASE
+          WHEN $3 IS NULL THEN TRUE
+          ELSE api_key = $3
+        END
+      )
+    GROUP BY end_user
+    ORDER BY total_spend DESC
+    LIMIT 100
+        """
     response = await prisma_client.db.query_raw(
         sql_query, startTime, endTime, selected_api_key
     )
@@ -2897,8 +3224,9 @@ async def provider_budgets() -> ProviderBudgetResponse:
 async def get_spend_by_tags(
     prisma_client: PrismaClient, start_date=None, end_date=None
 ):
-    response = await prisma_client.db.query_raw(
-        """
+    dialect = getattr(prisma_client, "dialect", "postgresql")
+    if dialect == "postgresql":
+        sql_query = """
         SELECT
         jsonb_array_elements_text(request_tags) AS individual_request_tag,
         COUNT(*) AS log_count,
@@ -2906,7 +3234,16 @@ async def get_spend_by_tags(
         FROM "LiteLLM_SpendLogs"
         GROUP BY individual_request_tag;
         """
-    )
+    else:
+        sql_query = """
+        SELECT
+            json_each.value AS individual_request_tag,
+            COUNT(*) AS log_count,
+            SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs", json_each(request_tags)
+        GROUP BY individual_request_tag;
+        """
+    response = await prisma_client.db.query_raw(sql_query)
 
     return response
 
@@ -2934,18 +3271,31 @@ async def ui_get_spend_by_tags(
         raise HTTPException(status_code=500, detail={"error": "No db connected"})
 
     response = None
+    dialect = getattr(prisma_client, "dialect", "postgresql")
     if tags_list is None or (isinstance(tags_list, list) and "all-tags" in tags_list):
         # Get spend for all tags
-        sql_query = """
-        SELECT
-            individual_request_tag,
-            spend_date,
-            log_count,
-            total_spend
-        FROM "DailyTagSpend"
-        WHERE spend_date >= $1::date AND spend_date <= $2::date
-        ORDER BY total_spend DESC;
-        """
+        if dialect == "postgresql":
+            sql_query = """
+            SELECT
+                individual_request_tag,
+                spend_date,
+                log_count,
+                total_spend
+            FROM "DailyTagSpend"
+            WHERE spend_date >= $1::date AND spend_date <= $2::date
+            ORDER BY total_spend DESC;
+            """
+        else:
+            sql_query = """
+            SELECT
+                individual_request_tag,
+                spend_date,
+                log_count,
+                total_spend
+            FROM "DailyTagSpend"
+            WHERE spend_date >= $1 AND spend_date <= $2
+            ORDER BY total_spend DESC;
+            """
         response = await prisma_client.db.query_raw(
             sql_query,
             start_date,
@@ -2953,23 +3303,44 @@ async def ui_get_spend_by_tags(
         )
     else:
         # filter by tags list
-        sql_query = """
-        SELECT
-            individual_request_tag,
-            SUM(log_count) AS log_count,
-            SUM(total_spend) AS total_spend
-        FROM "DailyTagSpend"
-        WHERE spend_date >= $1::date AND spend_date <= $2::date
-          AND individual_request_tag = ANY($3::text[])
-        GROUP BY individual_request_tag
-        ORDER BY total_spend DESC;
-        """
-        response = await prisma_client.db.query_raw(
-            sql_query,
-            start_date,
-            end_date,
-            tags_list,
-        )
+        if dialect == "postgresql":
+            sql_query = """
+            SELECT
+                individual_request_tag,
+                SUM(log_count) AS log_count,
+                SUM(total_spend) AS total_spend
+            FROM "DailyTagSpend"
+            WHERE spend_date >= $1::date AND spend_date <= $2::date
+              AND individual_request_tag = ANY($3::text[])
+            GROUP BY individual_request_tag
+            ORDER BY total_spend DESC;
+            """
+            response = await prisma_client.db.query_raw(
+                sql_query,
+                start_date,
+                end_date,
+                tags_list,
+            )
+        else:
+            # SQLite doesn't support ANY($3::text[]). Use a parameterized IN clause.
+            placeholders = ", ".join([f"${i+3}" for i in range(len(tags_list))])
+            sql_query = f"""
+            SELECT
+                individual_request_tag,
+                SUM(log_count) AS log_count,
+                SUM(total_spend) AS total_spend
+            FROM "DailyTagSpend"
+            WHERE spend_date >= $1 AND spend_date <= $2
+              AND individual_request_tag IN ({placeholders})
+            GROUP BY individual_request_tag
+            ORDER BY total_spend DESC;
+            """
+            response = await prisma_client.db.query_raw(
+                sql_query,
+                start_date,
+                end_date,
+                *tags_list,
+            )
 
     # print("tags - spend")
     # print(response)
