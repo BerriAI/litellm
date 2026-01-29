@@ -1842,7 +1842,7 @@ def test_calculate_usage_completion_tokens_details_always_populated():
     
     # completion_tokens_details should NOT be None
     assert usage.completion_tokens_details is not None
-    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.reasoning_tokens is 0
     assert usage.completion_tokens_details.text_tokens == 248
     assert usage.completion_tokens == 248
     assert usage.prompt_tokens == 37
