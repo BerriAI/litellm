@@ -382,25 +382,6 @@ async def retrieve_batch(
                 **data  # type: ignore
             )
             
-            # Re-encode all IDs in the response
-            if response:
-                if hasattr(response, "id") and response.id:
-                    response.id = batch_id  # Keep the encoded batch ID
-                
-                if hasattr(response, "input_file_id") and response.input_file_id:
-                    response.input_file_id = encode_file_id_with_model(
-                        file_id=response.input_file_id, model=model_from_id
-                    )
-                
-                if hasattr(response, "output_file_id") and response.output_file_id:
-                    response.output_file_id = encode_file_id_with_model(
-                        file_id=response.output_file_id, model=model_from_id
-                    )
-                
-                if hasattr(response, "error_file_id") and response.error_file_id:
-                    response.error_file_id = encode_file_id_with_model(
-                        file_id=response.error_file_id, model=model_from_id
-                    )
             
             verbose_proxy_logger.debug(
                 f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
@@ -769,6 +750,11 @@ async def cancel_batch(
 
             # Hook has already extracted model and unwrapped batch_id into data dict
             response = await llm_router.acancel_batch(**data)  # type: ignore
+            response._hidden_params["unified_batch_id"] = unified_batch_id
+            
+            # Ensure model_id is set for the post_call_success_hook to re-encode IDs
+            if not response._hidden_params.get("model_id") and data.get("model"):
+                response._hidden_params["model_id"] = data["model"]
         
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
@@ -781,6 +767,11 @@ async def cancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 **_cancel_batch_data,
             )
+
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
 
         ### ALERTING ###
         asyncio.create_task(
