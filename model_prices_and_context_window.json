@@ -13525,7 +13525,7 @@
         "cache_read_input_token_cost": 0,
         "input_cost_per_token": 3e-07,
         "input_cost_per_audio_token": 1e-06,
-        "litellm_provider": "gemini",
+        "litellm_provider": "vertex_ai-language-models",
         "max_input_tokens": 1048576,
         "max_output_tokens": 65535,
         "max_tokens": 65535,
