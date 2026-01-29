@@ -77,8 +77,7 @@ async def expire_previous_ui_session_tokens(
 
         if tokens_to_block:
             await prisma_client.db.litellm_verificationtoken.update_many(
-                where={"token": {"in": tokens_to_block}},
-                data={"blocked": True}
+                where={"token": {"in": tokens_to_block}}, data={"blocked": True}
             )
 
     except Exception:
@@ -302,6 +301,11 @@ async def authenticate_user(  # noqa: PLR0915
         )
         user_email = getattr(_user_row, "user_email", "unknown")
         _password = getattr(_user_row, "password", "unknown")
+        user_team_id = getattr(_user_row, "team_id", "litellm-dashboard")
+
+        # if user_team_id is None, set it to "litellm-dashboard"
+        if user_team_id is None:
+            user_team_id = "litellm-dashboard"
 
         if _password is None:
             raise ProxyException(
@@ -333,7 +337,7 @@ async def authenticate_user(  # noqa: PLR0915
                         "config": {},
                         "spend": 0,
                         "user_id": user_id,
-                        "team_id": "litellm-dashboard",
+                        "team_id": user_team_id,
                     },
                 )
             else:
@@ -402,4 +406,3 @@ def create_ui_token_object(
         disabled_non_admin_personal_key_creation=disabled_non_admin_personal_key_creation,
         server_root_path=get_server_root_path(),
     )
-
