@@ -4200,6 +4200,7 @@ workflows:
             - search_testing
             - litellm_mapped_tests_proxy
             - litellm_mapped_tests_llms
+            - litellm_mapped_tests_core
             - litellm_mapped_tests_integrations
             - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
@@ -4215,6 +4216,7 @@ workflows:
             - litellm_proxy_unit_testing_key_generation
             - litellm_proxy_unit_testing_part1
             - litellm_proxy_unit_testing_part2
+            - litellm_security_tests
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
@@ -4274,6 +4276,7 @@ workflows:
             - search_testing
             - litellm_mapped_tests_proxy
             - litellm_mapped_tests_llms
+            - litellm_mapped_tests_core
             - litellm_mapped_tests_integrations
             - litellm_mapped_tests_litellm_core_utils
             - litellm_mapped_enterprise_tests
@@ -4294,6 +4297,7 @@ workflows:
             - litellm_proxy_unit_testing_key_generation
             - litellm_proxy_unit_testing_part1
             - litellm_proxy_unit_testing_part2
+            - litellm_security_tests
             - installing_litellm_on_python
             - installing_litellm_on_python_3_13
             - proxy_logging_guardrails_model_info_tests
