@@ -1,7 +1,12 @@
+import contextvars
+import datetime
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+import threading
+from threading import Event
+from typing import Any
+from unittest.mock import MagicMock, patch, Mock
 
 import pytest
 
@@ -1060,3 +1065,41 @@ def test_append_system_prompt_messages():
         kwargs=None, messages=messages
     )
     assert result == messages
+
+
+@patch.object(LitellmLogging, "success_handler")
+@patch.object(LitellmLogging, "_should_run_sync_callbacks_for_async_calls", return_value=True)
+def test_handle_sync_success_callbacks_for_async_calls_runs_with_context(
+    should_run_sync_callbacks_for_async_calls_mock: Mock,
+    success_handler_mock: Mock,
+    logging_obj: LitellmLogging
+):
+    # Given
+    test_var = contextvars.ContextVar("test_var", default="test_value")
+    side_effect_test_var_value: None | str = None
+    event: Event = threading.Event()
+
+    def side_effect(result, start_time, end_time, cache_hit) -> None:
+        nonlocal side_effect_test_var_value
+
+        side_effect_test_var_value = test_var.get()
+        event.set()
+
+    success_handler_mock.side_effect = side_effect
+
+    args = (
+        "test_result",
+        datetime.datetime(2025, 12, 18, 10, 0 ,0),
+        datetime.datetime(2025, 12, 18, 10, 0, 5),
+        "hit"
+    )
+
+    # When
+    logging_obj.handle_sync_success_callbacks_for_async_calls(*args)
+    event.wait(timeout=1)
+
+    # Then
+    success_handler_mock.assert_called_once_with(*args)
+    should_run_sync_callbacks_for_async_calls_mock.assert_called_once_with()
+
+    assert side_effect_test_var_value == "test_value", "Context variable not preserved in success_handler call"
