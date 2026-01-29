@@ -21,6 +21,7 @@ from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     optionally_handle_anthropic_oauth,
+    set_anthropic_headers,
 )
 
 DEFAULT_ANTHROPIC_API_BASE = "https://api.anthropic.com"
@@ -78,8 +79,10 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if api_key is None:
             api_key = os.getenv("ANTHROPIC_API_KEY")
 
-        if "x-api-key" not in headers and api_key:
-            headers["x-api-key"] = api_key
+        # Case-insensitive check for existing auth headers
+        headers_lower = {k.lower(): v for k, v in headers.items()}
+        if "x-api-key" not in headers_lower and "authorization" not in headers_lower and api_key:
+            headers.update(set_anthropic_headers(api_key))
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
         if "content-type" not in headers:

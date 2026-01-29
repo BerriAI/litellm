@@ -91,16 +91,17 @@ class AnthropicTextConfig(BaseConfig):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> dict:
+        from litellm.llms.anthropic.common_utils import set_anthropic_headers
+
         if api_key is None:
             raise ValueError(
                 "Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params"
             )
-        _headers = {
+        _headers = set_anthropic_headers(api_key, {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
-            "x-api-key": api_key,
-        }
+        })
         headers.update(_headers)
         return headers
 

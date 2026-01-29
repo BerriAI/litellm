@@ -22,7 +22,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import CallTypes, LlmProviders, ModelResponse
 
 from ..chat.transformation import AnthropicConfig
-from ..common_utils import AnthropicModelInfo
+from ..common_utils import AnthropicModelInfo, set_anthropic_headers
 
 # Map Anthropic error types to HTTP status codes
 ANTHROPIC_ERROR_STATUS_CODE_MAP = {
@@ -94,11 +94,10 @@ class AnthropicFilesHandler:
         results_url = f"{api_base.rstrip('/')}/v1/messages/batches/{batch_id}/results"
 
         # Prepare headers
-        headers = {
+        headers = set_anthropic_headers(api_key, {
             "accept": "application/json",
             "anthropic-version": "2023-06-01",
-            "x-api-key": api_key,
-        }
+        })
 
         # Make the request to Anthropic
         async_client = get_async_httpx_client(llm_provider=LlmProviders.ANTHROPIC)
