@@ -1492,6 +1492,25 @@ class Logging(LiteLLMLoggingBaseClass):
         stream: bool = False,
     ) -> bool:
         try:
+            # Check for double logging
+            # If we are checking for success, check if EITHER async or sync success has explicitly been logged
+            if "success" in event_type:
+                if (
+                    self.model_call_details.get("has_logged_async_success", False)
+                    is True
+                    or self.model_call_details.get("has_logged_sync_success", False)
+                    is True
+                ):
+                    return False
+            elif "failure" in event_type:
+                if (
+                    self.model_call_details.get("has_logged_async_failure", False)
+                    is True
+                    or self.model_call_details.get("has_logged_sync_failure", False)
+                    is True
+                ):
+                    return False
+
             if self.model_call_details.get(f"has_logged_{event_type}", False) is True:
                 return False
 
