@@ -1,6 +1,6 @@
+import asyncio
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import aiohttp
 import aiohttp.client_exceptions
@@ -8,14 +8,11 @@ import aiohttp.http_exceptions
 import httpx
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 from litellm.llms.custom_httpx.aiohttp_transport import (
     AiohttpResponseStream,
     LiteLLMAiohttpTransport,
-    map_aiohttp_exceptions,
 )
 
 
@@ -32,9 +29,7 @@ class MockAiohttpResponse:
     ):
         self.status = status
         self.headers = headers or {}
-        self.content = MockContent(
-            content_chunks, exception_to_raise, exception_at_chunk
-        )
+        self.content = MockContent(content_chunks, exception_to_raise, exception_at_chunk)
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         pass
@@ -74,7 +69,6 @@ async def test_aiohttp_response_stream_normal_flow():
 @pytest.mark.asyncio
 async def test_transfer_encoding_error_no_httpx_read_error():
     """Test that TransferEncodingError doesn't get converted to httpx.ReadError"""
-    import logging
 
     # Create a TransferEncodingError wrapped in ClientPayloadError (like in real scenarios)
     transfer_error = aiohttp.http_exceptions.TransferEncodingError(
@@ -82,9 +76,7 @@ async def test_transfer_encoding_error_no_httpx_read_error():
     )
 
     # Wrap it in ClientPayloadError as aiohttp does
-    client_payload_error = aiohttp.ClientPayloadError(
-        "Response payload is not completed"
-    )
+    client_payload_error = aiohttp.ClientPayloadError("Response payload is not completed")
     client_payload_error.__cause__ = transfer_error
 
     mock_response = MockAiohttpResponse(
@@ -111,9 +103,7 @@ async def test_transfer_encoding_error_no_httpx_read_error():
 async def test_client_payload_error_graceful_handling():
     """Test that ClientPayloadError is handled gracefully without stacktrace"""
     # Create a ClientPayloadError directly
-    client_error = aiohttp.client_exceptions.ClientPayloadError(
-        "Response payload is not completed"
-    )
+    client_error = aiohttp.client_exceptions.ClientPayloadError("Response payload is not completed")
 
     mock_response = MockAiohttpResponse(
         content_chunks=[b"data1", b"data2", b"data3"],
@@ -181,7 +171,6 @@ async def test_timeout_exception_gets_mapped():
 @pytest.mark.asyncio
 async def test_handle_async_request_uses_env_proxy(monkeypatch):
     """Aiohttp transport should honor HTTP(S)_PROXY env vars"""
-    import asyncio
     proxy_url = "http://proxy.local:3128"
     monkeypatch.setenv("HTTP_PROXY", proxy_url)
     monkeypatch.setenv("http_proxy", proxy_url)
@@ -200,7 +189,7 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
                 self._loop = asyncio.get_running_loop()
             except RuntimeError:
                 self._loop = None
-        
+
         def request(self, *args, **kwargs):
             captured["proxy"] = kwargs.get("proxy")
 
@@ -231,35 +220,240 @@ async def test_handle_async_request_uses_env_proxy(monkeypatch):
     assert captured["proxy"] == proxy_url
 
 
+@pytest.mark.asyncio
+async def test_handle_async_request_uses_env_proxy_per_url(monkeypatch):
+    """Aiohttp transport should honor HTTP(S)_PROXY env vars unless NO_PROXY matches"""
+    proxy_url = "http://proxy.local:3128"
+    monkeypatch.setenv("NO_PROXY", "example.com")
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.setenv("http_proxy", proxy_url)
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.setenv("https_proxy", proxy_url)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
+
+    request_count = 0
+    proxied_count = 0
+
+    class FakeSession:
+        def __init__(self):
+            self.closed = False
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._loop = None
+
+        def request(self, *args, **kwargs):
+            nonlocal request_count
+            nonlocal proxied_count
+            request_count += 1
+
+            if kwargs.get("proxy") is not None:
+                proxied_count += 1
+
+            class Resp:
+                status = 200
+                headers = {}
+
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    pass
+
+                @property
+                def content(self):
+                    class C:
+                        async def iter_chunked(self, size):
+                            yield b""
+
+                    return C()
+
+            return Resp()
+
+    transport = LiteLLMAiohttpTransport(client=lambda: FakeSession())  # type: ignore
+    request = httpx.Request("GET", "http://example.com")
+    await transport.handle_async_request(request)
+
+    request = httpx.Request("GET", "http://foo.com")
+    await transport.handle_async_request(request)
+
+    assert request_count == 2
+    assert proxied_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_proxy_cache_per_host(monkeypatch):
+    """Aiohttp transport should only cache a proxy per host rather than full URL"""
+    proxy_url = "http://proxy.local:3128"
+    monkeypatch.setenv("NO_PROXY", "example.com")
+    monkeypatch.setenv("HTTP_PROXY", proxy_url)
+    monkeypatch.setenv("http_proxy", proxy_url)
+    monkeypatch.setenv("HTTPS_PROXY", proxy_url)
+    monkeypatch.setenv("https_proxy", proxy_url)
+    monkeypatch.delenv("DISABLE_AIOHTTP_TRUST_ENV", raising=False)
+
+    def factory():
+        return _make_mock_session()
+
+    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
+    request = httpx.Request("GET", "http://foo.com/path1")
+    await transport.handle_async_request(request)
+
+    request = httpx.Request("GET", "http://foo.com/path2")
+    await transport.handle_async_request(request)
+
+    assert len(transport.proxy_cache) == 1
+
+
 def _make_mock_response(should_fail=False, fail_count={"count": 0}):
     """Helper to create a mock aiohttp response"""
+
     class MockResp:
         status = 200
         headers = {}
-        
+
         async def __aenter__(self):
             if should_fail and fail_count["count"] < 1:
                 fail_count["count"] += 1
                 raise RuntimeError("Session is closed")
             return self
-        
+
         async def __aexit__(self, *args):
             pass
-        
+
         @property
         def content(self):
             class C:
                 async def iter_chunked(self, size):
                     yield b"test"
+
             return C()
-    
+
     return MockResp()
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_sock_read_timeout_triggers():
+    """
+    Ensure that LiteLLMAiohttpTransport raises httpx.TimeoutException
+    when the sock_read timeout duration elapses (individual read operation timeout).
+    This is the correct behavior for stream_timeout - it should timeout on slow reads,
+    not on the total duration of the stream.
+    """
+    import asyncio
+    from aiohttp import web
+
+    async def slow_handler(request):
+        # Sleep longer than the sock_read timeout
+        await asyncio.sleep(0.3)
+        return web.Response(text="ok")
+
+    app = web.Application()
+    app.router.add_get("/", slow_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+
+    port = site._server.sockets[0].getsockname()[1]
+
+    def factory():
+        return aiohttp.ClientSession()
+
+    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
+
+    request = httpx.Request("GET", f"http://127.0.0.1:{port}/")
+
+    # Set a short sock_read timeout - this should trigger
+    # Note: total timeout is NOT set, allowing long-running streams
+    request.extensions["timeout"] = {
+        "connect": 5.0,
+        "read": 0.1,  # Short timeout for individual reads
+        "pool": 5.0,
+    }
+
+    try:
+        with pytest.raises(httpx.TimeoutException):
+            await transport.handle_async_request(request)
+    finally:
+        await transport.aclose()
+        await runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_handle_async_request_streaming_does_not_timeout_on_total_duration():
+    """
+    Ensure that LiteLLMAiohttpTransport does NOT timeout on long-running
+    streaming responses as long as individual chunks arrive within the sock_read timeout.
+    This is the fix for issue #19184 - stream_timeout should only control the timeout
+    for individual chunks, not the total stream duration.
+    """
+    import asyncio
+    from aiohttp import web
+
+    async def streaming_handler(request):
+        # Simulate a streaming response that takes longer than a single timeout
+        # but each chunk arrives quickly
+        response = web.StreamResponse()
+        await response.prepare(request)
+        
+        # Send 5 chunks over 0.5 seconds total (0.1s between chunks)
+        for i in range(5):
+            await asyncio.sleep(0.05)  # Less than sock_read timeout
+            await response.write(f"chunk{i}\n".encode())
+        
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_get("/stream", streaming_handler)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    await site.start()
+
+    port = site._server.sockets[0].getsockname()[1]
+
+    def factory():
+        return aiohttp.ClientSession()
+
+    transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
+
+    request = httpx.Request("GET", f"http://127.0.0.1:{port}/stream")
+
+    # Set sock_read timeout that's longer than individual chunk delays
+    # but shorter than total stream duration
+    # Total duration: ~0.25s, sock_read timeout: 0.15s per chunk
+    # This should NOT timeout because each chunk arrives within 0.15s
+    request.extensions["timeout"] = {
+        "connect": 5.0,
+        "read": 0.15,  # Timeout for individual reads
+        "pool": 5.0,
+        # Note: total is NOT set - this is the fix!
+    }
+
+    try:
+        # This should succeed without timing out
+        response = await transport.handle_async_request(request)
+        assert response.status_code == 200
+        
+        # Read the streaming response
+        chunks = []
+        async for chunk in response.aiter_bytes():
+            chunks.append(chunk)
+        
+        # Verify we got all chunks
+        full_response = b"".join(chunks).decode()
+        assert "chunk0" in full_response
+        assert "chunk4" in full_response
+    finally:
+        await transport.aclose()
+        await runner.cleanup()
 
 
 def _make_mock_session(closed=False):
     """Helper to create a mock aiohttp session"""
-    import asyncio
-    
+
     class MockSession:
         def __init__(self):
             self.closed = closed
@@ -267,10 +461,10 @@ def _make_mock_session(closed=False):
                 self._loop = asyncio.get_running_loop()
             except RuntimeError:
                 self._loop = None
-        
+
         def request(self, *args, **kwargs):
             return _make_mock_response()
-    
+
     return MockSession()
 
 
@@ -278,14 +472,14 @@ def _make_mock_session(closed=False):
 async def test_handle_closed_session_before_request():
     """Test that closed sessions are detected and recreated"""
     counts = {"sessions": 0}
-    
+
     def factory():
         counts["sessions"] += 1
         return _make_mock_session(closed=counts["sessions"] == 1)
-    
+
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
     response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
-    
+
     assert counts["sessions"] == 2  # Created 2 sessions: closed one, then open one
     assert response.status_code == 200
 
@@ -295,7 +489,7 @@ async def test_handle_session_closed_during_request():
     """Test that sessions closed during request are handled with retry"""
     counts = {"sessions": 0, "requests": 0}
     fail_count = {"count": 0}
-    
+
     class MockSession:
         def __init__(self):
             self.closed = False
@@ -303,18 +497,18 @@ async def test_handle_session_closed_during_request():
                 self._loop = __import__("asyncio").get_running_loop()
             except RuntimeError:
                 self._loop = None
-        
+
         def request(self, *args, **kwargs):
             counts["requests"] += 1
             return _make_mock_response(should_fail=True, fail_count=fail_count)
-    
+
     def factory():
         counts["sessions"] += 1
         return MockSession()
-    
+
     transport = LiteLLMAiohttpTransport(client=factory)  # type: ignore
     response = await transport.handle_async_request(httpx.Request("GET", "http://example.com"))
-    
+
     assert counts["requests"] == 2  # First request failed, second succeeded
     assert counts["sessions"] == 2  # Created 2 sessions for retry
     assert response.status_code == 200

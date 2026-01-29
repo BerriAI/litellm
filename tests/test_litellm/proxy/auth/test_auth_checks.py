@@ -14,6 +14,8 @@ import pytest
 
 import litellm
 from litellm.proxy._types import (
+    CallInfo,
+    Litellm_EntityType,
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
@@ -26,7 +28,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.auth_checks import (
     ExperimentalUIJWTToken,
     _can_object_call_vector_stores,
+    _get_fuzzy_user_object,
     _get_team_db_check,
+    _virtual_key_max_budget_alert_check,
+    _virtual_key_soft_budget_check,
     get_user_object,
     vector_store_access_check,
 )
@@ -38,6 +43,24 @@ from litellm.utils import get_utc_datetime
 def set_salt_key(monkeypatch):
     """Automatically set LITELLM_SALT_KEY for all tests"""
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+
+
+@pytest.fixture(autouse=True)
+def reset_constants_module():
+    """Reset constants module to ensure clean state before each test"""
+    import importlib
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+    
+    # Reload modules before test
+    importlib.reload(constants)
+    importlib.reload(auth_checks)
+    
+    yield
+    
+    # Reload modules after test to clean up
+    importlib.reload(constants)
+    importlib.reload(auth_checks)
 
 
 @pytest.fixture
@@ -125,6 +148,63 @@ def test_get_key_object_from_ui_hash_key_invalid():
     # Test with invalid token
     key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key("invalid_token")
     assert key_object is None
+
+
+def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
+    """Test generating CLI JWT token with default 24-hour expiration"""
+    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    # Decrypt and verify token contents
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    assert token_data["user_id"] == "test_user"
+    assert token_data["user_role"] == LitellmUserRoles.PROXY_ADMIN.value
+    assert token_data["models"] == ["gpt-3.5-turbo"]
+    assert token_data["max_budget"] == litellm.max_ui_session_budget
+
+    # Verify expiration time is set to 24 hours (default)
+    assert "expires" in token_data
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    assert expires > get_utc_datetime()
+    assert expires <= get_utc_datetime() + timedelta(hours=24, minutes=1)
+    assert expires >= get_utc_datetime() + timedelta(hours=23, minutes=59)
+
+
+def test_get_cli_jwt_auth_token_custom_expiration(
+    valid_sso_user_defined_values, monkeypatch
+):
+    """Test generating CLI JWT token with custom expiration via environment variable"""
+    import importlib
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+    
+    # Set custom expiration to 48 hours
+    monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
+    
+    # Reload the constants module to pick up the new env var
+    importlib.reload(constants)
+    # Also reload auth_checks to pick up the new constant value
+    importlib.reload(auth_checks)
+    
+    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+
+    # Decrypt and verify token contents
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
+    assert decrypted_token is not None
+    token_data = json.loads(decrypted_token)
+
+    # Verify expiration time is set to 48 hours
+    assert "expires" in token_data
+    expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
+    assert expires > get_utc_datetime() + timedelta(hours=47, minutes=59)
+    assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
+
 
 
 @pytest.mark.asyncio
@@ -395,6 +475,55 @@ async def test_vector_store_access_check_with_permissions():
             )
 
         assert exc_info.value.type == ProxyErrorTypes.key_vector_store_access_denied
+
+
+@pytest.mark.asyncio
+async def test_vector_store_access_check_with_team_permissions():
+    """Ensure teams restricted to specific vector stores cannot access others."""
+    request_body = {}
+    valid_token = UserAPIKeyAuth(token="team-test-token", object_permission_id=None)
+
+    team_object = MagicMock()
+    team_object.object_permission_id = "team-permission"
+
+    mock_prisma_client = MagicMock()
+    team_permissions = MagicMock()
+    team_permissions.vector_stores = ["team-store-allowed"]
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=team_permissions
+    )
+
+    mock_vector_store_registry = MagicMock()
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = [
+        "team-store-allowed"
+    ]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
+    ):
+        result = await vector_store_access_check(
+            request_body=request_body,
+            team_object=team_object,
+            valid_token=valid_token,
+        )
+
+    assert result is True
+
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = [
+        "team-store-denied"
+    ]
+
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
+    ):
+        with pytest.raises(ProxyException) as exc_info:
+            await vector_store_access_check(
+                request_body=request_body,
+                team_object=team_object,
+                valid_token=valid_token,
+            )
+
+    assert exc_info.value.type == ProxyErrorTypes.team_vector_store_access_denied
 
 
 def test_can_object_call_model_with_alias():
@@ -705,3 +834,561 @@ async def test_get_tag_objects_batch():
     assert "tag:uncached-1" in cached_keys
     assert "tag:uncached-2" in cached_keys
     assert "tag:uncached-3" in cached_keys
+
+
+@pytest.mark.asyncio
+async def test_get_team_object_raises_404_when_not_found():
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    mock_prisma_client = MagicMock()
+    mock_db = AsyncMock()
+    mock_prisma_client.db = mock_db
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+
+    mock_cache = MagicMock()
+    mock_cache.async_get_cache = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_team_object(
+            team_id="nonexistent-team",
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=mock_cache,
+            check_cache_only=False,
+            check_db_only=True,
+        )
+
+    assert exc_info.value.status_code == 404
+    assert "Team doesn't exist in db" in str(exc_info.value.detail)
+
+
+# Reject Client-Side Metadata Tags Tests
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_enabled_with_tags():
+    """Test that common_checks rejects request when reject_clientside_metadata_tags is True and metadata.tags is present."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": True}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Create a valid token for the test
+    valid_token = UserAPIKeyAuth(token="test-token", models=["gpt-3.5-turbo"])
+
+    with pytest.raises(ProxyException) as exc_info:
+        await common_checks(
+            request_body=request_body,
+            team_object=None,
+            user_object=None,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings=general_settings,
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=valid_token,
+            request=mock_request,
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.bad_request_error
+    assert "metadata.tags" in exc_info.value.message
+    assert exc_info.value.param == "metadata.tags"
+    assert exc_info.value.code == "400"
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_enabled_without_tags():
+    """Test that common_checks allows request when reject_clientside_metadata_tags is True but no metadata.tags is present."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"custom_field": "value"},  # No tags field
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": True}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Create a valid token for the test
+    valid_token = UserAPIKeyAuth(token="test-token", models=["gpt-3.5-turbo"])
+
+    # Should not raise an exception
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_disabled_with_tags():
+    """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is False."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": False}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Create a valid token for the test
+    valid_token = UserAPIKeyAuth(token="test-token", models=["gpt-3.5-turbo"])
+
+    # Should not raise an exception
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_not_set_with_tags():
+    """Test that common_checks allows request with metadata.tags when reject_clientside_metadata_tags is not set."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "test"}],
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {}  # No reject_clientside_metadata_tags setting
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Create a valid token for the test
+    valid_token = UserAPIKeyAuth(token="test-token", models=["gpt-3.5-turbo"])
+
+    # Should not raise an exception
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=None,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/chat/completions",
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_reject_clientside_metadata_tags_non_llm_route():
+    """Test that reject_clientside_metadata_tags check only applies to LLM API routes."""
+    from fastapi import Request
+
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    request_body = {
+        "metadata": {"tags": ["custom-tag"]},
+    }
+
+    general_settings = {"reject_clientside_metadata_tags": True}
+
+    # Create a mock request object
+    mock_request = MagicMock(spec=Request)
+
+    # Create a valid token for the test
+    valid_token = UserAPIKeyAuth(token="test-token", models=["gpt-3.5-turbo"])
+
+    # Create an admin user object for the management route
+    admin_user = LiteLLM_UserTable(
+        user_id="admin-user",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    # Should not raise an exception for non-LLM route
+    result = await common_checks(
+        request_body=request_body,
+        team_object=None,
+        user_object=admin_user,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings=general_settings,
+        route="/key/generate",  # Management route, not LLM route
+        llm_router=None,
+        proxy_logging_obj=MagicMock(),
+        valid_token=valid_token,
+        request=mock_request,
+    )
+
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_soft_budget_check_with_user_obj():
+    """Test _virtual_key_soft_budget_check includes user_email when user_obj is provided"""
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+            assert type == "soft_budget"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=100.0,
+        soft_budget=50.0,
+        user_id="test-user",
+        team_id="test-team",
+        team_alias="test-team-alias",
+        org_id="test-org",
+        key_alias="test-key",
+        max_budget=200.0,
+    )
+
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        user_email="test@example.com",
+        max_budget=None,
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _virtual_key_soft_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=user_obj,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert alert_triggered is True
+    assert captured_call_info is not None
+    assert captured_call_info.user_email == "test@example.com"
+    assert captured_call_info.token == "test-token"
+    assert captured_call_info.spend == 100.0
+    assert captured_call_info.soft_budget == 50.0
+    assert captured_call_info.max_budget == 200.0
+    assert captured_call_info.user_id == "test-user"
+    assert captured_call_info.team_id == "test-team"
+    assert captured_call_info.team_alias == "test-team-alias"
+    assert captured_call_info.organization_id == "test-org"
+    assert captured_call_info.key_alias == "test-key"
+    assert captured_call_info.event_group == Litellm_EntityType.KEY
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_soft_budget_check_without_user_obj():
+    """Test _virtual_key_soft_budget_check sets user_email to None when user_obj is not provided"""
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+            assert type == "soft_budget"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=100.0,
+        soft_budget=50.0,
+        user_id="test-user",
+        team_id="test-team",
+        key_alias="test-key",
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _virtual_key_soft_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=None,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert alert_triggered is True
+    assert captured_call_info is not None
+    assert captured_call_info.user_email is None
+
+
+@pytest.mark.parametrize(
+    "spend, soft_budget, expect_alert",
+    [
+        (100.0, 50.0, True),  # Over soft budget
+        (50.0, 50.0, True),  # At soft budget
+        (25.0, 50.0, False),  # Under soft budget
+        (100.0, None, False),  # No soft budget set
+    ],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_soft_budget_check_scenarios(
+    spend, soft_budget, expect_alert
+):
+    """Test _virtual_key_soft_budget_check with various spend and soft_budget scenarios"""
+    alert_triggered = False
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered
+            alert_triggered = True
+            assert type == "soft_budget"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=spend,
+        soft_budget=soft_budget,
+        user_id="test-user",
+        key_alias="test-key",
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _virtual_key_soft_budget_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=None,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert (
+        alert_triggered == expect_alert
+    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_with_user_obj():
+    """Test _virtual_key_max_budget_alert_check includes user_email when user_obj is provided"""
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+            assert type == "max_budget_alert"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=90.0,
+        max_budget=100.0,
+        user_id="test-user",
+        team_id="test-team",
+        team_alias="test-team-alias",
+        org_id="test-org",
+        key_alias="test-key",
+        soft_budget=50.0,
+    )
+
+    user_obj = LiteLLM_UserTable(
+        user_id="test-user",
+        user_email="test@example.com",
+        max_budget=None,
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _virtual_key_max_budget_alert_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=user_obj,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert alert_triggered is True
+    assert captured_call_info is not None
+    assert captured_call_info.user_email == "test@example.com"
+    assert captured_call_info.token == "test-token"
+    assert captured_call_info.spend == 90.0
+    assert captured_call_info.max_budget == 100.0
+    assert captured_call_info.soft_budget == 50.0
+    assert captured_call_info.user_id == "test-user"
+    assert captured_call_info.team_id == "test-team"
+    assert captured_call_info.team_alias == "test-team-alias"
+    assert captured_call_info.organization_id == "test-org"
+    assert captured_call_info.key_alias == "test-key"
+    assert captured_call_info.event_group == Litellm_EntityType.KEY
+
+
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_without_user_obj():
+    """Test _virtual_key_max_budget_alert_check sets user_email to None when user_obj is not provided"""
+    alert_triggered = False
+    captured_call_info = None
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered, captured_call_info
+            alert_triggered = True
+            captured_call_info = user_info
+            assert type == "max_budget_alert"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=90.0,
+        max_budget=100.0,
+        user_id="test-user",
+        team_id="test-team",
+        key_alias="test-key",
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _virtual_key_max_budget_alert_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=None,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert alert_triggered is True
+    assert captured_call_info is not None
+    assert captured_call_info.user_email is None
+
+
+@pytest.mark.parametrize(
+    "spend, max_budget, expect_alert",
+    [
+        (80.0, 100.0, True),  # At 80% threshold (alert threshold)
+        (90.0, 100.0, True),  # Above threshold, below max_budget
+        (79.0, 100.0, False),  # Below threshold
+        (100.0, 100.0, False),  # At max_budget (not below, so no alert)
+        (110.0, 100.0, False),  # Above max_budget (already exceeded)
+        (100.0, None, False),  # No max_budget set
+        (0.0, 100.0, False),  # Spend is 0
+    ],
+)
+@pytest.mark.asyncio
+async def test_virtual_key_max_budget_alert_check_scenarios(
+    spend, max_budget, expect_alert
+):
+    """Test _virtual_key_max_budget_alert_check with various spend and max_budget scenarios"""
+    alert_triggered = False
+
+    class MockProxyLogging:
+        async def budget_alerts(self, type, user_info):
+            nonlocal alert_triggered
+            alert_triggered = True
+            assert type == "max_budget_alert"
+            assert isinstance(user_info, CallInfo)
+
+    valid_token = UserAPIKeyAuth(
+        token="test-token",
+        spend=spend,
+        max_budget=max_budget,
+        user_id="test-user",
+        key_alias="test-key",
+    )
+
+    proxy_logging_obj = MockProxyLogging()
+
+    await _virtual_key_max_budget_alert_check(
+        valid_token=valid_token,
+        proxy_logging_obj=proxy_logging_obj,
+        user_obj=None,
+    )
+
+    await asyncio.sleep(0.1)
+
+    assert (
+        alert_triggered == expect_alert
+    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, max_budget={max_budget}"
+
+
+@pytest.mark.asyncio
+async def test_get_fuzzy_user_object_case_insensitive_email():
+    """Test that _get_fuzzy_user_object uses case-insensitive email lookup"""
+    # Setup mock Prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_prisma.db.litellm_usertable = MagicMock()
+
+    # Mock user data with mixed case email
+    test_user = LiteLLM_UserTable(
+        user_id="test_123",
+        sso_user_id=None,
+        user_email="Test@Example.com",  # Mixed case in DB
+        organization_memberships=[],
+        max_budget=None,
+    )
+
+    # Test: SSO ID not found, find by email with different casing
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=test_user)
+
+    # Search with lowercase email (different from DB)
+    result = await _get_fuzzy_user_object(
+        prisma_client=mock_prisma,
+        sso_user_id=None,
+        user_email="test@example.com",  # Lowercase search
+    )
+
+    # Verify user was found despite case difference
+    assert result == test_user
+
+    # Verify the query used case-insensitive mode
+    mock_prisma.db.litellm_usertable.find_first.assert_called_once()
+    call_args = mock_prisma.db.litellm_usertable.find_first.call_args
+    assert call_args.kwargs["where"]["user_email"]["equals"] == "test@example.com"
+    assert call_args.kwargs["where"]["user_email"]["mode"] == "insensitive"
+    assert call_args.kwargs["include"] == {"organization_memberships": True}

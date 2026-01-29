@@ -280,6 +280,7 @@ const TeamsView: React.FC<TeamProps> = ({
               is_proxy_admin={userRole == "Admin"}
               userModels={userModels}
               editTeam={editTeam}
+              premiumUser={premiumUser}
             />
           ) : (
             <TeamsHeaderTabs lastRefreshed={lastRefreshed} onRefresh={handleRefreshClick} userRole={userRole}>

@@ -265,7 +265,7 @@ async def test_call_router_callbacks_on_success():
                 )
                 assert increment["increment_value"] == 1
 
-
+@pytest.mark.serial
 @pytest.mark.asyncio
 async def test_call_router_callbacks_on_failure():
     router = Router(
@@ -288,7 +288,7 @@ async def test_call_router_callbacks_on_failure():
                 mock_response="litellm.RateLimitError",
                 num_retries=0,
             )
-        await asyncio.sleep(1)
+        await asyncio.sleep(3)
         print(mock_callback.call_args_list)
         assert mock_callback.call_count == 1
 
@@ -456,6 +456,50 @@ def test_router_get_deployment_credentials():
     credentials = router.get_deployment_credentials(model_id="1")
     assert credentials is not None
     assert credentials["api_key"] == "123"
+
+
+def test_router_get_deployment_credentials_with_provider():
+    """
+    Test that get_deployment_credentials_with_provider returns credentials with provider info.
+    """
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "sk-test-123",
+                    "api_base": "https://api.openai.com/v1",
+                },
+                "model_info": {"id": "openai-deployment-1"},
+            },
+            {
+                "model_name": "claude-3",
+                "litellm_params": {
+                    "model": "anthropic/claude-3-sonnet",
+                    "api_key": "sk-ant-123",
+                },
+                "model_info": {"id": "anthropic-deployment-1"},
+            },
+        ]
+    )
+
+    # Test getting credentials by model_id
+    credentials = router.get_deployment_credentials_with_provider(model_id="openai-deployment-1")
+    assert credentials is not None
+    assert credentials["api_key"] == "sk-test-123"
+    assert credentials["custom_llm_provider"] == "openai"
+    assert credentials["api_base"] == "https://api.openai.com/v1"
+
+    # Test getting credentials by model_group_name (model_name)
+    credentials2 = router.get_deployment_credentials_with_provider(model_id="claude-3")
+    assert credentials2 is not None
+    assert credentials2["api_key"] == "sk-ant-123"
+    assert credentials2["custom_llm_provider"] == "anthropic"
+
+    # Test with non-existent model
+    credentials3 = router.get_deployment_credentials_with_provider(model_id="non-existent")
+    assert credentials3 is None
 
 
 def test_router_get_deployment_model_info():

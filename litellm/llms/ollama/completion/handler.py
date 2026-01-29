@@ -15,7 +15,7 @@ def _prepare_ollama_embedding_payload(
 ) -> Dict[str, Any]:
 
     data: Dict[str, Any] = {"model": model, "input": prompts}
-    special_optional_params = ["truncate", "options", "keep_alive"]
+    special_optional_params = ["truncate", "options", "keep_alive","dimensions"]
 
     for k, v in optional_params.items():
         if k in special_optional_params:

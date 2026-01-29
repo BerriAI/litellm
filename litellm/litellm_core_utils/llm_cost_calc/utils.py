@@ -23,6 +23,15 @@ def _is_above_128k(tokens: float) -> bool:
     return False
 
 
+def get_billable_input_tokens(usage: Usage) -> int:
+    """
+    Returns the number of billable input tokens.
+    Subtracts cached tokens from prompt tokens if applicable.
+    """
+    details = _parse_prompt_tokens_details(usage)
+    return usage.prompt_tokens - details["cache_hit_tokens"]
+
+
 def select_cost_metric_for_model(
     model_info: ModelInfo,
 ) -> Literal["cost_per_character", "cost_per_token"]:
@@ -161,6 +170,15 @@ def _get_token_base_cost(
 
     prompt_base_cost = cast(float, _get_cost_per_unit(model_info, input_cost_key))
     completion_base_cost = cast(float, _get_cost_per_unit(model_info, output_cost_key))
+
+    # For image generation models that don't have output_cost_per_token,
+    # use output_cost_per_image_token as the base cost (all output tokens are image tokens)
+    if completion_base_cost == 0.0 or completion_base_cost is None:
+        output_image_cost = _get_cost_per_unit(
+            model_info, "output_cost_per_image_token", None
+        )
+        if output_image_cost is not None:
+            completion_base_cost = cast(float, output_image_cost)
     cache_creation_cost = cast(
         float, _get_cost_per_unit(model_info, cache_creation_cost_key)
     )
@@ -181,7 +199,6 @@ def _get_token_base_cost(
                     1000 if "k" in threshold_str else 1
                 )
                 if usage.prompt_tokens > threshold:
-
                     prompt_base_cost = cast(
                         float, _get_cost_per_unit(model_info, key, prompt_base_cost)
                     )
@@ -342,9 +359,10 @@ class PromptTokensDetailsResult(TypedDict):
     cache_creation_token_details: Optional[CacheCreationTokenDetails]
     text_tokens: int
     audio_tokens: int
+    image_tokens: int
     character_count: int
     image_count: int
-    video_length_seconds: int
+    video_length_seconds: float
 
 
 def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
@@ -374,6 +392,10 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         cast(Optional[int], getattr(usage.prompt_tokens_details, "audio_tokens", 0))
         or 0
     )
+    image_tokens = (
+        cast(Optional[int], getattr(usage.prompt_tokens_details, "image_tokens", 0))
+        or 0
+    )
     character_count = (
         cast(
             Optional[int],
@@ -386,10 +408,10 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
     )
     video_length_seconds = (
         cast(
-            Optional[int],
+            Optional[float],
             getattr(usage.prompt_tokens_details, "video_length_seconds", 0),
         )
-        or 0
+        or 0.0
     )
 
     return PromptTokensDetailsResult(
@@ -398,9 +420,10 @@ def _parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
         cache_creation_token_details=cache_creation_token_details,
         text_tokens=text_tokens,
         audio_tokens=audio_tokens,
+        image_tokens=image_tokens,
         character_count=character_count,
         image_count=image_count,
-        video_length_seconds=video_length_seconds,
+        video_length_seconds=float(video_length_seconds),
     )
 
 
@@ -408,6 +431,7 @@ class CompletionTokensDetailsResult(TypedDict):
     audio_tokens: int
     text_tokens: int
     reasoning_tokens: int
+    image_tokens: int
 
 
 def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsResult:
@@ -432,11 +456,19 @@ def _parse_completion_tokens_details(usage: Usage) -> CompletionTokensDetailsRes
         )
         or 0
     )
+    image_tokens = (
+        cast(
+            Optional[int],
+            getattr(usage.completion_tokens_details, "image_tokens", 0),
+        )
+        or 0
+    )
 
     return CompletionTokensDetailsResult(
         audio_tokens=audio_tokens,
         text_tokens=text_tokens,
         reasoning_tokens=reasoning_tokens,
+        image_tokens=image_tokens,
     )
 
 
@@ -459,6 +491,16 @@ def _calculate_input_cost(
     ### AUDIO COST
     prompt_cost += calculate_cost_component(
         model_info, "input_cost_per_audio_token", prompt_tokens_details["audio_tokens"]
+    )
+
+    ### IMAGE TOKEN COST
+    # For image token costs:
+    # First check if input_cost_per_image_token is available. If not, default to generic input_cost_per_token.
+    image_token_cost_key = "input_cost_per_image_token"
+    if model_info.get(image_token_cost_key) is None:
+        image_token_cost_key = "input_cost_per_token"
+    prompt_cost += calculate_cost_component(
+        model_info, image_token_cost_key, prompt_tokens_details["image_tokens"]
     )
 
     ### CACHE WRITING COST - Now uses tiered pricing
@@ -492,7 +534,7 @@ def _calculate_input_cost(
     return prompt_cost
 
 
-def generic_cost_per_token(
+def generic_cost_per_token(  # noqa: PLR0915
     model: str,
     usage: Usage,
     custom_llm_provider: str,
@@ -524,21 +566,36 @@ def generic_cost_per_token(
         cache_creation_token_details=None,
         text_tokens=usage.prompt_tokens,
         audio_tokens=0,
+        image_tokens=0,
         character_count=0,
         image_count=0,
-        video_length_seconds=0,
+        video_length_seconds=0.0,
     )
     if usage.prompt_tokens_details:
         prompt_tokens_details = _parse_prompt_tokens_details(usage)
 
-    ## EDGE CASE - text tokens not set inside PromptTokensDetails
+    ## EDGE CASE - text tokens not set or includes cached tokens (double-counting)
+    ## Some providers (like xAI) report text_tokens = prompt_tokens (including cached)
+    ## We detect this when: text_tokens + cached_tokens + other > prompt_tokens
+    ## Ref: https://github.com/BerriAI/litellm/issues/19680, #14874, #14875
 
-    if prompt_tokens_details["text_tokens"] == 0:
+    cache_hit = prompt_tokens_details["cache_hit_tokens"]
+    text_tokens = prompt_tokens_details["text_tokens"]
+    audio_tokens = prompt_tokens_details["audio_tokens"]
+    cache_creation = prompt_tokens_details["cache_creation_tokens"]
+    image_tokens = prompt_tokens_details["image_tokens"]
+
+    # Check for double-counting: sum of details > prompt_tokens means overlap
+    total_details = text_tokens + cache_hit + audio_tokens + cache_creation + image_tokens
+    has_double_counting = cache_hit > 0 and total_details > usage.prompt_tokens
+
+    if text_tokens == 0 or has_double_counting:
         text_tokens = (
             usage.prompt_tokens
-            - prompt_tokens_details["cache_hit_tokens"]
-            - prompt_tokens_details["audio_tokens"]
-            - prompt_tokens_details["cache_creation_tokens"]
+            - cache_hit
+            - audio_tokens
+            - cache_creation
+            - image_tokens
         )
         prompt_tokens_details["text_tokens"] = text_tokens
 
@@ -565,17 +622,35 @@ def generic_cost_per_token(
     text_tokens = 0
     audio_tokens = 0
     reasoning_tokens = 0
+    image_tokens = 0
     is_text_tokens_total = False
     if usage.completion_tokens_details is not None:
         completion_tokens_details = _parse_completion_tokens_details(usage)
         audio_tokens = completion_tokens_details["audio_tokens"]
         text_tokens = completion_tokens_details["text_tokens"]
         reasoning_tokens = completion_tokens_details["reasoning_tokens"]
+        image_tokens = completion_tokens_details["image_tokens"]
 
+    # Handle text_tokens calculation:
+    # 1. If text_tokens is explicitly provided and > 0, use it
+    # 2. If there's a breakdown (reasoning/audio/image tokens), calculate text_tokens as the remainder
+    # 3. If no breakdown at all, assume all completion_tokens are text_tokens
+    has_token_breakdown = image_tokens > 0 or audio_tokens > 0 or reasoning_tokens > 0
     if text_tokens == 0:
-        text_tokens = usage.completion_tokens
-    if text_tokens == usage.completion_tokens:
-        is_text_tokens_total = True
+        if has_token_breakdown:
+            # Calculate text tokens as remainder when we have a breakdown
+            # This handles cases like OpenAI's reasoning models where text_tokens isn't provided
+            text_tokens = max(
+                0,
+                usage.completion_tokens
+                - reasoning_tokens
+                - audio_tokens
+                - image_tokens,
+            )
+        else:
+            # No breakdown at all, all tokens are text tokens
+            text_tokens = usage.completion_tokens
+            is_text_tokens_total = True
     ## TEXT COST
     completion_cost = float(text_tokens) * completion_base_cost
 
@@ -584,6 +659,9 @@ def generic_cost_per_token(
     )
     _output_cost_per_reasoning_token = _get_cost_per_unit(
         model_info, "output_cost_per_reasoning_token", None
+    )
+    _output_cost_per_image_token = _get_cost_per_unit(
+        model_info, "output_cost_per_image_token", None
     )
 
     ## AUDIO COST
@@ -603,6 +681,15 @@ def generic_cost_per_token(
             else completion_base_cost
         )
         completion_cost += float(reasoning_tokens) * _output_cost_per_reasoning_token
+
+    ## IMAGE COST
+    if not is_text_tokens_total and image_tokens and image_tokens > 0:
+        _output_cost_per_image_token = (
+            _output_cost_per_image_token
+            if _output_cost_per_image_token is not None
+            else completion_base_cost
+        )
+        completion_cost += float(image_tokens) * _output_cost_per_image_token
 
     return prompt_cost, completion_cost
 
@@ -640,6 +727,7 @@ class CostCalculatorUtils:
         n: Optional[int] = None,
         size: Optional[str] = None,
         optional_params: Optional[dict] = None,
+        call_type: Optional[str] = None,
     ) -> float:
         """
         Route the image generation cost calculator based on the custom_llm_provider
@@ -648,7 +736,7 @@ class CostCalculatorUtils:
         from litellm.llms.azure_ai.image_generation.cost_calculator import (
             cost_calculator as azure_ai_image_cost_calculator,
         )
-        from litellm.llms.bedrock.image.cost_calculator import (
+        from litellm.llms.bedrock.image_generation.cost_calculator import (
             cost_calculator as bedrock_image_cost_calculator,
         )
         from litellm.llms.gemini.image_generation.cost_calculator import (
@@ -713,6 +801,18 @@ class CostCalculatorUtils:
                 image_response=completion_response,
             )
         elif custom_llm_provider == litellm.LlmProviders.GEMINI.value:
+            if call_type in (
+                CallTypes.image_edit.value,
+                CallTypes.aimage_edit.value,
+            ):
+                from litellm.llms.gemini.image_edit.cost_calculator import (
+                    cost_calculator as gemini_image_edit_cost_calculator,
+                )
+
+                return gemini_image_edit_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                )
             from litellm.llms.gemini.image_generation.cost_calculator import (
                 cost_calculator as gemini_image_cost_calculator,
             )
@@ -734,6 +834,59 @@ class CostCalculatorUtils:
             return fal_ai_image_cost_calculator(
                 model=model,
                 image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.RUNWAYML.value:
+            from litellm.llms.runwayml.cost_calculator import (
+                cost_calculator as runwayml_image_cost_calculator,
+            )
+
+            return runwayml_image_cost_calculator(
+                model=model,
+                image_response=completion_response,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
+            # Check if this is a gpt-image model (token-based pricing)
+            model_lower = model.lower()
+            if "gpt-image-1" in model_lower:
+                from litellm.llms.openai.image_generation.cost_calculator import (
+                    cost_calculator as openai_gpt_image_cost_calculator,
+                )
+
+                return openai_gpt_image_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            # Fall through to default for DALL-E models
+            return default_image_cost_calculator(
+                model=model,
+                quality=quality,
+                custom_llm_provider=custom_llm_provider,
+                n=n,
+                size=size,
+                optional_params=optional_params,
+            )
+        elif custom_llm_provider == litellm.LlmProviders.AZURE.value:
+            # Check if this is a gpt-image model (token-based pricing)
+            model_lower = model.lower()
+            if "gpt-image-1" in model_lower:
+                from litellm.llms.openai.image_generation.cost_calculator import (
+                    cost_calculator as openai_gpt_image_cost_calculator,
+                )
+
+                return openai_gpt_image_cost_calculator(
+                    model=model,
+                    image_response=completion_response,
+                    custom_llm_provider=custom_llm_provider,
+                )
+            # Fall through to default for DALL-E models
+            return default_image_cost_calculator(
+                model=model,
+                quality=quality,
+                custom_llm_provider=custom_llm_provider,
+                n=n,
+                size=size,
+                optional_params=optional_params,
             )
         else:
             return default_image_cost_calculator(

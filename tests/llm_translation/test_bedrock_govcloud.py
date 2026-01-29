@@ -45,6 +45,8 @@ class TestBedrockGovCloudSupport:
         assert "bedrock/us-gov-west-1/anthropic.claude-3-5-sonnet-20240620-v1:0" in model_cost
         assert "bedrock/us-gov-east-1/anthropic.claude-3-haiku-20240307-v1:0" in model_cost
         assert "bedrock/us-gov-west-1/anthropic.claude-3-haiku-20240307-v1:0" in model_cost
+        assert "bedrock/us-gov-east-1/claude-sonnet-4-5-20250929-v1:0" in model_cost
+        assert "bedrock/us-gov-west-1/claude-sonnet-4-5-20250929-v1:0" in model_cost
         
         # Test Llama models in GovCloud
         assert "bedrock/us-gov-east-1/meta.llama3-8b-instruct-v1:0" in model_cost

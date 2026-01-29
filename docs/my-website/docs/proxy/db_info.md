@@ -46,8 +46,8 @@ You can see the full DB Schema [here](https://github.com/BerriAI/litellm/blob/ma
 
 | Table Name | Description | Row Insert Frequency |
 |------------|-------------|---------------------|
-| LiteLLM_SpendLogs | Detailed logs of all API requests. Records token usage, spend, and timing information. Tracks which models and keys were used. | **High - every LLM API request - Success or Failure** |
-| LiteLLM_AuditLog | Tracks changes to system configuration. Records who made changes and what was modified. Maintains history of updates to teams, users, and models. | **Off by default**, **High - when enabled** |
+| LiteLLM_SpendLogs | Detailed logs of all API requests. Records token usage, spend, and timing information. Tracks which models and keys were used. | **Medium - this is a batch process that runs on an interval.** |
+| LiteLLM_AuditLog | Tracks changes to system configuration. Records who made changes and what was modified. Maintains history of updates to teams, users, and models. | **Off by default**, **High - Runs on every change to an entity** |
 
 ## Disable `LiteLLM_SpendLogs`
 

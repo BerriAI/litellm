@@ -60,6 +60,58 @@ Each machine deploying LiteLLM had the following specs:
 - Database: PostgreSQL
 - Redis: Not used
 
+## Infrastructure Recommendations
+
+Recommended specifications based on benchmark results and industry standards for API gateway deployments.
+
+### PostgreSQL
+
+Required for authentication, key management, and usage tracking.
+
+| Workload | CPU | RAM | Storage | Connections |
+|----------|-----|-----|---------|-------------|
+| 1-2K RPS | 4-8 cores | 16GB | 200GB SSD (3000+ IOPS) | 100-200 |
+| 2-5K RPS | 8 cores | 16-32GB | 500GB SSD (5000+ IOPS) | 200-500 |
+| 5K+ RPS | 16+ cores | 32-64GB | 1TB+ SSD (10000+ IOPS) | 500+ |
+
+**Configuration:** Set `proxy_batch_write_at: 60` to batch writes and reduce DB load. Total connections = pool limit × instances.
+
+### Redis (Recommended)
+
+Redis was not used in these benchmarks but provides significant production benefits: 60-80% reduced DB load.
+
+| Workload | CPU | RAM |
+|----------|-----|-----|
+| 1-2K RPS | 2-4 cores | 8GB |
+| 2-5K RPS | 4 cores | 16GB |
+| 5K+ RPS | 8+ cores | 32GB+ |
+
+**Requirements:** Redis 7.0+, AOF persistence enabled, `allkeys-lru` eviction policy.
+
+**Configuration:**
+```yaml
+router_settings:
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT
+  redis_password: os.environ/REDIS_PASSWORD
+
+litellm_settings:
+  cache: True
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    password: os.environ/REDIS_PASSWORD
+```
+
+:::tip
+Use `redis_host`, `redis_port`, and `redis_password` instead of `redis_url` for ~80 RPS better performance.
+:::
+
+**Scaling:** DB connections scale linearly with instances. Consider PostgreSQL read replicas beyond 5K RPS.
+
+See [Production Configuration](./proxy/prod) for detailed best practices.
+
 ## Locust Settings
 
 - 1000 Users
@@ -125,18 +177,23 @@ class MyUser(HttpUser):
 ## LiteLLM vs Portkey Performance Comparison
 
 **Test Configuration**: 4 CPUs, 8 GB RAM per instance | Load: 1k concurrent users, 500 ramp-up
+**Versions:** Portkey **v1.14.0** | LiteLLM **v1.79.1-stable**  
+**Test Duration:** 5 minutes  
 
 ### Multi-Instance (4×) Performance
 
-| Metric              | Portkey (no DB) | LiteLLM (with DB) |
-| ------------------- | --------------- | ----------------- |
-| **Total Requests**  | 293,796         | 312,405           |
-| **Failed Requests** | 0               | 0                 |
-| **Median Latency**  | 100 ms          | 100 ms            |
-| **p95 Latency**     | 230 ms          | 150 ms            |
-| **p99 Latency**     | 500 ms          | 240 ms            |
-| **Average Latency** | 123 ms          | 111 ms            |
-| **Current RPS**     | 1,170.9         | 1,170             |
+| Metric              | Portkey (no DB) | LiteLLM (with DB) | Comment        |
+| ------------------- | --------------- | ----------------- | -------------- |
+| **Total Requests**  | 293,796         | 312,405           | LiteLLM higher |
+| **Failed Requests** | 0               | 0                 | Same           |
+| **Median Latency**  | 100 ms          | 100 ms            | Same           |
+| **p95 Latency**     | 230 ms          | 150 ms            | LiteLLM lower  |
+| **p99 Latency**     | 500 ms          | 240 ms            | LiteLLM lower  |
+| **Average Latency** | 123 ms          | 111 ms            | LiteLLM lower  |
+| **Current RPS**     | 1,170.9         | 1,170             | Same           |
+
+
+*Lower is better for latency metrics; higher is better for requests and RPS.*
 
 ### Technical Insights
 
@@ -167,7 +224,7 @@ class MyUser(HttpUser):
 
 ## Logging Callbacks
 
-### [GCS Bucket Logging](https://docs.litellm.ai/docs/proxy/bucket)
+### [GCS Bucket Logging](https://docs.litellm.ai/docs/observability/gcs_bucket_integration)
 
 Using GCS Bucket has **no impact on latency, RPS compared to Basic Litellm Proxy**
 

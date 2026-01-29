@@ -159,6 +159,7 @@ class CredentialLiteLLMParams(BaseModel):
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     aws_region_name: Optional[str] = None
+    aws_bedrock_runtime_endpoint: Optional[str] = None
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str] = None
 
@@ -205,6 +206,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
 
     # Batch/File API Params
     s3_bucket_name: Optional[str] = None
+    s3_encryption_key_id: Optional[str] = None
     gcs_bucket_name: Optional[str] = None
 
     # Vector Store Params
@@ -262,6 +264,7 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
         auto_router_embedding_model: Optional[str] = None,
         # Batch/File API Params
         s3_bucket_name: Optional[str] = None,
+        s3_encryption_key_id: Optional[str] = None,
         gcs_bucket_name: Optional[str] = None,
         **params,
     ):
@@ -401,6 +404,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
     aws_region_name: Optional[str]
+    ## AWS S3 VECTORS ##
+    vector_bucket_name: Optional[str]
+    index_name: Optional[str]
+    embedding_model: Optional[str]
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str]
     ## CUSTOM PRICING ##
@@ -632,6 +639,29 @@ class SearchToolTypedDict(TypedDict):
 
     search_tool_name: Required[str]
     litellm_params: Required[SearchToolLiteLLMParams]
+
+
+class GuardrailLiteLLMParams(TypedDict, total=False):
+    """
+    LiteLLM params for guardrails.
+    """
+
+    guardrail: Required[str]
+    mode: Required[str]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    weight: Optional[int]  # For load balancing
+
+
+class GuardrailTypedDict(TypedDict, total=False):
+    """
+    Configuration for a guardrail in the router.
+    """
+
+    guardrail_name: Required[str]
+    litellm_params: Required[GuardrailLiteLLMParams]
+    callback: Any  # The CustomGuardrail instance
+    id: Optional[str]  # Unique identifier for the guardrail deployment
 
 
 class FineTuningConfig(BaseModel):

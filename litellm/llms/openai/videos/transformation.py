@@ -1,29 +1,30 @@
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from io import BufferedReader
-from typing import cast
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
+
 import httpx
 from httpx._types import RequestFiles
 
-from litellm.types.videos.main import VideoCreateOptionalRequestParams
+import litellm
+from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
+from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import CreateVideoRequest
 from litellm.types.router import GenericLiteLLMParams
-from litellm.secret_managers.main import get_secret_str
-from litellm.types.videos.main import VideoObject
-from litellm.types.videos.utils import encode_video_id_with_provider, extract_original_video_id
-import litellm
-from litellm.llms.openai.image_edit.transformation import ImageEditRequestUtils
+from litellm.types.videos.main import VideoCreateOptionalRequestParams, VideoObject
+from litellm.types.videos.utils import (
+    encode_video_id_with_provider,
+    extract_original_video_id,
+)
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
-    from ...base_llm.videos.transformation import BaseVideoConfig as _BaseVideoConfig
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseVideoConfig = _BaseVideoConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    BaseVideoConfig = Any
     BaseLLMException = Any
 
 
@@ -63,7 +64,12 @@ class OpenAIVideoConfig(BaseVideoConfig):
         headers: dict,
         model: str,
         api_key: Optional[str] = None,
+        litellm_params: Optional[GenericLiteLLMParams] = None,
     ) -> dict:
+        # Use api_key from litellm_params if available, otherwise fall back to other sources
+        if litellm_params and litellm_params.api_key:
+            api_key = api_key or litellm_params.api_key
+        
         api_key = (
             api_key
             or litellm.api_key
@@ -178,10 +184,10 @@ class OpenAIVideoConfig(BaseVideoConfig):
         # Construct the URL for video content download
         url = f"{api_base.rstrip('/')}/{original_video_id}/content"
         
-        # Add video_id as query parameter
-        params = {"video_id": original_video_id}
-        
-        return url, params
+        # No additional data needed for GET content request
+        data: Dict[str, Any] = {}
+
+        return url, data
 
     def transform_video_remix_request(
         self,

@@ -1,7 +1,8 @@
 #### CRUD ENDPOINTS for UI Settings #####
-from typing import Any, Dict, List, Union, Optional
+import json
+from typing import Any, Dict, List, Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -9,6 +10,7 @@ from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
+    InProductNudgeResponse,
     SSOConfig,
 )
 
@@ -21,11 +23,11 @@ class IPAddress(BaseModel):
 
 class UIThemeConfig(BaseModel):
     """Configuration for UI theme customization"""
-    
+
     # Logo configuration
     logo_url: Optional[str] = Field(
         default=None,
-        description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL"
+        description="URL or path to custom logo image. Can be a local file path or HTTP/HTTPS URL",
     )
 
 
@@ -61,6 +63,39 @@ class UIThemeSettingsResponse(SettingsResponse):
     """Response model for UI theme settings"""
 
     pass
+
+
+class UISettings(BaseModel):
+    """Configuration for UI-specific flags"""
+
+    disable_model_add_for_internal_users: bool = Field(
+        default=False,
+        description="If true, internal users cannot add models from the UI",
+    )
+
+    disable_team_admin_delete_team_user: bool = Field(
+        default=False,
+        description="Prevents Team Admins from deleting users from the teams they manage. Useful for SCIM provisioning where team membership is defined externally.",
+    )
+
+    enabled_ui_pages_internal_users: Optional[List[str]] = Field(
+        default=None,
+        description="List of page keys that internal users (non-admins) can see in the UI sidebar. If not set, all pages are visible based on role permissions.",
+    )
+
+
+class UISettingsResponse(SettingsResponse):
+    """Response model for UI settings"""
+
+    pass
+
+
+# Allowlist of UI settings that can be stored
+ALLOWED_UI_SETTINGS_FIELDS = {
+    "disable_model_add_for_internal_users",
+    "disable_team_admin_delete_team_user",
+    "enabled_ui_pages_internal_users",
+}
 
 
 @router.get(
@@ -409,28 +444,57 @@ async def get_sso_settings():
 
     # Initialize with defaults
     sso_settings_dict = {}
-    
+
     if sso_db_record and sso_db_record.sso_settings:
         # Load settings from database
         sso_settings_dict = dict(sso_db_record.sso_settings)
-    
-    decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(environment_variables=sso_settings_dict)
+
+    # Extract role_mappings before removing it (it's a dict, not an env variable)
+    role_mappings_data = sso_settings_dict.pop("role_mappings", None)
+    role_mappings = None
+    if role_mappings_data:
+        from litellm.types.proxy.management_endpoints.ui_sso import RoleMappings
+
+        if isinstance(role_mappings_data, dict):
+            role_mappings = RoleMappings(**role_mappings_data)
+        elif isinstance(role_mappings_data, RoleMappings):
+            role_mappings = role_mappings_data
+
+    decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(
+        environment_variables=sso_settings_dict
+    )
 
     # Build SSO config with database values or environment fallback
+
     sso_config = SSOConfig(
         google_client_id=decrypted_sso_settings_dict.get("google_client_id", None),
-        google_client_secret=decrypted_sso_settings_dict.get("google_client_secret", None),
-        microsoft_client_id=decrypted_sso_settings_dict.get("microsoft_client_id", None),
-        microsoft_client_secret=decrypted_sso_settings_dict.get("microsoft_client_secret", None),
+        google_client_secret=decrypted_sso_settings_dict.get(
+            "google_client_secret", None
+        ),
+        microsoft_client_id=decrypted_sso_settings_dict.get(
+            "microsoft_client_id", None
+        ),
+        microsoft_client_secret=decrypted_sso_settings_dict.get(
+            "microsoft_client_secret", None
+        ),
         microsoft_tenant=decrypted_sso_settings_dict.get("microsoft_tenant", None),
         generic_client_id=decrypted_sso_settings_dict.get("generic_client_id", None),
-        generic_client_secret=decrypted_sso_settings_dict.get("generic_client_secret", None),
-        generic_authorization_endpoint=decrypted_sso_settings_dict.get("generic_authorization_endpoint", None),
-        generic_token_endpoint=decrypted_sso_settings_dict.get("generic_token_endpoint", None),
-        generic_userinfo_endpoint=decrypted_sso_settings_dict.get("generic_userinfo_endpoint", None),
+        generic_client_secret=decrypted_sso_settings_dict.get(
+            "generic_client_secret", None
+        ),
+        generic_authorization_endpoint=decrypted_sso_settings_dict.get(
+            "generic_authorization_endpoint", None
+        ),
+        generic_token_endpoint=decrypted_sso_settings_dict.get(
+            "generic_token_endpoint", None
+        ),
+        generic_userinfo_endpoint=decrypted_sso_settings_dict.get(
+            "generic_userinfo_endpoint", None
+        ),
         proxy_base_url=decrypted_sso_settings_dict.get("proxy_base_url", None),
         user_email=decrypted_sso_settings_dict.get("user_email"),
         ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
+        role_mappings=role_mappings,
     )
 
     # Get the schema for UI display
@@ -469,10 +533,14 @@ async def update_sso_settings(sso_config: SSOConfig):
     """
     Update SSO configuration by saving to the dedicated SSO table.
     """
-    import os
     import json
+    import os
 
-    from litellm.proxy.proxy_server import prisma_client, store_model_in_db, proxy_config
+    from litellm.proxy.proxy_server import (
+        prisma_client,
+        proxy_config,
+        store_model_in_db,
+    )
 
     if prisma_client is None:
         raise HTTPException(
@@ -525,7 +593,9 @@ async def update_sso_settings(sso_config: SSOConfig):
                 # Clear environment variable if value is null/empty
                 os.environ.pop(env_var_name, None)
 
-    encrypted_sso_data = proxy_config._encrypt_env_variables(environment_variables=sso_data)
+    encrypted_sso_data = proxy_config._encrypt_env_variables(
+        environment_variables=sso_data
+    )
 
     # Save to dedicated SSO table
     await prisma_client.db.litellm_ssoconfig.upsert(
@@ -540,6 +610,41 @@ async def update_sso_settings(sso_config: SSOConfig):
             },
         },
     )
+
+    # Remove SSO-related env vars from config.environment_variables
+    try:
+        env_var_entry = await prisma_client.db.litellm_config.find_unique(
+            where={"param_name": "environment_variables"}
+        )
+
+        # If no environment_variables entry exists, nothing to clean up
+        if env_var_entry is not None:
+            if env_var_entry.param_value is not None:
+                if isinstance(env_var_entry.param_value, str):
+                    environment_variables = json.loads(env_var_entry.param_value)
+                else:
+                    environment_variables = dict(env_var_entry.param_value)
+            else:
+                environment_variables = {}
+
+            env_vars_to_remove = set(env_var_mapping.values())
+            filtered_env_vars = {
+                key: value
+                for key, value in environment_variables.items()
+                if key not in env_vars_to_remove
+            }
+
+            await prisma_client.db.litellm_config.update(
+                where={"param_name": "environment_variables"},
+                data={
+                    "param_value": json.dumps(filtered_env_vars, default=str),
+                },
+            )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Error updating environment_variables: {str(e)}"},
+        )
 
     return {
         "message": "SSO settings updated successfully",
@@ -583,8 +688,9 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
     Update UI theme configuration.
     Updates logo settings for the admin UI.
     """
-    from litellm.proxy.proxy_server import proxy_config, store_model_in_db
     import os
+
+    from litellm.proxy.proxy_server import proxy_config, store_model_in_db
 
     if store_model_in_db is not True:
         raise HTTPException(
@@ -596,28 +702,30 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
 
     # Load existing config
     config = await proxy_config.get_config()
-    
+
     # Update config with UI theme settings
     if "general_settings" not in config:
         config["general_settings"] = {}
-    
+
     if "environment_variables" not in config:
         config["environment_variables"] = {}
 
     # Convert theme config to dict
     theme_data = theme_config.model_dump(exclude_none=True)
-    
+
     # Store UI theme config in litellm_settings (where it's retrieved from)
     if "litellm_settings" not in config:
         config["litellm_settings"] = {}
     config["litellm_settings"]["ui_theme_config"] = theme_data
-    
+
     # Update UI_LOGO_PATH environment variable if logo_url is provided
     # If logo_url is empty string, None, or null, remove the environment variable to use default
     logo_url = theme_data.get("logo_url")
     verbose_proxy_logger.debug(f"Updating logo_url: {logo_url}")
-    
-    if logo_url and isinstance(logo_url, str) and logo_url.strip():  # Check if logo_url exists and is not empty/whitespace
+
+    if (
+        logo_url and isinstance(logo_url, str) and logo_url.strip()
+    ):  # Check if logo_url exists and is not empty/whitespace
         config["environment_variables"]["UI_LOGO_PATH"] = logo_url
         os.environ["UI_LOGO_PATH"] = logo_url
         verbose_proxy_logger.debug(f"Set UI_LOGO_PATH to: {logo_url}")
@@ -632,12 +740,15 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
 
     # Handle environment variable encryption if needed
     stored_config = config.copy()
-    if "environment_variables" in stored_config and len(stored_config["environment_variables"]) > 0:
+    if (
+        "environment_variables" in stored_config
+        and len(stored_config["environment_variables"]) > 0
+    ):
         # Only encrypt if there are environment variables to encrypt
         stored_config["environment_variables"] = proxy_config._encrypt_env_variables(
             environment_variables=stored_config["environment_variables"]
         )
-    
+
     # Save the updated config
     await proxy_config.save_config(new_config=stored_config)
 
@@ -645,6 +756,140 @@ async def update_ui_theme_settings(theme_config: UIThemeConfig):
         "message": "Logo settings updated successfully.",
         "status": "success",
         "theme_config": theme_data,
+    }
+
+
+@router.get(
+    "/in_product_nudges",
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=InProductNudgeResponse,
+)
+async def get_in_product_nudges():
+    """
+    Get in-product nudges configuration.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    db_record = await prisma_client.db.litellm_dailytagspend.find_first(
+        where={"tag": "User-Agent: claude-cli"}
+    )
+
+    if db_record:
+        return InProductNudgeResponse(is_claude_code_enabled=True)
+
+    return InProductNudgeResponse(is_claude_code_enabled=False)
+
+
+@router.get(
+    "/get/ui_settings",
+    tags=["UI Settings"],
+    response_model=UISettingsResponse,
+)
+async def get_ui_settings():
+    """
+    Get UI-specific configuration flags.
+    All authenticated users can fetch these settings for client-side behavior.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    ui_settings: Dict[str, Any] = {}
+
+    db_record = await prisma_client.db.litellm_uisettings.find_unique(
+        where={"id": "ui_settings"}
+    )
+
+    if db_record and db_record.ui_settings:
+        ui_settings_json = db_record.ui_settings
+        if isinstance(ui_settings_json, str):
+            ui_settings = json.loads(ui_settings_json)
+        else:
+            ui_settings = dict(ui_settings_json)
+
+    # Sanitize any unexpected keys from persisted config before returning
+    ui_settings = {
+        k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+
+    # Build config-like object for schema helper
+    config: Dict[str, Any] = {"litellm_settings": {"ui_settings": ui_settings}}
+
+    return await _get_settings_with_schema(
+        settings_key="ui_settings",
+        settings_class=UISettings,
+        config=config,
+    )
+
+
+@router.patch(
+    "/update/ui_settings",
+    tags=["UI Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def update_ui_settings(
+    settings: UISettings, user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth)
+):
+    """
+    Update UI-specific configuration flags.
+    Only proxy admins are allowed to modify these settings.
+    """
+    from litellm.proxy.proxy_server import prisma_client, store_model_in_db
+
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403, detail="Only proxy admins can update UI settings."
+        )
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+
+    if store_model_in_db is not True:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Set `'STORE_MODEL_IN_DB='True'` in your env to enable this feature."
+            },
+        )
+
+    settings_dict = settings.model_dump(exclude_none=True)
+
+    # Enforce allowlist and drop anything unexpected
+    ui_settings = {
+        k: v for k, v in settings_dict.items() if k in ALLOWED_UI_SETTINGS_FIELDS
+    }
+
+    await prisma_client.db.litellm_uisettings.upsert(
+        where={"id": "ui_settings"},
+        data={
+            "create": {
+                "id": "ui_settings",
+                "ui_settings": json.dumps(ui_settings),
+            },
+            "update": {
+                "ui_settings": json.dumps(ui_settings),
+            },
+        },
+    )
+
+    return {
+        "message": "UI settings updated successfully",
+        "status": "success",
+        "settings": ui_settings,
     }
 
 
@@ -664,35 +909,35 @@ async def upload_logo(file: UploadFile = File(...)):
     # Validate file type
     allowed_extensions = {".png", ".jpg", ".jpeg", ".svg"}
     file_extension = Path(file.filename or "").suffix.lower()
-    
+
     if file_extension not in allowed_extensions:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}"
+            detail=f"Invalid file type. Allowed types: {', '.join(allowed_extensions)}",
         )
-    
+
     # Validate file size (max 5MB)
     file_content = await file.read()
     if len(file_content) > 5 * 1024 * 1024:  # 5MB
         raise HTTPException(
-            status_code=400,
-            detail="File size too large. Maximum size is 5MB."
+            status_code=400, detail="File size too large. Maximum size is 5MB."
         )
-    
+
     # Create uploads directory if it doesn't exist
     current_dir = os.path.dirname(os.path.abspath(__file__))
     upload_dir = os.path.join(current_dir, "..", "uploads")
     os.makedirs(upload_dir, exist_ok=True)
-    
+
     # Generate unique filename
     from litellm._uuid import uuid
+
     unique_filename = f"logo_{uuid.uuid4().hex}{file_extension}"
     file_path = os.path.join(upload_dir, unique_filename)
-    
+
     # Save the file
     with open(file_path, "wb") as buffer:
         buffer.write(file_content)
-    
+
     return {
         "message": "Logo uploaded successfully",
         "status": "success",

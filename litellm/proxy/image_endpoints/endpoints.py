@@ -215,9 +215,11 @@ async def image_generation(
 async def image_edit_api(
     request: Request,
     fastapi_response: Response,
-    image: List[UploadFile] = File(...),
-    mask: Optional[List[UploadFile]] = File(None),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    image: Optional[List[UploadFile]] = File(None),
+    image_array: Optional[List[UploadFile]] = File(None, alias="image[]"),
+    mask: Optional[List[UploadFile]] = File(None),
+    mask_array: Optional[List[UploadFile]] = File(None, alias="mask[]"),
     model: Optional[str] = None,
 ):
     """
@@ -233,6 +235,20 @@ async def image_edit_api(
         -F 'prompt=Create a studio ghibli image of this'
     ```
     """
+    if image is not None and image_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
+    if mask is not None and mask_array is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
+    if image is None and image_array is not None:
+        image = image_array
+    if mask is None and mask_array is not None:
+        mask = mask_array
+
+    # if image is None:
+    #     raise HTTPException(status_code=422, detail="Field required: image")
+    # Note: Image is optional for some models (e.g., Bedrock Stability style-transfer)
+    # The validation will be done at the model level if image is truly required
+
     from litellm.proxy.proxy_server import (
         _read_request_body,
         general_settings,
@@ -258,6 +274,10 @@ async def image_edit_api(
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
+    
+    # Ensure prompt exists in data (default to None for models that don't require it)
+    if "prompt" not in data:
+        data["prompt"] = None
 
     data["model"] = (
         model

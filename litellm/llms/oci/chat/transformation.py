@@ -32,6 +32,7 @@ from litellm.types.llms.oci import (
     OCICompletionResponse,
     OCIContentPartUnion,
     OCIImageContentPart,
+    OCIImageUrl,
     OCIMessage,
     OCIRoles,
     OCIServingMode,
@@ -416,15 +417,34 @@ class OCIChatConfig(BaseConfig):
                 "Please install it with: pip install cryptography"
             ) from e
 
+        # Handle oci_key - it should be a string (PEM content)
+        oci_key_content = None
+        if oci_key:
+            if isinstance(oci_key, str):
+                oci_key_content = oci_key
+                # Fix common issues with PEM content
+                # Replace escaped newlines with actual newlines
+                oci_key_content = oci_key_content.replace("\\n", "\n")
+                # Ensure proper line endings
+                if "\r\n" in oci_key_content:
+                    oci_key_content = oci_key_content.replace("\r\n", "\n")
+            else:
+                raise OCIError(
+                    status_code=400,
+                    message=f"oci_key must be a string containing the PEM private key content. "
+                    f"Got type: {type(oci_key).__name__}",
+                )
+
         private_key = (
-            load_private_key_from_str(oci_key)
-            if oci_key
+            load_private_key_from_str(oci_key_content)
+            if oci_key_content
             else load_private_key_from_file(oci_key_file) if oci_key_file else None
         )
 
         if private_key is None:
-            raise Exception(
-                "Private key is required for OCI authentication. Please provide either oci_key or oci_key_file."
+            raise OCIError(
+                status_code=400,
+                message="Private key is required for OCI authentication. Please provide either oci_key or oci_key_file.",
             )
 
         signature = private_key.sign(
@@ -765,9 +785,10 @@ class OCIChatConfig(BaseConfig):
             )
 
         if oci_serving_mode == "DEDICATED":
+            oci_endpoint_id = optional_params.get("oci_endpoint_id", model)
             servingMode = OCIServingMode(
                 servingType="DEDICATED",
-                endpointId=model,
+                endpointId=oci_endpoint_id,
             )
         else:
             servingMode = OCIServingMode(
@@ -1104,9 +1125,12 @@ def adapt_messages_to_generic_oci_standard_content_message(
 
         elif type == "image_url":
             image_url = content_item.get("image_url")
+            # Handle both OpenAI format (object with url) and string format
+            if isinstance(image_url, dict):
+                image_url = image_url.get("url")
             if not isinstance(image_url, str):
-                raise Exception("Prop `image_url` is not a string")
-            new_content.append(OCIImageContentPart(imageUrl=image_url))
+                raise Exception("Prop `image_url` must be a string or an object with a `url` property")
+            new_content.append(OCIImageContentPart(imageUrl=OCIImageUrl(url=image_url)))
 
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],
@@ -1328,6 +1352,17 @@ class OCIStreamWrapper(CustomStreamWrapper):
 
     def _handle_generic_stream_chunk(self, dict_chunk: dict):
         """Handle generic OCI streaming chunks."""
+        # Fix missing required fields in tool calls before Pydantic validation
+        # OCI streams tool calls progressively, so early chunks may be missing required fields
+        if dict_chunk.get("message") and dict_chunk["message"].get("toolCalls"):
+            for tool_call in dict_chunk["message"]["toolCalls"]:
+                if "arguments" not in tool_call:
+                    tool_call["arguments"] = ""
+                if "id" not in tool_call:
+                    tool_call["id"] = ""
+                if "name" not in tool_call:
+                    tool_call["name"] = ""
+
         try:
             typed_chunk = OCIStreamChunk(**dict_chunk)
         except TypeError as e:

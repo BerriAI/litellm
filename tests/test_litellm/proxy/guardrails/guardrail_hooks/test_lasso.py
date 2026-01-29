@@ -1,6 +1,7 @@
 import os
 import sys
 import pytest
+import uuid
 from unittest.mock import patch, MagicMock
 from httpx import Response, Request
 from fastapi import HTTPException
@@ -77,10 +78,11 @@ class TestLassoGuardrail:
         assert guardrail.lasso_api_key == "test-api-key"
         assert guardrail.user_id == "test-user"
         assert guardrail.conversation_id == "test-conversation"
-        assert guardrail.api_base == "https://server.lasso.security"
+        assert guardrail.api_base == "https://server.lasso.security/gateway/v3"
 
     @pytest.mark.asyncio
     async def test_pre_call_no_violations(self):
+        from litellm.integrations.custom_guardrail import dc as global_cache
         """Test pre-call hook with no violations detected."""
         # Setup guardrail
         guardrail = LassoGuardrail(
@@ -90,12 +92,16 @@ class TestLassoGuardrail:
             default_on=True
         )
 
+        test_call_id = str(uuid.uuid4())
+        assert global_cache.get_cache(f"lasso_conversation_id:{test_call_id}") is None
+
         # Test data
         data = {
             "messages": [
                 {"role": "user", "content": "Hello, how are you?"}
             ],
-            "metadata": {}
+            "metadata": {},
+            "litellm_call_id": test_call_id
         }
 
         # Mock successful API response with no violations
@@ -118,19 +124,25 @@ class TestLassoGuardrail:
             request=Request(method="POST", url="https://server.lasso.security/gateway/v3/classify"),
         )
 
+        local_cache = DualCache()
         with patch(
             "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.post",
             return_value=mock_response
         ):
             result = await guardrail.async_pre_call_hook(
                 user_api_key_dict=UserAPIKeyAuth(),
-                cache=DualCache(),
+                cache=local_cache,
                 data=data,
                 call_type="completion"
             )
 
         # Should return original data when no violations detected
         assert result == data
+
+        # Verify that the conversation_id is stored in the global cache but not the local cache
+        cache_key = f"lasso_conversation_id:{test_call_id}"
+        assert global_cache.get_cache(cache_key) is not None
+        assert local_cache.get_cache(cache_key) is None
 
     @pytest.mark.asyncio
     async def test_pre_call_with_violations(self):
@@ -466,9 +478,10 @@ class TestLassoGuardrail:
         )
 
         messages = [{"role": "user", "content": "Test message"}]
+        cache = DualCache()
 
         # Test PROMPT payload
-        prompt_payload = guardrail._prepare_payload(messages, "PROMPT")
+        prompt_payload = guardrail._prepare_payload(messages, {}, cache, "PROMPT")
         assert prompt_payload["messageType"] == "PROMPT"
         assert prompt_payload["messages"] == messages
         assert prompt_payload["userId"] == "test-user"
@@ -476,7 +489,7 @@ class TestLassoGuardrail:
 
         # Test COMPLETION payload
         completion_messages = [{"role": "assistant", "content": "Test response"}]
-        completion_payload = guardrail._prepare_payload(completion_messages, "COMPLETION")
+        completion_payload = guardrail._prepare_payload(completion_messages, {}, cache, "COMPLETION")
         assert completion_payload["messageType"] == "COMPLETION"
         assert completion_payload["messages"] == completion_messages
         assert completion_payload["userId"] == "test-user"
@@ -489,9 +502,9 @@ class TestLassoGuardrail:
             user_id="test-user",
             conversation_id="test-conversation"
         )
-
+        cache = DualCache()
         data = {"litellm_call_id": "test-call-id"}
-        headers = guardrail._prepare_headers(data)
+        headers = guardrail._prepare_headers(data, cache)
         assert headers["lasso-api-key"] == "test-api-key"
         assert headers["Content-Type"] == "application/json"
         assert headers["lasso-user-id"] == "test-user"
@@ -499,7 +512,7 @@ class TestLassoGuardrail:
 
         # Test without optional fields
         guardrail_minimal = LassoGuardrail(lasso_api_key="test-api-key")
-        headers_minimal = guardrail_minimal._prepare_headers(data)
+        headers_minimal = guardrail_minimal._prepare_headers(data, cache)
         assert headers_minimal["lasso-api-key"] == "test-api-key"
         assert headers_minimal["Content-Type"] == "application/json"
         assert "lasso-user-id" not in headers_minimal

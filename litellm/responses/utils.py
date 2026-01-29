@@ -2,6 +2,7 @@ import base64
 from typing import (
     Any,
     Dict,
+    Iterable,
     List,
     Optional,
     Type,
@@ -23,7 +24,12 @@ from litellm.types.llms.openai import (
     ResponseText,
 )
 from litellm.types.responses.main import DecodedResponseId
-from litellm.types.utils import PromptTokensDetails, SpecialEnums, Usage
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    PromptTokensDetailsWrapper,
+    SpecialEnums,
+    Usage,
+)
 
 
 class ResponsesAPIRequestUtils:
@@ -147,9 +153,11 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            non_default_params["metadata"] = add_openai_metadata(
-                non_default_params["metadata"]
-            )
+            converted_metadata = add_openai_metadata(non_default_params["metadata"])
+            if converted_metadata is not None:
+                non_default_params["metadata"] = converted_metadata
+            else:
+                non_default_params.pop("metadata", None)
 
         return cast(ResponsesAPIOptionalRequestParams, non_default_params)
 
@@ -190,11 +198,14 @@ class ResponsesAPIRequestUtils:
         model_id = model_info.get("id")
 
         # access the response id based on the object type
-        response_id = (
-            responses_api_response["id"]
-            if isinstance(responses_api_response, dict)
-            else responses_api_response.id
-        )
+        if isinstance(responses_api_response, dict):
+            response_id = responses_api_response.get("id")
+        else:
+            response_id = getattr(responses_api_response, "id", None)
+        
+        # If no response_id, return the response as-is (likely an error response)
+        if response_id is None:
+            return responses_api_response
 
         updated_id = ResponsesAPIRequestUtils._build_responses_api_response_id(
             model_id=model_id,
@@ -348,6 +359,66 @@ class ResponsesAPIRequestUtils:
                 return text
         return text
 
+    @staticmethod
+    def extract_mcp_headers_from_request(
+        secret_fields: Optional[Dict[str, Any]],
+        tools: Optional[Iterable[Any]],
+    ) -> tuple[
+        Optional[str],
+        Optional[Dict[str, Dict[str, str]]],
+        Optional[Dict[str, str]],
+        Optional[Dict[str, str]],
+    ]:
+        """
+        Extract MCP auth headers from the request to pass to MCP server.
+        Headers from tools.headers in request body should be passed to MCP server.
+        """
+        from starlette.datastructures import Headers
+
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        # Extract headers from secret_fields which contains the original request headers
+        raw_headers_from_request: Optional[Dict[str, str]] = None
+        if secret_fields and isinstance(secret_fields, dict):
+            raw_headers_from_request = secret_fields.get("raw_headers")
+        
+        # Extract MCP-specific headers using MCPRequestHandler methods
+        mcp_auth_header: Optional[str] = None
+        mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+        oauth2_headers: Optional[Dict[str, str]] = None
+        
+        if raw_headers_from_request:
+            headers_obj = Headers(raw_headers_from_request)
+            mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(headers_obj)
+            mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(headers_obj)
+
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    tool_headers = tool.get("headers", {})
+                    if tool_headers and isinstance(tool_headers, dict):
+                        # Merge tool headers into mcp_server_auth_headers
+                        # Extract server-specific headers from tool.headers
+                        headers_obj_from_tool = Headers(tool_headers)
+                        tool_mcp_server_auth_headers = MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj_from_tool)
+                        if tool_mcp_server_auth_headers:
+                            if mcp_server_auth_headers is None:
+                                mcp_server_auth_headers = {}
+                            # Merge the headers from tool into existing headers
+                            for server_alias, headers_dict in tool_mcp_server_auth_headers.items():
+                                if server_alias not in mcp_server_auth_headers:
+                                    mcp_server_auth_headers[server_alias] = {}
+                                mcp_server_auth_headers[server_alias].update(headers_dict)
+                        # Also merge raw headers (non-prefixed headers from tool.headers)
+                        if raw_headers_from_request is None:
+                            raw_headers_from_request = {}
+                        raw_headers_from_request.update(tool_headers)
+        
+        return mcp_auth_header, mcp_server_auth_headers, oauth2_headers, raw_headers_from_request
+
 
 class ResponseAPILoggingUtils:
     @staticmethod
@@ -363,31 +434,55 @@ class ResponseAPILoggingUtils:
     def _transform_response_api_usage_to_chat_usage(
         usage_input: Optional[Union[dict, ResponseAPIUsage]],
     ) -> Usage:
-        """Tranforms the ResponseAPIUsage object to a Usage object"""
+        """
+        Transforms ResponseAPIUsage or ImageUsage to a Usage object.
+
+        Both have the same spec with input_tokens, output_tokens, and
+        input_tokens_details (text_tokens, image_tokens).
+        """
         if usage_input is None:
             return Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
             )
-        response_api_usage: ResponseAPIUsage = (
-            ResponseAPIUsage(**usage_input)
-            if isinstance(usage_input, dict)
-            else usage_input
-        )
+        response_api_usage: ResponseAPIUsage
+        if isinstance(usage_input, dict):
+            total_tokens = usage_input.get("total_tokens")
+            if total_tokens is None:
+                input_tokens = usage_input.get("input_tokens")
+                output_tokens = usage_input.get("output_tokens")
+                if input_tokens is not None and output_tokens is not None:
+                    total_tokens = input_tokens + output_tokens
+                    usage_input["total_tokens"] = total_tokens
+            response_api_usage = ResponseAPIUsage(**usage_input)
+        else:
+            response_api_usage = usage_input
         prompt_tokens: int = response_api_usage.input_tokens or 0
         completion_tokens: int = response_api_usage.output_tokens or 0
-        prompt_tokens_details: Optional[PromptTokensDetails] = None
+        prompt_tokens_details: Optional[PromptTokensDetailsWrapper] = None
         if response_api_usage.input_tokens_details:
-            prompt_tokens_details = PromptTokensDetails(
-                cached_tokens=response_api_usage.input_tokens_details.cached_tokens,
-                audio_tokens=response_api_usage.input_tokens_details.audio_tokens,
+            prompt_tokens_details = PromptTokensDetailsWrapper(
+                cached_tokens=getattr(response_api_usage.input_tokens_details, "cached_tokens", None),
+                audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
+                text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
+                image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
             )
+        completion_tokens_details: Optional[CompletionTokensDetailsWrapper] = None
+        output_tokens_details = getattr(response_api_usage, "output_tokens_details", None)
+        if output_tokens_details:
+            completion_tokens_details = CompletionTokensDetailsWrapper(
+                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None),
+                image_tokens=getattr(output_tokens_details, "image_tokens", None),
+                text_tokens=getattr(output_tokens_details, "text_tokens", None),
+            )
+            
         chat_usage = Usage(
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=prompt_tokens + completion_tokens,
             prompt_tokens_details=prompt_tokens_details,
+            completion_tokens_details=completion_tokens_details,
         )
 
         # Preserve cost attribute if it exists on ResponseAPIUsage

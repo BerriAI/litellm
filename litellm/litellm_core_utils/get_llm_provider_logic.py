@@ -1,9 +1,8 @@
 from typing import Optional, Tuple
 
-import httpx
-
 import litellm
 from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
 from ..types.router import LiteLLM_Params
@@ -20,6 +19,18 @@ def _is_non_openai_azure_model(model: str) -> bool:
     except Exception:
         return False
     return False
+
+
+def _is_azure_claude_model(model: str) -> bool:
+    """
+    Check if a model name contains 'claude' (case-insensitive).
+    Used to detect Claude models that need Anthropic-specific handling.
+    """
+    try:
+        model_lower = model.lower()
+        return "claude" in model_lower or model_lower.startswith("claude")
+    except Exception:
+        return False
 
 
 def handle_cohere_chat_model_custom_llm_provider(
@@ -143,6 +154,17 @@ def get_llm_provider(  # noqa: PLR0915
 
         if api_key and api_key.startswith("os.environ/"):
             dynamic_api_key = get_secret_str(api_key)
+
+        # Check JSON-configured providers FIRST (before enum-based provider_list)
+        provider_prefix = model.split("/", 1)[0]
+        if len(model.split("/")) > 1 and JSONProviderRegistry.exists(provider_prefix):
+            return _get_openai_compatible_provider_info(
+                model=model,
+                api_base=api_base,
+                api_key=api_key,
+                dynamic_api_key=dynamic_api_key,
+            )
+
         # check if llm provider part of model name
 
         if (
@@ -205,10 +227,10 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "https://api.ai21.com/studio/v1":
                         custom_llm_provider = "ai21_chat"
                         dynamic_api_key = get_secret_str("AI21_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1":
+                    elif endpoint == "codestral.mistral.ai/v1/chat/completions":
                         custom_llm_provider = "codestral"
                         dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
-                    elif endpoint == "https://codestral.mistral.ai/v1":
+                    elif endpoint == "codestral.mistral.ai/v1/fim/completions":
                         custom_llm_provider = "text-completion-codestral"
                         dynamic_api_key = get_secret_str("CODESTRAL_API_KEY")
                     elif endpoint == "app.empower.dev/api/v1":
@@ -217,6 +239,9 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
+                    elif endpoint == "ollama.com":
+                        custom_llm_provider = "ollama"
+                        dynamic_api_key = get_secret_str("OLLAMA_API_KEY")
                     elif endpoint == "https://api.friendli.ai/serverless/v1":
                         custom_llm_provider = "friendliai"
                         dynamic_api_key = get_secret_str(
@@ -240,6 +265,30 @@ def get_llm_provider(  # noqa: PLR0915
                     elif endpoint == "api.moonshot.ai/v1":
                         custom_llm_provider = "moonshot"
                         dynamic_api_key = get_secret_str("MOONSHOT_API_KEY")
+                    elif endpoint == "api.minimax.io/anthropic" or endpoint == "api.minimaxi.com/anthropic":
+                        custom_llm_provider = "minimax"
+                        dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
+                    elif endpoint == "api.minimax.io/v1" or endpoint == "api.minimaxi.com/v1":
+                        custom_llm_provider = "minimax"
+                        dynamic_api_key = get_secret_str("MINIMAX_API_KEY")
+                    elif endpoint == "platform.publicai.co/v1":
+                        custom_llm_provider = "publicai"
+                        dynamic_api_key = get_secret_str("PUBLICAI_API_KEY")
+                    elif endpoint == "https://api.synthetic.new/openai/v1":
+                        custom_llm_provider = "synthetic"
+                        dynamic_api_key = get_secret_str("SYNTHETIC_API_KEY")
+                    elif endpoint == "https://api.stima.tech/v1":
+                        custom_llm_provider = "apertis"
+                        dynamic_api_key = get_secret_str("STIMA_API_KEY")
+                    elif endpoint == "https://nano-gpt.com/api/v1":
+                        custom_llm_provider = "nano-gpt"
+                        dynamic_api_key = get_secret_str("NANOGPT_API_KEY")
+                    elif endpoint == "https://api.poe.com/v1":
+                        custom_llm_provider = "poe"
+                        dynamic_api_key = get_secret_str("POE_API_KEY")
+                    elif endpoint == "https://llm.chutes.ai/v1/":
+                        custom_llm_provider = "chutes"
+                        dynamic_api_key = get_secret_str("CHUTES_API_KEY")
                     elif endpoint == "https://api.v0.dev/v1":
                         custom_llm_provider = "v0"
                         dynamic_api_key = get_secret_str("V0_API_KEY")
@@ -386,6 +435,10 @@ def get_llm_provider(  # noqa: PLR0915
             custom_llm_provider = "lemonade"
         elif model.startswith("clarifai/"):
             custom_llm_provider = "clarifai"
+        elif model.startswith("amazon_nova"):
+            custom_llm_provider = "amazon_nova"
+        elif model.startswith("sap/"):
+            custom_llm_provider = "sap"
         if not custom_llm_provider:
             if litellm.suppress_debug_info is False:
                 print()  # noqa
@@ -398,11 +451,7 @@ def get_llm_provider(  # noqa: PLR0915
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=error_str,
                 model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
+                response=None,
                 llm_provider="",
             )
         if api_base is not None and not isinstance(api_base, str):
@@ -426,11 +475,7 @@ def get_llm_provider(  # noqa: PLR0915
             raise litellm.exceptions.BadRequestError(  # type: ignore
                 message=f"GetLLMProvider Exception - {str(e)}\n\noriginal model: {model}",
                 model=model,
-                response=httpx.Response(
-                    status_code=400,
-                    content=error_str,
-                    request=httpx.Request(method="completion", url="https://github.com/BerriAI/litellm"),  # type: ignore
-                ),
+                response=None,
                 llm_provider="",
             )
 
@@ -452,6 +497,20 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
 
     custom_llm_provider = model.split("/", 1)[0]
     model = model.split("/", 1)[1]
+
+    # Check JSON providers FIRST (before hardcoded ones)
+    from litellm.llms.openai_like.dynamic_config import create_config_class
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    if JSONProviderRegistry.exists(custom_llm_provider):
+        provider_config = JSONProviderRegistry.get(custom_llm_provider)
+        if provider_config is None:
+            raise ValueError(f"Provider {custom_llm_provider} not found")
+        config_class = create_config_class(provider_config)
+        api_base, dynamic_api_key = config_class()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+        return model, custom_llm_provider, dynamic_api_key, api_base
 
     if custom_llm_provider == "perplexity":
         # perplexity is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.perplexity.ai
@@ -529,6 +588,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             or "https://api.studio.nebius.ai/v1"
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NEBIUS_API_KEY")
+    elif custom_llm_provider == "ollama":
+        api_base = (
+            api_base
+            or get_secret("OLLAMA_API_BASE")
+            or "http://localhost:11434"
+        )  # type: ignore
+        dynamic_api_key = api_key or get_secret_str("OLLAMA_API_KEY")
     elif (custom_llm_provider == "ai21_chat") or (
         custom_llm_provider == "ai21" and model in litellm.ai21_chat_models
     ):
@@ -647,6 +713,13 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.XAIChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "zai":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.ZAIChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "together_ai":
         api_base = (
             api_base
@@ -685,6 +758,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.GithubCopilotConfig()._get_openai_compatible_provider_info(
             model, api_base, api_key, custom_llm_provider
         )
+    elif custom_llm_provider == "chatgpt":
+        (
+            api_base,
+            dynamic_api_key,
+            custom_llm_provider,
+        ) = litellm.ChatGPTConfig()._get_openai_compatible_provider_info(
+            model, api_base, api_key, custom_llm_provider
+        )
     elif custom_llm_provider == "novita":
         api_base = (
             api_base
@@ -693,12 +774,12 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         )  # type: ignore
         dynamic_api_key = api_key or get_secret_str("NOVITA_API_KEY")
     elif custom_llm_provider == "snowflake":
-        api_base = (
-            api_base
-            or get_secret_str("SNOWFLAKE_API_BASE")
-            or f"https://{get_secret('SNOWFLAKE_ACCOUNT_ID')}.snowflakecomputing.com/api/v2/cortex/inference:complete"
-        )  # type: ignore
-        dynamic_api_key = api_key or get_secret_str("SNOWFLAKE_JWT")
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.SnowflakeConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
     elif custom_llm_provider == "gradient_ai":
         (
             api_base,
@@ -739,6 +820,14 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
             api_base,
             dynamic_api_key,
         ) = litellm.MoonshotChatConfig()._get_openai_compatible_provider_info(
+            api_base, api_key
+        )
+    # publicai is now handled by JSON config (see litellm/llms/openai_like/providers.json)
+    elif custom_llm_provider == "docker_model_runner":
+        (
+            api_base,
+            dynamic_api_key,
+        ) = litellm.DockerModelRunnerChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
     elif custom_llm_provider == "v0":
@@ -804,6 +893,32 @@ def _get_openai_compatible_provider_info(  # noqa: PLR0915
         ) = litellm.ClarifaiConfig()._get_openai_compatible_provider_info(
             api_base, api_key
         )
+    elif custom_llm_provider == "ragflow":
+        full_model = f"ragflow/{model}"
+        (
+            api_base,
+            dynamic_api_key,
+            _,
+        ) = litellm.RAGFlowConfig()._get_openai_compatible_provider_info(
+            full_model, api_base, api_key, "ragflow"
+        )
+        model = full_model
+    elif custom_llm_provider == "langgraph":
+        # LangGraph is a custom provider, just need to set api_base
+        api_base = (
+            api_base
+            or get_secret_str("LANGGRAPH_API_BASE")
+            or "http://localhost:2024"
+        )
+        dynamic_api_key = api_key or get_secret_str("LANGGRAPH_API_KEY")
+    elif custom_llm_provider == "manus":
+        # Manus is OpenAI compatible for responses API
+        api_base = (
+            api_base
+            or get_secret_str("MANUS_API_BASE")
+            or "https://api.manus.im"
+        )
+        dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception("api base needs to be a string. api_base={}".format(api_base))

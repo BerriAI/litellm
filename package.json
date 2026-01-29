@@ -9,5 +9,8 @@
     "@testing-library/react": "^14.3.1",
     "@types/react-copy-to-clipboard": "^5.0.7",
     "jest": "^29.7.0"
+  },
+  "overrides": {
+    "glob": ">=11.1.0"
   }
 }

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Modal, Form, Input, Button as Button2, Select } from "antd";
+import { Modal, Form, Input, Button as Button2, Select, Checkbox } from "antd";
 import { Text, TextInput } from "@tremor/react";
 import { getSSOSettings, updateSSOSettings } from "./networking";
 import NotificationsManager from "./molecules/notifications_manager";
@@ -43,8 +43,8 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       google_client_secret: "GOOGLE_CLIENT_SECRET",
     },
     fields: [
-      { label: "GOOGLE CLIENT ID", name: "google_client_id" },
-      { label: "GOOGLE CLIENT SECRET", name: "google_client_secret" },
+      { label: "Google Client ID", name: "google_client_id" },
+      { label: "Google Client Secret", name: "google_client_secret" },
     ],
   },
   microsoft: {
@@ -54,9 +54,9 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       microsoft_tenant: "MICROSOFT_TENANT",
     },
     fields: [
-      { label: "MICROSOFT CLIENT ID", name: "microsoft_client_id" },
-      { label: "MICROSOFT CLIENT SECRET", name: "microsoft_client_secret" },
-      { label: "MICROSOFT TENANT", name: "microsoft_tenant" },
+      { label: "Microsoft Client ID", name: "microsoft_client_id" },
+      { label: "Microsoft Client Secret", name: "microsoft_client_secret" },
+      { label: "Microsoft Tenant", name: "microsoft_tenant" },
     ],
   },
   okta: {
@@ -68,18 +68,18 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
     },
     fields: [
-      { label: "GENERIC CLIENT ID", name: "generic_client_id" },
-      { label: "GENERIC CLIENT SECRET", name: "generic_client_secret" },
+      { label: "Generic Client ID", name: "generic_client_id" },
+      { label: "Generic Client Secret", name: "generic_client_secret" },
       {
-        label: "AUTHORIZATION ENDPOINT",
+        label: "Authorization Endpoint",
         name: "generic_authorization_endpoint",
-        placeholder: "https://your-okta-domain/authorize",
+        placeholder: "https://your-domain/authorize",
       },
-      { label: "TOKEN ENDPOINT", name: "generic_token_endpoint", placeholder: "https://your-okta-domain/token" },
+      { label: "Token Endpoint", name: "generic_token_endpoint", placeholder: "https://your-domain/token" },
       {
-        label: "USERINFO ENDPOINT",
+        label: "Userinfo Endpoint",
         name: "generic_userinfo_endpoint",
-        placeholder: "https://your-okta-domain/userinfo",
+        placeholder: "https://your-domain/userinfo",
       },
     ],
   },
@@ -92,11 +92,11 @@ const ssoProviderConfigs: Record<string, SSOProviderConfig> = {
       generic_userinfo_endpoint: "GENERIC_USERINFO_ENDPOINT",
     },
     fields: [
-      { label: "GENERIC CLIENT ID", name: "generic_client_id" },
-      { label: "GENERIC CLIENT SECRET", name: "generic_client_secret" },
-      { label: "AUTHORIZATION ENDPOINT", name: "generic_authorization_endpoint" },
-      { label: "TOKEN ENDPOINT", name: "generic_token_endpoint" },
-      { label: "USERINFO ENDPOINT", name: "generic_userinfo_endpoint" },
+      { label: "Generic Client ID", name: "generic_client_id" },
+      { label: "Generic Client Secret", name: "generic_client_secret" },
+      { label: "Authorization Endpoint", name: "generic_authorization_endpoint" },
+      { label: "Token Endpoint", name: "generic_token_endpoint" },
+      { label: "Userinfo Endpoint", name: "generic_userinfo_endpoint" },
     ],
   },
 };
@@ -144,12 +144,35 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               }
             }
 
+            // Extract role mappings if they exist
+            let roleMappingFields = {};
+            if (ssoData.values.role_mappings) {
+              const roleMappings = ssoData.values.role_mappings;
+
+              // Helper function to join arrays into comma-separated strings
+              const joinTeams = (teams: string[] | undefined): string => {
+                if (!teams || teams.length === 0) return "";
+                return teams.join(", ");
+              };
+
+              roleMappingFields = {
+                use_role_mappings: true,
+                group_claim: roleMappings.group_claim,
+                default_role: roleMappings.default_role || "internal_user",
+                proxy_admin_teams: joinTeams(roleMappings.roles?.proxy_admin),
+                admin_viewer_teams: joinTeams(roleMappings.roles?.proxy_admin_viewer),
+                internal_user_teams: joinTeams(roleMappings.roles?.internal_user),
+                internal_viewer_teams: joinTeams(roleMappings.roles?.internal_user_viewer),
+              };
+            }
+
             // Set form values with existing data (excluding UI access control fields)
             const formValues = {
               sso_provider: selectedProvider,
               proxy_base_url: ssoData.values.proxy_base_url,
               user_email: ssoData.values.user_email,
               ...ssoData.values,
+              ...roleMappingFields,
             };
 
             console.log("Setting form values:", formValues); // Debug log
@@ -178,8 +201,55 @@ const SSOModals: React.FC<SSOModalsProps> = ({
     }
 
     try {
+      const {
+        proxy_admin_teams,
+        admin_viewer_teams,
+        internal_user_teams,
+        internal_viewer_teams,
+        default_role,
+        group_claim,
+        use_role_mappings,
+        ...rest
+      } = formValues;
+
+      const payload: any = {
+        ...rest,
+      };
+
+      // Add role mappings if use_role_mappings is checked
+      if (use_role_mappings) {
+        // Helper function to split comma-separated string into array
+        const splitTeams = (teams: string | undefined): string[] => {
+          if (!teams || teams.trim() === "") return [];
+          return teams
+            .split(",")
+            .map((team) => team.trim())
+            .filter((team) => team.length > 0);
+        };
+
+        // Map default role display values to backend values
+        const defaultRoleMapping: Record<string, string> = {
+          internal_user_viewer: "internal_user_viewer",
+          internal_user: "internal_user",
+          proxy_admin_viewer: "proxy_admin_viewer",
+          proxy_admin: "proxy_admin",
+        };
+
+        payload.role_mappings = {
+          provider: "generic",
+          group_claim,
+          default_role: defaultRoleMapping[default_role] || "internal_user",
+          roles: {
+            proxy_admin: splitTeams(proxy_admin_teams),
+            proxy_admin_viewer: splitTeams(admin_viewer_teams),
+            internal_user: splitTeams(internal_user_teams),
+            internal_user_viewer: splitTeams(internal_viewer_teams),
+          },
+        };
+      }
+
       // Save SSO settings using the new API
-      await updateSSOSettings(accessToken, formValues);
+      await updateSSOSettings(accessToken, payload);
 
       // Continue with the original flow (show instructions)
       handleShowInstructions(formValues);
@@ -211,6 +281,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
         proxy_base_url: null,
         user_email: null,
         sso_provider: null,
+        role_mappings: null,
       };
 
       await updateSSOSettings(accessToken, clearSettings);
@@ -282,7 +353,12 @@ const SSOModals: React.FC<SSOModalsProps> = ({
                           style={{ height: 24, width: 24, marginRight: 12, objectFit: "contain" }}
                         />
                       )}
-                      <span>{value.charAt(0).toUpperCase() + value.slice(1)} SSO</span>
+                      <span>
+                        {value.toLowerCase() === "okta"
+                          ? "Okta / Auth0"
+                          : value.charAt(0).toUpperCase() + value.slice(1)}{" "}
+                        SSO
+                      </span>
                     </div>
                   </Select.Option>
                 ))}
@@ -307,7 +383,7 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               <TextInput />
             </Form.Item>
             <Form.Item
-              label="PROXY BASE URL"
+              label="Proxy Base URL"
               name="proxy_base_url"
               normalize={(value) => value?.trim()}
               rules={[
@@ -328,6 +404,79 @@ const SSOModals: React.FC<SSOModalsProps> = ({
               ]}
             >
               <TextInput placeholder="https://example.com" />
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) => prevValues.sso_provider !== currentValues.sso_provider}
+            >
+              {({ getFieldValue }) => {
+                const provider = getFieldValue("sso_provider");
+                return provider === "okta" || provider === "generic" ? (
+                  <Form.Item label="Use Role Mappings" name="use_role_mappings" valuePropName="checked">
+                    <Checkbox />
+                  </Form.Item>
+                ) : null;
+              }}
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) =>
+                prevValues.use_role_mappings !== currentValues.use_role_mappings
+              }
+            >
+              {({ getFieldValue }) => {
+                const useRoleMappings = getFieldValue("use_role_mappings");
+                return useRoleMappings ? (
+                  <Form.Item
+                    label="Group Claim"
+                    name="group_claim"
+                    rules={[{ required: true, message: "Please enter the group claim" }]}
+                  >
+                    <TextInput />
+                  </Form.Item>
+                ) : null;
+              }}
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, currentValues) =>
+                prevValues.use_role_mappings !== currentValues.use_role_mappings
+              }
+            >
+              {({ getFieldValue }) => {
+                const useRoleMappings = getFieldValue("use_role_mappings");
+                return useRoleMappings ? (
+                  <>
+                    <Form.Item label="Default Role" name="default_role" initialValue="Internal User">
+                      <Select>
+                        <Select.Option value="internal_user_viewer">Internal Viewer</Select.Option>
+                        <Select.Option value="internal_user">Internal User</Select.Option>
+                        <Select.Option value="proxy_admin_viewer">Admin Viewer</Select.Option>
+                        <Select.Option value="proxy_admin">Proxy Admin</Select.Option>
+                      </Select>
+                    </Form.Item>
+
+                    <Form.Item label="Proxy Admin Teams" name="proxy_admin_teams">
+                      <TextInput />
+                    </Form.Item>
+
+                    <Form.Item label="Admin Viewer Teams" name="admin_viewer_teams">
+                      <TextInput />
+                    </Form.Item>
+
+                    <Form.Item label="Internal User Teams" name="internal_user_teams">
+                      <TextInput />
+                    </Form.Item>
+
+                    <Form.Item label="Internal Viewer Teams" name="internal_viewer_teams">
+                      <TextInput />
+                    </Form.Item>
+                  </>
+                ) : null;
+              }}
             </Form.Item>
           </>
           <div

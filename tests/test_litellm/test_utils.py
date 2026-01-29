@@ -1,7 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from jsonschema import validate
@@ -21,11 +21,37 @@ from litellm.types.utils import (
 from litellm.utils import (
     ProviderConfigManager,
     TextCompletionStreamWrapper,
+    _check_provider_match,
     get_llm_provider,
     get_optional_params_image_gen,
+    is_cached_message,
 )
 
 # Adds the parent directory to the system path
+
+
+def test_check_provider_match_azure_ai_allows_openai_and_azure():
+    """
+    Test that azure_ai provider can match openai and azure models.
+    This is needed for Azure Model Router which can route to OpenAI models.
+    """
+    # azure_ai should match openai models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "openai"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should match azure models
+    assert _check_provider_match(
+        model_info={"litellm_provider": "azure"},
+        custom_llm_provider="azure_ai"
+    ) is True
+
+    # azure_ai should NOT match other providers
+    assert _check_provider_match(
+        model_info={"litellm_provider": "anthropic"},
+        custom_llm_provider="azure_ai"
+    ) is False
 
 
 def test_get_optional_params_image_gen():
@@ -416,6 +442,7 @@ def validate_model_cost_values(model_data, exceptions=None):
         "input_cost_per_request",
         "input_cost_per_audio_token",
         "output_cost_per_audio_token",
+        "output_cost_per_image_token",
         "input_cost_per_audio_per_second",
         "input_cost_per_video_per_second",
         "input_cost_per_token_above_128k_tokens",
@@ -518,6 +545,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "input_cost_per_audio_per_second": {"type": "number"},
                 "input_cost_per_audio_per_second_above_128k_tokens": {"type": "number"},
                 "input_cost_per_audio_token": {"type": "number"},
+                "input_cost_per_image_token": {"type": "number"},
                 "input_cost_per_character": {"type": "number"},
                 "input_cost_per_character_above_128k_tokens": {"type": "number"},
                 "input_cost_per_image": {"type": "number"},
@@ -571,6 +599,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                         "chat",
                         "completion",
                         "container",
+                        "image_edit",
                         "embedding",
                         "image_generation",
                         "video_generation",
@@ -746,6 +775,57 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         raise AssertionError(error_message)
 
 
+def test_max_tokens_consistency():
+    """
+    Test that max_tokens == max_output_tokens for all models.
+
+    According to the spec in model_prices_and_context_window.json:
+    - max_tokens is a LEGACY parameter
+    - It should be set to max_output_tokens if the provider specifies it
+
+    This test ensures consistency across all model definitions.
+    """
+    import json
+    from pathlib import Path
+
+    # Load the model configuration
+    config_path = Path(__file__).parent.parent.parent / "model_prices_and_context_window.json"
+    with open(config_path, 'r') as f:
+        models = json.load(f)
+
+    inconsistencies = []
+
+    for model_name, config in models.items():
+        # Skip the sample_spec
+        if model_name == "sample_spec":
+            continue
+
+        # Check if both max_tokens and max_output_tokens exist
+        if isinstance(config, dict):
+            max_tokens = config.get('max_tokens')
+            max_output_tokens = config.get('max_output_tokens')
+
+            # Only validate if both exist
+            if max_tokens is not None and max_output_tokens is not None:
+                if max_tokens != max_output_tokens:
+                    inconsistencies.append({
+                        'model': model_name,
+                        'max_tokens': max_tokens,
+                        'max_output_tokens': max_output_tokens
+                    })
+
+    if inconsistencies:
+        error_msg = f"\n\n❌ Found {len(inconsistencies)} models with max_tokens != max_output_tokens:\n\n"
+        for item in inconsistencies[:10]:  # Show first 10
+            error_msg += f"  {item['model']}: max_tokens={item['max_tokens']}, max_output_tokens={item['max_output_tokens']}\n"
+
+        if len(inconsistencies) > 10:
+            error_msg += f"\n  ... and {len(inconsistencies) - 10} more\n"
+
+        error_msg += "\nTo fix these inconsistencies, run: poetry run python fix_max_tokens_inconsistencies.py"
+        raise AssertionError(error_msg)
+
+
 def test_get_model_info_gemini():
     """
     Tests if ALL gemini models have 'tpm' and 'rpm' in the model info
@@ -845,6 +925,7 @@ def test_check_provider_match():
     model_info = {"litellm_provider": "bedrock"}
     assert litellm.utils._check_provider_match(model_info, "openai") is False
 
+
 def test_get_provider_rerank_config():
     """
     Test the get_provider_rerank_config function for various providers
@@ -853,8 +934,11 @@ def test_get_provider_rerank_config():
     from litellm.utils import LlmProviders, ProviderConfigManager
 
     # Test for hosted_vllm provider
-    config = ProviderConfigManager.get_provider_rerank_config("my_model", LlmProviders.HOSTED_VLLM, 'http://localhost', [])
+    config = ProviderConfigManager.get_provider_rerank_config(
+        "my_model", LlmProviders.HOSTED_VLLM, "http://localhost", []
+    )
     assert isinstance(config, HostedVLLMRerankConfig)
+
 
 # Models that should be skipped during testing
 OLD_PROVIDERS = ["aleph_alpha", "palm"]
@@ -864,8 +948,6 @@ SKIP_MODELS = [
     "jamba",
     "deepinfra",
     "mistral.",
-    "groq/llama-guard-3-8b",
-    "groq/gemma2-9b-it",
 ]
 
 # Bedrock models to block - organized by type
@@ -2512,3 +2594,513 @@ class TestGetValidModelsWithCLI:
             assert "headers" in call_kwargs
             headers = call_kwargs["headers"]
             assert headers.get("Authorization") == "Bearer sk-test-cli-key-123"
+
+
+class TestIsCachedMessage:
+    """Test is_cached_message function for context caching detection.
+
+    Fixes GitHub issue #17821 - TypeError when content is string instead of list.
+    """
+
+    def test_string_content_returns_false(self):
+        """String content should return False without crashing."""
+        message = {"role": "user", "content": "Hello world"}
+        assert is_cached_message(message) is False
+
+    def test_none_content_returns_false(self):
+        """None content should return False."""
+        message = {"role": "user", "content": None}
+        assert is_cached_message(message) is False
+
+    def test_missing_content_returns_false(self):
+        """Message without content key should return False."""
+        message = {"role": "user"}
+        assert is_cached_message(message) is False
+
+    def test_list_content_without_cache_control_returns_false(self):
+        """List content without cache_control should return False."""
+        message = {"role": "user", "content": [{"type": "text", "text": "Hello"}]}
+        assert is_cached_message(message) is False
+
+    def test_list_content_with_cache_control_returns_true(self):
+        """List content with cache_control ephemeral should return True."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_list_with_non_dict_items_skips_them(self):
+        """List content with non-dict items should skip them gracefully."""
+        message = {
+            "role": "user",
+            "content": ["string_item", 123, {"type": "text", "text": "Hello"}],
+        }
+        assert is_cached_message(message) is False
+
+    def test_list_with_mixed_items_finds_cached(self):
+        """Mixed content list should find cached item."""
+        message = {
+            "role": "user",
+            "content": [
+                "string_item",
+                {"type": "image", "url": "..."},
+                {
+                    "type": "text",
+                    "text": "cached",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        }
+        assert is_cached_message(message) is True
+
+    def test_wrong_cache_control_type_returns_false(self):
+        """Non-ephemeral cache_control type should return False."""
+        message = {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "permanent"},
+                }
+            ],
+        }
+        assert is_cached_message(message) is False
+
+    def test_empty_list_content_returns_false(self):
+        """Empty list content should return False."""
+        message = {"role": "user", "content": []}
+        assert is_cached_message(message) is False
+
+
+@pytest.mark.asyncio
+class TestProxyLoggingBudgetAlerts:
+    """Test budget_alerts method in ProxyLogging class."""
+
+    async def test_budget_alerts_when_alerting_is_none(self):
+        """Test that budget_alerts returns early when alerting is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = None
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        # Should return without calling any alerting instances
+        await proxy_logging.budget_alerts(type="user_budget", user_info=user_info)
+
+        # Verify no calls were made
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_not_called()
+        proxy_logging.email_logging_instance.budget_alerts.assert_not_called()
+
+    async def test_budget_alerts_with_slack_only(self):
+        """Test that budget_alerts calls slack_alerting_instance when slack is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="token_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="token_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_only(self):
+        """Test that budget_alerts calls email_logging_instance when email is in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="team_budget", user_info=user_info)
+
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="team_budget", user_info=user_info
+        )
+
+    async def test_budget_alerts_with_email_when_instance_is_none(self):
+        """Test that budget_alerts does not call email_logging_instance when it is None."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["email"]
+        proxy_logging.email_logging_instance = None
+
+        user_info = MagicMock()
+
+        # Should not raise an error
+        await proxy_logging.budget_alerts(type="organization_budget", user_info=user_info)
+
+    async def test_budget_alerts_with_both_slack_and_email(self):
+        """Test that budget_alerts calls both slack and email instances when both are in alerting."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type="proxy_budget", user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type="proxy_budget", user_info=user_info
+        )
+
+    @pytest.mark.parametrize(
+        "alert_type",
+        [
+            "token_budget",
+            "user_budget",
+            "soft_budget",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+        ],
+    )
+    async def test_budget_alerts_with_all_alert_types(self, alert_type):
+        """Test that budget_alerts works with all supported alert types."""
+        from litellm.caching.caching import DualCache
+        from litellm.proxy.utils import ProxyLogging
+
+        proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging.alerting = ["slack", "email"]
+        proxy_logging.slack_alerting_instance = AsyncMock()
+        proxy_logging.email_logging_instance = AsyncMock()
+
+        user_info = MagicMock()
+
+        await proxy_logging.budget_alerts(type=alert_type, user_info=user_info)
+
+        proxy_logging.slack_alerting_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+        proxy_logging.email_logging_instance.budget_alerts.assert_called_once_with(
+            type=alert_type, user_info=user_info
+        )
+
+
+def test_azure_ai_claude_provider_config():
+    """Test that Azure AI Claude models return AzureAnthropicConfig for proper tool transformation."""
+    from litellm import AzureAIStudioConfig, AzureAnthropicConfig
+    from litellm.utils import ProviderConfigManager
+
+    # Claude models should return AzureAnthropicConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="claude-sonnet-4-5",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Test case-insensitive matching
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="Claude-Opus-4",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAnthropicConfig)
+
+    # Non-Claude models should return AzureAIStudioConfig
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="mistral-large",
+        provider=LlmProviders.AZURE_AI,
+    )
+    assert isinstance(config, AzureAIStudioConfig)
+
+
+# Tests for thinking blocks helper functions
+# Related to issue: https://github.com/BerriAI/litellm/issues/18926
+
+
+def test_any_assistant_message_has_thinking_blocks_with_thinking():
+    """Test that function returns True when any assistant message has thinking_blocks."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [{"type": "thinking", "thinking": "Let me think..."}],
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+        {"role": "tool", "tool_call_id": "123", "content": "result"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "456", "function": {"name": "test2"}}],
+            # No thinking_blocks here - Claude sometimes doesn't include them
+        },
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is True
+
+
+def test_any_assistant_message_has_thinking_blocks_without_thinking():
+    """Test that function returns False when no assistant message has thinking_blocks."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+        {"role": "tool", "tool_call_id": "123", "content": "result"},
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is False
+
+
+def test_any_assistant_message_has_thinking_blocks_empty_list():
+    """Test that function returns False when thinking_blocks is an empty list."""
+    from litellm.utils import any_assistant_message_has_thinking_blocks
+
+    messages = [
+        {"role": "user", "content": "Hello"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [],  # Empty list
+            "tool_calls": [{"id": "123", "function": {"name": "test"}}],
+        },
+    ]
+
+    assert any_assistant_message_has_thinking_blocks(messages) is False
+
+
+def test_last_assistant_with_tool_calls_has_no_thinking_blocks_issue_18926():
+    """
+    Test the scenario from issue #18926 where:
+    - First assistant message HAS thinking_blocks
+    - Second assistant message has NO thinking_blocks
+
+    The old logic would drop thinking because the LAST tool_call message
+    has no thinking_blocks, but this breaks because the first message
+    still has thinking blocks in the conversation.
+    """
+    from litellm.utils import (
+        any_assistant_message_has_thinking_blocks,
+        last_assistant_with_tool_calls_has_no_thinking_blocks,
+    )
+
+    messages = [
+        {"role": "user", "content": "Build a feature"},
+        {
+            "role": "assistant",
+            "thinking_blocks": [
+                {"type": "thinking", "thinking": "Let me analyze the requirements..."}
+            ],
+            "tool_calls": [
+                {"id": "toolu_1", "function": {"name": "file_editor", "arguments": "{}"}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_1",
+            "content": "File contents here...",
+        },
+        {
+            "role": "assistant",
+            # NO thinking_blocks - Claude sometimes doesn't include them
+            "content": [{"type": "text", "text": "Let me explore more..."}],
+            "tool_calls": [
+                {"id": "toolu_2", "function": {"name": "file_editor", "arguments": "{}"}}
+            ],
+        },
+    ]
+
+    # Last assistant with tool_calls has no thinking_blocks
+    assert last_assistant_with_tool_calls_has_no_thinking_blocks(messages) is True
+
+    # But ANY assistant message has thinking_blocks
+    assert any_assistant_message_has_thinking_blocks(messages) is True
+
+    # So we should NOT drop thinking - the combination tells us thinking is in use
+    # The fix uses both checks: only drop if last has none AND no message has any
+    should_drop_thinking = (
+        last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
+        and not any_assistant_message_has_thinking_blocks(messages)
+    )
+    assert should_drop_thinking is False
+
+
+class TestAdditionalDropParamsForNonOpenAIProviders:
+    """
+    Test additional_drop_params functionality for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    The bug was that additional_drop_params only filtered params for OpenAI/Azure
+    providers, but not for other providers like Bedrock. This caused OpenAI-specific
+    params like prompt_cache_key to be passed to Bedrock, resulting in errors.
+    """
+
+    def test_additional_drop_params_filters_for_bedrock(self):
+        """
+        Test that additional_drop_params correctly filters params for Bedrock provider.
+
+        Before the fix, prompt_cache_key would be passed through to Bedrock even when
+        specified in additional_drop_params, causing:
+        'BedrockException - {"message":"The model returned the following errors:
+        prompt_cache_key: Extra inputs are not permitted"}'
+        """
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key_123",
+            "temperature": 0.7,
+            "model": "bedrock/anthropic.claude-v2",
+        }
+        openai_params = ["temperature", "max_tokens", "top_p", "model"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key"],
+        )
+
+        # prompt_cache_key should be filtered out
+        assert "prompt_cache_key" not in result
+        # temperature should still be there (it's in openai_params, not filtered)
+        # Note: temperature is in openai_params so it won't be added by this function
+        # The function only adds params NOT in openai_params
+
+    def test_additional_drop_params_filters_multiple_params_for_non_openai(self):
+        """Test filtering multiple params for non-OpenAI providers."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "some_openai_only_param": "value1",
+            "another_openai_param": "value2",
+            "keep_this_param": "keep_me",
+        }
+        openai_params = ["temperature", "max_tokens"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="anthropic",
+            openai_params=openai_params,
+            additional_drop_params=["prompt_cache_key", "some_openai_only_param"],
+        )
+
+        # Filtered params should not be present
+        assert "prompt_cache_key" not in result
+        assert "some_openai_only_param" not in result
+        # Non-filtered params should be present
+        assert result.get("another_openai_param") == "value2"
+        assert result.get("keep_this_param") == "keep_me"
+
+    def test_additional_drop_params_none_keeps_all_params(self):
+        """Test that when additional_drop_params is None, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=None,
+        )
+
+        # All params should be present when additional_drop_params is None
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+    def test_additional_drop_params_empty_list_keeps_all_params(self):
+        """Test that when additional_drop_params is empty list, all params are kept."""
+        from litellm.utils import add_provider_specific_params_to_optional_params
+
+        optional_params = {}
+        passed_params = {
+            "prompt_cache_key": "test_key",
+            "custom_param": "value",
+        }
+        openai_params = ["temperature"]
+
+        result = add_provider_specific_params_to_optional_params(
+            optional_params=optional_params,
+            passed_params=passed_params,
+            custom_llm_provider="bedrock",
+            openai_params=openai_params,
+            additional_drop_params=[],
+        )
+
+        # All params should be present when additional_drop_params is empty
+        assert result.get("prompt_cache_key") == "test_key"
+        assert result.get("custom_param") == "value"
+
+
+class TestDropParamsWithPromptCacheKey:
+    """
+    Test that drop_params: true correctly drops prompt_cache_key for non-OpenAI providers.
+
+    Fixes https://github.com/BerriAI/litellm/issues/19225
+
+    prompt_cache_key is an OpenAI-specific parameter that should be automatically
+    dropped when using providers like Bedrock that don't support it.
+    """
+
+    def test_prompt_cache_key_in_default_params(self):
+        """Verify prompt_cache_key is now in DEFAULT_CHAT_COMPLETION_PARAM_VALUES."""
+        from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+        assert "prompt_cache_key" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+        assert "prompt_cache_retention" in DEFAULT_CHAT_COMPLETION_PARAM_VALUES
+
+    def test_drop_params_removes_prompt_cache_key_for_bedrock(self):
+        """
+        Test that get_optional_params with drop_params=True removes prompt_cache_key
+        for Bedrock provider since it's not in Bedrock's supported params.
+        """
+        from litellm.utils import get_optional_params
+
+        # Call get_optional_params for Bedrock with prompt_cache_key
+        # drop_params=True should remove it since Bedrock doesn't support it
+        result = get_optional_params(
+            model="anthropic.claude-3-sonnet-20240229-v1:0",
+            custom_llm_provider="bedrock",
+            prompt_cache_key="test_cache_key",
+            temperature=0.7,
+            drop_params=True,
+        )
+
+        # prompt_cache_key should be dropped for Bedrock
+        assert "prompt_cache_key" not in result
+        # temperature should remain (it's supported by Bedrock)
+        assert result.get("temperature") == 0.7

@@ -40,8 +40,8 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         params = optional_params or {}
         
         # Get credentials to extract project ID if needed
-        vertex_credentials = self.get_vertex_ai_credentials(params.copy())
-        vertex_project = self.get_vertex_ai_project(params.copy())
+        vertex_credentials = self.safe_get_vertex_ai_credentials(params.copy())
+        vertex_project = self.safe_get_vertex_ai_project(params.copy())
         
         # Use _ensure_access_token to extract project_id from credentials
         # This is the same method used in vertex embeddings
@@ -76,9 +76,9 @@ class VertexAIRerankConfig(BaseRerankConfig, VertexBase):
         Validate and set up authentication for Vertex AI Discovery Engine API
         """
         # Get credentials and project info from optional_params (which contains vertex_credentials, etc.)
-        litellm_params = optional_params or {}
-        vertex_credentials = self.get_vertex_ai_credentials(litellm_params)
-        vertex_project = self.get_vertex_ai_project(litellm_params)
+        litellm_params = optional_params.copy() if optional_params else {}
+        vertex_credentials = self.safe_get_vertex_ai_credentials(litellm_params)
+        vertex_project = self.safe_get_vertex_ai_project(litellm_params)
         
         # Get access token using the base class method
         access_token, project_id = self._ensure_access_token(

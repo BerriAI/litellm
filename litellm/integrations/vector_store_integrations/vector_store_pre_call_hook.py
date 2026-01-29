@@ -12,6 +12,7 @@ import litellm.vector_stores
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionUserMessage
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 from litellm.types.vector_stores import (
     LiteLLM_ManagedVectorStore,
@@ -23,7 +24,7 @@ from litellm.types.vector_stores import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 else:
-    LiteLLMLoggingObj = None
+    LiteLLMLoggingObj = Any
 
 
 class VectorStorePreCallHook(CustomLogger):
@@ -49,9 +50,12 @@ class VectorStorePreCallHook(CustomLogger):
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         litellm_logging_obj: LiteLLMLoggingObj,
+        prompt_spec: Optional[PromptSpec] = None,
         tools: Optional[List[Dict]] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Perform vector store search and append results as context to messages.
@@ -74,9 +78,20 @@ class VectorStorePreCallHook(CustomLogger):
             if litellm.vector_store_registry is None:
                 return model, messages, non_default_params
 
+            # Get prisma_client for database fallback
+            prisma_client = None
+            try:
+                from litellm.proxy.proxy_server import prisma_client as _prisma_client
+                prisma_client = _prisma_client
+            except ImportError:
+                pass
+
+            # Use database fallback to ensure synchronization across instances
             vector_stores_to_run: List[LiteLLM_ManagedVectorStore] = (
-                litellm.vector_store_registry.pop_vector_stores_to_run(
-                    non_default_params=non_default_params, tools=tools
+                await litellm.vector_store_registry.pop_vector_stores_to_run_with_db_fallback(
+                    non_default_params=non_default_params, 
+                    tools=tools,
+                    prisma_client=prisma_client
                 )
             )
 

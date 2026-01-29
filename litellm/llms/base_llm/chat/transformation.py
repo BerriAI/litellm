@@ -101,6 +101,7 @@ class BaseConfig(ABC):
                 ),
             )
             and v is not None
+            and not callable(v)  # Filter out any callable objects including mocks
         }
 
     def get_json_schema_from_pydantic_object(
@@ -131,10 +132,10 @@ class BaseConfig(ABC):
 
         Checks 'non_default_params' for 'thinking' and 'max_tokens'
 
-        if 'thinking' is enabled and 'max_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
+        if 'thinking' is enabled and 'max_tokens' or 'max_completion_tokens' is not specified, set 'max_tokens' to the thinking token budget + DEFAULT_MAX_TOKENS
         """
         is_thinking_enabled = self.is_thinking_enabled(optional_params)
-        if is_thinking_enabled and "max_tokens" not in non_default_params:
+        if is_thinking_enabled and ("max_tokens" not in non_default_params and "max_completion_tokens" not in non_default_params):
             thinking_token_budget = cast(dict, optional_params["thinking"]).get(
                 "budget_tokens", None
             )
