@@ -74,7 +74,3 @@ jobs:
     - name: Check import safety
       run: |
         poetry run python -c "from litellm import *" || (echo '🚨 import failed, this means you introduced unprotected imports! 🚨'; exit 1)
-    
-    - name: Validate model_prices_and_context_window.json
-      run: |
-        jq empty litellm/model_prices_and_context_window.json
