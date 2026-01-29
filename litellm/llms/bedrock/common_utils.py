@@ -802,33 +802,47 @@ def get_anthropic_beta_from_headers(headers: dict) -> List[str]:
     Used by both converse and invoke transformations for consistent handling
     of anthropic-beta headers that should be passed to AWS Bedrock.
 
+    Filters out invalid cache beta headers that Bedrock doesn't support.
+
     Args:
         headers (dict): Request headers dictionary
 
     Returns:
-        List[str]: List of anthropic beta feature strings, empty list if no header
+        List[str]: List of anthropic beta feature strings (filtered), empty list if no header
     """
+    from litellm.types.llms.anthropic import ANTHROPIC_CACHE_BETA_HEADERS
+
     anthropic_beta_header = headers.get("anthropic-beta")
     if not anthropic_beta_header:
         return []
 
-    # If it's already a list, return it
+    beta_list = []
+
+    # If it's already a list, use it
     if isinstance(anthropic_beta_header, list):
-        return anthropic_beta_header
-    
+        beta_list = anthropic_beta_header
     # Try to parse as JSON array first (e.g., '["interleaved-thinking-2025-05-14", "claude-code-20250219"]')
-    if isinstance(anthropic_beta_header, str):
+    elif isinstance(anthropic_beta_header, str):
         anthropic_beta_header = anthropic_beta_header.strip()
         if anthropic_beta_header.startswith("[") and anthropic_beta_header.endswith("]"):
             try:
                 parsed = json.loads(anthropic_beta_header)
                 if isinstance(parsed, list):
-                    return [str(beta).strip() for beta in parsed]
+                    beta_list = [str(beta).strip() for beta in parsed]
             except json.JSONDecodeError:
                 pass  # Fall through to comma-separated parsing
-        
-        # Fall back to comma-separated values
-        return [beta.strip() for beta in anthropic_beta_header.split(",")]
+
+        if not beta_list:  # If JSON parsing didn't work or wasn't attempted
+            # Fall back to comma-separated values
+            beta_list = [beta.strip() for beta in anthropic_beta_header.split(",")]
+
+    # Filter out cache beta headers that Bedrock doesn't support
+    filtered_list = [
+        beta for beta in beta_list
+        if beta not in ANTHROPIC_CACHE_BETA_HEADERS
+    ]
+
+    return filtered_list
     
     return []
 

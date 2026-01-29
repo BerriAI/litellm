@@ -247,21 +247,29 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         return False
 
     def _get_user_anthropic_beta_headers(
-        self, anthropic_beta_header: Optional[str]
+        self,
+        anthropic_beta_header: Optional[str],
+        is_vertex_request: bool = False,
+        is_bedrock_request: bool = False,
     ) -> Optional[List[str]]:
         if anthropic_beta_header is None:
             return None
 
         from litellm.types.llms.anthropic import ANTHROPIC_CACHE_BETA_HEADERS
 
-        # Split the header string and filter out invalid cache beta headers
+        # Split the header string
         beta_headers = [header.strip() for header in anthropic_beta_header.split(",")]
-        filtered_headers = [
-            header for header in beta_headers
-            if header not in ANTHROPIC_CACHE_BETA_HEADERS
-        ]
 
-        return filtered_headers if filtered_headers else None
+        # Filter out cache beta headers only for Vertex and Bedrock
+        if is_vertex_request or is_bedrock_request:
+            filtered_headers = [
+                header
+                for header in beta_headers
+                if header not in ANTHROPIC_CACHE_BETA_HEADERS
+            ]
+            return filtered_headers if filtered_headers else None
+
+        return beta_headers
 
     def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
         """
@@ -340,6 +348,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         input_examples_used: bool = False,
         effort_used: bool = False,
         is_vertex_request: bool = False,
+        is_bedrock_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
         code_execution_tool_used: bool = False,
         container_with_skills_used: bool = False,
@@ -386,12 +395,18 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
 
-        # Don't send any beta headers to Vertex, except web search which is required
+        # Don't send any beta headers to Vertex/Bedrock, except web search which is required for Vertex
         if is_vertex_request is True:
             # Vertex AI requires web search beta header for web search to work
             if web_search_tool_used:
                 from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
                 headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
+            # Don't include any other beta headers for Vertex (no else clause needed, header won't be set)
+        elif is_bedrock_request is True:
+            # Bedrock recognizes features via request body, not beta headers
+            # Send filtered user beta headers if any (cache headers already removed)
+            if len(betas) > 0:
+                headers["anthropic-beta"] = ",".join(betas)
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
@@ -431,8 +446,15 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         effort_used = self.is_effort_used(optional_params=optional_params, model=model)
         code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
         container_with_skills_used = self.is_container_with_skills_used(optional_params=optional_params)
+        is_vertex_request = optional_params.get("is_vertex_request", False)
+        is_bedrock_request = optional_params.get("is_bedrock_request", False)
+
+        # Get user beta headers and remove from input headers (will be regenerated in get_anthropic_headers)
+        user_anthropic_beta_header = headers.pop("anthropic-beta", None)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
-            anthropic_beta_header=headers.get("anthropic-beta")
+            anthropic_beta_header=user_anthropic_beta_header,
+            is_vertex_request=is_vertex_request,
+            is_bedrock_request=is_bedrock_request,
         )
         anthropic_headers = self.get_anthropic_headers(
             computer_tool_used=computer_tool_used,
@@ -441,7 +463,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             api_key=api_key,
             file_id_used=file_id_used,
             web_search_tool_used=web_search_tool_used,
-            is_vertex_request=optional_params.get("is_vertex_request", False),
+            is_vertex_request=is_vertex_request,
+            is_bedrock_request=is_bedrock_request,
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
             tool_search_used=tool_search_used,

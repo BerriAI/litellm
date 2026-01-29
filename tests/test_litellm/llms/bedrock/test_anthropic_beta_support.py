@@ -47,6 +47,28 @@ class TestAnthropicBetaHeaderSupport:
         result = get_anthropic_beta_from_headers(headers)
         assert result == ["context-1m-2025-08-07", "computer-use-2024-10-22"]
 
+    def test_get_anthropic_beta_from_headers_filters_cache_headers(self):
+        """Test that invalid cache beta headers are filtered out for Bedrock."""
+        # Test single invalid cache header is filtered
+        headers = {"anthropic-beta": "prompt-caching-scope-2026-01-05"}
+        result = get_anthropic_beta_from_headers(headers)
+        assert result == []
+
+        # Test cache header filtered from comma-separated list
+        headers = {"anthropic-beta": "prompt-caching-scope-2026-01-05,computer-use-2024-10-22"}
+        result = get_anthropic_beta_from_headers(headers)
+        assert result == ["computer-use-2024-10-22"]
+
+        # Test cache header filtered from JSON array
+        headers = {"anthropic-beta": '["prompt-caching-scope-2026-01-05", "context-1m-2025-08-07"]'}
+        result = get_anthropic_beta_from_headers(headers)
+        assert result == ["context-1m-2025-08-07"]
+
+        # Test valid headers are preserved
+        headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"}
+        result = get_anthropic_beta_from_headers(headers)
+        assert result == ["context-1m-2025-08-07", "computer-use-2024-10-22"]
+
     def test_invoke_transformation_anthropic_beta(self):
         """Test that Invoke API transformation includes anthropic_beta in request."""
         config = AmazonAnthropicClaudeConfig()
