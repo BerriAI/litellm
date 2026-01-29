@@ -180,7 +180,25 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         optional_params: dict,
         litellm_params: dict,
     ) -> tuple[str, dict]:
-        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file retrieval")
+        """
+        Get the URL to retrieve a file from Google AI Studio.
+        
+        We expect file_id to be the URI (e.g. https://generativelanguage.googleapis.com/v1beta/files/...)
+        as returned by the upload response.
+        """
+        api_key = litellm_params.get("api_key")
+        if not api_key:
+            raise ValueError("api_key is required")
+
+        if file_id.startswith("http"):
+            url = "{}?key={}".format(file_id, api_key)
+        else:
+            # Fallback for just file name (files/...)
+            api_base = self.get_api_base(litellm_params.get("api_base")) or "https://generativelanguage.googleapis.com"
+            api_base = api_base.rstrip("/")
+            url = "{}/v1beta/{}?key={}".format(api_base, file_id, api_key)
+
+        return url, {"Content-Type": "application/json"}
 
     def transform_retrieve_file_response(
         self,
@@ -188,7 +206,40 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         logging_obj: LiteLLMLoggingObj,
         litellm_params: dict,
     ) -> OpenAIFileObject:
-        raise NotImplementedError("GoogleAIStudioFilesHandler does not support file retrieval")
+        """
+        Transform Gemini's file retrieval response into OpenAI-style FileObject
+        """
+        try:
+            response_json = raw_response.json()
+            
+            # Map Gemini state to OpenAI status
+            gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
+            status = "uploaded" # Default
+            if gemini_state == "ACTIVE":
+                status = "processed"
+            elif gemini_state == "FAILED":
+                status = "error"
+            
+            return OpenAIFileObject(
+                id=response_json.get("uri", ""),
+                bytes=int(response_json.get("sizeBytes", 0)),
+                created_at=int(
+                    time.mktime(
+                        time.strptime(
+                            response_json["createTime"].replace("Z", "+00:00"),
+                            "%Y-%m-%dT%H:%M:%S.%f%z",
+                        )
+                    )
+                ),
+                filename=response_json.get("displayName", ""),
+                object="file",
+                purpose="user_data",
+                status=status,
+                status_details=str(response_json.get("error", "")) if gemini_state == "FAILED" else None,
+            )
+        except Exception as e:
+            verbose_logger.exception(f"Error parsing file retrieve response: {str(e)}")
+            raise ValueError(f"Error parsing file retrieve response: {str(e)}")
 
     def transform_delete_file_request(
         self,
