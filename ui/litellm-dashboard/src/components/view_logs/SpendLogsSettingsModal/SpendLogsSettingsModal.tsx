@@ -1,11 +1,12 @@
 "use client";
 
+import { ConfigType, GeneralSettingsFieldName, useDeleteProxyConfigField, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { StoreRequestInSpendLogsParams, useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
-import { ConfigType, useProxyConfig, useDeleteProxyConfigField, GeneralSettingsFieldName } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
+import NewBadge from "@/components/common_components/NewBadge";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { ClockCircleOutlined } from "@ant-design/icons";
-import { Button, Form, Input, Modal, Skeleton, Space, Switch } from "antd";
+import { Button, Form, Input, Modal, Skeleton, Space, Switch, Typography } from "antd";
 import React, { useEffect, useMemo } from "react";
 
 interface SpendLogsSettingsModalProps {
@@ -98,7 +99,7 @@ const SpendLogsSettingsModal: React.FC<SpendLogsSettingsModalProps> = ({ isVisib
 
   return (
     <Modal
-      title="Spend Logs Settings"
+      title={<span className="flex gap-2"><Typography.Title level={5}>Spend Logs Settings</Typography.Title><NewBadge /></span>}
       open={isVisible}
       footer={
         <Space>
