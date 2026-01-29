@@ -50,7 +50,10 @@ def setup_and_teardown():
         warnings.warn(f"GLOBAL_LOGGING_WORKER not available: {e}")
     else:
         try:
-            loop.run_until_complete(GLOBAL_LOGGING_WORKER.stop())
+            if GLOBAL_LOGGING_WORKER is not None:
+                loop.run_until_complete(GLOBAL_LOGGING_WORKER.stop())
+            else:
+                warnings.warn("GLOBAL_LOGGING_WORKER is None; skipping stop()")
         except (RuntimeError, asyncio.CancelledError):
             # RuntimeError: event loop already closed
             # CancelledError: pending tasks cancelled during shutdown
