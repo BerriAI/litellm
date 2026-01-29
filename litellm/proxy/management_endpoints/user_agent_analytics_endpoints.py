@@ -172,6 +172,10 @@ async def get_daily_active_users(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -185,6 +189,8 @@ async def get_daily_active_users(
         end_date: End date for the analytics period (YYYY-MM-DD, defaults to today)
         tag_filter: Optional filter to specific tag (legacy)
         tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
+        custom_llm_provider: Optional filter to custom LLM provider
+        team_id: Optional filter to team ID
 
     Returns:
         ActiveUsersAnalyticsResponse: DAU data by tag for each day in the date range
@@ -230,6 +236,11 @@ async def get_daily_active_users(
         if custom_llm_provider:
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
+
+        # Add team_id filter if provided
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -300,22 +311,28 @@ async def get_weekly_active_users(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
     Get Weekly Active Users (WAU) by tags for the last {MAX_WEEKS} weeks ending on UTC today + 1 day.
-    
+
     Shows week-by-week breakdown:
     - Week 1 (Jan 1): Earliest week (7 weeks ago)
     - Week 2 (Jan 8): Next week (6 weeks ago)
     - Week 3 (Jan 15): Next week (5 weeks ago)
     - ... and so on for {MAX_WEEKS} weeks total
     - Week 7: Most recent week ending on UTC today + 1 day
-    
+
     Args:
         tag_filter: Optional filter to specific tag (legacy)
         tag_filters: Optional filter to multiple specific tags (takes precedence over tag_filter)
-        
+        custom_llm_provider: Optional filter to custom LLM provider
+        team_id: Optional filter to team ID
+
     Returns:
         ActiveUsersAnalyticsResponse: WAU data by tag for each of the last {MAX_WEEKS} weeks with descriptive week labels (e.g., "Week 1 (Jan 1)")
     """
@@ -346,6 +363,11 @@ async def get_weekly_active_users(
         if custom_llm_provider:
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
+
+        # Add team_id filter if provided
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -430,6 +452,10 @@ async def get_monthly_active_users(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -459,19 +485,26 @@ async def get_monthly_active_users(
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
-        # Calculate date range for N months
-        # Start from (months * 30 - 1) days before end_date
-        start_dt = end_dt - timedelta(days=(months * 30 - 1))
+        # Calculate start_date as N months ago (first day of that month)
+        # Start from end_dt and go back (months-1) months to include current month
+        start_dt = end_dt.replace(day=1)
+        for _ in range(months - 1):
+            start_dt = (start_dt - timedelta(days=1)).replace(day=1)
         start_date = start_dt.strftime("%Y-%m-%d")
 
         # Build SQL query with optional tag filter(s) and custom_llm_provider filter
-        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
+        where_clause = "WHERE dts.date >= $1 AND dts.date < $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
 
         # Add custom_llm_provider filter if provided
         if custom_llm_provider:
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
+
+        # Add team_id filter if provided
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -485,15 +518,13 @@ async def get_monthly_active_users(
             where_clause += " AND dts.tag ILIKE $3"
             params.append(f"%{tag_filter}%")
 
-        # Use window function to group by months with proper month name labels
+        # Use DATE_TRUNC to group by actual calendar months
         sql_query = f"""
         WITH monthly_data AS (
             SELECT
                 dts.tag,
-                dts.date,
-                vt.user_id,
-                -- Calculate month number (0 = most recent month, 1 = month before, etc.)
-                FLOOR((DATE '{end_date}' - dts.date::date) / 30) as month_offset
+                DATE_TRUNC('month', dts.date::date) as month_start,
+                vt.user_id
             FROM "LiteLLM_DailyTagSpend" dts
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
             {where_clause}
@@ -501,16 +532,13 @@ async def get_monthly_active_users(
         SELECT
             tag,
             COUNT(DISTINCT user_id) as active_users,
-            -- Month label with proper month name and year (e.g., "December 2025")
-            TO_CHAR(DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval, 'Mon YYYY') as date,
-            -- Calculate month start and end dates
-            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
-            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end,
-            month_offset
+            TO_CHAR(month_start, 'Mon YYYY') as date,
+            month_start::text as period_start,
+            (month_start + INTERVAL '1 month - 1 day')::text as period_end
         FROM monthly_data
-        WHERE month_offset < {months}
-        GROUP BY tag, month_offset
-        ORDER BY month_offset DESC, active_users DESC
+        GROUP BY tag, month_start
+        ORDER BY month_start DESC, active_users DESC
+        LIMIT {MAX_TAGS * months}
         """
         
         db_response = await prisma_client.db.query_raw(sql_query, *params)
@@ -560,6 +588,10 @@ async def get_tag_summary(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -595,7 +627,11 @@ async def get_tag_summary(
         if custom_llm_provider:
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
-       
+
+        # Add team_id filter if provided
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
 
         # Handle multiple tag filters (takes precedence over single tag filter)
         if tag_filters and len(tag_filters) > 0:
@@ -619,7 +655,7 @@ async def get_tag_summary(
             SUM(dts.prompt_tokens + dts.completion_tokens) as total_tokens,
             SUM(dts.spend) as total_spend
         FROM "LiteLLM_DailyTagSpend" dts
-        LEFT JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
+        INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
         {where_clause}
         GROUP BY dts.tag
         ORDER BY total_requests DESC
@@ -850,6 +886,10 @@ async def get_user_leaderboard(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -898,12 +938,18 @@ async def get_user_leaderboard(
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
 
+        # Add team_id filter if provided
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
+
         # First, get all matching api_keys and aggregate counts in a single query
         sql_query = f"""
         SELECT
             dts.api_key,
             SUM(dts.api_requests) as request_count
         FROM "LiteLLM_DailyTagSpend" dts
+        INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
         {where_clause}
         AND dts.api_key IS NOT NULL
         GROUP BY dts.api_key
@@ -1020,6 +1066,10 @@ async def get_user_daily_active_users(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1062,6 +1112,10 @@ async def get_user_daily_active_users(
         if custom_llm_provider:
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
+
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
 
         sql_query = f"""
         SELECT
@@ -1109,6 +1163,10 @@ async def get_user_weekly_active_users(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1139,6 +1197,10 @@ async def get_user_weekly_active_users(
         if custom_llm_provider:
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
+
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
 
         sql_query = f"""
         WITH weekly_data AS (
@@ -1196,6 +1258,10 @@ async def get_user_monthly_active_users(
         default=None,
         description="Filter by custom LLM provider (e.g., 'hosted_vllm') (optional)",
     ),
+    team_id: Optional[str] = Query(
+        default=None,
+        description="Filter by team ID (optional)",
+    ),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -1213,39 +1279,47 @@ async def get_user_monthly_active_users(
 
     try:
         from datetime import timezone
+        # Calculate end_date as UTC today + 1 day (for inclusive query)
         end_dt = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         end_date = end_dt.strftime("%Y-%m-%d")
 
-        start_dt = end_dt - timedelta(days=(months * 30 - 1))
+        # Calculate start_date as N months ago (first day of that month)
+        # Start from end_dt and go back (months-1) months to include current month
+        start_dt = end_dt.replace(day=1)
+        for _ in range(months - 1):
+            start_dt = (start_dt - timedelta(days=1)).replace(day=1)
         start_date = start_dt.strftime("%Y-%m-%d")
 
-        where_clause = "WHERE dts.date >= $1 AND dts.date <= $2 AND vt.user_id IS NOT NULL"
+        where_clause = "WHERE dts.date >= $1 AND dts.date < $2 AND vt.user_id IS NOT NULL"
         params = [start_date, end_date]
 
         if custom_llm_provider:
             where_clause += f" AND dts.custom_llm_provider = ${len(params) + 1}"
             params.append(custom_llm_provider)
 
+        if team_id:
+            where_clause += f" AND vt.team_id = ${len(params) + 1}"
+            params.append(team_id)
+
+        # Use DATE_TRUNC to group by actual calendar months
         sql_query = f"""
         WITH monthly_data AS (
             SELECT
-                dts.date,
-                vt.user_id,
-                FLOOR((DATE '{end_date}' - dts.date::date) / 30) as month_offset
+                DATE_TRUNC('month', dts.date::date) as month_start,
+                vt.user_id
             FROM "LiteLLM_DailyTagSpend" dts
             INNER JOIN "LiteLLM_VerificationToken" vt ON dts.api_key = vt.token
             {where_clause}
         )
         SELECT
             COUNT(DISTINCT user_id) as active_users,
-            TO_CHAR(DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval, 'Mon YYYY') as date,
-            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval - '29 days'::interval)::text as period_start,
-            (DATE '{end_date}' - (month_offset * 30 || ' days')::interval)::text as period_end,
-            month_offset
+            TO_CHAR(month_start, 'Mon YYYY') as date,
+            month_start::text as period_start,
+            (month_start + INTERVAL '1 month - 1 day')::text as period_end
         FROM monthly_data
-        WHERE month_offset < {months}
-        GROUP BY month_offset
-        ORDER BY month_offset DESC
+        GROUP BY month_start
+        ORDER BY month_start DESC
+        LIMIT {months}
         """
 
         db_response = await prisma_client.db.query_raw(sql_query, *params)
