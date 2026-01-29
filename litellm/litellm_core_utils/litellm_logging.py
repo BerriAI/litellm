@@ -2336,18 +2336,28 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_cost = kwargs.get("batch_cost", None)
             batch_usage = kwargs.get("batch_usage", None)
             batch_models = kwargs.get("batch_models", None)
-            if all([batch_cost, batch_usage, batch_models]) is not None:
+            has_explicit_batch_data = all(
+                x is not None for x in (batch_cost, batch_usage, batch_models)
+            )
+
+            should_compute_batch_data = (
+                not is_base64_unified_file_id
+                or not has_explicit_batch_data
+                and result.status == "completed"
+            )
+            if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost
                 result._hidden_params["batch_models"] = batch_models
                 result.usage = batch_usage
 
-            elif not is_base64_unified_file_id:  # only run for non-unified file ids
+            elif should_compute_batch_data:
                 (
                     response_cost,
                     batch_usage,
                     batch_models,
                 ) = await _handle_completed_batch(
-                    batch=result, custom_llm_provider=self.custom_llm_provider
+                    batch=result,
+                    custom_llm_provider=self.custom_llm_provider,
                 )
 
                 result._hidden_params["response_cost"] = response_cost
