@@ -369,6 +369,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if (
             call_type == CallTypes.afile_content.value
             or call_type == CallTypes.afile_delete.value
+            or call_type == CallTypes.afile_retrieve.value
+            or call_type == CallTypes.afile_content.value
         ):
             await self.check_managed_file_id_access(data, user_api_key_dict)
 
@@ -972,8 +974,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
+            # Remove conflicting keys from data to avoid duplicate keyword arguments
+            filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span

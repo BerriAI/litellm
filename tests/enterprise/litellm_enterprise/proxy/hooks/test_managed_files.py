@@ -235,10 +235,10 @@ async def test_async_pre_call_hook_for_unified_finetuning_job():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("call_type", ["afile_content", "afile_delete"])
+@pytest.mark.parametrize("call_type", ["afile_content", "afile_delete", "afile_retrieve"])
 async def test_can_user_call_unified_file_id(call_type):
     """
-    Test that on file retrieve, delete we check if the user has access to the file
+    Test that on file retrieve, delete, and content we check if the user has access to the file
     """
     from litellm.proxy._types import UserAPIKeyAuth
 
