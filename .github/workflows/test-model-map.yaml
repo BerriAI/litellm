@@ -12,4 +12,4 @@ jobs:
 
       - name: Validate model_prices_and_context_window.json
         run: |
-          jq empty litellm/model_prices_and_context_window.json
+          jq empty model_prices_and_context_window.json
