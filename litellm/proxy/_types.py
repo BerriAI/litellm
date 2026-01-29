@@ -3917,6 +3917,9 @@ class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime]
     litellm_credential_name: Optional[str]
     litellm_params: Optional[Dict[str, Any]]
+    # Enterprise metadata (may be present in registry/db in some deployments)
+    team_id: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):
