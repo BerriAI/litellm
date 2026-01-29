@@ -1278,3 +1278,84 @@ def test_transform_response_preserves_annotations():
     assert result.usage.total_tokens == 30
 
     print("✓ Annotations from Responses API are correctly preserved in Chat Completions format")
+
+def test_output_tokens_details_always_set_for_openai_sdk_compatibility():
+    """
+    Test that output_tokens_details is always set with at least reasoning_tokens: 0.
+ 
+    This is a regression test for a bug where non-OpenAI models (like Anthropic/Bedrock)
+    returned output_tokens_details: null, which caused the OpenAI Ruby SDK to fail with:
+ 
+        "Failed to parse ResponseUsage.output_tokens_details from NilClass to
+        OpenAI::Models::Responses::ResponseUsage::OutputTokensDetails[{:reasoning_tokens=>Integer}]"
+ 
+    The OpenAI SDK expects output_tokens_details to always be an object like:
+        {"reasoning_tokens": 0}
+ 
+    Not null/None.
+ 
+    Related issue: Non-OpenAI models through the Responses API must still return
+    OpenAI-compatible response structures.
+    """
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+    from litellm.types.utils import Usage
+ 
+    config = LiteLLMCompletionResponsesConfig()
+ 
+    # Test case 1: Usage without completion_tokens_details (like Anthropic/Bedrock models)
+    # This is the bug scenario - no completion_tokens_details should still result in
+    # output_tokens_details being set with reasoning_tokens: 0
+    usage_without_details = Usage(
+        prompt_tokens=11,
+        completion_tokens=20,
+        total_tokens=31,
+        # Note: No completion_tokens_details - this is what non-OpenAI models return
+    )
+ 
+    response_usage = config._transform_chat_completion_usage_to_responses_usage(
+        usage_without_details
+    )
+ 
+    # The key assertion: output_tokens_details should NOT be None
+    assert response_usage.output_tokens_details is not None, (
+        "output_tokens_details should not be None - OpenAI SDK requires it to be an object. "
+        "This breaks the Ruby OpenAI SDK which expects {reasoning_tokens: Integer}"
+    )
+ 
+    # And it should have reasoning_tokens set (at least to 0)
+    assert response_usage.output_tokens_details.reasoning_tokens == 0, (
+        "output_tokens_details.reasoning_tokens should be 0 when not provided by the model"
+    )
+ 
+    # Verify the basic usage fields are correct too
+    assert response_usage.input_tokens == 11
+    assert response_usage.output_tokens == 20
+    assert response_usage.total_tokens == 31
+ 
+    print("✓ output_tokens_details is correctly set to {reasoning_tokens: 0} for non-OpenAI models")
+ 
+    # Test case 2: Usage with completion_tokens_details (OpenAI models)
+    # Should preserve the actual values from the model
+    from litellm.types.utils import CompletionTokensDetailsWrapper
+ 
+    usage_with_details = Usage(
+        prompt_tokens=15,
+        completion_tokens=25,
+        total_tokens=40,
+        completion_tokens_details=CompletionTokensDetailsWrapper(
+            reasoning_tokens=10,
+            text_tokens=15,
+        ),
+    )
+ 
+    response_usage_with_details = config._transform_chat_completion_usage_to_responses_usage(
+        usage_with_details
+    )
+ 
+    assert response_usage_with_details.output_tokens_details is not None
+    assert response_usage_with_details.output_tokens_details.reasoning_tokens == 10
+    assert response_usage_with_details.output_tokens_details.text_tokens == 15
+ 
+    print("✓ output_tokens_details correctly preserves actual values from OpenAI models")
