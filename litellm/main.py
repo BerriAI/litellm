@@ -7197,6 +7197,23 @@ def stream_chunk_builder(  # noqa: PLR0915
             _choice = cast(Choices, response.choices[0])
             _choice.message.audio = processor.get_combined_audio_content(audio_chunks)
 
+        # Handle image chunks from models like gemini-2.5-flash-image
+        # See: https://github.com/BerriAI/litellm/issues/19478
+        image_chunks = [
+            chunk
+            for chunk in chunks
+            if len(chunk["choices"]) > 0
+            and "images" in chunk["choices"][0]["delta"]
+            and chunk["choices"][0]["delta"]["images"] is not None
+        ]
+
+        if len(image_chunks) > 0:
+            # Images come complete in a single chunk, collect all images from all chunks
+            all_images = []
+            for chunk in image_chunks:
+                all_images.extend(chunk["choices"][0]["delta"]["images"])
+            response["choices"][0]["message"]["images"] = all_images
+
         # Combine provider_specific_fields from streaming chunks (e.g., web_search_results, citations)
         # See: https://github.com/BerriAI/litellm/issues/17737
         provider_specific_chunks = [
