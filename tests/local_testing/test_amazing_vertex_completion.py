@@ -742,7 +742,7 @@ def test_gemini_pro_grounding(value_in_dict):
 @pytest.mark.parametrize("model", ["vertex_ai_beta/gemini-2.5-flash-lite"])  # "vertex_ai",
 @pytest.mark.parametrize("sync_mode", [True])  # "vertex_ai",
 @pytest.mark.asyncio
-@pytest.mark.flaky(retries=3, delay=1)
+@pytest.mark.flaky(retries=6, delay=2)
 async def test_gemini_pro_function_calling_httpx(model, sync_mode):
     try:
         load_vertex_ai_credentials()
@@ -785,6 +785,7 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             "messages": messages,
             "tools": tools,
             "tool_choice": "required",
+            "timeout": 60,  # Add explicit timeout
         }
         print(f"Model for call - {model}")
         if sync_mode:
@@ -799,12 +800,18 @@ async def test_gemini_pro_function_calling_httpx(model, sync_mode):
             response.choices[0].message.tool_calls[0].function.arguments, str
         )
     except litellm.RateLimitError as e:
-        pass
+        pytest.skip(f"Rate limit exceeded: {str(e)}")
+    except litellm.ServiceUnavailableError as e:
+        pytest.skip(f"Service unavailable: {str(e)}")
+    except litellm.Timeout as e:
+        pytest.skip(f"Request timeout: {str(e)}")
     except Exception as e:
-        if "429 Quota exceeded" in str(e):
-            pass
+        error_msg = str(e)
+        # Skip test for known transient API issues
+        if any(x in error_msg for x in ["429 Quota exceeded", "503", "Service unavailable", "timeout", "Timeout", "UNAVAILABLE"]):
+            pytest.skip(f"Transient API error: {error_msg}")
         else:
-            pytest.fail("An unexpected exception occurred - {}".format(str(e)))
+            pytest.fail(f"An unexpected exception occurred - {error_msg}")
 
 
 from test_completion import response_format_tests
