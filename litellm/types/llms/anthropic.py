@@ -647,4 +647,8 @@ ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
 ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
 ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
 
-
+# Invalid cache-related beta headers that should be filtered out
+# These are cache beta headers that Anthropic no longer accepts
+ANTHROPIC_CACHE_BETA_HEADERS = {
+    "prompt-caching-scope-2026-01-05",  # Invalid cache beta header value
+}

@@ -251,7 +251,17 @@ class AnthropicModelInfo(BaseLLMModelInfo):
     ) -> Optional[List[str]]:
         if anthropic_beta_header is None:
             return None
-        return anthropic_beta_header.split(",")
+
+        from litellm.types.llms.anthropic import ANTHROPIC_CACHE_BETA_HEADERS
+
+        # Split the header string and filter out invalid cache beta headers
+        beta_headers = [header.strip() for header in anthropic_beta_header.split(",")]
+        filtered_headers = [
+            header for header in beta_headers
+            if header not in ANTHROPIC_CACHE_BETA_HEADERS
+        ]
+
+        return filtered_headers if filtered_headers else None
 
     def get_computer_tool_beta_header(self, computer_tool_version: str) -> str:
         """
