@@ -695,14 +695,30 @@ async def cancel_batch(
 
     data: Dict = {}
     try:
-        data = await _read_request_body(request=request)
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
-        )
-        
         # Check for encoded batch ID with model info
         model_from_id = decode_model_from_file_id(batch_id)
+        
+        # Create CancelBatchRequest with batch_id to enable ownership checking
+        _cancel_batch_request = CancelBatchRequest(
+            batch_id=batch_id,
+        )
+        data = cast(dict, _cancel_batch_request)
+        
         unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
+
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="acancel_batch",
+        )
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -751,17 +767,8 @@ async def cancel_batch(
                     },
                 )
 
-            model = (
-                get_model_id_from_unified_batch_id(unified_batch_id)
-                if unified_batch_id
-                else None
-            )
-
-            model_batch_id = get_batch_id_from_unified_batch_id(unified_batch_id)
-
-            data["batch_id"] = model_batch_id
-
-            response = await llm_router.acancel_batch(model=model, **data)  # type: ignore
+            # Hook has already extracted model and unwrapped batch_id into data dict
+            response = await llm_router.acancel_batch(**data)  # type: ignore
         
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:

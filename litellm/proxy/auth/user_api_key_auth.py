@@ -1239,7 +1239,9 @@ async def user_api_key_auth(
         request_data=request_data, request=request
     )
     route: str = get_request_route(request=request)
-
+    print(f"🔥route: {route}")
+    print(f"🔥request_data: {request_data}")
+    print(f"🔥api_key: {api_key}")
     ## CHECK IF ROUTE IS ALLOWED
 
     user_api_key_auth_obj = await _user_api_key_auth_builder(
@@ -1263,7 +1265,7 @@ async def user_api_key_auth(
         user_api_key_auth_obj.end_user_id = end_user_id
 
     user_api_key_auth_obj.request_route = normalize_request_route(route)
-
+    print(f"🔥user_api_key_auth_obj: {user_api_key_auth_obj}")
     return user_api_key_auth_obj
 
 
