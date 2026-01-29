@@ -505,7 +505,7 @@ async def delete_vector_store(
         ):
             raise HTTPException(
                 status_code=403,
-                detail=f"Access denied: You do not have permission to delete this vector store",
+                detail="Access denied: You do not have permission to delete this vector store",
             )
 
         # Delete from database if exists
@@ -548,8 +548,6 @@ async def get_vector_store_info(
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        vector_store_data = None
-        
         if litellm.vector_store_registry is not None:
             vector_store = litellm.vector_store_registry.get_litellm_managed_vector_store_from_registry(
                 vector_store_id=data.vector_store_id
@@ -559,7 +557,7 @@ async def get_vector_store_info(
                 if not _check_vector_store_access(vector_store, user_api_key_dict):
                     raise HTTPException(
                         status_code=403,
-                        detail=f"Access denied: You do not have permission to access this vector store",
+                        detail="Access denied: You do not have permission to access this vector store",
                     )
                 
                 vector_store_metadata = vector_store.get("vector_store_metadata")
@@ -605,7 +603,7 @@ async def get_vector_store_info(
         if not _check_vector_store_access(vector_store_typed, user_api_key_dict):
             raise HTTPException(
                 status_code=403,
-                detail=f"Access denied: You do not have permission to access this vector store",
+                detail="Access denied: You do not have permission to access this vector store",
             )
 
         return {"vector_store": vector_store_dict}

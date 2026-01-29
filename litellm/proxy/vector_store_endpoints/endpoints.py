@@ -79,7 +79,7 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
                 if not _check_vector_store_access(vector_store_to_run, user_api_key_dict):
                     raise HTTPException(
                         status_code=403,
-                        detail=f"Access denied: You do not have permission to access this vector store",
+                        detail="Access denied: You do not have permission to access this vector store",
                     )
             
             if "custom_llm_provider" in vector_store_to_run:
