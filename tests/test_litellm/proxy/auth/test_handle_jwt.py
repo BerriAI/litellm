@@ -578,6 +578,65 @@ async def test_nested_jwt_field_access():
     assert jwt_handler.get_user_roles(nested_token, []) == ["admin", "user"]
 
 
+def test_multi_field_jwt_claim_mapping():
+    from litellm.proxy._types import LiteLLM_JWTAuth
+    from litellm.proxy.auth.handle_jwt import JWTHandler
+
+    jwt_handler = JWTHandler()
+    token = {
+        "groups": ["team1", "team2"],
+        "alt_groups": ["team2", "team3"],
+        "stringified_groups": "['team3', 'team4']",
+        "resource_access": {"my-client": {"roles": ["admin", "user"]}},
+        "realm_access": {"roles": ["user", "viewer"]},
+        "extra_roles": '["admin", "auditor"]',
+    }
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_ids_jwt_field=["groups", "alt_groups", "stringified_groups"]
+    )
+    assert jwt_handler.get_team_ids_from_jwt(token) == [
+        "team1",
+        "team2",
+        "team3",
+        "team4",
+    ]
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        team_ids_jwt_field="groups, alt_groups, stringified_groups"
+    )
+    assert jwt_handler.get_team_ids_from_jwt(token) == [
+        "team1",
+        "team2",
+        "team3",
+        "team4",
+    ]
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        roles_jwt_field=[
+            "resource_access.my-client.roles",
+            "realm_access.roles",
+            "extra_roles",
+        ]
+    )
+    assert jwt_handler.get_jwt_role(token, []) == [
+        "admin",
+        "user",
+        "viewer",
+        "auditor",
+    ]
+
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
+        roles_jwt_field="resource_access.my-client.roles, realm_access.roles, extra_roles"
+    )
+    assert jwt_handler.get_jwt_role(token, []) == [
+        "admin",
+        "user",
+        "viewer",
+        "auditor",
+    ]
+
+
 @pytest.mark.asyncio
 async def test_nested_jwt_field_missing_paths():
     """
@@ -1483,6 +1542,5 @@ async def test_get_objects_resolves_org_by_name():
             parent_otel_span=None,
             proxy_logging_obj=proxy_logging_obj,
         )
-
 
 
