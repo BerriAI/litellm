@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Button, Modal, Form, Input, Select, Select as Select2 } from "antd";
+import { Button, Modal, Form, Input, Select, Select as Select2, Switch } from "antd";
 import {
   Button as Button2,
   Text,
@@ -119,7 +119,7 @@ const Createuser: React.FC<CreateuserProps> = ({
     form.resetFields();
   };
 
-  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string }) => {
+  const handleCreate = async (formValues: { user_id: string; models?: string[]; user_role: string; send_invite_email?: boolean }) => {
     try {
       NotificationsManager.info("Making API Call");
       if (!isEmbedded) {
@@ -238,6 +238,21 @@ const Createuser: React.FC<CreateuserProps> = ({
         <Form form={form} onFinish={handleCreate} labelCol={{ span: 8 }} wrapperCol={{ span: 16 }} labelAlign="left">
           <Form.Item label="User Email" name="user_email">
             <TextInput placeholder="" />
+          </Form.Item>
+          <Form.Item
+            label={
+              <span>
+                Send Invite Email{" "}
+                <Tooltip title="Send an invitation email to the user with login instructions. Requires email settings to be configured.">
+                  <InfoCircleOutlined />
+                </Tooltip>
+              </span>
+            }
+            name="send_invite_email"
+            valuePropName="checked"
+            initialValue={false}
+          >
+            <Switch />
           </Form.Item>
           <Form.Item
             label={
