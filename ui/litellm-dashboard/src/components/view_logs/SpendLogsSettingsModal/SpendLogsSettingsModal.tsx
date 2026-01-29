@@ -1,13 +1,13 @@
 "use client";
 
+import { ConfigType, GeneralSettingsFieldName, useDeleteProxyConfigField, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { StoreRequestInSpendLogsParams, useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
-import { ConfigType, useProxyConfig, useDeleteProxyConfigField, GeneralSettingsFieldName } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
+import NewBadge from "@/components/common_components/NewBadge";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { ClockCircleOutlined } from "@ant-design/icons";
 import { Button, Form, Input, Modal, Skeleton, Space, Switch, Typography } from "antd";
 import React, { useEffect, useMemo } from "react";
-import NewBadge from "@/components/common_components/NewBadge";
 
 interface SpendLogsSettingsModalProps {
   isVisible: boolean;
