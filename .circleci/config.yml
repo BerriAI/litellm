@@ -715,8 +715,8 @@ jobs:
       - run:
           name: Rename the coverage files
           command: |
-            mv coverage.xml litellm_router_coverage.xml
-            mv .coverage litellm_router_coverage
+            mv coverage.xml litellm_router_unit_coverage.xml
+            mv .coverage litellm_router_unit_coverage
       # Store test results
       - store_test_results:
           path: test-results
@@ -724,8 +724,8 @@ jobs:
       - persist_to_workspace:
           root: .
           paths:
-            - litellm_router_coverage.xml
-            - litellm_router_coverage
+            - litellm_router_unit_coverage.xml
+            - litellm_router_unit_coverage
   litellm_security_tests:
     machine:
       image: ubuntu-2204:2023.10.1
@@ -3428,7 +3428,7 @@ jobs:
             python -m venv venv
             . venv/bin/activate
             pip install coverage
-            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
+            coverage combine llm_translation_coverage llm_responses_api_coverage ocr_coverage search_coverage mcp_coverage logging_coverage audio_coverage litellm_router_coverage litellm_router_unit_coverage local_testing_part1_coverage local_testing_part2_coverage litellm_assistants_api_coverage auth_ui_unit_tests_coverage langfuse_coverage caching_coverage litellm_proxy_unit_tests_part1_coverage litellm_proxy_unit_tests_part2_coverage image_gen_coverage pass_through_unit_tests_coverage batches_coverage litellm_security_tests_coverage guardrails_coverage litellm_mapped_tests_coverage
             coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3478,8 +3478,22 @@ jobs:
                 ls dist/
                 twine upload --verbose dist/*
             else
-                echo "Version ${VERSION} of package is already published on PyPI. Skipping PyPI publish."
-                circleci step halt
+                echo "Version ${VERSION} of package is already published on PyPI."
+                
+                # Check if corresponding Docker nightly image exists
+                NIGHTLY_TAG="v${VERSION}-nightly"
+                echo "Checking for Docker nightly image: litellm/litellm:${NIGHTLY_TAG}"
+                
+                # Check Docker Hub for the nightly image
+                if curl -s "https://hub.docker.com/v2/repositories/litellm/litellm/tags/${NIGHTLY_TAG}" | grep -q "name"; then
+                    echo "Docker nightly image ${NIGHTLY_TAG} exists. This release was already completed successfully."
+                    echo "Skipping PyPI publish and continuing to ensure Docker images are up to date."
+                    circleci step halt
+                else
+                    echo "ERROR: PyPI package ${VERSION} exists but Docker nightly image ${NIGHTLY_TAG} does not exist!"
+                    echo "This indicates an incomplete release. Please investigate."
+                    exit 1
+                fi
             fi
       - run:
           name: Trigger Github Action for new Docker Container + Trigger Load Testing
@@ -3488,11 +3502,21 @@ jobs:
             python3 -m pip install toml
             VERSION=$(python3 -c "import toml; print(toml.load('pyproject.toml')['tool']['poetry']['version'])")
             echo "LiteLLM Version ${VERSION}"
+
+            # Determine which branch to use for Docker build
+            if [[ "$CIRCLE_BRANCH" =~ ^litellm_release_day_.* ]]; then
+              BUILD_BRANCH="$CIRCLE_BRANCH"
+              echo "Using release branch: $BUILD_BRANCH"
+            else
+              BUILD_BRANCH="main"
+              echo "Using default branch: $BUILD_BRANCH"
+            fi
+
             curl -X POST \
               -H "Accept: application/vnd.github.v3+json" \
               -H "Authorization: Bearer $GITHUB_TOKEN" \
               "https://api.github.com/repos/BerriAI/litellm/actions/workflows/ghcr_deploy.yml/dispatches" \
-              -d "{\"ref\":\"main\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
+              -d "{\"ref\":\"${BUILD_BRANCH}\", \"inputs\":{\"tag\":\"v${VERSION}-nightly\", \"commit_hash\":\"$CIRCLE_SHA1\"}}"
             echo "triggering load testing server for version ${VERSION} and commit ${CIRCLE_SHA1}"
             curl -X POST "https://proxyloadtester-production.up.railway.app/start/load/test?version=${VERSION}&commit_hash=${CIRCLE_SHA1}&release_type=nightly"
 
@@ -4235,6 +4259,7 @@ workflows:
             branches:
               only:
                 - main
+                - /litellm_release_day_.*/
       - publish_to_pypi:
           requires:
             - mypy_linting

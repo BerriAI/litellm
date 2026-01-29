@@ -464,6 +464,11 @@ export default function SpendLogsTable({
       label: "Key Hash",
       isSearchable: false,
     },
+    {
+      name: "Error Message",
+      label: "Error Message",
+      isSearchable: false,
+    },
   ];
 
   // When a session is selected, render the SessionView component

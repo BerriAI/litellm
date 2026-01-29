@@ -12,7 +12,7 @@ import {
 } from "@tanstack/react-table";
 import React from "react";
 import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
-import { SwitchVerticalIcon, ChevronUpIcon, ChevronDownIcon } from "@heroicons/react/outline";
+import { TableHeaderSortDropdown, SortState } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 
 // Extend the column meta type to include className
 declare module "@tanstack/react-table" {
@@ -102,17 +102,15 @@ export function AllModelsDataTable<TData, TValue>({
                   {headerGroup.headers.map((header) => (
                     <TableHeaderCell
                       key={header.id}
-                      className={`py-1 h-8 relative ${
-                        header.id === "actions"
-                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
-                          : ""
-                      } ${header.column.columnDef.meta?.className || ""}`}
+                      className={`py-1 h-8 relative ${header.id === "actions"
+                        ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                        : ""
+                        } ${header.column.columnDef.meta?.className || ""}`}
                       style={{
                         width: header.id === "actions" ? 120 : header.getSize(),
                         position: header.id === "actions" ? "sticky" : "relative",
                         right: header.id === "actions" ? 0 : "auto",
                       }}
-                      onClick={header.column.getCanSort() ? header.column.getToggleSortingHandler() : undefined}
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center">
@@ -120,26 +118,37 @@ export function AllModelsDataTable<TData, TValue>({
                             ? null
                             : flexRender(header.column.columnDef.header, header.getContext())}
                         </div>
-                        {header.id !== "actions" && header.column.getCanSort() && (
-                          <div className="w-4">
-                            {header.column.getIsSorted() ? (
-                              {
-                                asc: <ChevronUpIcon className="h-4 w-4 text-blue-500" />,
-                                desc: <ChevronDownIcon className="h-4 w-4 text-blue-500" />,
-                              }[header.column.getIsSorted() as string]
-                            ) : (
-                              <SwitchVerticalIcon className="h-4 w-4 text-gray-400" />
-                            )}
-                          </div>
+                        {header.id !== "actions" && header.column.getCanSort() && onSortingChange && (
+                          <TableHeaderSortDropdown
+                            sortState={
+                              header.column.getIsSorted() === false
+                                ? false
+                                : (header.column.getIsSorted() as SortState)
+                            }
+                            onSortChange={(newState) => {
+                              // Convert SortState to TanStack SortingState
+                              // Only allow one column to be sorted at a time
+                              if (newState === false) {
+                                onSortingChange([]);
+                              } else {
+                                onSortingChange([
+                                  {
+                                    id: header.column.id,
+                                    desc: newState === "desc",
+                                  },
+                                ]);
+                              }
+                            }}
+                            columnId={header.column.id}
+                          />
                         )}
                       </div>
                       {header.column.getCanResize() && (
                         <div
                           onMouseDown={header.getResizeHandler()}
                           onTouchStart={header.getResizeHandler()}
-                          className={`absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none ${
-                            header.column.getIsResizing() ? "bg-blue-500" : "hover:bg-blue-200"
-                          }`}
+                          className={`absolute right-0 top-0 h-full w-2 cursor-col-resize select-none touch-none ${header.column.getIsResizing() ? "bg-blue-500" : "hover:bg-blue-200"
+                            }`}
                         />
                       )}
                     </TableHeaderCell>
@@ -162,11 +171,10 @@ export function AllModelsDataTable<TData, TValue>({
                     {row.getVisibleCells().map((cell) => (
                       <TableCell
                         key={cell.id}
-                        className={`py-0.5 ${
-                          cell.column.id === "actions"
-                            ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
-                            : ""
-                        } ${cell.column.columnDef.meta?.className || ""}`}
+                        className={`py-0.5 ${cell.column.id === "actions"
+                          ? "sticky right-0 bg-white shadow-[-4px_0_8px_-6px_rgba(0,0,0,0.1)] w-[120px] ml-8"
+                          : ""
+                          } ${cell.column.columnDef.meta?.className || ""}`}
                         style={{
                           width: cell.column.id === "actions" ? 120 : cell.column.getSize(),
                           position: cell.column.id === "actions" ? "sticky" : "relative",
