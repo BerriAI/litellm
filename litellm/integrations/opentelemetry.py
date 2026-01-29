@@ -144,6 +144,7 @@ class OpenTelemetry(CustomLogger):
         self.OTEL_EXPORTER = self.config.exporter
         self.OTEL_ENDPOINT = self.config.endpoint
         self.OTEL_HEADERS = self.config.headers
+        self._tracer_provider_cache: Dict[str, Any] = {}
         self._init_tracing(tracer_provider)
 
         _debug_otel = str(os.getenv("DEBUG_OTEL", "False")).lower()
@@ -615,11 +616,19 @@ class OpenTelemetry(CustomLogger):
         """Create a temporary tracer with dynamic headers for this request only."""
         from opentelemetry.sdk.trace import TracerProvider
 
+        # Prevents thread exhaustion by reusing providers for the same credential sets (e.g. per-team keys)
+        cache_key = str(sorted(dynamic_headers.items()))
+        if cache_key in self._tracer_provider_cache:
+            return self._tracer_provider_cache[cache_key].get_tracer(LITELLM_TRACER_NAME)
+
         # Create a temporary tracer provider with dynamic headers
         temp_provider = TracerProvider(resource=self._get_litellm_resource(self.config))
         temp_provider.add_span_processor(
             self._get_span_processor(dynamic_headers=dynamic_headers)
         )
+
+        # Store in cache for reuse
+        self._tracer_provider_cache[cache_key] = temp_provider
 
         return temp_provider.get_tracer(LITELLM_TRACER_NAME)
 
@@ -995,9 +1004,13 @@ class OpenTelemetry(CustomLogger):
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
         try:
-            from opentelemetry.sdk._logs import LogRecord as SdkLogRecord  # type: ignore[attr-defined]  # OTEL < 1.39.0
+            from opentelemetry.sdk._logs import (
+                LogRecord as SdkLogRecord,  # type: ignore[attr-defined]  # OTEL < 1.39.0
+            )
         except ImportError:
-            from opentelemetry.sdk._logs._internal import LogRecord as SdkLogRecord  # OTEL >= 1.39.0
+            from opentelemetry.sdk._logs._internal import (
+                LogRecord as SdkLogRecord,  # OTEL >= 1.39.0
+            )
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
 
@@ -1618,6 +1631,7 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
+            self.handle_callback_failure(callback_name= self.callback_name)  
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
