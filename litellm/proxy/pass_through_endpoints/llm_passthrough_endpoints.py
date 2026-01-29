@@ -1098,7 +1098,6 @@ def _resolve_vertex_model_from_router(
         # e.g., "vertex_ai/gemini-2.0-flash-exp" -> "gemini-2.0-flash-exp"
         model_from_config = litellm_params.get("model", "")
         if model_from_config:
-            from litellm.utils import get_llm_provider
 
             # get_llm_provider returns (model, custom_llm_provider, dynamic_api_key, api_base)
             # For "vertex_ai/gemini-2.0-flash-exp" it returns:
