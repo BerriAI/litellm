@@ -12,6 +12,7 @@ import time
 import traceback
 import warnings
 from datetime import datetime, timedelta
+import enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -28,7 +29,41 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from pydantic import BaseModel, Json
 
+from litellm.proxy._types import (
+    ProxyException,
+    UserAPIKeyAuth,
+    LiteLLM_UserTable,
+    CommonProxyErrors,
+    LitellmUserRoles,
+    ConfigList,
+    ConfigYAML,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigFieldInfo,
+    PassThroughGenericEndpoint,
+    FieldDetail,
+    ConfigFieldDelete,
+    CallbackDelete,
+    InvitationClaim,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    InvitationDelete,
+    CallInfo,
+    Litellm_EntityType,
+    TeamDefaultSettings,
+    RoleBasedPermissions,
+    SupportedDBObjectType,
+    ProxyErrorTypes,
+    EnterpriseLicenseData,
+    LiteLLM_JWTAuth,
+    TokenCountRequest,
+    TransformRequestBody,
+    LiteLLM_TeamTable,
+    SpecialModelNames,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -44,6 +79,9 @@ from litellm.constants import (
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.common_utils.callback_utils import (
@@ -2147,6 +2185,12 @@ class ProxyConfig:
         """
         search_tools_raw = config.get("search_tools", None)
         if not search_tools_raw:
+            # Check in general_settings
+            general_settings = config.get("general_settings", {})
+            if general_settings:
+                search_tools_raw = general_settings.get("search_tools", None)
+
+        if not search_tools_raw:
             return None
 
         search_tools_parsed: List[SearchToolTypedDict] = []
@@ -2890,9 +2934,6 @@ class ProxyConfig:
         """
         Initialize alerting settings
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            _init_custom_logger_compatible_class,
-        )
 
         _alerting_callbacks = general_settings.get("alerting", None)
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
@@ -3190,6 +3231,8 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
+                if search_tools is not None and llm_router is not None:
+                    llm_router.search_tools = search_tools
                 ## DELETE MODEL LOGIC
                 await self._delete_deployment(db_models=models_list)
 
