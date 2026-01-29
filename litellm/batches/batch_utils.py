@@ -148,8 +148,16 @@ def calculate_vertex_ai_batch_cost_and_usage(
             logging_obj.optional_params = {}
             raw_response = httpx.Response(200)  # Mock response object
             
+            completion_response = response.get("response", {})
+            # Handle case where usageMetadata is at the top level (Vertex Batch specific)
+            if "usageMetadata" in response and "usageMetadata" not in completion_response:
+                _usage_metadata = response["usageMetadata"]
+                if isinstance(_usage_metadata, list) and len(_usage_metadata) > 0:
+                    _usage_metadata = _usage_metadata[0]
+                completion_response["usageMetadata"] = _usage_metadata
+
             openai_format_response = VertexGeminiConfig()._transform_google_generate_content_to_openai_model_response(
-                completion_response=response["response"],
+                completion_response=completion_response,
                 model_response=model_response,
                 model=actual_model_name,
                 logging_obj=logging_obj,
