@@ -554,7 +554,7 @@ export default function SpendLogsTable({
                 <DataTable
                   columns={columns}
                   data={sessionData}
-                  renderSubComponent={RequestViewer}
+                  renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
                   getRowCanExpand={() => true}
                 // Optionally: add session-specific row expansion state
                 />
@@ -753,7 +753,7 @@ export default function SpendLogsTable({
                   <DataTable
                     columns={columns}
                     data={filteredData}
-                    renderSubComponent={RequestViewer}
+                    renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
                     getRowCanExpand={() => true}
                   />
                 </div>
@@ -779,7 +779,7 @@ export default function SpendLogsTable({
   );
 }
 
-export function RequestViewer({ row }: { row: Row<LogEntry> }) {
+export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onOpenSettings?: () => void }) {
   // Helper function to clean metadata by removing specific fields
   const formatData = (input: any) => {
     if (typeof input === "string") {
@@ -990,7 +990,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
 
       {/* Configuration Info Message - Show when data is missing */}
-      <ConfigInfoMessage show={missingData} />
+      <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
 
       {/* Request/Response Panel */}
       <div className="w-full max-w-full overflow-hidden">
