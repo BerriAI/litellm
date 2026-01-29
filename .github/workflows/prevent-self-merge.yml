@@ -1,0 +1,150 @@
+name: Check CI Quality Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main]
+
+jobs:
+  check-ci-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check CI job status
+        uses: actions/github-script@v7
+        with:
+          script: |
+            // Wait for CI jobs to stabilize (jobs may be dynamically registered)
+            async function waitForJobsToStabilize() {
+              let previousCount = 0;
+              let stableCount = 0;
+              const expectedJobCount = 55; // Expected number of CI jobs
+              const maxWaitMinutes = 15;
+              const checkIntervalSeconds = 30;
+              const checksNeeded = 3; // Jobs must remain stable for 3 checks
+              
+              console.log(`Waiting for CI jobs to stabilize (expecting ~${expectedJobCount} jobs)...`);
+              
+              for (let i = 0; i < (maxWaitMinutes * 60 / checkIntervalSeconds); i++) {
+                const { data: checks } = await github.rest.checks.listForRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha,
+                });
+                
+                const { data: statuses } = await github.rest.repos.getCombinedStatusForRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: context.payload.pull_request.head.sha,
+                });
+                
+                const currentCount = checks.check_runs.length + statuses.statuses.length;
+                
+                console.log(`Check ${i + 1}: ${currentCount}/${expectedJobCount} total jobs (${checks.check_runs.length} checks + ${statuses.statuses.length} statuses)`);
+                
+                // If we've reached expected count, check for stability
+                if (currentCount >= expectedJobCount) {
+                  if (currentCount === previousCount) {
+                    stableCount++;
+                    if (stableCount >= checksNeeded) {
+                      console.log(`✅ Job count stabilized at ${currentCount} jobs (expected ${expectedJobCount})\n`);
+                      return { checks, statuses };
+                    }
+                  } else {
+                    stableCount = 0;
+                    console.log(`Job count changed from ${previousCount} to ${currentCount}, resetting stability counter`);
+                  }
+                } else {
+                  // Haven't reached expected count yet, just keep waiting
+                  console.log(`Still waiting for more jobs... (${currentCount}/${expectedJobCount})`);
+                }
+                
+                previousCount = currentCount;
+                
+                if (i < (maxWaitMinutes * 60 / checkIntervalSeconds) - 1) {
+                  await new Promise(resolve => setTimeout(resolve, checkIntervalSeconds * 1000));
+                }
+              }
+              
+              console.log(`⚠️ Timeout: Job count did not reach expected ${expectedJobCount} after ${maxWaitMinutes} minutes`);
+              // Return latest data even if not stable
+              const { data: checks } = await github.rest.checks.listForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+              });
+              const { data: statuses } = await github.rest.repos.getCombinedStatusForRef({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ref: context.payload.pull_request.head.sha,
+              });
+              return { checks, statuses };
+            }
+            
+            const { checks, statuses } = await waitForJobsToStabilize();
+            
+            console.log('=== CI Status Check ===');
+            console.log(`PR: #${context.payload.pull_request.number} - ${context.payload.pull_request.title}`);
+            console.log(`Total checks: ${checks.check_runs.length}`);
+            console.log(`Total statuses (CircleCI, etc): ${statuses.statuses.length}`);
+            
+            let failedJobs = [];
+            let pendingJobs = [];
+            let passedJobs = [];
+            
+            // Check GitHub Actions checks
+            checks.check_runs.forEach(check => {
+              console.log(`[Check] ${check.name}: ${check.status} / ${check.conclusion}`);
+              
+              if (check.status === 'completed' && check.conclusion === 'failure') {
+                failedJobs.push(`[Check] ${check.name}`);
+              } else if (check.status !== 'completed') {
+                pendingJobs.push(`[Check] ${check.name}`);
+              } else if (check.status === 'completed' && check.conclusion === 'success') {
+                passedJobs.push(`[Check] ${check.name}`);
+              }
+            });
+            
+            // Check CircleCI and other status checks
+            statuses.statuses.forEach(status => {
+              console.log(`[Status] ${status.context}: ${status.state}`);
+              
+              if (status.state === 'failure' || status.state === 'error') {
+                failedJobs.push(`[Status] ${status.context}`);
+              } else if (status.state === 'pending') {
+                pendingJobs.push(`[Status] ${status.context}`);
+              } else if (status.state === 'success') {
+                passedJobs.push(`[Status] ${status.context}`);
+              }
+            });
+            
+            console.log('\n=== Summary ===');
+            console.log(`✅ Passed: ${passedJobs.length}`);
+            console.log(`⏳ Pending: ${pendingJobs.length}`);
+            console.log(`❌ Failed: ${failedJobs.length}`);
+            
+            if (failedJobs.length > 0) {
+              core.setFailed(`❌ Cannot merge: ${failedJobs.length} CI job(s) failing:\n${failedJobs.join('\n')}`);
+              return;
+            }
+            
+            if (pendingJobs.length > 0) {
+              core.setFailed(`⏳ Cannot evaluate: ${pendingJobs.length} job(s) still running. Wait for all CI jobs to complete before merging.\n\nPending jobs:\n${pendingJobs.join('\n')}`);
+              return;
+            }
+            
+            // Calculate pass/fail rates
+            const totalCompleted = passedJobs.length + failedJobs.length;
+            const passRate = totalCompleted > 0 ? (passedJobs.length / totalCompleted * 100).toFixed(1) : 0;
+            const failRate = totalCompleted > 0 ? (failedJobs.length / totalCompleted * 100).toFixed(1) : 0;
+            
+            console.log(`\n📊 Pass Rate: ${passRate}%`);
+            console.log(`📊 Fail Rate: ${failRate}%`);
+            
+            // Block if 10% or more jobs fail
+            const maxFailRate = 10;
+            if (parseFloat(failRate) >= maxFailRate) {
+              core.setFailed(`❌ CI fail rate (${failRate}%) exceeds maximum threshold (${maxFailRate}%)`);
+              return;
+            }
+            
+            console.log('✅ All CI quality checks passed!');
