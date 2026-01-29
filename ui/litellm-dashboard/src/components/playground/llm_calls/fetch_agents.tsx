@@ -1,6 +1,6 @@
 // fetch_agents.tsx
 
-import { getProxyBaseUrl } from "../../networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "../../networking";
 
 export interface Agent {
   agent_id: string;
@@ -27,7 +27,7 @@ export const fetchAvailableAgents = async (
     const response = await fetch(url, {
       method: "GET",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
     });

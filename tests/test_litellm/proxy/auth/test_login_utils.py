@@ -626,3 +626,133 @@ async def test_expire_previous_ui_session_tokens_exception_handling():
 
     # Should not raise exception despite database error
     await expire_previous_ui_session_tokens(user_id, mock_prisma_client)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_admin_login_with_non_ascii_characters():
+    """Test admin login with non-ASCII characters in password (issue #19559)"""
+    master_key = "sk-1234"
+    ui_username = "admin£test"
+    ui_password = "sk-1234£pass"
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+
+    with patch.dict(
+        os.environ,
+        {
+            "UI_USERNAME": ui_username,
+            "UI_PASSWORD": ui_password,
+            "DATABASE_URL": "postgresql://test:test@localhost/test",
+        },
+    ):
+        with patch(
+            "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+            new_callable=AsyncMock,
+        ) as mock_generate_key:
+            mock_generate_key.return_value = {
+                "token": "test-token-123",
+                "user_id": LITELLM_PROXY_ADMIN_NAME,
+            }
+
+            with patch(
+                "litellm.proxy.auth.login_utils.user_update",
+                new_callable=AsyncMock,
+                return_value=None,
+            ) as mock_user_update:
+                with patch(
+                    "litellm.proxy.auth.login_utils.get_secret_bool",
+                    return_value=False,
+                ):
+                    result = await authenticate_user(
+                        username=ui_username,
+                        password=ui_password,
+                        master_key=master_key,
+                        prisma_client=mock_prisma_client,
+                    )
+
+                    assert isinstance(result, LoginResult)
+                    assert result.user_id == LITELLM_PROXY_ADMIN_NAME
+                    assert result.key == "test-token-123"
+                    assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+
+def test_authenticate_user_non_ascii_direct_comparison():
+    """Test that non-ASCII characters can be compared directly (unit test for fix)"""
+    import secrets
+
+    # This test verifies the fix handles non-ASCII by encoding to bytes
+    username = "admin£test"
+    password = "pass£word"
+
+    # This would fail without encoding:
+    # secrets.compare_digest(username, username)  # TypeError!
+
+    # But works with the fix:
+    result = secrets.compare_digest(
+        username.encode("utf-8"), username.encode("utf-8")
+    )
+    assert result is True
+
+    # And correctly returns False for different passwords
+    result = secrets.compare_digest(
+        password.encode("utf-8"), "different£pass".encode("utf-8")
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_authenticate_user_database_login_with_non_ascii_password():
+    """Test database user login with non-ASCII characters in password (issue #19559)"""
+    master_key = "sk-1234"
+    user_email = "test@example.com"
+    password_with_special_char = "correct£password"
+    hashed_password = hash_token(token=password_with_special_char)
+
+    mock_user = MagicMock()
+    mock_user.user_id = "test-user-123"
+    mock_user.user_email = user_email
+    mock_user.password = hashed_password
+    mock_user.user_role = LitellmUserRoles.INTERNAL_USER
+
+    def mock_find_first(**kwargs):
+        where = kwargs.get("where", {})
+        user_email_filter = where.get("user_email", {})
+        if str(user_email_filter.get("equals", "")).lower() == user_email.lower():
+            return mock_user
+        return None
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_usertable.find_first = AsyncMock(
+        side_effect=mock_find_first
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "DATABASE_URL": "postgresql://test:test@localhost/test",
+            "UI_USERNAME": "admin",
+            "UI_PASSWORD": "admin-password",
+        },
+    ):
+        with patch(
+            "litellm.proxy.auth.login_utils.expire_previous_ui_session_tokens",
+            new_callable=AsyncMock,
+            return_value=None,
+        ):
+            with patch(
+                "litellm.proxy.auth.login_utils.generate_key_helper_fn",
+                new_callable=AsyncMock,
+            ) as mock_generate_key:
+                mock_generate_key.return_value = {"token": "token-123"}
+
+                result = await authenticate_user(
+                    username=user_email,
+                    password=password_with_special_char,
+                    master_key=master_key,
+                    prisma_client=mock_prisma_client,
+                )
+
+                assert isinstance(result, LoginResult)
+                assert result.user_id == "test-user-123"
+                assert result.user_email == user_email

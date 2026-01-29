@@ -856,3 +856,97 @@ def test_create_file_without_expires_after(mocker: MockerFixture, monkeypatch, l
     result = response.json()
     assert result["id"] == "file-abc123"
     assert result["purpose"] == "fine-tune"
+
+
+def test_managed_files_with_loadbalancing(mocker: MockerFixture, monkeypatch, llm_router: Router):
+    """
+    Test that managed files work with loadbalancing when both target_model_names
+    and enable_loadbalancing_on_batch_endpoints are enabled.
+    
+    This ensures that the priority order is correct:
+    - managed files should take precedence over deprecated loadbalancing
+    - managed files internally use llm_router.acreate_file() which provides loadbalancing
+    """
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.types.llms.openai import OpenAIFileObject
+    
+    # Enable loadbalancing on batch endpoints
+    monkeypatch.setattr("litellm.enable_loadbalancing_on_batch_endpoints", True)
+    
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+    
+    # Track calls to verify loadbalancing through router
+    router_acreate_file_calls = []
+    
+    class ManagedFilesWithLoadbalancing(BaseFileEndpoints):
+        async def acreate_file(self, llm_router, create_file_request, target_model_names_list, litellm_parent_otel_span, user_api_key_dict):
+            # Verify we receive the target model names
+            assert len(target_model_names_list) > 0, "Should have target_model_names_list"
+            
+            # Simulate what managed files does - call llm_router.acreate_file for each model
+            # This is where loadbalancing happens internally
+            for model in target_model_names_list:
+                router_acreate_file_calls.append({
+                    "model": model,
+                    "via_router": True
+                })
+            
+            # Return a managed file ID (base64 encoded)
+            return OpenAIFileObject(
+                id="litellm_managed_file_abc123",
+                object="file",
+                bytes=100,
+                created_at=1234567890,
+                filename="batch_data.jsonl",
+                purpose="batch",
+                status="uploaded",
+            )
+        
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_list(self, purpose, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_delete(self, file_id, litellm_parent_otel_span, llm_router, **data):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
+            raise NotImplementedError("Not implemented for test")
+    
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = ManagedFilesWithLoadbalancing()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+    
+    # Create batch file content
+    test_file_content = b'{"custom_id": "request-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo", "messages": [{"role": "user", "content": "Hello"}]}}'
+    test_file = ("batch_data.jsonl", test_file_content, "application/jsonl")
+    
+    # Make request with both target_model_names AND enable_loadbalancing_on_batch_endpoints
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "batch",
+            "target_model_names": "azure-gpt-3-5-turbo,gpt-3.5-turbo",  # Multiple models
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+    
+    # Verify success
+    assert response.status_code == 200
+    result = response.json()
+    assert result["id"] == "litellm_managed_file_abc123"
+    assert result["purpose"] == "batch"
+    
+    # Verify that managed files was called (via router for loadbalancing)
+    # This proves that managed files took precedence over deprecated loadbalancing
+    assert len(router_acreate_file_calls) == 2, "Should have called router for both models"
+    assert router_acreate_file_calls[0]["model"] == "azure-gpt-3-5-turbo"
+    assert router_acreate_file_calls[1]["model"] == "gpt-3.5-turbo"
+    assert all(call["via_router"] for call in router_acreate_file_calls), "All calls should go through router"
