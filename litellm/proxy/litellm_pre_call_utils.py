@@ -397,6 +397,29 @@ class LiteLLMProxyRequestSetup:
         return None
 
     @staticmethod
+    def _filter_blocked_anthropic_beta_values(header_value: str) -> Optional[str]:
+        """
+        Filter out blocked anthropic-beta header values.
+
+        Some beta headers (e.g., prompt-caching-scope-*) cause API errors
+        when forwarded to Anthropic/Vertex AI. This filters them out.
+        """
+        from litellm.types.llms.anthropic import BLOCKED_ANTHROPIC_BETA_HEADER_PATTERNS
+
+        values = [v.strip() for v in header_value.split(",")]
+        filtered = []
+        for v in values:
+            is_blocked = False
+            for pattern in BLOCKED_ANTHROPIC_BETA_HEADER_PATTERNS:
+                if v.startswith(pattern):
+                    is_blocked = True
+                    break
+            if not is_blocked:
+                filtered.append(v)
+
+        return ",".join(filtered) if filtered else None
+
+    @staticmethod
     def _get_forwardable_headers(
         headers: Union[Headers, dict],
     ):
@@ -414,7 +437,10 @@ class LiteLLMProxyRequestSetup:
             ):  # causes openai sdk to fail
                 forwarded_headers[header] = value
             elif header.lower().startswith("anthropic-beta"):
-                forwarded_headers[header] = value
+                # Filter out blocked beta values (e.g., prompt-caching-scope-*)
+                filtered_value = LiteLLMProxyRequestSetup._filter_blocked_anthropic_beta_values(value)
+                if filtered_value:
+                    forwarded_headers[header] = filtered_value
 
         return forwarded_headers
 
