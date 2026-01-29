@@ -88,6 +88,7 @@ async def common_checks(
     proxy_logging_obj: ProxyLogging,
     valid_token: Optional[UserAPIKeyAuth],
     request: Request,
+    user_teams: Optional[List[LiteLLM_TeamTable]] = None,
 ) -> bool:
     """
     Common checks across jwt + key-based auth.
@@ -137,6 +138,7 @@ async def common_checks(
             model=_model,
             llm_router=llm_router,
             user_object=user_object,
+            user_teams=user_teams,
         )
 
     # 3. If team is in budget
@@ -1851,9 +1853,9 @@ async def get_org_object(
         # Cache the result
         await user_api_key_cache.async_set_cache(
             key=cache_key,
-            value=response.model_dump()
-            if hasattr(response, "model_dump")
-            else response,
+            value=(
+                response.model_dump() if hasattr(response, "model_dump") else response
+            ),
             ttl=DEFAULT_IN_MEMORY_TTL,
         )
 
@@ -2075,11 +2077,26 @@ async def can_user_call_model(
     model: Union[str, List[str]],
     llm_router: Optional[Router],
     user_object: Optional[LiteLLM_UserTable],
+    user_teams: Optional[List[LiteLLM_TeamTable]] = None,
 ) -> Literal[True]:
     if user_object is None:
         return True
 
     if SpecialModelNames.no_default_models.value in user_object.models:
+        # Check if user has access via any of their teams
+        if user_teams:
+            for team in user_teams:
+                # Reuse can_team_access_model for each team
+                try:
+                    can_team_access_model(
+                        model=model,
+                        team_object=team,
+                        llm_router=llm_router,
+                    )
+                    return True
+                except Exception:
+                    continue
+
         raise ProxyException(
             message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
             type=ProxyErrorTypes.key_model_access_denied,
@@ -2087,12 +2104,28 @@ async def can_user_call_model(
             code=status.HTTP_401_UNAUTHORIZED,
         )
 
-    return _can_object_call_model(
-        model=model,
-        llm_router=llm_router,
-        models=user_object.models,
-        object_type="user",
-    )
+    try:
+        return _can_object_call_model(
+            model=model,
+            llm_router=llm_router,
+            models=user_object.models,
+            object_type="user",
+        )
+    except Exception as e:
+        # If user check fails, check teams
+        if user_teams:
+            for team in user_teams:
+                try:
+                    can_team_access_model(
+                        model=model,
+                        team_object=team,
+                        llm_router=llm_router,
+                    )
+                    return True
+                except Exception:
+                    continue
+        # If all checks fail, raise the original exception
+        raise e
 
 
 async def is_valid_fallback_model(
