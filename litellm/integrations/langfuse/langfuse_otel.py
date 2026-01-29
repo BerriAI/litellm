@@ -41,6 +41,27 @@ class LangfuseOtelLogger(OpenTelemetry):
         super().__init__(*args, **kwargs)
 
     @staticmethod
+    def set_langfuse_environment_on_span(span: Span):
+        """
+        Sets the LANGFUSE_TRACING_ENVIRONMENT attribute on any span.
+        
+        This method should be called for all span types (service, guardrail, 
+        management endpoint, etc.) to ensure the environment is populated
+        on all spans in a trace, not just generation spans.
+        
+        Fixes: https://github.com/BerriAI/litellm/issues/19926
+        """
+        from litellm.integrations.arize._utils import safe_set_attribute
+        
+        langfuse_environment = os.environ.get("LANGFUSE_TRACING_ENVIRONMENT")
+        if langfuse_environment:
+            safe_set_attribute(
+                span,
+                LangfuseSpanAttributes.LANGFUSE_ENVIRONMENT.value,
+                langfuse_environment,
+            )
+
+    @staticmethod
     def set_langfuse_otel_attributes(span: Span, kwargs, response_obj):
         """
         Sets OpenTelemetry span attributes for Langfuse observability.
