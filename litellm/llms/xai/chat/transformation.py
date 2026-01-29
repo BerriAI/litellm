@@ -2,7 +2,6 @@ from typing import List, Optional, Tuple
 
 import httpx
 
-import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     filter_value_from_dict,
@@ -63,15 +62,13 @@ class XAIChatConfig(OpenAIGPTConfig):
             base_openai_params.append("frequency_penalty")
         
         #########################################################
-        # reasoning check
+        # reasoning_effort check
+        # Only grok-3-mini models accept the reasoning_effort parameter.
+        # Other xAI reasoning models (like grok-4-1-fast-reasoning) are
+        # reasoning models by nature but don't accept this parameter.
         #########################################################
-        try:
-            if litellm.supports_reasoning(
-                model=model, custom_llm_provider=self.custom_llm_provider
-            ):
-                base_openai_params.append("reasoning_effort")
-        except Exception as e:
-            verbose_logger.debug(f"Error checking if model supports reasoning: {e}")
+        if self._supports_reasoning_effort(model):
+            base_openai_params.append("reasoning_effort")
 
         return base_openai_params
     
@@ -95,6 +92,17 @@ class XAIChatConfig(OpenAIGPTConfig):
         if "grok-code-fast" in model:
             return False
         return True
+
+    def _supports_reasoning_effort(self, model: str) -> bool:
+        """
+        Only grok-3-mini models accept the reasoning_effort parameter.
+
+        Other xAI reasoning models (like grok-4-1-fast-reasoning) are reasoning
+        models by nature but don't accept this parameter via the API.
+        """
+        if "grok-3-mini" in model:
+            return True
+        return False
 
     def map_openai_params(
         self,
