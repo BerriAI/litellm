@@ -5,7 +5,6 @@ Azure Batches API Handler
 from typing import Any, Coroutine, Optional, Union, cast
 
 import httpx
-
 from openai import AsyncOpenAI, OpenAI
 
 from litellm.llms.azure.azure import AsyncAzureOpenAI, AzureOpenAI
@@ -130,9 +129,9 @@ class AzureBatchesAPI(BaseAzureLLM):
         self,
         cancel_batch_data: CancelBatchRequest,
         client: Union[AsyncAzureOpenAI, AsyncOpenAI],
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         response = await client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def cancel_batch(
         self,
@@ -161,7 +160,7 @@ class AzureBatchesAPI(BaseAzureLLM):
                 "OpenAI client is not initialized. Make sure api_key is passed or OPENAI_API_KEY is set in the environment."
             )
         response = azure_client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     async def alist_batches(
         self,

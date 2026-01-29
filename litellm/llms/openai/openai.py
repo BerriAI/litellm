@@ -1923,10 +1923,10 @@ class OpenAIBatchesAPI(BaseLLM):
         self,
         cancel_batch_data: CancelBatchRequest,
         openai_client: AsyncOpenAI,
-    ) -> Batch:
+    ) -> LiteLLMBatch:
         verbose_logger.debug("async cancelling batch, args= %s", cancel_batch_data)
         response = await openai_client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     def cancel_batch(
         self,
@@ -1963,7 +1963,7 @@ class OpenAIBatchesAPI(BaseLLM):
             )
 
         response = openai_client.batches.cancel(**cancel_batch_data)
-        return response
+        return LiteLLMBatch(**response.model_dump())
 
     async def alist_batches(
         self,
