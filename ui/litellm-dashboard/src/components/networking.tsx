@@ -6825,6 +6825,7 @@ export const tagDauCall = async (
   tagFilter?: string,
   tagFilters?: string[],
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get Daily Active Users (DAU) for a customizable date range
@@ -6839,6 +6840,7 @@ export const tagDauCall = async (
         tag_filters: hasTagFilters ? tagFilters : undefined,
         tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {
@@ -6852,6 +6854,7 @@ export const tagWauCall = async (
   tagFilter?: string,
   tagFilters?: string[],
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get Weekly Active Users (WAU) for the last 7 weeks
@@ -6864,6 +6867,7 @@ export const tagWauCall = async (
         tag_filters: hasTagFilters ? tagFilters : undefined,
         tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {
@@ -6878,6 +6882,7 @@ export const tagMauCall = async (
   tagFilter?: string,
   tagFilters?: string[],
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get Monthly Active Users (MAU) for the last N months
@@ -6891,6 +6896,7 @@ export const tagMauCall = async (
         tag_filters: hasTagFilters ? tagFilters : undefined,
         tag_filter: !hasTagFilters && tagFilter ? tagFilter : undefined,
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {
@@ -6918,6 +6924,7 @@ export const userAgentSummaryCall = async (
   endTime: Date,
   tagFilters?: string[],
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get user agent summary statistics
@@ -6937,6 +6944,7 @@ export const userAgentSummaryCall = async (
         end_date: formatDate(endTime),
         tag_filters: tagFilters && tagFilters.length > 0 ? tagFilters : undefined,
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {
@@ -6974,6 +6982,7 @@ export const leaderboardCall = async (
   start_date?: string,
   end_date?: string,
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get all active users by request count with customizable date range
@@ -6986,6 +6995,7 @@ export const leaderboardCall = async (
         start_date: start_date || undefined,
         end_date: end_date || undefined,
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {
@@ -7000,6 +7010,7 @@ export const userDauCall = async (
   startDate?: string,
   endDate?: string,
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get daily unique user count (not broken down by user-agent)
@@ -7011,6 +7022,7 @@ export const userDauCall = async (
         start_date: startDate || undefined,
         end_date: endDate || undefined,
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {
@@ -7022,6 +7034,7 @@ export const userDauCall = async (
 export const userWauCall = async (
   accessToken: string,
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get weekly unique user count for the last 7 weeks (not broken down by user-agent)
@@ -7031,6 +7044,7 @@ export const userWauCall = async (
       accessToken,
       query: {
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {
@@ -7043,6 +7057,7 @@ export const userMauCall = async (
   accessToken: string,
   months: number = 7,
   custom_llm_provider?: string,
+  team_id?: string,
 ) => {
   /**
    * Get monthly unique user count for the last N months (not broken down by user-agent)
@@ -7053,6 +7068,7 @@ export const userMauCall = async (
       query: {
         months: months.toString(),
         custom_llm_provider: custom_llm_provider || undefined,
+        team_id: team_id || undefined,
       },
     });
   } catch (error) {

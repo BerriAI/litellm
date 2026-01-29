@@ -140,6 +140,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [usageView, setUsageView] = useState<UsageOption>("global");
+  const [selectedTeamId, setSelectedTeamId] = useState<string>("all");
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
@@ -449,7 +450,24 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               isAdmin={isAdmin}
               canViewTagUsage={canViewTagUsage}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <div className="flex items-end gap-4">
+              {isAdmin && usageView === "user-agent-activity" && (
+                <Select
+                  placeholder="Select team"
+                  value={selectedTeamId}
+                  onChange={setSelectedTeamId}
+                  style={{ width: 180 }}
+                  options={[
+                    { value: "all", label: "All Teams" },
+                    ...teams.map((team) => ({
+                      value: team.team_id,
+                      label: team.team_alias || team.team_id,
+                    })),
+                  ]}
+                />
+              )}
+              <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            </div>
           </div>
           {paginatedResult.isFetchingMore && (
             <Alert
@@ -954,7 +972,12 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* User Agent Activity Panel */}
           {usageView === "user-agent-activity" && (
-            <UserAgentActivity accessToken={accessToken} userRole={userRole} dateValue={dateValue} />
+            <UserAgentActivity
+              accessToken={accessToken}
+              userRole={userRole}
+              dateValue={dateValue}
+              teamId={selectedTeamId}
+            />
           )}
         </div>
       </div>
