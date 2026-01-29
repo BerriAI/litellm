@@ -16,7 +16,7 @@ Endpoints here:
 import importlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, Iterable, List, Literal, Optional, Protocol, cast
+from typing import Any, Dict, Iterable, List, Literal, Optional
 
 from fastapi import (
     APIRouter,
@@ -56,31 +56,18 @@ except ImportError as e:
     MCP_AVAILABLE = False
 
 if MCP_AVAILABLE:
-
-    class _ToolNameValidationResult(Protocol):
-        is_valid: bool
-        warnings: list
-
-    def _fallback_validate_tool_name(name: str) -> _ToolNameValidationResult:
-        from pydantic import BaseModel
-
-        class MockResult(BaseModel):
-            is_valid: bool = True
-            warnings: list = []
-
-        return MockResult()
-
     try:
-        from mcp.shared.tool_name_validation import (
-            validate_tool_name as _mcp_validate_tool_name,  # type: ignore
-        )
-
-        validate_tool_name: Callable[[str], _ToolNameValidationResult] = cast(
-            Callable[[str], _ToolNameValidationResult],
-            _mcp_validate_tool_name,
-        )
+        from mcp.shared.tool_name_validation import validate_tool_name  # type: ignore
     except ImportError:
-        validate_tool_name = _fallback_validate_tool_name
+
+        def validate_tool_name(name: str):
+            from pydantic import BaseModel
+
+            class MockResult(BaseModel):
+                is_valid: bool = True
+                warnings: list = []
+
+            return MockResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
@@ -142,9 +129,13 @@ if MCP_AVAILABLE:
             if validation_result.is_valid:
                 continue
 
-            error_messages_text = f"Invalid MCP tool prefix '{value}' provided via {field_name}"
+            error_messages_text = (
+                f"Invalid MCP tool prefix '{value}' provided via {field_name}"
+            )
             if validation_result.warnings:
-                error_messages_text = error_messages_text + "\n" + "\n".join(validation_result.warnings)
+                error_messages_text = (
+                    error_messages_text + "\n" + "\n".join(validation_result.warnings)
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail={"error": error_messages_text},
@@ -173,7 +164,9 @@ if MCP_AVAILABLE:
             return server.server_name
         return server.server_id
 
-    def _build_mcp_registry_entry_for_server(server: MCPServer, base_url: str) -> Dict[str, Any]:
+    def _build_mcp_registry_entry_for_server(
+        server: MCPServer, base_url: str
+    ) -> Dict[str, Any]:
         server_name = _build_mcp_registry_server_name(server)
         title = server_name
         description = server_name
@@ -219,7 +212,11 @@ if MCP_AVAILABLE:
             return
 
         now = datetime.utcnow()
-        expired_ids = [server_id for server_id, entry in _temporary_mcp_servers.items() if entry.expires_at <= now]
+        expired_ids = [
+            server_id
+            for server_id, entry in _temporary_mcp_servers.items()
+            if entry.expires_at <= now
+        ]
         for server_id in expired_ids:
             _temporary_mcp_servers.pop(server_id, None)
 
@@ -268,7 +265,9 @@ if MCP_AVAILABLE:
         if not payload.server_id or payload.credentials:
             return payload
 
-        existing_server = global_mcp_server_manager.get_mcp_server_by_id(payload.server_id)
+        existing_server = global_mcp_server_manager.get_mcp_server_by_id(
+            payload.server_id
+        )
         if existing_server is None:
             return payload
 
@@ -343,7 +342,9 @@ if MCP_AVAILABLE:
             )
         return prisma_client
 
-    def does_mcp_server_exist(mcp_server_records: Iterable[LiteLLM_MCPServerTable], mcp_server_id: str) -> bool:
+    def does_mcp_server_exist(
+        mcp_server_records: Iterable[LiteLLM_MCPServerTable], mcp_server_id: str
+    ) -> bool:
         """
         Check if the mcp server with the given id exists in the iterable of mcp servers
         """
@@ -405,7 +406,10 @@ if MCP_AVAILABLE:
             try:
                 mcp_servers = await prisma_client.db.litellm_mcpservertable.find_many()
                 for server in mcp_servers:
-                    if hasattr(server, "mcp_access_groups") and server.mcp_access_groups:
+                    if (
+                        hasattr(server, "mcp_access_groups")
+                        and server.mcp_access_groups
+                    ):
                         access_groups.update(server.mcp_access_groups)
             except Exception as e:
                 verbose_proxy_logger.debug(f"Error getting MCP access groups: {e}")
@@ -483,12 +487,16 @@ if MCP_AVAILABLE:
 
             aggregated_servers: Dict[str, LiteLLM_MCPServerTable] = {}
             for auth_context in auth_contexts:
-                servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(user_api_key_auth=auth_context)
+                servers = await global_mcp_server_manager.get_all_allowed_mcp_servers(
+                    user_api_key_auth=auth_context
+                )
                 for server in servers:
                     if server.server_id not in aggregated_servers:
                         aggregated_servers[server.server_id] = server
 
-            redacted_mcp_servers = _redact_mcp_credentials_list(aggregated_servers.values())
+            redacted_mcp_servers = _redact_mcp_credentials_list(
+                aggregated_servers.values()
+            )
 
         # augment the mcp servers with public status
         if litellm.public_mcp_servers is not None:
@@ -533,12 +541,19 @@ if MCP_AVAILABLE:
         user_mcp_management_mode = _get_user_mcp_management_mode()
 
         if user_mcp_management_mode == "view_all":
-            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
-            return [{"server_id": server.server_id, "status": server.status} for server in servers]
+            servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(
+                server_ids=server_ids
+            )
+            return [
+                {"server_id": server.server_id, "status": server.status}
+                for server in servers
+            ]
 
         auth_contexts = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_status_map: Dict[str, Optional[Literal["healthy", "unhealthy", "unknown"]]] = {}
+        server_status_map: Dict[
+            str, Optional[Literal["healthy", "unhealthy", "unknown"]]
+        ] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
@@ -548,7 +563,10 @@ if MCP_AVAILABLE:
                 if server.server_id not in server_status_map:
                     server_status_map[server.server_id] = server.status
 
-        return [{"server_id": server_id, "status": status} for server_id, status in server_status_map.items()]
+        return [
+            {"server_id": server_id, "status": status}
+            for server_id, status in server_status_map.items()
+        ]
 
     @router.get(
         "/server/{server_id}",
@@ -569,7 +587,9 @@ if MCP_AVAILABLE:
         --header 'Authorization: Bearer your_api_key_here'
         ```
         """
-        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
 
         # check to see if server exists for all users
         mcp_server = await get_mcp_server(prisma_client, server_id)
@@ -581,13 +601,19 @@ if MCP_AVAILABLE:
 
         # Perform health check on the server using server manager
         try:
-            health_result = await global_mcp_server_manager.health_check_server(server_id)
+            health_result = await global_mcp_server_manager.health_check_server(
+                server_id
+            )
             # Update the server object with health check results
-            mcp_server.status = health_result.status if health_result.status else "unknown"
+            mcp_server.status = (
+                health_result.status if health_result.status else "unknown"
+            )
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
-            verbose_proxy_logger.debug(f"Error performing health check on server {server_id}: {e}")
+            verbose_proxy_logger.debug(
+                f"Error performing health check on server {server_id}: {e}"
+            )
             mcp_server.status = "unknown"
             mcp_server.last_health_check = datetime.now()
             mcp_server.health_check_error = str(e)
@@ -597,7 +623,9 @@ if MCP_AVAILABLE:
             return _redact_mcp_credentials(mcp_server)
 
         # Perform authz check to filter the mcp servers user has access to
-        mcp_server_records = await get_all_mcp_servers_for_user(prisma_client, user_api_key_dict)
+        mcp_server_records = await get_all_mcp_servers_for_user(
+            prisma_client, user_api_key_dict
+        )
         exists = does_mcp_server_exist(mcp_server_records, server_id)
 
         if exists:
@@ -630,7 +658,9 @@ if MCP_AVAILABLE:
         """
         Allow users to add a new external mcp server.
         """
-        prisma_client = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
+        prisma_client = get_prisma_client_or_throw(
+            "Database not connected. Connect a database to your proxy"
+        )
 
         # Validate and normalize payload fields
         validate_and_normalize_mcp_server_payload(payload)
@@ -649,7 +679,9 @@ if MCP_AVAILABLE:
             if mcp_server is not None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail={"error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."},
+                    detail={
+                        "error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."
+                    },
                 )
         elif (
             SpecialMCPServerName.all_team_servers == payload.server_id
@@ -657,7 +689,9 @@ if MCP_AVAILABLE:
         ):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": f"MCP Server with id {payload.server_id} is special and cannot be used."},
+                detail={
+                    "error": f"MCP Server with id {payload.server_id} is special and cannot be used."
+                },
             )
 
         # TODO: audit log for create
@@ -723,16 +757,20 @@ if MCP_AVAILABLE:
         )
 
         try:
-            temporary_server = await global_mcp_server_manager.build_mcp_server_from_table(
-                temp_record,
-                credentials_are_encrypted=False,
+            temporary_server = (
+                await global_mcp_server_manager.build_mcp_server_from_table(
+                    temp_record,
+                    credentials_are_encrypted=False,
+                )
             )
             _cache_temporary_mcp_server(
                 temporary_server,
                 ttl_seconds=TEMPORARY_MCP_SERVER_TTL_SECONDS,
             )
         except Exception as e:
-            verbose_proxy_logger.exception(f"Error caching temporary mcp server: {str(e)}")
+            verbose_proxy_logger.exception(
+                f"Error caching temporary mcp server: {str(e)}"
+            )
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail={"error": f"Error caching temporary mcp server: {str(e)}"},
@@ -942,7 +980,9 @@ if MCP_AVAILABLE:
         if mcp_server_record_updated is None:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server not found, passed server_id={payload.server_id}"},
+                detail={
+                    "error": f"MCP Server not found, passed server_id={payload.server_id}"
+                },
             )
         await global_mcp_server_manager.update_server(mcp_server_record_updated)
 
@@ -993,7 +1033,9 @@ if MCP_AVAILABLE:
                 litellm.public_mcp_servers = []
 
             for server_id in request.mcp_server_ids:
-                server = global_mcp_server_manager.get_mcp_server_by_id(server_id=server_id)
+                server = global_mcp_server_manager.get_mcp_server_by_id(
+                    server_id=server_id
+                )
                 if server is None:
                     raise HTTPException(
                         status_code=404,
@@ -1006,7 +1048,9 @@ if MCP_AVAILABLE:
             if "litellm_settings" not in config or config["litellm_settings"] is None:
                 config["litellm_settings"] = {}
 
-            config["litellm_settings"]["public_mcp_servers"] = litellm.public_mcp_servers
+            config["litellm_settings"][
+                "public_mcp_servers"
+            ] = litellm.public_mcp_servers
 
             # Save the updated config
             await proxy_config.save_config(new_config=config)

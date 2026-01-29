@@ -107,13 +107,3 @@ LAZY_LOADING_IMPROVEMENTS.md
 **/playwright-report
 **/*.storageState.json
 **/coverage
-
-# Local agent/tool state
-registered_agents*.json
-task_agent_mapping*.json
-
-# Local Next.js export artifacts
-litellm/proxy/_experimental/out/404/
-litellm/proxy/_experimental/out/model_hub/
-litellm/proxy/_experimental/out/onboarding/
-litellm/proxy/_experimental/out/guardrails/

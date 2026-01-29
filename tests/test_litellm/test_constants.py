@@ -1,6 +1,5 @@
 import inspect
 import json
-import inspect
 import os
 import sys
 from unittest import mock
@@ -57,6 +56,6 @@ def test_all_numeric_constants_can_be_overridden():
             new_value = getattr(constants, name)
 
             # Verify the value was overridden
-            assert new_value == test_value, (
-                f"Failed to override {name} with environment variable. Expected {test_value}, got {new_value}"
-            )
+            assert (
+                new_value == test_value
+            ), f"Failed to override {name} with environment variable. Expected {test_value}, got {new_value}"

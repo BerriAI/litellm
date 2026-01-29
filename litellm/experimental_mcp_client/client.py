@@ -11,15 +11,10 @@ from mcp import ClientSession, ReadResourceResult, Resource, StdioServerParamete
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 
-# Optional dependency. Keep type broad to satisfy mypy across versions.
-streamable_http_client: Any = None
-
 try:
-    from mcp.client.streamable_http import streamable_http_client as _streamable_http_client  # type: ignore
-
-    streamable_http_client = _streamable_http_client
+    from mcp.client.streamable_http import streamable_http_client  # type: ignore
 except ImportError:
-    pass
+    streamable_http_client = None
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
@@ -118,7 +113,9 @@ class MCPClient:
         # HTTP transport (default)
         headers = self._get_auth_headers()
         httpx_client_factory = self._create_httpx_client_factory()
-        verbose_logger.debug("litellm headers for streamable_http_client: %s", headers)
+        verbose_logger.debug(
+            "litellm headers for streamable_http_client: %s", headers
+        )
         http_client = httpx_client_factory(
             headers=headers,
             timeout=httpx.Timeout(self.timeout),
@@ -158,14 +155,18 @@ class MCPClient:
             except BaseException as e:
                 verbose_logger.debug(f"Error during transport context exit: {e}")
 
-    async def run_with_session(self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]) -> TSessionResult:
+    async def run_with_session(
+        self, operation: Callable[[ClientSession], Awaitable[TSessionResult]]
+    ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up."""
         http_client: Optional[httpx.AsyncClient] = None
         try:
             transport_ctx, http_client = self._create_transport_context()
             return await self._execute_session_operation(transport_ctx, operation)
         except Exception:
-            verbose_logger.warning("MCP client run_with_session failed for %s", self.server_url or "stdio")
+            verbose_logger.warning(
+                "MCP client run_with_session failed for %s", self.server_url or "stdio"
+            )
             raise
         finally:
             if http_client is not None:
@@ -230,7 +231,9 @@ class MCPClient:
             # Get unified SSL configuration using the same logic as http_handler.py
             ssl_config = get_ssl_configuration(self.ssl_verify)
 
-            verbose_logger.debug(f"MCP client using SSL configuration: {type(ssl_config).__name__}")
+            verbose_logger.debug(
+                f"MCP client using SSL configuration: {type(ssl_config).__name__}"
+            )
 
             return httpx.AsyncClient(
                 headers=headers,
@@ -244,7 +247,9 @@ class MCPClient:
 
     async def list_tools(self) -> List[MCPTool]:
         """List available tools from the server."""
-        verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
+        verbose_logger.debug(
+            f"MCP client listing tools from {self.server_url or 'stdio'}"
+        )
 
         async def _list_tools_operation(session: ClientSession):
             return await session.list_tools()
@@ -253,7 +258,9 @@ class MCPClient:
             result = await self.run_with_session(_list_tools_operation)
             tool_count = len(result.tools)
             tool_names = [tool.name for tool in result.tools]
-            verbose_logger.info(f"MCP client listed {tool_count} tools from {self.server_url or 'stdio'}: {tool_names}")
+            verbose_logger.info(
+                f"MCP client listed {tool_count} tools from {self.server_url or 'stdio'}: {tool_names}"
+            )
             return result.tools
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client list_tools was cancelled")
@@ -279,7 +286,9 @@ class MCPClient:
             return []
 
     async def call_tool(
-        self, call_tool_request_params: MCPCallToolRequestParams, host_progress_callback: Optional[Callable] = None
+        self,
+        call_tool_request_params: MCPCallToolRequestParams,
+        host_progress_callback: Optional[Callable] = None
     ) -> MCPCallToolResult:
         """
         Call an MCP Tool.
@@ -294,7 +303,7 @@ class MCPClient:
                 f"MCP Tool '{call_tool_request_params.name}' progress: "
                 f"{progress}/{total} ({percentage:.0f}%) - {message or ''}"
             )
-
+            
             # Forward to Host if callback provided
             if host_progress_callback:
                 try:
@@ -308,11 +317,13 @@ class MCPClient:
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
                 progress_callback=on_progress,
-            )
 
+            )
         try:
             tool_result = await self.run_with_session(_call_tool_operation)
-            verbose_logger.info(f"MCP client tool call '{call_tool_request_params.name}' completed successfully")
+            verbose_logger.info(
+                f"MCP client tool call '{call_tool_request_params.name}' completed successfully"
+            )
             return tool_result
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client tool call was cancelled")
@@ -343,13 +354,17 @@ class MCPClient:
 
             # Return a default error result instead of raising
             return MCPCallToolResult(
-                content=[TextContent(type="text", text=f"{error_type}: {str(e)}")],  # Empty content for error case
+                content=[
+                    TextContent(type="text", text=f"{error_type}: {str(e)}")
+                ],  # Empty content for error case
                 isError=True,
             )
 
     async def list_prompts(self) -> List[Prompt]:
         """List available prompts from the server."""
-        verbose_logger.debug(f"MCP client listing tools from {self.server_url or 'stdio'}")
+        verbose_logger.debug(
+            f"MCP client listing tools from {self.server_url or 'stdio'}"
+        )
 
         async def _list_prompts_operation(session: ClientSession):
             return await session.list_prompts()
@@ -385,7 +400,9 @@ class MCPClient:
             # Return empty list instead of raising to allow graceful degradation
             return []
 
-    async def get_prompt(self, get_prompt_request_params: GetPromptRequestParams) -> GetPromptResult:
+    async def get_prompt(
+        self, get_prompt_request_params: GetPromptRequestParams
+    ) -> GetPromptResult:
         """Fetch a prompt definition from the MCP server."""
         verbose_logger.info(
             f"MCP client fetching prompt '{get_prompt_request_params.name}' with arguments: {get_prompt_request_params.arguments}"
@@ -400,7 +417,9 @@ class MCPClient:
 
         try:
             get_prompt_result = await self.run_with_session(_get_prompt_operation)
-            verbose_logger.info(f"MCP client get_prompt '{get_prompt_request_params.name}' completed successfully")
+            verbose_logger.info(
+                f"MCP client get_prompt '{get_prompt_request_params.name}' completed successfully"
+            )
             return get_prompt_result
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client get_prompt was cancelled")
@@ -433,7 +452,9 @@ class MCPClient:
 
     async def list_resources(self) -> list[Resource]:
         """List available resources from the server."""
-        verbose_logger.debug(f"MCP client listing resources from {self.server_url or 'stdio'}")
+        verbose_logger.debug(
+            f"MCP client listing resources from {self.server_url or 'stdio'}"
+        )
 
         async def _list_resources_operation(session: ClientSession):
             return await session.list_resources()
@@ -471,7 +492,9 @@ class MCPClient:
 
     async def list_resource_templates(self) -> list[ResourceTemplate]:
         """List available resource templates from the server."""
-        verbose_logger.debug(f"MCP client listing resource templates from {self.server_url or 'stdio'}")
+        verbose_logger.debug(
+            f"MCP client listing resource templates from {self.server_url or 'stdio'}"
+        )
 
         async def _list_resource_templates_operation(session: ClientSession):
             return await session.list_resource_templates()
@@ -479,7 +502,9 @@ class MCPClient:
         try:
             result = await self.run_with_session(_list_resource_templates_operation)
             resource_template_count = len(result.resourceTemplates)
-            resource_template_names = [resourceTemplate.name for resourceTemplate in result.resourceTemplates]
+            resource_template_names = [
+                resourceTemplate.name for resourceTemplate in result.resourceTemplates
+            ]
             verbose_logger.info(
                 f"MCP client listed {resource_template_count} resource templates from {self.server_url or 'stdio'}: {resource_template_names}"
             )
@@ -517,7 +542,9 @@ class MCPClient:
 
         try:
             read_resource_result = await self.run_with_session(_read_resource_operation)
-            verbose_logger.info(f"MCP client read_resource '{url}' completed successfully")
+            verbose_logger.info(
+                f"MCP client read_resource '{url}' completed successfully"
+            )
             return read_resource_result
         except asyncio.CancelledError:
             verbose_logger.warning("MCP client read_resource was cancelled")

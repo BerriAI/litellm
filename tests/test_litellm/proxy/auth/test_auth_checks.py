@@ -4,7 +4,9 @@ import os
 import sys
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
+sys.path.insert(
+    0, os.path.abspath("../../..")
+)  # Adds the parent directory to the system path
 
 from datetime import datetime, timedelta
 
@@ -67,10 +69,14 @@ def invalid_sso_user_defined_values():
 
 def test_get_experimental_ui_login_jwt_auth_token_valid(valid_sso_user_defined_values):
     """Test generating JWT token with valid user role"""
-    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
     # Check that decrypted_token is not None before using json.loads
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
@@ -92,16 +98,22 @@ def test_get_experimental_ui_login_jwt_auth_token_invalid(
 ):
     """Test generating JWT token with missing user role"""
     with pytest.raises(Exception) as exc_info:
-        ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(invalid_sso_user_defined_values)
+        ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+            invalid_sso_user_defined_values
+        )
 
     assert str(exc_info.value) == "User role is required for experimental UI login"
 
 
-def test_get_key_object_from_ui_hash_key_valid(valid_sso_user_defined_values, monkeypatch):
+def test_get_key_object_from_ui_hash_key_valid(
+    valid_sso_user_defined_values, monkeypatch
+):
     """Test getting key object from valid UI hash key"""
     monkeypatch.setenv("EXPERIMENTAL_UI_LOGIN", "True")
     # Generate a valid token
-    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(valid_sso_user_defined_values)
+    token = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(
+        valid_sso_user_defined_values
+    )
 
     # Get key object
     key_object = ExperimentalUIJWTToken.get_key_object_from_ui_hash_key(token)
@@ -120,22 +132,14 @@ def test_get_key_object_from_ui_hash_key_invalid():
     assert key_object is None
 
 
-def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values, monkeypatch):
+def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values):
     """Test generating CLI JWT token with default 24-hour expiration"""
-    # Ensure any prior test that reloaded constants with a custom env override
-    # does not leak into this test.
-    monkeypatch.delenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", raising=False)
-
-    import importlib
-
-    from litellm import constants
-
-    importlib.reload(constants)
-
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -152,22 +156,25 @@ def test_get_cli_jwt_auth_token_default_expiration(valid_sso_user_defined_values
     assert expires >= get_utc_datetime() + timedelta(hours=23, minutes=59)
 
 
-def test_get_cli_jwt_auth_token_custom_expiration(valid_sso_user_defined_values, monkeypatch):
+def test_get_cli_jwt_auth_token_custom_expiration(
+    valid_sso_user_defined_values, monkeypatch
+):
     """Test generating CLI JWT token with custom expiration via environment variable"""
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
-
+    
     # Reload the constants module to pick up the new env var
     import importlib
 
     from litellm import constants
-
     importlib.reload(constants)
-
+    
     token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
-    decrypted_token = decrypt_value_helper(token, key="ui_hash_key", exception_type="debug")
+    decrypted_token = decrypt_value_helper(
+        token, key="ui_hash_key", exception_type="debug"
+    )
     assert decrypted_token is not None
     token_data = json.loads(decrypted_token)
 
@@ -176,6 +183,7 @@ def test_get_cli_jwt_auth_token_custom_expiration(valid_sso_user_defined_values,
     expires = datetime.fromisoformat(token_data["expires"].replace("Z", "+00:00"))
     assert expires > get_utc_datetime() + timedelta(hours=47, minutes=59)
     assert expires <= get_utc_datetime() + timedelta(hours=48, minutes=1)
+
 
 
 @pytest.mark.asyncio
@@ -314,16 +322,17 @@ async def test_get_team_db_check_does_not_call_new_team_if_exists(mock_new_team,
         (MagicMock(), MagicMock(), True),  # No vector stores to run
     ],
 )
-async def test_vector_store_access_check_early_returns(prisma_client, vector_store_registry, expected_result):
+async def test_vector_store_access_check_early_returns(
+    prisma_client, vector_store_registry, expected_result
+):
     """Test vector_store_access_check returns True for early exit conditions"""
     request_body = {"messages": [{"role": "user", "content": "test"}]}
 
     if vector_store_registry:
         vector_store_registry.get_vector_store_ids_to_run.return_value = None
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
-        patch("litellm.vector_store_registry", vector_store_registry),
+    with patch("litellm.proxy.proxy_server.prisma_client", prisma_client), patch(
+        "litellm.vector_store_registry", vector_store_registry
     ):
         result = await vector_store_access_check(
             request_body=request_body,
@@ -364,7 +373,9 @@ async def test_vector_store_access_check_early_returns(prisma_client, vector_sto
         ),  # Partial access
     ],
 )
-def test_can_object_call_vector_stores_scenarios(object_permissions, vector_store_ids, should_raise, error_type):
+def test_can_object_call_vector_stores_scenarios(
+    object_permissions, vector_store_ids, should_raise, error_type
+):
     """Test _can_object_call_vector_stores with various permission scenarios"""
     # Convert dict to object if not None
     if object_permissions is not None:
@@ -372,7 +383,11 @@ def test_can_object_call_vector_stores_scenarios(object_permissions, vector_stor
         mock_permissions.vector_stores = object_permissions["vector_stores"]
         object_permissions = mock_permissions
 
-    object_type = "key" if error_type == ProxyErrorTypes.key_vector_store_access_denied else "team"
+    object_type = (
+        "key"
+        if error_type == ProxyErrorTypes.key_vector_store_access_denied
+        else "team"
+    )
 
     if should_raise:
         with pytest.raises(ProxyException) as exc_info:
@@ -407,14 +422,15 @@ async def test_vector_store_access_check_with_permissions():
     mock_prisma_client = MagicMock()
     mock_permissions = MagicMock()
     mock_permissions.vector_stores = ["store-1", "store-2"]
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=mock_permissions)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=mock_permissions
+    )
 
     mock_vector_store_registry = MagicMock()
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-1"]
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
     ):
         result = await vector_store_access_check(
             request_body=request_body,
@@ -427,9 +443,8 @@ async def test_vector_store_access_check_with_permissions():
     # Test with denied access
     mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["store-3"]
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
     ):
         with pytest.raises(ProxyException) as exc_info:
             await vector_store_access_check(
@@ -453,14 +468,17 @@ async def test_vector_store_access_check_with_team_permissions():
     mock_prisma_client = MagicMock()
     team_permissions = MagicMock()
     team_permissions.vector_stores = ["team-store-allowed"]
-    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=team_permissions)
+    mock_prisma_client.db.litellm_objectpermissiontable.find_unique = AsyncMock(
+        return_value=team_permissions
+    )
 
     mock_vector_store_registry = MagicMock()
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["team-store-allowed"]
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = [
+        "team-store-allowed"
+    ]
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
     ):
         result = await vector_store_access_check(
             request_body=request_body,
@@ -470,11 +488,12 @@ async def test_vector_store_access_check_with_team_permissions():
 
     assert result is True
 
-    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = ["team-store-denied"]
+    mock_vector_store_registry.get_vector_store_ids_to_run.return_value = [
+        "team-store-denied"
+    ]
 
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.vector_store_registry", mock_vector_store_registry),
+    with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client), patch(
+        "litellm.vector_store_registry", mock_vector_store_registry
     ):
         with pytest.raises(ProxyException) as exc_info:
             await vector_store_access_check(
@@ -749,7 +768,9 @@ async def test_get_tag_objects_batch():
     mock_cache.async_set_cache = AsyncMock()
 
     # Mock DB to return all uncached tags in ONE query
-    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(return_value=[uncached_tag_1, uncached_tag_2, uncached_tag_3])
+    mock_prisma.db.litellm_tagtable.find_many = AsyncMock(
+        return_value=[uncached_tag_1, uncached_tag_2, uncached_tag_3]
+    )
 
     # Call batch fetch
     tag_objects = await get_tag_objects_batch(
@@ -1133,7 +1154,9 @@ async def test_virtual_key_soft_budget_check_without_user_obj():
     ],
 )
 @pytest.mark.asyncio
-async def test_virtual_key_soft_budget_check_scenarios(spend, soft_budget, expect_alert):
+async def test_virtual_key_soft_budget_check_scenarios(
+    spend, soft_budget, expect_alert
+):
     """Test _virtual_key_soft_budget_check with various spend and soft_budget scenarios"""
     alert_triggered = False
 
@@ -1162,9 +1185,9 @@ async def test_virtual_key_soft_budget_check_scenarios(spend, soft_budget, expec
 
     await asyncio.sleep(0.1)
 
-    assert alert_triggered == expect_alert, (
-        f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
-    )
+    assert (
+        alert_triggered == expect_alert
+    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, soft_budget={soft_budget}"
 
 
 @pytest.mark.asyncio
@@ -1275,7 +1298,9 @@ async def test_virtual_key_max_budget_alert_check_without_user_obj():
     ],
 )
 @pytest.mark.asyncio
-async def test_virtual_key_max_budget_alert_check_scenarios(spend, max_budget, expect_alert):
+async def test_virtual_key_max_budget_alert_check_scenarios(
+    spend, max_budget, expect_alert
+):
     """Test _virtual_key_max_budget_alert_check with various spend and max_budget scenarios"""
     alert_triggered = False
 
@@ -1304,9 +1329,9 @@ async def test_virtual_key_max_budget_alert_check_scenarios(spend, max_budget, e
 
     await asyncio.sleep(0.1)
 
-    assert alert_triggered == expect_alert, (
-        f"Expected alert_triggered to be {expect_alert} for spend={spend}, max_budget={max_budget}"
-    )
+    assert (
+        alert_triggered == expect_alert
+    ), f"Expected alert_triggered to be {expect_alert} for spend={spend}, max_budget={max_budget}"
 
 
 @pytest.mark.asyncio
