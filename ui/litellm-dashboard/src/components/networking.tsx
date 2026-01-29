@@ -2764,6 +2764,7 @@ export const uiSpendLogsCall = async (
   model?: string,
   keyAlias?: string,
   error_code?: string,
+  error_message?: string,
 ) => {
   try {
     // Construct base URL
@@ -2784,6 +2785,7 @@ export const uiSpendLogsCall = async (
     if (model) queryParams.append("model", model);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
     if (error_code) queryParams.append("error_code", error_code);
+    if (error_message) queryParams.append("error_message", error_message);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
