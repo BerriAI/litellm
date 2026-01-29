@@ -271,6 +271,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
+            "cached_content",
         ]
 
         # Add penalty parameters only for non-preview models
@@ -1074,6 +1075,8 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
                 optional_params = self._add_tools_to_optional_params(
                     optional_params, [_tools]
                 )
+            elif param == "cached_content":
+                optional_params["cached_content"] = value
         if litellm.vertex_ai_safety_settings is not None:
             optional_params["safety_settings"] = litellm.vertex_ai_safety_settings
 

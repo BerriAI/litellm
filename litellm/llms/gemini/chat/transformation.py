@@ -91,6 +91,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "modalities",
             "parallel_tool_calls",
             "web_search_options",
+            "cached_content",
         ]
         if supports_reasoning(model, custom_llm_provider="gemini"):
             supported_params.append("reasoning_effort")

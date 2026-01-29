@@ -1,3 +1,5 @@
+from typing import List, cast
+
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_gemini_tool_call_result,
 )
@@ -6,6 +8,7 @@ from litellm.llms.vertex_ai.gemini.transformation import (
     _transform_request_body,
     check_if_part_exists_in_parts,
 )
+from litellm.types.llms.openai import AllMessageValues
 from litellm.types.llms.vertex_ai import BlobType
 
 
@@ -86,7 +89,7 @@ def test_check_if_part_exists_in_parts_camel_case_snake_case():
 # Tests for issue #14556: Labels field provider-aware filtering
 def test_google_genai_excludes_labels():
     """Test that Google GenAI/AI Studio endpoints exclude labels when custom_llm_provider='gemini'"""
-    messages = [{"role": "user", "content": "test"}]
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
 
@@ -106,7 +109,7 @@ def test_google_genai_excludes_labels():
 
 def test_vertex_ai_includes_labels():
     """Test that Vertex AI endpoints include labels when custom_llm_provider='vertex_ai'"""
-    messages = [{"role": "user", "content": "test"}]
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
     optional_params = {"labels": {"project": "test", "team": "ai"}}
     litellm_params = {}
 
@@ -127,7 +130,7 @@ def test_vertex_ai_includes_labels():
 
 def test_metadata_to_labels_vertex_only():
     """Test that metadata->labels conversion only happens for Vertex AI"""
-    messages = [{"role": "user", "content": "test"}]
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
     optional_params = {}
     litellm_params = {
         "metadata": {
@@ -1086,3 +1089,90 @@ def test_convert_tool_response_with_nested_file_object():
     assert "mime_type" in inline_data
     assert inline_data["mime_type"] == "application/pdf"
     assert inline_data["data"] == test_pdf_base64
+
+
+def test_cached_content_vertex_ai():
+    """Test that cached_content is passed through to the request body for Vertex AI."""
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
+    optional_params = {}
+    litellm_params = {}
+    cache_name = "cachedContents/abc123xyz"
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-1.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="vertex_ai",
+        litellm_params=litellm_params,
+        cached_content=cache_name,
+    )
+
+    # Verify cached_content is in the request body
+    assert "cachedContent" in result
+    assert result["cachedContent"] == cache_name
+
+
+def test_cached_content_google_ai_studio():
+    """Test that cached_content is passed through to the request body for Google AI Studio."""
+    messages = cast(List[AllMessageValues], [{"role": "user", "content": "test"}])
+    optional_params = {}
+    litellm_params = {}
+    cache_name = "cachedContents/def456abc"
+
+    result = _transform_request_body(
+        messages=messages,
+        model="gemini-1.5-pro",
+        optional_params=optional_params,
+        custom_llm_provider="gemini",
+        litellm_params=litellm_params,
+        cached_content=cache_name,
+    )
+
+    # Verify cached_content is in the request body
+    assert "cachedContent" in result
+    assert result["cachedContent"] == cache_name
+
+
+def test_cached_content_in_supported_params_vertex_ai():
+    """Test that cached_content is listed in supported params for Vertex AI."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    config = VertexGeminiConfig()
+    supported_params = config.get_supported_openai_params(model="gemini-1.5-pro")
+
+    assert "cached_content" in supported_params
+
+
+def test_cached_content_in_supported_params_google_ai_studio():
+    """Test that cached_content is listed in supported params for Google AI Studio."""
+    from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
+
+    config = GoogleAIStudioGeminiConfig()
+    supported_params = config.get_supported_openai_params(model="gemini-1.5-pro")
+
+    assert "cached_content" in supported_params
+
+
+def test_cached_content_map_openai_params():
+    """Test that cached_content is properly mapped in map_openai_params."""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    config = VertexGeminiConfig()
+    cache_name = "cachedContents/test123"
+
+    non_default_params = {"cached_content": cache_name}
+    optional_params = {}
+
+    result = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="gemini-1.5-pro",
+        drop_params=False,
+    )
+
+    assert "cached_content" in result
+    assert result["cached_content"] == cache_name
