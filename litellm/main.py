@@ -2694,53 +2694,23 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
             response = response
         elif custom_llm_provider == "nlp_cloud":
-            from litellm.llms.nlp_cloud.chat.handler import NLPCloudChatHandler
-            nlp_cloud_chat_completion = NLPCloudChatHandler()
-
-            nlp_cloud_key = (
-                api_key
-                or litellm.nlp_cloud_key
-                or get_secret_str("NLP_CLOUD_API_KEY")
-                or litellm.api_key
+            response = base_llm_http_handler.completion(
+                model=model,
+                messages=messages,
+                api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
+                model_response=model_response,
+                encoding=_get_encoding(),
+                logging_obj=logging,
+                optional_params=optional_params,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                acompletion=acompletion,
+                stream=stream,
+                api_key=api_key,
+                client=client,
+                shared_session=shared_session,
             )
-
-            api_base = (
-                litellm.api_base
-                or api_base
-                or get_secret_str("NLP_CLOUD_API_BASE")
-                or "https://api.nlpcloud.io/v1/"
-            )
-
-            if acompletion is True:
-                response = nlp_cloud_chat_completion.acompletion(
-                    model=model,
-                    messages=messages,
-                    api_base=api_base,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=nlp_cloud_key,
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=_get_encoding(),
-                    client=client,
-                )
-            else:
-                response = nlp_cloud_chat_completion.completion(
-                    model=model,
-                    messages=messages,
-                    api_base=api_base,
-                    model_response=model_response,
-                    print_verbose=print_verbose,
-                    api_key=nlp_cloud_key,
-                    logging_obj=logging,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    logger_fn=logger_fn,
-                    encoding=_get_encoding(),
-                    client=client,
-                )
         elif custom_llm_provider == "aleph_alpha":
             aleph_alpha_key = (
                 api_key
@@ -5131,30 +5101,19 @@ def embedding(  # noqa: PLR0915
                 aembedding=aembedding,
             )
         elif custom_llm_provider == "nlp_cloud":
-            from litellm.llms.nlp_cloud.chat.handler import NLPCloudChatHandler
-            nlp_cloud_chat_completion = NLPCloudChatHandler()
-
-            api_base = (
-                litellm.api_base
-                or api_base
-                or get_secret_str("NLP_CLOUD_API_BASE")
-                or "https://api.nlpcloud.io/v1/"
-            )
-            api_key = (
-                api_key
-                or litellm.nlp_cloud_key
-                or get_secret_str("NLP_CLOUD_API_KEY")
-                or litellm.api_key
-            )
-            response = nlp_cloud_chat_completion.embedding(
+            response = base_llm_http_handler.embedding(
                 model=model,
                 input=input,
-                api_key=api_key,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
                 api_base=api_base,
-                logging_obj=litellm_logging_obj,
-                model_response=None,
                 optional_params=optional_params,
-                client=client
+                litellm_params=litellm_params_dict,
+                model_response=EmbeddingResponse(),
+                api_key=api_key,
+                client=client,
+                aembedding=aembedding,
             )
         elif custom_llm_provider == "nebius":
             api_key = api_key or litellm.api_key or get_secret_str("NEBIUS_API_KEY")
