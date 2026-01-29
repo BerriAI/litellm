@@ -1262,7 +1262,6 @@ async def user_api_key_auth(
         user_api_key_auth_obj.end_user_id = end_user_id
 
     user_api_key_auth_obj.request_route = normalize_request_route(route)
-    print(f"🔥user_api_key_auth_obj: {user_api_key_auth_obj}")
     return user_api_key_auth_obj
 
 
