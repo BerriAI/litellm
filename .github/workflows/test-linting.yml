@@ -34,10 +34,10 @@ jobs:
         poetry install --with dev
         poetry run pip install openai==1.100.1
 
-    - name: Run Black formatting
+    - name: Check Black formatting
       run: |
         cd litellm
-        poetry run black .
+        poetry run black --check .
         cd ..
 
     - name: Debug - Check file state
