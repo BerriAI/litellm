@@ -1060,3 +1060,81 @@ def test_append_system_prompt_messages():
         kwargs=None, messages=messages
     )
     assert result == messages
+
+
+def test_get_error_information_error_code_priority():
+    """
+    Test get_error_information prioritizes 'code' attribute over 'status_code' attribute
+    and handles edge cases like empty strings and "None" string values.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Test case 1: Exception with 'code' attribute (ProxyException style)
+    class ProxyException(Exception):
+        def __init__(self, code, message):
+            self.code = code
+            self.message = message
+            super().__init__(message)
+
+    proxy_exception = ProxyException(code="500", message="Internal Server Error")
+    result = StandardLoggingPayloadSetup.get_error_information(proxy_exception)
+    assert result["error_code"] == "500"
+    assert result["error_class"] == "ProxyException"
+
+    # Test case 2: Exception with 'status_code' attribute (LiteLLM style)
+    class LiteLLMException(Exception):
+        def __init__(self, status_code, message):
+            self.status_code = status_code
+            self.message = message
+            super().__init__(message)
+
+    litellm_exception = LiteLLMException(status_code=429, message="Rate limit exceeded")
+    result = StandardLoggingPayloadSetup.get_error_information(litellm_exception)
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "LiteLLMException"
+
+    # Test case 3: Exception with both 'code' and 'status_code' - should prefer 'code'
+    class BothAttributesException(Exception):
+        def __init__(self, code, status_code, message):
+            self.code = code
+            self.status_code = status_code
+            self.message = message
+            super().__init__(message)
+
+    both_exception = BothAttributesException(
+        code="400", status_code=500, message="Bad Request"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(both_exception)
+    assert result["error_code"] == "400"  # Should prefer 'code' over 'status_code'
+
+    # Test case 4: Exception with 'code' as empty string - should fall back to 'status_code'
+    empty_code_exception = BothAttributesException(
+        code="", status_code=404, message="Not Found"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(empty_code_exception)
+    assert result["error_code"] == "404"  # Should fall back to status_code
+
+    # Test case 5: Exception with 'code' as "None" string - should fall back to 'status_code'
+    none_string_exception = BothAttributesException(
+        code="None", status_code=503, message="Service Unavailable"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(none_string_exception)
+    assert result["error_code"] == "503"  # Should fall back to status_code
+
+    # Test case 6: Exception with 'code' as None - should fall back to 'status_code'
+    none_code_exception = BothAttributesException(
+        code=None, status_code=401, message="Unauthorized"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(none_code_exception)
+    assert result["error_code"] == "401"  # Should fall back to status_code
+
+    # Test case 7: Exception with neither 'code' nor 'status_code' - should return empty string
+    class NoCodeException(Exception):
+        def __init__(self, message):
+            self.message = message
+            super().__init__(message)
+
+    no_code_exception = NoCodeException(message="Generic error")
+    result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
+    assert result["error_code"] == ""
+    assert result["error_class"] == "NoCodeException"
