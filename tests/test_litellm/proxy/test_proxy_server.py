@@ -5,7 +5,7 @@ import os
 import socket
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -1047,6 +1047,82 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
 
     result = await proxy_config._get_config_from_file(None)
     assert result == test_config
+
+
+def test_normalize_datetime_for_sorting():
+    """
+    Test the _normalize_datetime_for_sorting function.
+    Tests various scenarios: None values, ISO format strings, datetime objects (naive and aware).
+    """
+    from litellm.proxy.proxy_server import _normalize_datetime_for_sorting
+
+    # Test Case 1: None value
+    assert _normalize_datetime_for_sorting(None) is None
+
+    # Test Case 2: ISO format string with 'Z' suffix
+    dt_str_z = "2024-01-15T10:30:00Z"
+    result = _normalize_datetime_for_sorting(dt_str_z)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result.year == 2024
+    assert result.month == 1
+    assert result.day == 15
+    assert result.hour == 10
+    assert result.minute == 30
+
+    # Test Case 3: ISO format string without 'Z' suffix (naive)
+    dt_str_naive = "2024-01-15T10:30:00"
+    result = _normalize_datetime_for_sorting(dt_str_naive)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+
+    # Test Case 4: ISO format string with timezone offset
+    dt_str_tz = "2024-01-15T10:30:00+05:00"
+    result = _normalize_datetime_for_sorting(dt_str_tz)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    # Should convert from +05:00 to UTC (subtract 5 hours)
+    assert result.hour == 5  # 10:30 - 5 hours = 5:30 UTC
+
+    # Test Case 5: Naive datetime object
+    naive_dt = datetime(2024, 1, 15, 10, 30, 0)
+    result = _normalize_datetime_for_sorting(naive_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result.year == 2024
+    assert result.month == 1
+    assert result.day == 15
+
+    # Test Case 6: Timezone-aware datetime object (non-UTC)
+    from datetime import timedelta
+    aware_dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone(timedelta(hours=5)))
+    result = _normalize_datetime_for_sorting(aware_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    # Should convert from +05:00 to UTC
+    assert result.hour == 5
+
+    # Test Case 7: UTC-aware datetime object
+    utc_dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+    result = _normalize_datetime_for_sorting(utc_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result == utc_dt
+
+    # Test Case 8: Invalid string format
+    invalid_str = "not-a-date"
+    result = _normalize_datetime_for_sorting(invalid_str)
+    assert result is None
+
+    # Test Case 9: Invalid type (should return None)
+    result = _normalize_datetime_for_sorting(12345)
+    assert result is None
 
 
 @pytest.mark.asyncio
