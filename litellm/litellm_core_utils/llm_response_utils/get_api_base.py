@@ -28,6 +28,13 @@ def get_api_base(
     ```
     """
 
+    # Fast path: if api_base is already in the dict, return it directly
+    # without constructing a full LiteLLM_Params Pydantic model.
+    if isinstance(optional_params, dict):
+        _api_base = optional_params.get("api_base")
+        if _api_base is not None:
+            return _api_base
+
     try:
         if isinstance(optional_params, LiteLLM_Params):
             _optional_params = optional_params
