@@ -1224,6 +1224,7 @@ redis_usage_cache: Optional[
     RedisCache
 ] = None  # redis cache used for tracking spend, tpm/rpm limits
 polling_via_cache_enabled: Union[Literal["all"], List[str], bool] = False
+native_background_mode: List[str] = []  # Models that should use native provider background mode instead of polling
 polling_cache_ttl: int = 3600  # Default 1 hour TTL for polling cache
 user_custom_auth = None
 user_custom_key_generate = None
@@ -2456,14 +2457,17 @@ class ProxyConfig:
                     pass
                 elif key == "responses":
                     # Initialize global polling via cache settings
-                    global polling_via_cache_enabled, polling_cache_ttl
+                    global polling_via_cache_enabled, native_background_mode, polling_cache_ttl
                     background_mode = value.get("background_mode", {})
                     polling_via_cache_enabled = background_mode.get(
                         "polling_via_cache", False
                     )
+                    native_background_mode = background_mode.get(
+                        "native_background_mode", []
+                    )
                     polling_cache_ttl = background_mode.get("ttl", 3600)
                     verbose_proxy_logger.debug(
-                        f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, ttl={polling_cache_ttl}{reset_color_code}"
+                        f"{blue_color_code} Initialized polling via cache: enabled={polling_via_cache_enabled}, native_background_mode={native_background_mode}, ttl={polling_cache_ttl}{reset_color_code}"
                     )
                 elif key == "default_team_settings":
                     for idx, team_setting in enumerate(
@@ -3540,6 +3544,79 @@ class ProxyConfig:
                 llm_router=llm_router,
             )
 
+    async def _reschedule_spend_log_cleanup_job(self):
+        """
+        Reschedule the spend log cleanup job based on current general_settings.
+        This is called when maximum_spend_logs_retention_period is updated dynamically.
+        If the retention period is None, the job will be removed.
+        """
+        global scheduler, general_settings, prisma_client
+        if scheduler is None:
+            return
+
+        # Remove existing job if it exists
+        try:
+            scheduler.remove_job("spend_log_cleanup_job")
+            verbose_proxy_logger.info("Removed existing spend log cleanup job")
+        except Exception:
+            pass  # Job might not exist, which is fine
+
+        # Schedule new job if retention period is set (not None)
+        retention_period = general_settings.get("maximum_spend_logs_retention_period")
+        if retention_period is not None:
+            from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import (
+                SpendLogCleanup,
+            )
+
+            spend_log_cleanup = SpendLogCleanup()
+            cleanup_cron = general_settings.get("maximum_spend_logs_cleanup_cron")
+
+            if cleanup_cron:
+                from apscheduler.triggers.cron import CronTrigger
+
+                try:
+                    cron_trigger = CronTrigger.from_crontab(cleanup_cron)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        cron_trigger,
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup rescheduled with cron: {cleanup_cron}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        f"Invalid maximum_spend_logs_cleanup_cron value: {cleanup_cron}"
+                    )
+            else:
+                # Interval-based scheduling (existing behavior)
+                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+                retention_interval = general_settings.get(
+                    "maximum_spend_logs_retention_interval", "1d"
+                )
+                try:
+                    interval_seconds = duration_in_seconds(retention_interval)
+                    scheduler.add_job(
+                        spend_log_cleanup.cleanup_old_spend_logs,
+                        "interval",
+                        seconds=interval_seconds + random.randint(0, 60),
+                        args=[prisma_client],
+                        id="spend_log_cleanup_job",
+                        replace_existing=True,
+                        misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+                    )
+                    verbose_proxy_logger.info(
+                        f"Spend log cleanup rescheduled with interval: {retention_interval}"
+                    )
+                except ValueError:
+                    verbose_proxy_logger.error(
+                        "Invalid maximum_spend_logs_retention_interval value"
+                    )
+
     async def _update_general_settings(self, db_general_settings: Optional[Json]):
         """
         Pull from DB, read general settings value
@@ -3578,6 +3655,32 @@ class ProxyConfig:
         ## UI ACCESS MODE ##
         if "ui_access_mode" in _general_settings:
             general_settings["ui_access_mode"] = _general_settings["ui_access_mode"]
+
+        ## STORE PROMPTS IN SPEND LOGS ##
+        if "store_prompts_in_spend_logs" in _general_settings:
+            value = _general_settings["store_prompts_in_spend_logs"]
+            # Normalize case: handle True/true/TRUE, False/false/FALSE, None/null
+            if value is None:
+                general_settings["store_prompts_in_spend_logs"] = None
+            elif isinstance(value, bool):
+                general_settings["store_prompts_in_spend_logs"] = value
+            elif isinstance(value, str):
+                # Case-insensitive string comparison
+                general_settings["store_prompts_in_spend_logs"] = (
+                    value.lower() == "true"
+                )
+            else:
+                # For other types, convert to bool
+                general_settings["store_prompts_in_spend_logs"] = bool(value)
+
+        ## MAXIMUM SPEND LOGS RETENTION PERIOD ##
+        if "maximum_spend_logs_retention_period" in _general_settings:
+            old_value = general_settings.get("maximum_spend_logs_retention_period")
+            new_value = _general_settings["maximum_spend_logs_retention_period"]
+            general_settings["maximum_spend_logs_retention_period"] = new_value
+            # Reschedule cleanup job if value changed (including when set to None)
+            if old_value != new_value:
+                await self._reschedule_spend_log_cleanup_job()
 
     def _update_config_fields(
         self,
@@ -4688,7 +4791,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ):
         """Initializes scheduled background jobs"""
-        global store_model_in_db
+        global store_model_in_db, scheduler
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -7807,6 +7910,7 @@ async def _apply_search_filter_to_models(
     size: int,
     prisma_client: Optional[Any],
     proxy_config: Any,
+    sort_by: Optional[str] = None,
 ) -> Tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Apply search filter to models, querying database for additional matching models.
@@ -7818,6 +7922,7 @@ async def _apply_search_filter_to_models(
         size: Page size
         prisma_client: Prisma client for database queries
         proxy_config: Proxy config for decrypting models
+        sort_by: Optional sort field - if provided, fetch all matching models instead of paginating at DB level
 
     Returns:
         Tuple of (filtered_models, total_count). total_count is None if not searching.
@@ -7881,17 +7986,15 @@ async def _apply_search_filter_to_models(
             # Calculate total count for search results
             search_total_count = router_models_count + db_models_total_count
 
-            # Fetch database models if we need more for the current page
-            if router_models_count < models_needed_for_page:
-                models_to_fetch = min(
-                    models_needed_for_page - router_models_count, db_models_total_count
-                )
-
-                if models_to_fetch > 0:
+            # If sorting is requested, we need to fetch ALL matching models to sort correctly
+            # Otherwise, we can optimize by only fetching what's needed for the current page
+            if sort_by:
+                # Fetch all matching database models for sorting
+                if db_models_total_count > 0:
                     db_models_raw = (
                         await prisma_client.db.litellm_proxymodeltable.find_many(
                             where=db_where_condition,
-                            take=models_to_fetch,
+                            take=db_models_total_count,  # Fetch all matching models
                         )
                     )
 
@@ -7902,6 +8005,28 @@ async def _apply_search_filter_to_models(
                         )
                         if decrypted_models:
                             db_models.extend(decrypted_models)
+            else:
+                # Fetch database models if we need more for the current page
+                if router_models_count < models_needed_for_page:
+                    models_to_fetch = min(
+                        models_needed_for_page - router_models_count, db_models_total_count
+                    )
+
+                    if models_to_fetch > 0:
+                        db_models_raw = (
+                            await prisma_client.db.litellm_proxymodeltable.find_many(
+                                where=db_where_condition,
+                                take=models_to_fetch,
+                            )
+                        )
+
+                        # Convert database models to router format
+                        for db_model in db_models_raw:
+                            decrypted_models = proxy_config.decrypt_model_list_from_db(
+                                [db_model]
+                            )
+                            if decrypted_models:
+                                db_models.extend(decrypted_models)
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"Error querying database models with search: {str(e)}"
@@ -7915,6 +8040,80 @@ async def _apply_search_filter_to_models(
     # Combine all models
     filtered_models = filtered_router_models + db_models
     return filtered_models, search_total_count
+
+
+def _sort_models(
+    all_models: List[Dict[str, Any]],
+    sort_by: Optional[str],
+    sort_order: str = "asc",
+) -> List[Dict[str, Any]]:
+    """
+    Sort models by the specified field and order.
+
+    Args:
+        all_models: List of models to sort
+        sort_by: Field to sort by (model_name, created_at, updated_at, costs, status)
+        sort_order: Sort order (asc or desc)
+
+    Returns:
+        Sorted list of models
+    """
+    if not sort_by or sort_by not in ["model_name", "created_at", "updated_at", "costs", "status"]:
+        return all_models
+
+    reverse = sort_order.lower() == "desc"
+
+    def get_sort_key(model: Dict[str, Any]) -> Any:
+        model_info = model.get("model_info", {})
+        
+        if sort_by == "model_name":
+            return model.get("model_name", "").lower()
+        
+        elif sort_by == "created_at":
+            created_at = model_info.get("created_at")
+            if created_at is None:
+                # Put None values at the end for asc, at the start for desc
+                return (datetime.max if not reverse else datetime.min)
+            if isinstance(created_at, str):
+                try:
+                    return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    return datetime.min if not reverse else datetime.max
+            return created_at
+        
+        elif sort_by == "updated_at":
+            updated_at = model_info.get("updated_at")
+            if updated_at is None:
+                return (datetime.max if not reverse else datetime.min)
+            if isinstance(updated_at, str):
+                try:
+                    return datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    return datetime.min if not reverse else datetime.max
+            return updated_at
+        
+        elif sort_by == "costs":
+            input_cost = model_info.get("input_cost_per_token", 0) or 0
+            output_cost = model_info.get("output_cost_per_token", 0) or 0
+            total_cost = input_cost + output_cost
+            # Put 0 or None costs at the end for asc, at the start for desc
+            if total_cost == 0:
+                return (float("inf") if not reverse else float("-inf"))
+            return total_cost
+        
+        elif sort_by == "status":
+            # False (config) comes before True (db) for asc
+            db_model = model_info.get("db_model", False)
+            return db_model
+        
+        return None
+
+    try:
+        sorted_models = sorted(all_models, key=get_sort_key, reverse=reverse)
+        return sorted_models
+    except Exception as e:
+        verbose_proxy_logger.exception(f"Error sorting models by {sort_by}: {str(e)}")
+        return all_models
 
 
 def _paginate_models_response(
@@ -8078,6 +8277,55 @@ async def _filter_models_by_team_id(
     return filtered_models
 
 
+async def _find_model_by_id(
+    model_id: str,
+    search: Optional[str],
+    llm_router,
+    prisma_client,
+    proxy_config,
+) -> tuple[list, Optional[int]]:
+    """Find a model by its ID and optionally filter by search term."""
+    found_model = None
+
+    # First, search in config
+    if llm_router is not None:
+        found_model = llm_router.get_model_info(id=model_id)
+        if found_model:
+            found_model = copy.deepcopy(found_model)
+
+    # If not found in config, search in database
+    if found_model is None:
+        try:
+            db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
+                where={"model_id": model_id}
+            )
+            if db_model:
+                # Convert database model to router format
+                decrypted_models = proxy_config.decrypt_model_list_from_db(
+                    [db_model]
+                )
+                if decrypted_models:
+                    found_model = decrypted_models[0]
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Error querying database for modelId {model_id}: {str(e)}"
+            )
+
+    # If model found, verify search filter if provided
+    if found_model is not None:
+        if search is not None and search.strip():
+            search_lower = search.lower().strip()
+            model_name = found_model.get("model_name", "")
+            if search_lower not in model_name.lower():
+                # Model found but doesn't match search filter
+                found_model = None
+
+    # Set all_models to the found model or empty list
+    all_models = [found_model] if found_model is not None else []
+    search_total_count: Optional[int] = len(all_models)
+    return all_models, search_total_count
+
+
 @router.get(
     "/v2/model/info",
     description="v2 - returns models available to the user based on their API key permissions. Shows model info from config.yaml (except api key and api base). Filter to just user-added models with ?user_models_only=true",
@@ -8109,6 +8357,14 @@ async def model_info_v2(
         None,
         description="Filter models by team ID. Returns models with direct_access=True or teamId in access_via_team_ids",
     ),
+    sortBy: Optional[str] = fastapi.Query(
+        None,
+        description="Field to sort by. Options: model_name, created_at, updated_at, costs, status",
+    ),
+    sortOrder: Optional[str] = fastapi.Query(
+        "asc",
+        description="Sort order. Options: asc, desc",
+    ),
 ):
     """
     BETA ENDPOINT. Might change unexpectedly. Use `/v1/model/info` for now.
@@ -8136,44 +8392,13 @@ async def model_info_v2(
 
     # If modelId is provided, search for the specific model
     if modelId is not None:
-        found_model = None
-
-        # First, search in config
-        if llm_router is not None:
-            found_model = llm_router.get_model_info(id=modelId)
-            if found_model:
-                found_model = copy.deepcopy(found_model)
-
-        # If not found in config, search in database
-        if found_model is None:
-            try:
-                db_model = await prisma_client.db.litellm_proxymodeltable.find_unique(
-                    where={"model_id": modelId}
-                )
-                if db_model:
-                    # Convert database model to router format
-                    decrypted_models = proxy_config.decrypt_model_list_from_db(
-                        [db_model]
-                    )
-                    if decrypted_models:
-                        found_model = decrypted_models[0]
-            except Exception as e:
-                verbose_proxy_logger.exception(
-                    f"Error querying database for modelId {modelId}: {str(e)}"
-                )
-
-        # If model found, verify search filter if provided
-        if found_model is not None:
-            if search is not None and search.strip():
-                search_lower = search.lower().strip()
-                model_name = found_model.get("model_name", "")
-                if search_lower not in model_name.lower():
-                    # Model found but doesn't match search filter
-                    found_model = None
-
-        # Set all_models to the found model or empty list
-        all_models = [found_model] if found_model is not None else []
-        search_total_count: Optional[int] = len(all_models)
+        all_models, search_total_count = await _find_model_by_id(
+            model_id=modelId,
+            search=search,
+            llm_router=llm_router,
+            prisma_client=prisma_client,
+            proxy_config=proxy_config,
+        )
     else:
         # Normal flow when modelId is not provided
         all_models = copy.deepcopy(llm_router.model_list)
@@ -8193,6 +8418,7 @@ async def model_info_v2(
             size=size,
             prisma_client=prisma_client,
             proxy_config=proxy_config,
+            sort_by=sortBy,
         )
 
     if user_models_only:
@@ -8235,6 +8461,20 @@ async def model_info_v2(
     # to ensure pagination reflects the final filtered result (0 or 1)
     if modelId is not None:
         search_total_count = len(all_models)
+
+    # Apply sorting before pagination
+    if sortBy:
+        # Validate sortOrder
+        if sortOrder and sortOrder.lower() not in ["asc", "desc"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid sortOrder: {sortOrder}. Must be 'asc' or 'desc'",
+            )
+        all_models = _sort_models(
+            all_models=all_models,
+            sort_by=sortBy,
+            sort_order=sortOrder or "asc",
+        )
 
     verbose_proxy_logger.debug("all_models: %s", all_models)
 

@@ -78,6 +78,11 @@ class UISettings(BaseModel):
         description="Prevents Team Admins from deleting users from the teams they manage. Useful for SCIM provisioning where team membership is defined externally.",
     )
 
+    enabled_ui_pages_internal_users: Optional[List[str]] = Field(
+        default=None,
+        description="List of page keys that internal users (non-admins) can see in the UI sidebar. If not set, all pages are visible based on role permissions.",
+    )
+
 
 class UISettingsResponse(SettingsResponse):
     """Response model for UI settings"""
@@ -89,6 +94,7 @@ class UISettingsResponse(SettingsResponse):
 ALLOWED_UI_SETTINGS_FIELDS = {
     "disable_model_add_for_internal_users",
     "disable_team_admin_delete_team_user",
+    "enabled_ui_pages_internal_users",
 }
 
 

@@ -68,6 +68,7 @@ async def responses_api(
         _read_request_body,
         general_settings,
         llm_router,
+        native_background_mode,
         polling_cache_ttl,
         polling_via_cache_enabled,
         proxy_config,
@@ -95,6 +96,7 @@ async def responses_api(
         redis_cache=redis_usage_cache,
         model=data.get("model", ""),
         llm_router=llm_router,
+        native_background_mode=native_background_mode,
     )
     
     # If polling is enabled, use polling mode

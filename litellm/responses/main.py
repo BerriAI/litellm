@@ -434,6 +434,8 @@ async def aresponses(
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model, api_base=local_vars.get("base_url", None)
             )
+            # Update local_vars with detected provider (fixes #19782)
+            local_vars["custom_llm_provider"] = custom_llm_provider
 
         func = partial(
             responses,
@@ -582,6 +584,9 @@ def responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+
+        # Update local_vars with detected provider (fixes #19782)
+        local_vars["custom_llm_provider"] = custom_llm_provider
 
         # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
         if dynamic_api_key is not None:
@@ -1411,6 +1416,8 @@ async def acompact_responses(
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
                 model=model, api_base=local_vars.get("base_url", None)
             )
+            # Update local_vars with detected provider (fixes #19782)
+            local_vars["custom_llm_provider"] = custom_llm_provider
 
         func = partial(
             compact_responses,
@@ -1497,6 +1504,9 @@ def compact_responses(
             api_base=litellm_params.api_base,
             api_key=litellm_params.api_key,
         )
+
+        # Update local_vars with detected provider (fixes #19782)
+        local_vars["custom_llm_provider"] = custom_llm_provider
 
         # Use dynamic credentials from get_llm_provider (e.g., when use_litellm_proxy=True)
         if dynamic_api_key is not None:
