@@ -118,6 +118,7 @@ services = Union[
         "email",
         "braintrust",
         "datadog",
+        "datadog_llm_observability",
         "generic_api",
         "arize",
         "sqs"
@@ -190,6 +191,7 @@ async def health_services_endpoint(  # noqa: PLR0915
             "custom_callback_api",
             "langsmith",
             "datadog",
+            "datadog_llm_observability",
             "generic_api",
             "arize",
             "sqs"
