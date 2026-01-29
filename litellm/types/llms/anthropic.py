@@ -667,3 +667,10 @@ ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
 ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
 
 ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER = "prompt-caching-scope-2026-01-05"
+
+
+# Patterns for anthropic-beta headers that should be blocked/dropped
+# These are headers that cause API errors when forwarded
+BLOCKED_ANTHROPIC_BETA_HEADER_PATTERNS = [
+    "prompt-caching-scope-",  # Claude Code sends this but Anthropic API doesn't recognize it
+]

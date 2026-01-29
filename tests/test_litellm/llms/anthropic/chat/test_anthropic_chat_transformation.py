@@ -3399,3 +3399,64 @@ def test_extract_response_content_thinking_block_null_thinking():
     assert len(thinking_blocks) == 1
     assert thinking_blocks[0]["thinking"] == "Let me think..."
     assert "Done" in text
+
+
+class TestAnthropicBetaHeaderFiltering:
+    """Tests for filtering blocked anthropic-beta headers in pass-through endpoint."""
+
+    def test_filters_prompt_caching_scope_header(self):
+        """Test that prompt-caching-scope-* headers are filtered out."""
+        headers = {"anthropic-beta": "prompt-caching-scope-2026-01-05"}
+        result = AnthropicMessagesConfig._filter_blocked_anthropic_beta_headers(headers)
+        assert "anthropic-beta" not in result
+
+    def test_filters_prompt_caching_scope_preserves_valid_headers(self):
+        """Test that valid headers are preserved while blocked ones are filtered."""
+        headers = {
+            "anthropic-beta": "prompt-caching-2024-07-31,prompt-caching-scope-2026-01-05,computer-use-2024-10-22"
+        }
+        result = AnthropicMessagesConfig._filter_blocked_anthropic_beta_headers(headers)
+
+        assert "anthropic-beta" in result
+        assert "prompt-caching-2024-07-31" in result["anthropic-beta"]
+        assert "computer-use-2024-10-22" in result["anthropic-beta"]
+        assert "prompt-caching-scope-2026-01-05" not in result["anthropic-beta"]
+
+    def test_handles_no_anthropic_beta_header(self):
+        """Test that headers without anthropic-beta are unchanged."""
+        headers = {"content-type": "application/json"}
+        result = AnthropicMessagesConfig._filter_blocked_anthropic_beta_headers(headers)
+        assert result == headers
+
+    def test_handles_whitespace_in_headers(self):
+        """Test that whitespace around headers is handled correctly."""
+        headers = {
+            "anthropic-beta": " prompt-caching-2024-07-31 , prompt-caching-scope-2026-01-05 "
+        }
+        result = AnthropicMessagesConfig._filter_blocked_anthropic_beta_headers(headers)
+
+        assert "anthropic-beta" in result
+        assert "prompt-caching-2024-07-31" in result["anthropic-beta"]
+        assert "prompt-caching-scope-2026-01-05" not in result["anthropic-beta"]
+
+    def test_all_valid_headers_pass_through(self):
+        """Test that valid headers pass through unchanged."""
+        headers = {
+            "anthropic-beta": "prompt-caching-2024-07-31,computer-use-2024-10-22,files-api-2025-04-14"
+        }
+        result = AnthropicMessagesConfig._filter_blocked_anthropic_beta_headers(headers)
+
+        assert "anthropic-beta" in result
+        assert "prompt-caching-2024-07-31" in result["anthropic-beta"]
+        assert "computer-use-2024-10-22" in result["anthropic-beta"]
+        assert "files-api-2025-04-14" in result["anthropic-beta"]
+
+    def test_is_blocked_anthropic_beta_header(self):
+        """Test the helper method for checking blocked headers."""
+        # Should be blocked
+        assert AnthropicMessagesConfig._is_blocked_anthropic_beta_header("prompt-caching-scope-2026-01-05") is True
+        assert AnthropicMessagesConfig._is_blocked_anthropic_beta_header("prompt-caching-scope-2025-01-01") is True
+
+        # Should not be blocked
+        assert AnthropicMessagesConfig._is_blocked_anthropic_beta_header("prompt-caching-2024-07-31") is False
+        assert AnthropicMessagesConfig._is_blocked_anthropic_beta_header("computer-use-2024-10-22") is False
