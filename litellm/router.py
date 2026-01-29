@@ -8730,11 +8730,6 @@ class Router:
             return None
 
         if (
-            isinstance(exception, litellm.BadRequestError)
-            and allowed_fails_policy.BadRequestErrorAllowedFails is not None
-        ):
-            return allowed_fails_policy.BadRequestErrorAllowedFails
-        if (
             isinstance(exception, litellm.AuthenticationError)
             and allowed_fails_policy.AuthenticationErrorAllowedFails is not None
         ):
@@ -8754,6 +8749,11 @@ class Router:
             and allowed_fails_policy.ContentPolicyViolationErrorAllowedFails is not None
         ):
             return allowed_fails_policy.ContentPolicyViolationErrorAllowedFails
+        if (
+            isinstance(exception, litellm.BadRequestError)
+            and allowed_fails_policy.BadRequestErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.BadRequestErrorAllowedFails
 
     def _initialize_alerting(self):
         from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting

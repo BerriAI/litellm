@@ -5201,7 +5201,20 @@ class ProxyStartupEvent:
                 except Exception as e:
                     raise e
 
-                await prisma_client.connect()
+                try:
+                    await prisma_client.connect()
+                except Exception as e:
+                    if "P3018" in str(e) or "P3009" in str(e):
+                        verbose_proxy_logger.debug(
+                            "CRITICAL: DATABASE MIGRATION FAILED"
+                        )
+                        verbose_proxy_logger.debug(
+                            "Your database is in a 'dirty' state."
+                        )
+                        verbose_proxy_logger.debug(
+                            "FIX: Run 'prisma migrate resolve --applied <migration_name>'"
+                        )
+                    raise e
 
                 ## Start RDS IAM token refresh background task if enabled ##
                 # This proactively refreshes IAM tokens before they expire,
