@@ -25,6 +25,43 @@ class VertexAIError(Exception):
         )  # Call the base class constructor with the parameters it needs
 
 
+def _is_blocked_anthropic_beta_header(header: str) -> bool:
+    """Check if a header matches any blocked pattern."""
+    from litellm.types.llms.anthropic import BLOCKED_ANTHROPIC_BETA_HEADER_PATTERNS
+
+    for pattern in BLOCKED_ANTHROPIC_BETA_HEADER_PATTERNS:
+        if header.startswith(pattern):
+            return True
+    return False
+
+
+def get_anthropic_beta_from_headers(headers: Dict) -> List[str]:
+    """
+    Extract anthropic-beta header values and convert them to a list.
+    Supports comma-separated values from user headers.
+    Filters out blocked headers (e.g., prompt-caching-scope-*) that cause API errors.
+
+    Used by Vertex AI Anthropic transformation for consistent handling
+    of anthropic-beta headers that should be passed to Vertex AI.
+
+    Args:
+        headers (dict): Request headers dictionary
+
+    Returns:
+        List[str]: List of anthropic beta feature strings, empty list if no header
+    """
+    anthropic_beta_header = headers.get("anthropic-beta")
+    if not anthropic_beta_header:
+        return []
+
+    # Split comma-separated values and strip whitespace, filtering out blocked headers
+    return [
+        beta.strip()
+        for beta in anthropic_beta_header.split(",")
+        if not _is_blocked_anthropic_beta_header(beta.strip())
+    ]
+
+
 class VertexAIAnthropicConfig(AnthropicConfig):
     """
     Reference:https://docs.anthropic.com/claude/reference/messages_post
