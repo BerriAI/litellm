@@ -447,3 +447,75 @@ def test_forward_headers_from_request_x_pass_prefix():
     assert "x-pass-anthropic-beta" not in result
     assert "x-pass-custom-header" not in result
 
+
+@pytest.mark.asyncio
+async def test_vertex_passthrough_custom_model_name_replaced_in_url():
+    """
+    Test that when a passthrough URL contains a custom model_name (e.g., gcp/google/gemini-3-pro),
+    the URL is rewritten to use the actual Vertex AI model name (e.g., gemini-3-pro)
+    before being forwarded to Vertex AI.
+
+    This prevents 404 errors from Vertex AI when custom model names are used in the config.
+
+    Config example:
+        model_name: gcp/google/gemini-3-pro
+        litellm_params:
+          model: vertex_ai/gemini-3-pro
+          vertex_project: "my-project"
+          vertex_location: "global"
+          use_in_pass_through: true
+    """
+    mock_request = MagicMock()
+    mock_response = MagicMock()
+    mock_handler = MagicMock()
+
+    # Deployment with custom model_name but real vertex model
+    mock_deployment = {
+        "litellm_params": {
+            "model": "vertex_ai/gemini-3-pro",
+            "vertex_project": "nv-gcpllmgwit-20250411173346",
+            "vertex_location": "global",
+            "use_in_pass_through": True,
+        }
+    }
+    mock_router = MagicMock()
+    mock_router.get_available_deployment_for_pass_through.return_value = mock_deployment
+
+    # The URL contains project/location AND a custom model name with slashes
+    test_endpoint = "v1/projects/nv-gcpllmgwit-20250411173346/locations/global/publishers/google/models/gcp/google/gemini-3-pro:generateContent"
+
+    with patch("litellm.proxy.proxy_server.llm_router", mock_router), \
+         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router") as mock_pt_router, \
+         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints._prepare_vertex_auth_headers", new_callable=AsyncMock) as mock_prep_headers, \
+         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route") as mock_create_route, \
+         patch("litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth", new_callable=AsyncMock) as mock_auth:
+
+        mock_pt_router.get_vertex_credentials.return_value = MagicMock()
+        mock_prep_headers.return_value = ({}, "https://global-aiplatform.googleapis.com", False, "nv-gcpllmgwit-20250411173346", "global")
+        mock_endpoint_func = AsyncMock()
+        mock_create_route.return_value = mock_endpoint_func
+        mock_auth.return_value = {}
+
+        mock_handler.get_default_base_target_url.return_value = "https://global-aiplatform.googleapis.com"
+
+        await _base_vertex_proxy_route(
+            endpoint=test_endpoint,
+            request=mock_request,
+            fastapi_response=mock_response,
+            get_vertex_pass_through_handler=mock_handler,
+        )
+
+        # Verify the router was called with the custom model name (extracted from URL)
+        mock_router.get_available_deployment_for_pass_through.assert_called_once_with(
+            model="gcp/google/gemini-3-pro"
+        )
+
+        # Verify the target URL passed to create_pass_through_route contains
+        # the REAL Vertex AI model name, not the custom one
+        create_route_call = mock_create_route.call_args
+        target_url = create_route_call.kwargs.get("target", "")
+        assert "gcp/google/gemini-3-pro" not in target_url, \
+            f"Custom model name should have been replaced in target URL. Got: {target_url}"
+        assert "gemini-3-pro" in target_url, \
+            f"Actual Vertex AI model name should be in target URL. Got: {target_url}"
+

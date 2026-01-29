@@ -7,6 +7,22 @@ import { describe, it, expect } from "vitest";
 import { getAvailablePages } from "./page_utils";
 import { menuGroups } from "./leftnav";
 import { pageDescriptions } from "./page_metadata";
+import { internalUserRoles } from "@/utils/roles";
+
+/**
+ * Check if a page is accessible to internal users
+ * A page is accessible if:
+ * 1. It has no role restrictions, OR
+ * 2. Its roles include at least one internal user role
+ */
+const isPageAccessibleToInternalUsers = (pageRoles?: string[]): boolean => {
+  if (!pageRoles || pageRoles.length === 0) {
+    return true; // No role restrictions
+  }
+  
+  // Check if any of the page's roles match internal user roles
+  return pageRoles.some(role => internalUserRoles.includes(role));
+};
 
 describe("Page Utils - LeftNav Sync", () => {
   it("should return all pages from leftnav configuration", () => {
@@ -32,26 +48,32 @@ describe("Page Utils - LeftNav Sync", () => {
     const availablePages = getAvailablePages();
     const availablePageKeys = availablePages.map((p) => p.page);
     
-    // Collect all page keys from menuGroups (excluding parent containers)
+    // Collect all page keys from menuGroups (excluding parent containers and pages not accessible to internal users)
     const menuPageKeys: string[] = [];
     const excludedParents = ["tools", "experimental", "settings"];
     
     menuGroups.forEach((group) => {
       group.items.forEach((item) => {
-        if (item.page && !excludedParents.includes(item.page)) {
+        if (
+          item.page &&
+          !excludedParents.includes(item.page) &&
+          isPageAccessibleToInternalUsers(item.roles)
+        ) {
           menuPageKeys.push(item.page);
         }
         
-        // Add children
+        // Add children (only if accessible to internal users)
         if (item.children) {
           item.children.forEach((child) => {
-            menuPageKeys.push(child.page);
+            if (isPageAccessibleToInternalUsers(child.roles)) {
+              menuPageKeys.push(child.page);
+            }
           });
         }
       });
     });
     
-    // Every menu page should be in available pages
+    // Every menu page accessible to internal users should be in available pages
     menuPageKeys.forEach((pageKey) => {
       expect(
         availablePageKeys,

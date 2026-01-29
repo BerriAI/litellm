@@ -1681,6 +1681,9 @@ async def ui_view_spend_logs(  # noqa: PLR0915
     error_code: Optional[str] = fastapi.Query(
         default=None, description="Filter logs by error code (e.g., '404', '500')"
     ),
+    error_message: Optional[str] = fastapi.Query(
+        default=None, description="Filter logs by error message (partial string match)"
+    ),
 ):
     """
     View spend logs with pagination support.
@@ -1772,6 +1775,12 @@ async def ui_view_spend_logs(  # noqa: PLR0915
             metadata_filters.append({
                 "path": ["error_information", "error_code"],
                 "equals": f'"{error_code}"',
+            })
+
+        if error_message is not None:
+            metadata_filters.append({
+                "path": ["error_information", "error_message"],
+                "string_contains": error_message,
             })
 
         if metadata_filters:
