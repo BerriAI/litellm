@@ -1044,6 +1044,10 @@ class LangFuseLogger:
                 "Not logging guardrail information as span because standard_logging_object is None"
             )
             return
+            
+        tags = []
+        if os.getenv("LANGFUSE_TRACING_ENVIRONMENT") is not None:
+            tags.append(f"environment:{os.getenv('LANGFUSE_TRACING_ENVIRONMENT')}")
 
         guardrail_information = standard_logging_object.get(
             "guardrail_information", None
@@ -1082,6 +1086,7 @@ class LangFuseLogger:
                 },
                 start_time=guardrail_entry.get("start_time", None),  # type: ignore
                 end_time=guardrail_entry.get("end_time", None),  # type: ignore
+                tags=tags,
             )
 
             verbose_logger.debug(f"Logged guardrail information as span: {span}")
@@ -1196,6 +1201,10 @@ def log_provider_specific_information_as_span(
     if _hidden_params is None:
         return
 
+    tags = []
+    if os.getenv("LANGFUSE_TRACING_ENVIRONMENT") is not None:
+        tags.append(f"environment:{os.getenv('LANGFUSE_TRACING_ENVIRONMENT')}")
+
     vertex_ai_grounding_metadata = _hidden_params.get(
         "vertex_ai_grounding_metadata", None
     )
@@ -1208,16 +1217,19 @@ def log_provider_specific_information_as_span(
                         trace.span(
                             name=key,
                             input=value,
+                            tags=tags,
                         )
                 else:
                     trace.span(
                         name="vertex_ai_grounding_metadata",
                         input=elem,
+                        tags=tags,
                     )
         else:
             trace.span(
                 name="vertex_ai_grounding_metadata",
                 input=vertex_ai_grounding_metadata,
+                tags=tags,
             )
 
 

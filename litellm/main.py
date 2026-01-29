@@ -196,7 +196,6 @@ from .llms.groq.chat.handler import GroqChatCompletion
 from .llms.heroku.chat.transformation import HerokuChatConfig
 from .llms.huggingface.embedding.handler import HuggingFaceEmbedding
 from .llms.lemonade.chat.transformation import LemonadeChatConfig
-from .llms.nlp_cloud.chat.handler import completion as nlp_cloud_chat_completion
 from .llms.oci.chat.transformation import OCIChatConfig
 from .llms.ollama.completion import handler as ollama
 from .llms.oobabooga.chat import oobabooga
@@ -2695,52 +2694,23 @@ def completion(  # type: ignore # noqa: PLR0915
                 )
             response = response
         elif custom_llm_provider == "nlp_cloud":
-            nlp_cloud_key = (
-                api_key
-                or litellm.nlp_cloud_key
-                or get_secret("NLP_CLOUD_API_KEY")
-                or litellm.api_key
-            )
-
-            api_base = (
-                api_base
-                or litellm.api_base
-                or get_secret("NLP_CLOUD_API_BASE")
-                or "https://api.nlpcloud.io/v1/gpu/"
-            )
-
-            response = nlp_cloud_chat_completion(
+            response = base_llm_http_handler.completion(
                 model=model,
                 messages=messages,
                 api_base=api_base,
+                custom_llm_provider=custom_llm_provider,
                 model_response=model_response,
-                print_verbose=print_verbose,
-                optional_params=optional_params,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
                 encoding=_get_encoding(),
-                api_key=nlp_cloud_key,
                 logging_obj=logging,
+                optional_params=optional_params,
+                timeout=timeout,
+                litellm_params=litellm_params,
+                acompletion=acompletion,
+                stream=stream,
+                api_key=api_key,
+                client=client,
+                shared_session=shared_session,
             )
-
-            if "stream" in optional_params and optional_params["stream"] is True:
-                # don't try to access stream object,
-                response = CustomStreamWrapper(
-                    response,
-                    model,
-                    custom_llm_provider="nlp_cloud",
-                    logging_obj=logging,
-                )
-
-            if optional_params.get("stream", False) or acompletion is True:
-                ## LOGGING
-                logging.post_call(
-                    input=messages,
-                    api_key=api_key,
-                    original_response=response,
-                )
-
-            response = response
         elif custom_llm_provider == "aleph_alpha":
             aleph_alpha_key = (
                 api_key
@@ -4058,6 +4028,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
             pass
 
+
         elif custom_llm_provider == "custom":
             url = litellm.api_base or api_base or ""
             if url is None or url == "":
@@ -5126,6 +5097,21 @@ def embedding(  # noqa: PLR0915
                 timeout=timeout,
                 model_response=EmbeddingResponse(),
                 optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+            )
+        elif custom_llm_provider == "nlp_cloud":
+            response = base_llm_http_handler.embedding(
+                model=model,
+                input=input,
+                timeout=timeout,
+                custom_llm_provider=custom_llm_provider,
+                logging_obj=logging,
+                api_base=api_base,
+                optional_params=optional_params,
+                litellm_params=litellm_params_dict,
+                model_response=EmbeddingResponse(),
+                api_key=api_key,
                 client=client,
                 aembedding=aembedding,
             )

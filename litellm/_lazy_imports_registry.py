@@ -540,7 +540,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AnthropicMessagesConfig": (".llms.anthropic.experimental_pass_through.messages.transformation", "AnthropicMessagesConfig"),
     "AmazonAnthropicClaudeMessagesConfig": (".llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation", "AmazonAnthropicClaudeMessagesConfig"),
     "TogetherAIConfig": (".llms.together_ai.chat", "TogetherAIConfig"),
-    "NLPCloudConfig": (".llms.nlp_cloud.chat.handler", "NLPCloudConfig"),
+    "NLPCloudConfig": (
+        ".llms.nlp_cloud.chat.transformation",
+        "NLPCloudConfig",
+    ),
     "VertexGeminiConfig": (".llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini", "VertexGeminiConfig"),
     "GoogleAIStudioGeminiConfig": (".llms.gemini.chat.transformation", "GoogleAIStudioGeminiConfig"),
     "VertexAIAnthropicConfig": (".llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation", "VertexAIAnthropicConfig"),

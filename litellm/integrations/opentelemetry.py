@@ -435,6 +435,13 @@ class OpenTelemetry(CustomLogger):
                 key="service",
                 value=payload.service.value,
             )
+            
+            # Set Langfuse environment on service spans (fixes #19926)
+            if self.callback_name == "langfuse_otel":
+                from litellm.integrations.langfuse.langfuse_otel import (
+                    LangfuseOtelLogger,
+                )
+                LangfuseOtelLogger.set_langfuse_environment_on_span(service_logging_span)
 
             if event_metadata:
                 for key, value in event_metadata.items():
@@ -513,6 +520,13 @@ class OpenTelemetry(CustomLogger):
                         key=key,
                         value=value,
                     )
+
+            # Set Langfuse environment on service failure spans (fixes #19926)
+            if self.callback_name == "langfuse_otel":
+                from litellm.integrations.langfuse.langfuse_otel import (
+                    LangfuseOtelLogger,
+                )
+                LangfuseOtelLogger.set_langfuse_environment_on_span(service_logging_span)
 
             service_logging_span.set_status(Status(StatusCode.ERROR))
             service_logging_span.end(end_time=_end_time_ns)
@@ -1156,7 +1170,15 @@ class OpenTelemetry(CustomLogger):
                 value=guardrail_information.get("guardrail_response"),
             )
 
+            # Set Langfuse environment on guardrail spans (fixes #19926)
+            if self.callback_name == "langfuse_otel":
+                from litellm.integrations.langfuse.langfuse_otel import (
+                    LangfuseOtelLogger,
+                )
+                LangfuseOtelLogger.set_langfuse_environment_on_span(guardrail_span)
+
             guardrail_span.end(end_time=self._to_ns(end_time_datetime))
+
 
     def _handle_failure(self, kwargs, response_obj, start_time, end_time):
         from opentelemetry.trace import Status, StatusCode
@@ -1631,7 +1653,7 @@ class OpenTelemetry(CustomLogger):
                                     )
 
         except Exception as e:
-            self.handle_callback_failure(callback_name= self.callback_name)  
+            self.handle_callback_failure(callback_name=self.callback_name or "otel")  
             verbose_logger.exception(
                 "OpenTelemetry logging error in set_attributes %s", str(e)
             )
@@ -2234,6 +2256,13 @@ class OpenTelemetry(CustomLogger):
                         value=value,
                     )
 
+            # Set Langfuse environment on management endpoint spans (fixes #19926)
+            if self.callback_name == "langfuse_otel":
+                from litellm.integrations.langfuse.langfuse_otel import (
+                    LangfuseOtelLogger,
+                )
+                LangfuseOtelLogger.set_langfuse_environment_on_span(management_endpoint_span)
+
             management_endpoint_span.set_status(Status(StatusCode.OK))
             management_endpoint_span.end(end_time=_end_time_ns)
 
@@ -2284,6 +2313,14 @@ class OpenTelemetry(CustomLogger):
                 key="exception",
                 value=str(_exception),
             )
+
+            # Set Langfuse environment on management endpoint failure spans (fixes #19926)
+            if self.callback_name == "langfuse_otel":
+                from litellm.integrations.langfuse.langfuse_otel import (
+                    LangfuseOtelLogger,
+                )
+                LangfuseOtelLogger.set_langfuse_environment_on_span(management_endpoint_span)
+
             management_endpoint_span.set_status(Status(StatusCode.ERROR))
             management_endpoint_span.end(end_time=_end_time_ns)
 

@@ -19,11 +19,11 @@ if TYPE_CHECKING:
     GenerateContentRequestParametersDict = _genai_types._GenerateContentParametersDict
     ToolConfigDict = _genai_types.ToolConfigDict
 
-    class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc]
+    class GenerateContentRequestDict(GenerateContentRequestParametersDict):  # type: ignore[misc, valid-type]
         generationConfig: Optional[Any]
-        tools: Optional[ToolConfigDict] # type: ignore[assignment]
+        tools: Optional[ToolConfigDict] # type: ignore[assignment, valid-type]
 
-    class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc]
+    class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject): # type: ignore[misc, valid-type]
         _hidden_params: dict = {}
         pass
 else:

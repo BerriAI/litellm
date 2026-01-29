@@ -527,7 +527,8 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Optional[int]:
         """Find the index of the previous assistant message."""
         for j in range(current_idx - 1, -1, -1):
-            if messages[j].get("role") == "assistant":
+            role = messages[j].get("role") if isinstance(messages[j], dict) else getattr(messages[j], "role", None)
+            if role == "assistant":
                 return j
         return None
 
@@ -674,12 +675,13 @@ class LiteLLMCompletionResponsesConfig:
         # Count non-tool messages to avoid removing all messages
         # This prevents empty messages list when using previous_response_id without a database
         non_tool_messages_count = sum(
-            1 for msg in fixed_messages if msg.get("role") != "tool"
+            1 for msg in fixed_messages if (msg.get("role") if isinstance(msg, dict) else getattr(msg, "role", None)) != "tool"
         )
         
         for i, message in enumerate(fixed_messages):
             # Only process tool messages - check role first to narrow the type
-            if message.get("role") != "tool":
+            role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
+            if role != "tool":
                 continue
                 
             # At this point, we know it's a tool message, so it should have tool_call_id

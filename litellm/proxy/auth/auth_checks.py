@@ -137,6 +137,7 @@ async def common_checks(
             model=_model,
             llm_router=llm_router,
             user_object=user_object,
+            general_settings=general_settings,
         )
 
     # 3. If team is in budget
@@ -2075,9 +2076,31 @@ async def can_user_call_model(
     model: Union[str, List[str]],
     llm_router: Optional[Router],
     user_object: Optional[LiteLLM_UserTable],
+    general_settings: Optional[dict] = None,
 ) -> Literal[True]:
     if user_object is None:
         return True
+
+    # 1. Check for Tier-Based Access Rules
+    # If a user has a 'tier' in their metadata, we check if the requested model is allowed for that tier.
+    if general_settings and "tier_model_map" in general_settings:
+        tier_model_map = general_settings["tier_model_map"]
+        user_tier = user_object.metadata.get("tier") if user_object.metadata else None
+
+        if user_tier and user_tier in tier_model_map:
+            allowed_models_for_tier = tier_model_map[user_tier]
+
+            # normalize model to list
+            models_to_check = [model] if isinstance(model, str) else model
+
+            for m in models_to_check:
+                if m not in allowed_models_for_tier:
+                    raise ProxyException(
+                        message=f"User tier '{user_tier}' is not allowed to access model '{m}'",
+                        type=ProxyErrorTypes.key_model_access_denied,
+                        param="model",
+                        code=status.HTTP_403_FORBIDDEN,
+                    )
 
     if SpecialModelNames.no_default_models.value in user_object.models:
         raise ProxyException(

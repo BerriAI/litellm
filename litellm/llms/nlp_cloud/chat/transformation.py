@@ -1,15 +1,16 @@
 import json
 import time
-from typing import TYPE_CHECKING, Any, List, Optional, Union
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, List, Optional, Union
 
 import httpx
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     convert_content_list_to_str,
 )
+from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 from litellm.types.llms.openai import AllMessageValues
-from litellm.utils import ModelResponse, Usage
 
 from ..common_utils import NLPCloudError
 
@@ -150,6 +151,19 @@ class NLPCloudConfig(BaseConfig):
             status_code=status_code, message=error_message, headers=headers
         )
 
+    def get_complete_url(
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: str,
+        optional_params: dict,
+        litellm_params: dict,
+        stream: Optional[bool] = None,
+    ) -> str:
+        if api_base is None:
+            api_base = "https://api.nlpcloud.io/v1/"
+        return api_base + model + "/generation"
+
     def transform_request(
         self,
         model: str,
@@ -226,3 +240,52 @@ class NLPCloudConfig(BaseConfig):
         )
         setattr(model_response, "usage", usage)
         return model_response
+
+    def get_model_response_iterator(
+        self,
+        streaming_response: Union[Iterator[str], AsyncIterator[str], ModelResponse],
+        sync_stream: bool,
+        json_mode: Optional[bool] = False,
+    ):
+        return NLPCloudChatCompletionResponseIterator(
+            streaming_response=streaming_response,
+            sync_stream=sync_stream,
+            json_mode=json_mode,
+        )
+
+
+class NLPCloudChatCompletionResponseIterator(BaseModelResponseIterator):
+    def chunk_parser(self, chunk: dict) -> ModelResponseStream:
+        """
+        Expected chunk format:
+        {"generated_text": "...", "nb_input_tokens": 0, "nb_generated_tokens": 0}
+        """
+        try:
+            from litellm._uuid import uuid
+            from litellm.types.utils import Delta, StreamingChoices
+
+            delta = Delta(content=chunk.get("generated_text"))
+            usage = Usage(
+                prompt_tokens=chunk.get("nb_input_tokens", 0),
+                completion_tokens=chunk.get("nb_generated_tokens", 0),
+                total_tokens=chunk.get("nb_input_tokens", 0)
+                + chunk.get("nb_generated_tokens", 0),
+            )
+
+            choices = [
+                StreamingChoices(
+                    delta=delta,
+                    finish_reason="stop" if chunk.get("nb_generated_tokens", 0) > 0 else None,
+                    index=0,
+                )
+            ]
+
+            return ModelResponseStream(
+                id=f"chatcmpl-{str(uuid.uuid4())}",
+                choices=choices,
+                created=int(time.time()),
+                model="",
+                usage=usage,
+            )
+        except Exception as e:
+            raise e
