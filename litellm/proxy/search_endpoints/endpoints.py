@@ -4,6 +4,7 @@ import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
@@ -136,6 +137,13 @@ async def search(
         
         if llm_router is not None and hasattr(llm_router, "search_tools"):
             search_tool_name_value = data["search_tool_name"]
+            
+            verbose_proxy_logger.debug(
+                f"Search endpoint - Looking for search_tool_name: {search_tool_name_value}. "
+                f"Available search tools in router: {[tool.get('search_tool_name') for tool in llm_router.search_tools]}. "
+                f"Total search tools: {len(llm_router.search_tools)}"
+            )
+            
             matching_tools = [
                 tool for tool in llm_router.search_tools
                 if tool.get("search_tool_name") == search_tool_name_value
