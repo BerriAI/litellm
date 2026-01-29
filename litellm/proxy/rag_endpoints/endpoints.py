@@ -94,6 +94,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
     - Checks if the vector store already exists in the database
     - Creates a new database entry if it doesn't exist
     - Adds the vector store to the registry
+    - Tracks team_id and user_id for access control
     
     Args:
         response: The response from litellm.aingest()
@@ -176,6 +177,8 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 vector_store_description=vector_store_description,
                 vector_store_metadata=initial_metadata,
                 litellm_params=provider_specific_params if provider_specific_params else None,
+                team_id=user_api_key_dict.team_id,
+                user_id=user_api_key_dict.user_id,
             )
 
             verbose_proxy_logger.info(

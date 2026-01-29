@@ -136,6 +136,39 @@ async def _resolve_embedding_config_from_db(
 ########################################################
 # Helper Functions
 ########################################################
+def _check_vector_store_access(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """
+    Check if the user has access to the vector store based on team membership.
+    
+    Args:
+        vector_store: The vector store to check access for
+        user_api_key_dict: User API key authentication info
+        
+    Returns:
+        True if user has access, False otherwise
+        
+    Access rules:
+    - If vector store has no team_id, it's accessible to all (legacy behavior)
+    - If user's team_id matches the vector store's team_id, access is granted
+    - Otherwise, access is denied
+    """
+    vector_store_team_id = vector_store.get("team_id")
+    
+    # If vector store has no team_id, it's accessible to all (legacy behavior)
+    if vector_store_team_id is None:
+        return True
+    
+    # Check if user's team matches the vector store's team
+    user_team_id = user_api_key_dict.team_id
+    if user_team_id == vector_store_team_id:
+        return True
+    
+    return False
+
+
 async def create_vector_store_in_db(
     vector_store_id: str,
     custom_llm_provider: str,
@@ -145,6 +178,8 @@ async def create_vector_store_in_db(
     vector_store_metadata: Optional[Dict] = None,
     litellm_params: Optional[Dict] = None,
     litellm_credential_name: Optional[str] = None,
+    team_id: Optional[str] = None,
+    user_id: Optional[str] = None,
 ) -> LiteLLM_ManagedVectorStore:
     """
     Helper function to create a vector store in the database.
@@ -191,6 +226,10 @@ async def create_vector_store_in_db(
         data_to_create["vector_store_metadata"] = safe_dumps(vector_store_metadata)
     if litellm_credential_name is not None:
         data_to_create["litellm_credential_name"] = litellm_credential_name
+    if team_id is not None:
+        data_to_create["team_id"] = team_id
+    if user_id is not None:
+        data_to_create["user_id"] = user_id
     
     # Handle litellm_params - always provide at least an empty dict
     if litellm_params:
@@ -288,6 +327,8 @@ async def new_vector_store(
             vector_store_metadata=validated_metadata,
             litellm_params=vector_store.get("litellm_params"),
             litellm_credential_name=vector_store.get("litellm_credential_name"),
+            team_id=user_api_key_dict.team_id,
+            user_id=user_api_key_dict.user_id,
         )
 
         return {
@@ -380,14 +421,19 @@ async def list_vector_stores(
                         updated_data=vector_store
                     )
 
-        combined_vector_stores = list(vector_store_map.values())
-        total_count = len(combined_vector_stores)
+        # Filter vector stores based on team access
+        accessible_vector_stores = [
+            vs for vs in vector_store_map.values()
+            if _check_vector_store_access(vs, user_api_key_dict)
+        ]
+        
+        total_count = len(accessible_vector_stores)
         total_pages = (total_count + page_size - 1) // page_size
 
         # Format response using LiteLLM_ManagedVectorStoreListResponse
         response = LiteLLM_ManagedVectorStoreListResponse(
             object="list",
-            data=combined_vector_stores,
+            data=accessible_vector_stores,
             total_count=total_count,
             current_page=page,
             total_pages=total_pages,
@@ -423,6 +469,7 @@ async def delete_vector_store(
         # Check if vector store exists in database or in-memory registry
         db_vector_store_exists = False
         memory_vector_store_exists = False
+        vector_store_to_check = None
         
         existing_vector_store = (
             await prisma_client.db.litellm_managedvectorstorestable.find_unique(
@@ -431,6 +478,9 @@ async def delete_vector_store(
         )
         if existing_vector_store is not None:
             db_vector_store_exists = True
+            vector_store_to_check = LiteLLM_ManagedVectorStore(
+                **existing_vector_store.model_dump()
+            )
         
         # Check in-memory registry
         if litellm.vector_store_registry is not None:
@@ -439,12 +489,23 @@ async def delete_vector_store(
             )
             if memory_vector_store is not None:
                 memory_vector_store_exists = True
+                if vector_store_to_check is None:
+                    vector_store_to_check = memory_vector_store
         
         # If not found in either location, raise 404
         if not db_vector_store_exists and not memory_vector_store_exists:
             raise HTTPException(
                 status_code=404,
                 detail=f"Vector store with ID {data.vector_store_id} not found",
+            )
+        
+        # Check access control
+        if vector_store_to_check and not _check_vector_store_access(
+            vector_store_to_check, user_api_key_dict
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You do not have permission to delete this vector store",
             )
 
         # Delete from database if exists
@@ -492,6 +553,13 @@ async def get_vector_store_info(
                 vector_store_id=data.vector_store_id
             )
             if vector_store is not None:
+                # Check access control
+                if not _check_vector_store_access(vector_store, user_api_key_dict):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Access denied: You do not have permission to access this vector store",
+                    )
+                
                 vector_store_metadata = vector_store.get("vector_store_metadata")
                 # Parse metadata if it's a JSON string
                 parsed_metadata: Optional[dict] = None
@@ -513,6 +581,8 @@ async def get_vector_store_info(
                     updated_at=vector_store.get("updated_at") or None,
                     litellm_credential_name=vector_store.get("litellm_credential_name"),
                     litellm_params=vector_store.get("litellm_params") or None,
+                    team_id=vector_store.get("team_id") or None,
+                    user_id=vector_store.get("user_id") or None,
                 )
                 return {"vector_store": vector_store_pydantic_obj}
 
@@ -526,8 +596,16 @@ async def get_vector_store_info(
                 status_code=404,
                 detail=f"Vector store with ID {data.vector_store_id} not found",
             )
-
+        
+        # Check access control for DB vector store
         vector_store_dict = vector_store.model_dump()  # type: ignore[attr-defined]
+        vector_store_typed = LiteLLM_ManagedVectorStore(**vector_store_dict)
+        if not _check_vector_store_access(vector_store_typed, user_api_key_dict):
+            raise HTTPException(
+                status_code=403,
+                detail="Access denied: You do not have permission to access this vector store",
+            )
+
         return {"vector_store": vector_store_dict}
     except Exception as e:
         verbose_proxy_logger.exception(f"Error getting vector store info: {str(e)}")

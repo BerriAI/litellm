@@ -38,6 +38,10 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
 
     # litellm_params
     litellm_params: Optional[Dict[str, Any]]
+    
+    # access control fields
+    team_id: Optional[str]
+    user_id: Optional[str]
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):

@@ -353,6 +353,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}",
         "/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
+        "/vector_store/list",
+        "/v1/vector_store/list",
+
         # search
         "/search",
         "/v1/search",
