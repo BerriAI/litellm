@@ -87,7 +87,7 @@ describe("S3VectorsConfig", () => {
 
     render(<S3VectorsConfig {...defaultProps} />);
 
-    const bucketInput = screen.getByPlaceholderText("my-vector-bucket");
+    const bucketInput = screen.getByPlaceholderText("my-vector-bucket (min 3 chars)");
 
     await act(async () => {
       fireEvent.change(bucketInput, { target: { value: "test-bucket" } });
@@ -150,7 +150,7 @@ describe("S3VectorsConfig", () => {
 
     render(<S3VectorsConfig {...defaultProps} providerParams={existingParams} />);
 
-    const indexInput = screen.getByPlaceholderText("my-vector-index");
+    const indexInput = screen.getByPlaceholderText("my-vector-index (optional, min 3 chars)");
 
     await act(async () => {
       fireEvent.change(indexInput, { target: { value: "my-index" } });

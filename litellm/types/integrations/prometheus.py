@@ -227,6 +227,9 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_KEY_ALIAS.value,
         UserAPIKeyLabelNames.TEAM.value,
         UserAPIKeyLabelNames.TEAM_ALIAS.value,
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.END_USER.value,
+        UserAPIKeyLabelNames.USER.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
     ]
 

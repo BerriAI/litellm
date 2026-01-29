@@ -901,7 +901,7 @@ class PrometheusLogger(CustomLogger):
 
         model = kwargs.get("model", "")
         litellm_params = kwargs.get("litellm_params", {}) or {}
-        _metadata = litellm_params.get("metadata", {})
+        _metadata = litellm_params.get("metadata") or {}
         get_end_user_id_for_cost_tracking = _get_cached_end_user_id_for_cost_tracking()
 
         end_user_id = get_end_user_id_for_cost_tracking(
@@ -1178,26 +1178,15 @@ class PrometheusLogger(CustomLogger):
         response_cost: float,
         user_id: Optional[str] = None,
     ):
-        _team_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_spend", None
-        )
-        _team_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_team_max_budget", None
-        )
+        _metadata = litellm_params.get("metadata") or {}
+        _team_spend = _metadata.get("user_api_key_team_spend", None)
+        _team_max_budget = _metadata.get("user_api_key_team_max_budget", None)
 
-        _api_key_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_spend", None
-        )
-        _api_key_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_max_budget", None
-        )
+        _api_key_spend = _metadata.get("user_api_key_spend", None)
+        _api_key_max_budget = _metadata.get("user_api_key_max_budget", None)
 
-        _user_spend = litellm_params.get("metadata", {}).get(
-            "user_api_key_user_spend", None
-        )
-        _user_max_budget = litellm_params.get("metadata", {}).get(
-            "user_api_key_user_max_budget", None
-        )
+        _user_spend = _metadata.get("user_api_key_user_spend", None)
+        _user_max_budget = _metadata.get("user_api_key_user_max_budget", None)
 
         await self._set_api_key_budget_metrics_after_api_request(
             user_api_key=user_api_key,
@@ -1310,12 +1299,14 @@ class PrometheusLogger(CustomLogger):
             time_to_first_token_seconds is not None
             and kwargs.get("stream", False) is True  # only emit for streaming requests
         ):
+            _ttft_labels = prometheus_label_factory(
+                supported_enum_labels=self.get_labels_for_metric(
+                    metric_name="litellm_llm_api_time_to_first_token_metric"
+                ),
+                enum_values=enum_values,
+            )
             self.litellm_llm_api_time_to_first_token_metric.labels(
-                model,
-                user_api_key,
-                user_api_key_alias,
-                user_api_team,
-                user_api_team_alias,
+                **_ttft_labels
             ).observe(time_to_first_token_seconds)
         else:
             verbose_logger.debug(
@@ -1355,7 +1346,7 @@ class PrometheusLogger(CustomLogger):
 
         # request queue time (time from arrival to processing start)
         _litellm_params = kwargs.get("litellm_params", {}) or {}
-        queue_time_seconds = _litellm_params.get("metadata", {}).get(
+        queue_time_seconds = (_litellm_params.get("metadata") or {}).get(
             "queue_time_seconds"
         )
         if queue_time_seconds is not None and queue_time_seconds >= 0:
@@ -2509,8 +2500,8 @@ class PrometheusLogger(CustomLogger):
         self,
         user_api_team: Optional[str],
         user_api_team_alias: Optional[str],
-        team_spend: float,
-        team_max_budget: float,
+        team_spend: Optional[float],
+        team_max_budget: Optional[float],
         response_cost: float,
     ):
         """
@@ -2672,7 +2663,7 @@ class PrometheusLogger(CustomLogger):
         user_api_key: Optional[str],
         user_api_key_alias: Optional[str],
         response_cost: float,
-        key_max_budget: float,
+        key_max_budget: Optional[float],
         key_spend: Optional[float],
     ):
         if user_api_key:
@@ -2689,7 +2680,7 @@ class PrometheusLogger(CustomLogger):
         self,
         user_api_key: str,
         user_api_key_alias: str,
-        key_max_budget: float,
+        key_max_budget: Optional[float],
         key_spend: Optional[float],
         response_cost: float,
     ) -> UserAPIKeyAuth:

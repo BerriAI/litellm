@@ -353,6 +353,9 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}",
         "/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
+        "/vector_store/list",
+        "/v1/vector_store/list",
+
         # search
         "/search",
         "/v1/search",
@@ -2072,6 +2075,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     user_mcp_management_mode: Optional[UserMCPManagementMode] = Field(
         None,
         description="Controls how non-admin users interact with MCP servers in the dashboard. 'restricted' shows only accessible servers, 'view_all' lists every server in read-only mode.",
+    )
+    store_prompts_in_spend_logs: Optional[bool] = Field(
+        None,
+        description="If True, stores request messages and responses in spend logs. Default is False.",
+    )
+    maximum_spend_logs_retention_period: Optional[str] = Field(
+        None,
+        description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
     )
 
 
@@ -3909,6 +3920,8 @@ class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
     updated_at: Optional[datetime]
     litellm_credential_name: Optional[str]
     litellm_params: Optional[Dict[str, Any]]
+    team_id: Optional[str]
+    user_id: Optional[str]
 
 
 class ResponseLiteLLM_ManagedVectorStore(TypedDict, total=False):

@@ -462,6 +462,7 @@ router_settings:
 | CHATGPT_USER_AGENT_SUFFIX | Suffix to append to the ChatGPT user agent string
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
+| CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours. Can also be set via LITELLM_CLI_JWT_EXPIRATION_HOURS
 | CLOUDZERO_API_KEY | CloudZero API key for authentication
 | CLOUDZERO_CONNECTION_ID | CloudZero connection ID for data submission
 | CLOUDZERO_EXPORT_INTERVAL_MINUTES | Interval in minutes for CloudZero data export operations
@@ -723,6 +724,7 @@ router_settings:
 | LITERAL_API_URL | API URL for Literal service
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
 | LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
+| LITELLM_CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours
 | LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
 | LITELLM_DD_AGENT_PORT | Port of DataDog agent for LiteLLM-specific log intake. Default is 10518
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI

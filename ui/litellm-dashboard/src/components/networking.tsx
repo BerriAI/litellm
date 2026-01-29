@@ -2007,12 +2007,12 @@ export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: st
 let ModelListerrorShown = false;
 let errorTimer: NodeJS.Timeout | null = null;
 
-export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string) => {
+export const modelInfoCall = async (accessToken: string, userID: string, userRole: string, page: number = 1, size: number = 50, search?: string, modelId?: string, teamId?: string, sortBy?: string, sortOrder?: string) => {
   /**
    * Get all models on proxy
    */
   try {
-    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId);
+    console.log("modelInfoCall:", accessToken, userID, userRole, page, size, search, modelId, teamId, sortBy, sortOrder);
     let url = proxyBaseUrl ? `${proxyBaseUrl}/v2/model/info` : `/v2/model/info`;
     const params = new URLSearchParams();
     params.append("include_team_models", "true");
@@ -2026,6 +2026,12 @@ export const modelInfoCall = async (accessToken: string, userID: string, userRol
     }
     if (teamId && teamId.trim()) {
       params.append("teamId", teamId.trim());
+    }
+    if (sortBy && sortBy.trim()) {
+      params.append("sortBy", sortBy.trim());
+    }
+    if (sortOrder && sortOrder.trim()) {
+      params.append("sortOrder", sortOrder.trim());
     }
     if (params.toString()) {
       url += `?${params.toString()}`;
@@ -2758,6 +2764,7 @@ export const uiSpendLogsCall = async (
   model?: string,
   keyAlias?: string,
   error_code?: string,
+  error_message?: string,
 ) => {
   try {
     // Construct base URL
@@ -2778,6 +2785,7 @@ export const uiSpendLogsCall = async (
     if (model) queryParams.append("model", model);
     if (keyAlias) queryParams.append("key_alias", keyAlias);
     if (error_code) queryParams.append("error_code", error_code);
+    if (error_message) queryParams.append("error_message", error_message);
     // Append query parameters to URL if any exist
     const queryString = queryParams.toString();
     if (queryString) {
@@ -5326,6 +5334,66 @@ export const getProxyUISettings = async (accessToken: string) => {
     // Handle success - you might want to update some state or UI based on the created key
   } catch (error) {
     console.error("Failed to get callbacks:", error);
+    throw error;
+  }
+};
+
+export const getUISettings = async (accessToken: string) => {
+  /**
+   * Get UI-specific configuration flags from the database
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/ui_settings` : `/get/ui_settings`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      console.error("Failed to get UI settings:", errorMessage);
+      return null;
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to get UI settings:", error);
+    return null;
+  }
+};
+
+export const updateUISettings = async (accessToken: string, settings: any) => {
+  /**
+   * Update UI-specific configuration flags in the database
+   * Only proxy admins can update these settings
+   */
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/update/ui_settings` : `/update/ui_settings`;
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(settings),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      const errorMessage = deriveErrorMessage(errorData);
+      handleError(errorMessage);
+      throw new Error(errorMessage);
+    }
+
+    const data = await response.json();
+    return data;
+  } catch (error) {
+    console.error("Failed to update UI settings:", error);
     throw error;
   }
 };

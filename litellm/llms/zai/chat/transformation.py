@@ -1,6 +1,7 @@
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 
 from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 
@@ -18,6 +19,19 @@ class ZAIChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("ZAI_API_BASE") or ZAI_API_BASE
         dynamic_api_key = api_key or get_secret_str("ZAI_API_KEY")
         return api_base, dynamic_api_key
+
+    def remove_cache_control_flag_from_messages_and_tools(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        tools: Optional[List[ChatCompletionToolParam]] = None,
+    ) -> Tuple[List[AllMessageValues], Optional[List[ChatCompletionToolParam]]]:
+        """
+        Override to preserve cache_control for GLM/ZAI.
+        GLM supports cache_control - don't strip it.
+        """
+        # GLM/ZAI supports cache_control, so return messages and tools unchanged
+        return messages, tools
 
     def get_supported_openai_params(self, model: str) -> list:
         base_params = [
