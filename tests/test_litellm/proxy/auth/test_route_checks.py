@@ -921,6 +921,40 @@ def test_route_in_additional_public_routes_wildcard_match():
         assert route_in_additonal_public_routes("/other/path") is False
 
 
+def test_proxy_admin_viewer_can_access_customer_list():
+    """
+    Test that proxy_admin_viewer can access /customer/list and related customer read routes.
+
+    Admin (View Only) role should be able to view customer usage from the usages tab.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+
+    for route in ["/customer/list", "/customer/info", "/customer/daily/activity"]:
+        try:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=user_obj,
+                _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+                route=route,
+                request=request,
+                valid_token=valid_token,
+                request_data={},
+            )
+        except Exception as e:
+            pytest.fail(
+                f"proxy_admin_viewer should be able to access {route}. Got error: {str(e)}"
+            )
+
+
 def test_route_in_additional_public_routes_exact_match():
     """
     Test that route_in_additonal_public_routes supports exact matches.
@@ -934,4 +968,4 @@ def test_route_in_additional_public_routes_exact_match():
         assert route_in_additonal_public_routes("/status") is True
         # Non-matching routes should fail
         assert route_in_additonal_public_routes("/other") is False
-        
+
