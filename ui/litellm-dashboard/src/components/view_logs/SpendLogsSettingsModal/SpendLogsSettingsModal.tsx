@@ -1,10 +1,11 @@
 "use client";
 
 import { StoreRequestInSpendLogsParams, useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
+import NewBadge from "@/components/common_components/NewBadge";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
 import { ClockCircleOutlined } from "@ant-design/icons";
-import { Button, Form, Input, Modal, Space, Switch } from "antd";
+import { Button, Form, Input, Modal, Space, Switch, Typography } from "antd";
 import React from "react";
 
 interface SpendLogsSettingsModalProps {
@@ -42,7 +43,7 @@ const SpendLogsSettingsModal: React.FC<SpendLogsSettingsModalProps> = ({ isVisib
 
   return (
     <Modal
-      title="Spend Logs Settings"
+      title={<span className="flex gap-2"><Typography.Title level={5}>Spend Logs Settings</Typography.Title><NewBadge /></span>}
       open={isVisible}
       width={600}
       footer={
