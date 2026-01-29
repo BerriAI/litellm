@@ -270,10 +270,16 @@ def _get_wildcard_models(
     return_wildcard_routes: Optional[bool] = False,
     llm_router: Optional[Router] = None,
 ) -> List[str]:
-    models_to_remove = set()
-    all_wildcard_models = []
+    models_to_remove: Set[str] = set()
+    all_wildcard_models: List[str] = []
     for model in unique_models:
         if _check_wildcard_routing(model=model):
+            # Always remove the wildcard pattern from the final model list.
+            # Previously this was only done in the `llm_router is None` branch,
+            # which caused wildcard patterns (e.g. "anthropic/*") to leak into
+            # the /v1/models response as literal model names.
+            models_to_remove.add(model)
+
             if (
                 return_wildcard_routes
             ):  # will add the wildcard route to the list eg: anthropic/*.
@@ -296,11 +302,33 @@ def _get_wildcard_models(
                 wildcard_models = get_known_models_from_wildcard(wildcard_model=model)
 
                 if wildcard_models is not None:
-                    models_to_remove.add(model)
                     all_wildcard_models.extend(wildcard_models)
 
     for model in models_to_remove:
         unique_models.remove(model)
+
+    # Deduplicate wildcard expansions.
+    # When multiple wildcard deployments exist for the same provider (e.g.
+    # several "anthropic/*" entries with different credentials), each one
+    # independently expands to the full set of known provider models.
+    # Also remove models that already appear in unique_models (with or
+    # without provider prefix) to avoid duplicates.
+    if all_wildcard_models:
+        existing = set(unique_models)
+        existing_bare = set(
+            m.split("/", 1)[1] if "/" in m else m for m in unique_models
+        )
+        seen: Set[str] = set()
+        deduped: List[str] = []
+        for wm in all_wildcard_models:
+            if wm in seen or wm in existing:
+                continue
+            seen.add(wm)
+            bare = wm.split("/", 1)[1] if "/" in wm else wm
+            if bare in existing_bare:
+                continue
+            deduped.append(wm)
+        all_wildcard_models = deduped
 
     return all_wildcard_models
 
