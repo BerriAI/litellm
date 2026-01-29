@@ -5,7 +5,7 @@ from litellm import verbose_logger
 _db = Any
 
 
-async def create_missing_views(db: _db):  # noqa: PLR0915
+async def create_missing_views(db: _db, dialect: str = "postgresql"):  # noqa: PLR0915
     """
     --------------------------------------------------
     NOTE: Copy of `litellm/db_scripts/create_views.py`.
@@ -40,32 +40,47 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
 
         print("LiteLLM_VerificationTokenView Created!")  # noqa
 
-    try:
-        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpend" LIMIT 1""")
-        print("MonthlyGlobalSpend Exists!")  # noqa
-    except Exception:
-        sql_query = """
-        CREATE OR REPLACE VIEW "MonthlyGlobalSpend" AS 
+    # Helper for creating/replacing views
+    async def create_view(name: str, sql: str):
+        try:
+            await db.query_raw(f"""SELECT 1 FROM "{name}" LIMIT 1""")
+            print(f"{name} Exists!")  # noqa
+        except Exception:
+            if dialect == "postgresql":
+                await db.execute_raw(query=f"CREATE OR REPLACE VIEW \"{name}\" AS {sql}")
+            else:
+                await db.execute_raw(query=f"DROP VIEW IF EXISTS \"{name}\"")
+                await db.execute_raw(query=f"CREATE VIEW \"{name}\" AS {sql}")
+            print(f"{name} Created!")  # noqa
+
+    # Common snippets
+    if dialect == "postgresql":
+        date_snippet = 'DATE("startTime")'
+        interval_snippet = "CURRENT_DATE - INTERVAL '30 days'"
+    else:
+        date_snippet = "date(\"startTime\")"
+        interval_snippet = "date('now', '-30 days')"
+
+    # MonthlyGlobalSpend
+    await create_view(
+        "MonthlyGlobalSpend",
+        f"""
         SELECT
-        DATE("startTime") AS date, 
+        {date_snippet} AS date, 
         SUM("spend") AS spend 
         FROM 
         "LiteLLM_SpendLogs" 
         WHERE 
-        "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+        "startTime" >= ({interval_snippet})
         GROUP BY 
-        DATE("startTime");
-        """
-        await db.execute_raw(query=sql_query)
+        {date_snippet};
+        """,
+    )
 
-        print("MonthlyGlobalSpend Created!")  # noqa
-
-    try:
-        await db.query_raw("""SELECT 1 FROM "Last30dKeysBySpend" LIMIT 1""")
-        print("Last30dKeysBySpend Exists!")  # noqa
-    except Exception:
-        sql_query = """
-        CREATE OR REPLACE VIEW "Last30dKeysBySpend" AS
+    # Last30dKeysBySpend
+    await create_view(
+        "Last30dKeysBySpend",
+        f"""
         SELECT 
         L."api_key", 
         V."key_alias",
@@ -78,91 +93,74 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         ON
         L."api_key" = V."token"
         WHERE
-        L."startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+        L."startTime" >= ({interval_snippet})
         GROUP BY
         L."api_key", V."key_alias", V."key_name"
         ORDER BY
         total_spend DESC;
-        """
-        await db.execute_raw(query=sql_query)
+        """,
+    )
 
-        print("Last30dKeysBySpend Created!")  # noqa
-
-    try:
-        await db.query_raw("""SELECT 1 FROM "Last30dModelsBySpend" LIMIT 1""")
-        print("Last30dModelsBySpend Exists!")  # noqa
-    except Exception:
-        sql_query = """
-        CREATE OR REPLACE VIEW "Last30dModelsBySpend" AS
+    # Last30dModelsBySpend
+    await create_view(
+        "Last30dModelsBySpend",
+        f"""
         SELECT
         "model",
         SUM("spend") AS total_spend
         FROM
         "LiteLLM_SpendLogs"
         WHERE
-        "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+        "startTime" >= ({interval_snippet})
         AND "model" != ''
         GROUP BY
         "model"
         ORDER BY
         total_spend DESC;
-        """
-        await db.execute_raw(query=sql_query)
+        """,
+    )
 
-        print("Last30dModelsBySpend Created!")  # noqa
-    try:
-        await db.query_raw("""SELECT 1 FROM "MonthlyGlobalSpendPerKey" LIMIT 1""")
-        print("MonthlyGlobalSpendPerKey Exists!")  # noqa
-    except Exception:
-        sql_query = """
-            CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerKey" AS 
+    # MonthlyGlobalSpendPerKey
+    await create_view(
+        "MonthlyGlobalSpendPerKey",
+        f"""
             SELECT
-            DATE("startTime") AS date, 
+            {date_snippet} AS date, 
             SUM("spend") AS spend,
             api_key as api_key
             FROM 
             "LiteLLM_SpendLogs" 
             WHERE 
-            "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+            "startTime" >= ({interval_snippet})
             GROUP BY 
-            DATE("startTime"),
+            {date_snippet},
             api_key;
-        """
-        await db.execute_raw(query=sql_query)
+        """,
+    )
 
-        print("MonthlyGlobalSpendPerKey Created!")  # noqa
-    try:
-        await db.query_raw(
-            """SELECT 1 FROM "MonthlyGlobalSpendPerUserPerKey" LIMIT 1"""
-        )
-        print("MonthlyGlobalSpendPerUserPerKey Exists!")  # noqa
-    except Exception:
-        sql_query = """
-            CREATE OR REPLACE VIEW "MonthlyGlobalSpendPerUserPerKey" AS 
+    # MonthlyGlobalSpendPerUserPerKey
+    await create_view(
+        "MonthlyGlobalSpendPerUserPerKey",
+        f"""
             SELECT
-            DATE("startTime") AS date, 
+            {date_snippet} AS date, 
             SUM("spend") AS spend,
             api_key as api_key,
             "user" as "user"
             FROM 
             "LiteLLM_SpendLogs" 
             WHERE 
-            "startTime" >= (CURRENT_DATE - INTERVAL '30 days')
+            "startTime" >= ({interval_snippet})
             GROUP BY 
-            DATE("startTime"),
+            {date_snippet},
             "user",
             api_key;
-        """
-        await db.execute_raw(query=sql_query)
+        """,
+    )
 
-        print("MonthlyGlobalSpendPerUserPerKey Created!")  # noqa
-
-    try:
-        await db.query_raw("""SELECT 1 FROM "DailyTagSpend" LIMIT 1""")
-        print("DailyTagSpend Exists!")  # noqa
-    except Exception:
-        sql_query = """
-        CREATE OR REPLACE VIEW "DailyTagSpend" AS
+    # DailyTagSpend
+    if dialect == "postgresql":
+        tag_sql = """
         SELECT
             jsonb_array_elements_text(request_tags) AS individual_request_tag,
             DATE(s."startTime") AS spend_date,
@@ -171,43 +169,54 @@ async def create_missing_views(db: _db):  # noqa: PLR0915
         FROM "LiteLLM_SpendLogs" s
         GROUP BY individual_request_tag, DATE(s."startTime");
         """
-        await db.execute_raw(query=sql_query)
+    else:
+        # SQLite: request_tags is expected to be a JSON string. json_each can iterate over it.
+        tag_sql = """
+        SELECT
+            json_each.value AS individual_request_tag,
+            date(s."startTime") AS spend_date,
+            COUNT(*) AS log_count,
+            SUM(spend) AS total_spend
+        FROM "LiteLLM_SpendLogs" s, json_each(s.request_tags)
+        GROUP BY individual_request_tag, date(s."startTime");
+        """
+    await create_view("DailyTagSpend", tag_sql)
 
-        print("DailyTagSpend Created!")  # noqa
-
-    try:
-        await db.query_raw("""SELECT 1 FROM "Last30dTopEndUsersSpend" LIMIT 1""")
-        print("Last30dTopEndUsersSpend Exists!")  # noqa
-    except Exception:
-        sql_query = """
-        CREATE VIEW "Last30dTopEndUsersSpend" AS
+    # Last30dTopEndUsersSpend
+    await create_view(
+        "Last30dTopEndUsersSpend",
+        f"""
         SELECT end_user, COUNT(*) AS total_events, SUM(spend) AS total_spend
         FROM "LiteLLM_SpendLogs"
         WHERE end_user <> '' AND end_user <> user
-        AND "startTime" >= CURRENT_DATE - INTERVAL '30 days'
+        AND "startTime" >= {interval_snippet}
         GROUP BY end_user
         ORDER BY total_spend DESC
         LIMIT 100;
-        """
-        await db.execute_raw(query=sql_query)
-
-        print("Last30dTopEndUsersSpend Created!")  # noqa
+        """,
+    )
 
     return
 
 
-async def should_create_missing_views(db: _db) -> bool:
+async def should_create_missing_views(db: _db, dialect: str = "postgresql") -> bool:
     """
     Run only on first time startup.
 
     If SpendLogs table already has values, then don't create views on startup.
     """
 
-    sql_query = """
-    SELECT reltuples::BIGINT
-    FROM pg_class
-    WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
-    """
+    if dialect == "postgresql":
+        sql_query = """
+        SELECT reltuples::BIGINT
+        FROM pg_class
+        WHERE oid = '"LiteLLM_SpendLogs"'::regclass;
+        """
+    else:
+        # SQLite
+        sql_query = """
+        SELECT count(*) as reltuples FROM "LiteLLM_SpendLogs" LIMIT 1
+        """
 
     result = await db.query_raw(query=sql_query)
 
@@ -218,7 +227,7 @@ async def should_create_missing_views(db: _db) -> bool:
         and len(result) > 0
         and isinstance(result[0], dict)
         and "reltuples" in result[0]
-        and result[0]["reltuples"]
+        and result[0]["reltuples"] is not None
         and (result[0]["reltuples"] == 0 or result[0]["reltuples"] == -1)
     ):
         verbose_logger.debug("Should create views")

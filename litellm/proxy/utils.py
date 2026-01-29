@@ -2020,7 +2020,13 @@ class PrismaClient:
                     else False
                 ),
             )  # Client to connect to Prisma db
-        verbose_proxy_logger.debug("Success - Created Prisma Client")
+
+        # Dialect detection
+        self.dialect: Literal["postgresql", "sqlite"] = "postgresql"
+        if database_url.startswith("sqlite:") or "sqlite" in database_url:
+            self.dialect = "sqlite"
+
+        verbose_proxy_logger.debug(f"Success - Created Prisma Client. Dialect: {self.dialect}")
 
     def get_request_status(
         self, payload: Union[dict, SpendLogsPayload]
@@ -2109,29 +2115,44 @@ class PrismaClient:
             ]
             required_view = "LiteLLM_VerificationTokenView"
             expected_views_str = ", ".join(f"'{view}'" for view in expected_views)
-            pg_schema = os.getenv("DATABASE_SCHEMA", "public")
-            ret = await self.db.query_raw(
-                f"""
-                WITH existing_views AS (
-                    SELECT viewname
-                    FROM pg_views
-                    WHERE schemaname = '{pg_schema}' AND viewname IN (
-                        {expected_views_str}
+
+            if self.dialect == "postgresql":
+                pg_schema = os.getenv("DATABASE_SCHEMA", "public")
+                ret = await self.db.query_raw(
+                    f"""
+                    WITH existing_views AS (
+                        SELECT viewname
+                        FROM pg_views
+                        WHERE schemaname = '{pg_schema}' AND viewname IN (
+                            {expected_views_str}
+                        )
                     )
+                    SELECT
+                        (SELECT COUNT(*) FROM existing_views) AS view_count,
+                        ARRAY_AGG(viewname) AS view_names
+                    FROM existing_views
+                    """
                 )
-                SELECT
-                    (SELECT COUNT(*) FROM existing_views) AS view_count,
-                    ARRAY_AGG(viewname) AS view_names
-                FROM existing_views
-                """
-            )
+                view_count = ret[0]["view_count"]
+                view_names = ret[0]["view_names"] or []
+            else:
+                # SQLite fallback
+                ret = await self.db.query_raw(
+                    f"""
+                    SELECT name FROM sqlite_master 
+                    WHERE type='view' AND name IN ({expected_views_str})
+                    """
+                )
+                view_count = len(ret) if ret else 0
+                view_names = [r["name"] for r in ret] if ret else []
+
             expected_total_views = len(expected_views)
-            if ret[0]["view_count"] == expected_total_views:
+            if view_count == expected_total_views:
                 verbose_proxy_logger.info("All necessary views exist!")
                 return
             else:
                 ## check if required view exists ##
-                if ret[0]["view_names"] and required_view not in ret[0]["view_names"]:
+                if view_names and required_view not in view_names:
                     await self.health_check()  # make sure we can connect to db
                     await self.db.execute_raw(
                         """
@@ -2151,9 +2172,9 @@ class PrismaClient:
                         "LiteLLM_VerificationTokenView Created in DB!"
                     )
                 else:
-                    should_create_views = await should_create_missing_views(db=self.db)
+                    should_create_views = await should_create_missing_views(db=self.db, dialect=self.dialect)
                     if should_create_views:
-                        await create_missing_views(db=self.db)
+                        await create_missing_views(db=self.db, dialect=self.dialect)
                     else:
                         # don't block execution if these views are missing
                         # Convert lists to sets for efficient difference calculation

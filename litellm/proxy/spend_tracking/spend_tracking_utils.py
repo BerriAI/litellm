@@ -2,7 +2,7 @@ import copy
 import hashlib
 import json
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from datetime import datetime as dt
 from datetime import timezone
 from typing import Any, List, Literal, Optional, cast
@@ -506,69 +506,119 @@ async def get_spend_by_team_and_customer(
     customer_id: str,
     prisma_client: PrismaClient,
 ):
-    sql_query = """
-    WITH SpendByModelApiKey AS (
-        SELECT
-            date_trunc('day', sl."startTime") AS group_by_day,
-            COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
-            sl.end_user AS customer,
-            sl.model,
-            sl.api_key,
-            SUM(sl.spend) AS model_api_spend,
-            SUM(sl.total_tokens) AS model_api_tokens
-        FROM 
-            "LiteLLM_SpendLogs" sl
-        LEFT JOIN 
-            "LiteLLM_TeamTable" tt 
-        ON 
-            sl.team_id = tt.team_id
-        WHERE
-            sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
-            AND sl.team_id = $3
-            AND sl.end_user = $4
-        GROUP BY
-            date_trunc('day', sl."startTime"),
-            tt.team_alias,
-            sl.end_user,
-            sl.model,
-            sl.api_key
-    )
-        SELECT
-            group_by_day,
-            jsonb_agg(jsonb_build_object(
-                'team_name', team_name,
-                'customer', customer,
-                'total_spend', total_spend,
-                'metadata', metadata
-            )) AS teams_customers
-        FROM (
+    dialect = getattr(prisma_client, "dialect", "postgresql")
+    if dialect == "postgresql":
+        sql_query = """
+        WITH SpendByModelApiKey AS (
+            SELECT
+                date_trunc('day', sl."startTime") AS group_by_day,
+                COALESCE(tt.team_alias, 'Unassigned Team') AS team_name,
+                sl.end_user AS customer,
+                sl.model,
+                sl.api_key,
+                SUM(sl.spend) AS model_api_spend,
+                SUM(sl.total_tokens) AS model_api_tokens
+            FROM 
+                "LiteLLM_SpendLogs" sl
+            LEFT JOIN 
+                "LiteLLM_TeamTable" tt 
+            ON 
+                sl.team_id = tt.team_id
+            WHERE
+                sl."startTime" >= $1::timestamptz AND sl."startTime" < ($2::timestamptz + INTERVAL '1 day')
+                AND sl.team_id = $3
+                AND sl.end_user = $4
+            GROUP BY
+                date_trunc('day', sl."startTime"),
+                tt.team_alias,
+                sl.end_user,
+                sl.model,
+                sl.api_key
+        )
             SELECT
                 group_by_day,
-                team_name,
-                customer,
-                SUM(model_api_spend) AS total_spend,
                 jsonb_agg(jsonb_build_object(
-                    'model', model,
-                    'api_key', api_key,
-                    'spend', model_api_spend,
-                    'total_tokens', model_api_tokens
-                )) AS metadata
-            FROM 
-                SpendByModelApiKey
+                    'team_name', team_name,
+                    'customer', customer,
+                    'total_spend', total_spend,
+                    'metadata', metadata
+                )) AS teams_customers
+            FROM (
+                SELECT
+                    group_by_day,
+                    team_name,
+                    customer,
+                    SUM(model_api_spend) AS total_spend,
+                    jsonb_agg(jsonb_build_object(
+                        'model', model,
+                        'api_key', api_key,
+                        'spend', model_api_spend,
+                        'total_tokens', model_api_tokens
+                    )) AS metadata
+                FROM 
+                    SpendByModelApiKey
+                GROUP BY
+                    group_by_day,
+                    team_name,
+                    customer
+            ) AS aggregated
             GROUP BY
-                group_by_day,
-                team_name,
-                customer
-        ) AS aggregated
-        GROUP BY
-            group_by_day
-        ORDER BY
-            group_by_day;
-    """
+                group_by_day
+            ORDER BY
+                group_by_day;
+        """
 
-    db_response = await prisma_client.db.query_raw(
-        sql_query, start_date, end_date, team_id, customer_id
-    )
+        db_response = await prisma_client.db.query_raw(
+            sql_query, start_date, end_date, team_id, customer_id
+        )
+    else:
+        # SQLite fallback: Fetch raw logs and aggregate in Python
+        # Get start/end range
+        end_date_full = end_date + timedelta(days=1)
+        logs = await prisma_client.db.litellm_spendlogs.find_many(
+            where={
+                "startTime": {"gte": start_date, "lt": end_date_full},
+                "team_id": team_id,
+                "end_user": customer_id,
+            },
+            include={"liteLLM_teamtable": True},
+        )
+
+        # Aggregate
+        from collections import defaultdict
+
+        aggregated_data = defaultdict(lambda: defaultdict(lambda: {"total_spend": 0, "metadata": defaultdict(lambda: {"spend": 0, "total_tokens": 0})}))
+
+        for log in logs:
+            day = log.startTime.strftime("%Y-%m-%d")
+            team_name = (log.liteLLM_teamtable.team_alias if log.liteLLM_teamtable else None) or "Unassigned Team"
+            aggregated_data[day][(team_name, log.end_user)]["total_spend"] += log.spend or 0
+            
+            meta_key = (log.model, log.api_key)
+            aggregated_data[day][(team_name, log.end_user)]["metadata"][meta_key]["spend"] += log.spend or 0
+            aggregated_data[day][(team_name, log.end_user)]["metadata"][meta_key]["total_tokens"] += log.total_tokens or 0
+
+        # Format to match Postgres response
+        db_response = []
+        for day, teams in sorted(aggregated_data.items()):
+            day_entry = {"group_by_day": day, "teams_customers": []}
+            for (team_name, customer), data in teams.items():
+                metadata = []
+                for (model, api_key), m_data in data["metadata"].items():
+                    metadata.append({
+                        "model": model,
+                        "api_key": api_key,
+                        "spend": m_data["spend"],
+                        "total_tokens": m_data["total_tokens"]
+                    })
+                day_entry["teams_customers"].append({
+                    "team_name": team_name,
+                    "customer": customer,
+                    "total_spend": data["total_spend"],
+                    "metadata": metadata
+                })
+            db_response.append(day_entry)
+
     if db_response is None:
         return []
 

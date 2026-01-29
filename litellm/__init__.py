@@ -1339,7 +1339,10 @@ if TYPE_CHECKING:
     from .llms.anthropic.experimental_pass_through.messages.transformation import AnthropicMessagesConfig as AnthropicMessagesConfig
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import AmazonAnthropicClaudeMessagesConfig as AmazonAnthropicClaudeMessagesConfig
     from .llms.together_ai.chat import TogetherAIConfig as TogetherAIConfig
-    from .llms.nlp_cloud.chat.handler import NLPCloudConfig as NLPCloudConfig
+    from .llms.nlp_cloud.chat.transformation import NLPCloudConfig as NLPCloudConfig
+    from .llms.nlp_cloud.embed.transformation import (
+        NLPCloudEmbeddingConfig as NLPCloudEmbeddingConfig,
+    )
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as VertexGeminiConfig
     from .llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig as GoogleAIStudioGeminiConfig
     from .llms.vertex_ai.vertex_ai_partner_models.anthropic.transformation import VertexAIAnthropicConfig as VertexAIAnthropicConfig

@@ -8067,6 +8067,12 @@ class ProviderConfigManager:
             )
 
             return SagemakerEmbeddingConfig.get_model_config(model)
+        elif litellm.LlmProviders.NLP_CLOUD == provider:
+            from litellm.llms.nlp_cloud.embed.transformation import (
+                NLPCloudEmbeddingConfig,
+            )
+
+            return NLPCloudEmbeddingConfig()
         return None
 
     @staticmethod
