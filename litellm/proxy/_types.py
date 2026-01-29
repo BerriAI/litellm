@@ -293,6 +293,8 @@ class LiteLLMRoutes(enum.Enum):
         "/batches",
         "/v1/batches/{batch_id}",
         "/batches/{batch_id}",
+        "/v1/batches/{batch_id}/cancel",
+        "/batches/{batch_id}/cancel",
         # files
         "/v1/files",
         "/files",
