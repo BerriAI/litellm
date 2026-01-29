@@ -320,4 +320,27 @@ describe("KeyInfoView", () => {
       expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
     });
   });
+
+  it("should display user_id in the overview section", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
+    render(
+      <KeyInfoView
+        keyData={MOCK_KEY_DATA}
+        onClose={() => {}}
+        keyId={"test-key-id"}
+        onKeyDataUpdate={() => {}}
+        teams={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      // User ID appears in multiple places (overview and settings tab)
+      const userIdElements = screen.getAllByText("User ID");
+      expect(userIdElements.length).toBeGreaterThan(0);
+      // Verify the user_id value is displayed
+      const userIdValues = screen.getAllByText("default_user_id");
+      expect(userIdValues.length).toBeGreaterThan(0);
+    });
+  });
 });
