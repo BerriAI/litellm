@@ -94,6 +94,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
     - Checks if the vector store already exists in the database
     - Creates a new database entry if it doesn't exist
     - Adds the vector store to the registry
+    - Tracks team_id and user_id for access control
     
     Args:
         response: The response from litellm.aingest()
@@ -129,6 +130,14 @@ async def _save_vector_store_to_db_from_rag_ingest(
     litellm_vector_store_params = ingest_options.get("litellm_vector_store_params", {})
     custom_vector_store_name = litellm_vector_store_params.get("vector_store_name")
     custom_vector_store_description = litellm_vector_store_params.get("vector_store_description")
+    
+    # Extract provider-specific params from vector_store_config to save as litellm_params
+    # This ensures params like aws_region_name, embedding_model, etc. are available for search
+    provider_specific_params = {}
+    excluded_keys = {"custom_llm_provider", "vector_store_id"}
+    for key, value in vector_store_config.items():
+        if key not in excluded_keys and value is not None:
+            provider_specific_params[key] = value
 
     # Build file metadata entry using helper
     file_entry = _build_file_metadata_entry(
@@ -167,6 +176,9 @@ async def _save_vector_store_to_db_from_rag_ingest(
                 vector_store_name=vector_store_name,
                 vector_store_description=vector_store_description,
                 vector_store_metadata=initial_metadata,
+                litellm_params=provider_specific_params if provider_specific_params else None,
+                team_id=user_api_key_dict.team_id,
+                user_id=user_api_key_dict.user_id,
             )
 
             verbose_proxy_logger.info(

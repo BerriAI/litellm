@@ -6,6 +6,7 @@ Provides standalone functions with @client decorator for LiteLLM logging integra
 
 import asyncio
 import datetime
+import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator, Coroutine, Dict, Optional, Union
 
 import litellm
@@ -20,7 +21,6 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.agents import LiteLLMSendMessageResponse
 from litellm.utils import client
-import uuid
 
 if TYPE_CHECKING:
     from a2a.client import A2AClient as A2AClientType
@@ -36,12 +36,17 @@ A2ACardResolver: Any = None
 _A2AClient: Any = None
 
 try:
-    from a2a.client import A2ACardResolver  # type: ignore[no-redef]
     from a2a.client import A2AClient as _A2AClient  # type: ignore[no-redef]
 
     A2A_SDK_AVAILABLE = True
 except ImportError:
     pass
+
+# Import our custom card resolver that supports multiple well-known paths
+from litellm.a2a_protocol.card_resolver import LiteLLMA2ACardResolver
+
+# Use our custom resolver instead of the default A2A SDK resolver
+A2ACardResolver = LiteLLMA2ACardResolver
 
 
 def _set_usage_on_logging_obj(
