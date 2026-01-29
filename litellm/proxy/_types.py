@@ -227,6 +227,7 @@ class KeyManagementRoutes(str, enum.Enum):
     KEY_REGENERATE_WITH_PATH_PARAM = "/key/{key_id}/regenerate"
     KEY_BLOCK = "/key/block"
     KEY_UNBLOCK = "/key/unblock"
+    KEY_BULK_UPDATE = "/key/bulk_update"
 
     # info and health routes
     KEY_INFO = "/key/info"
@@ -497,6 +498,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_LIST.value,
         KeyManagementRoutes.KEY_BLOCK.value,
         KeyManagementRoutes.KEY_UNBLOCK.value,
+        KeyManagementRoutes.KEY_BULK_UPDATE.value,
     ]
 
     management_routes = [
