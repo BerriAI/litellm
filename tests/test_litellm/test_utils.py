@@ -2543,6 +2543,48 @@ def test_model_info_for_vertex_ai_deepseek_model():
     print("vertex deepseek model info", model_info)
 
 
+def test_model_info_for_openrouter_kimi_k2_5():
+    """
+    Test that openrouter/moonshotai/kimi-k2.5 model info is correctly configured
+    in model_prices_and_context_window.json.
+
+    Model properties from OpenRouter API:
+    - context_length: 262144
+    - pricing: prompt=$0.0000006, completion=$0.000003, input_cache_read=$0.0000001
+    - modality: text+image->text (supports vision)
+    - supports: tool_choice, tools (function calling)
+    """
+    import json
+    from pathlib import Path
+
+    # Load directly from the local JSON file
+    json_path = Path(__file__).parents[2] / "model_prices_and_context_window.json"
+    with open(json_path) as f:
+        model_cost = json.load(f)
+
+    model_info = model_cost.get("openrouter/moonshotai/kimi-k2.5")
+    assert model_info is not None, "Model not found in model_prices_and_context_window.json"
+    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["mode"] == "chat"
+
+    # Verify context window
+    assert model_info["max_input_tokens"] == 262144
+    assert model_info["max_output_tokens"] == 262144
+    assert model_info["max_tokens"] == 262144
+
+    # Verify pricing
+    assert model_info["input_cost_per_token"] == 6e-07
+    assert model_info["output_cost_per_token"] == 3e-06
+    assert model_info["cache_read_input_token_cost"] == 1e-07
+
+    # Verify capabilities
+    assert model_info["supports_vision"] is True
+    assert model_info["supports_function_calling"] is True
+    assert model_info["supports_tool_choice"] is True
+
+    print("openrouter kimi-k2.5 model info", model_info)
+
+
 class TestGetValidModelsWithCLI:
     """Test get_valid_models function as used in CLI token usage"""
 
