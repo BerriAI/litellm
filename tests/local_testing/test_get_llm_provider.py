@@ -420,3 +420,14 @@ def test_get_llm_provider_use_proxy_arg_true_with_direct_args():
     assert provider == "litellm_proxy"
     assert key == arg_api_key  # Should use the argument key
     assert base == arg_api_base # Should use the argument base
+
+
+def test_openrouter_free_model():
+    """
+    Test that models ending in :free are routed to openrouter
+    """
+    model, custom_llm_provider, _, _ = litellm.get_llm_provider(
+        model="google/gemma-3-27b-it:free",
+    )
+    assert custom_llm_provider == "openrouter"
+    assert model == "google/gemma-3-27b-it:free"
