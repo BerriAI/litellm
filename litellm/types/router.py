@@ -623,7 +623,7 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     max_retries: Optional[int]
 
 
-class SearchToolTypedDict(TypedDict):
+class SearchToolTypedDict(TypedDict, total=False):
     """
     Configuration for a search tool in the router.
 
@@ -639,6 +639,7 @@ class SearchToolTypedDict(TypedDict):
 
     search_tool_name: Required[str]
     litellm_params: Required[SearchToolLiteLLMParams]
+    search_tool_info: Optional[dict]
 
 
 class GuardrailLiteLLMParams(TypedDict, total=False):
