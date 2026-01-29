@@ -6,8 +6,14 @@ from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.llms.bedrock.common_utils import (
+    get_anthropic_beta_from_headers,
+    is_bedrock_opus_4_5,
+)
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_TOOL_EXAMPLES_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import ModelResponse
 
@@ -116,6 +122,15 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
+
+        # Add input examples beta header for Bedrock (Claude Opus 4.5 only)
+        if input_examples_used:
+            # Remove the advanced-tool-use header if present (not supported on Bedrock)
+            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+            
+            # Only add the tool-examples header for Claude Opus 4.5
+            if is_bedrock_opus_4_5(model):
+                beta_set.add(ANTHROPIC_TOOL_EXAMPLES_BETA_HEADER)
 
         if beta_set:
             _anthropic_request["anthropic_beta"] = list(beta_set)

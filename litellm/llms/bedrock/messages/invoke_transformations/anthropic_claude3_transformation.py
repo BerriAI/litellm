@@ -23,8 +23,14 @@ from litellm.llms.bedrock.chat.invoke_handler import AWSEventStreamDecoder
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
-from litellm.llms.bedrock.common_utils import get_anthropic_beta_from_headers
-from litellm.types.llms.anthropic import ANTHROPIC_TOOL_SEARCH_BETA_HEADER
+from litellm.llms.bedrock.common_utils import (
+    get_anthropic_beta_from_headers,
+    is_bedrock_opus_4_5,
+)
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_TOOL_EXAMPLES_BETA_HEADER,
+    ANTHROPIC_TOOL_SEARCH_BETA_HEADER,
+)
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk
@@ -294,6 +300,59 @@ class AmazonAnthropicClaudeMessagesConfig(
             if "opus-4" in model.lower() or "opus_4" in model.lower():
                 beta_set.add("tool-search-tool-2025-10-19")
 
+    def _get_input_examples_beta_header_for_bedrock(
+        self,
+        model: str,
+        input_examples_used: bool,
+        beta_set: set,
+    ) -> None:
+        """
+        Add input examples beta header for Bedrock.
+
+        Bedrock requires the `tool-examples-2025-10-29` beta header for input examples.
+        This is only supported on Claude Opus 4.5.
+
+        Note: On Amazon Bedrock, input_examples is only supported on Claude Opus 4.5.
+
+        Ref: https://docs.anthropic.com/en/docs/build-with-claude/tool-use#providing-tool-use-examples
+
+        Args:
+            model: The model name
+            input_examples_used: Whether input examples are used
+            beta_set: The set of beta headers to modify in-place
+        """
+        if input_examples_used:
+            # Remove the advanced-tool-use header if present (not supported on Bedrock)
+            beta_set.discard(ANTHROPIC_TOOL_SEARCH_BETA_HEADER)
+            
+            # Only add the tool-examples header for Claude Opus 4.5
+            if is_bedrock_opus_4_5(model):
+                beta_set.add(ANTHROPIC_TOOL_EXAMPLES_BETA_HEADER)
+
+    def _remove_input_examples_for_non_opus_4_5(
+        self,
+        model: str,
+        anthropic_messages_request: Dict,
+    ) -> None:
+        """
+        Remove input_examples from tools for non-Opus 4.5 models.
+
+        Bedrock Invoke only supports input_examples on Claude Opus 4.5. For all other models,
+        we need to strip the input_examples field from tools to prevent API errors.
+
+        Args:
+            model: The model name
+            anthropic_messages_request: The request dict to modify in-place
+        """
+        # Only keep input_examples for Opus 4.5
+        if not is_bedrock_opus_4_5(model):
+            # Remove input_examples from all tools for non-Opus 4.5 models
+            tools = anthropic_messages_request.get("tools")
+            if tools and isinstance(tools, list):
+                for tool in tools:
+                    if isinstance(tool, dict) and "input_examples" in tool:
+                        tool.pop("input_examples", None)
+
     def _convert_output_format_to_inline_schema(
         self,
         output_format: Dict,
@@ -425,6 +484,19 @@ class AmazonAnthropicClaudeMessagesConfig(
             programmatic_tool_calling_used=programmatic_tool_calling_used,
             input_examples_used=input_examples_used,
             beta_set=beta_set,
+        )
+
+        self._get_input_examples_beta_header_for_bedrock(
+            model=model,
+            input_examples_used=input_examples_used,
+            beta_set=beta_set,
+        )
+
+        # Remove input_examples from tools for non-Opus 4.5 models
+        # (Bedrock only supports input_examples on Opus 4.5)
+        self._remove_input_examples_for_non_opus_4_5(
+            model=model,
+            anthropic_messages_request=anthropic_messages_request,
         )
 
         # Filter out unsupported beta headers for Bedrock (e.g., advanced-tool-use, extended-thinking on non-Opus/Sonnet 4 models)

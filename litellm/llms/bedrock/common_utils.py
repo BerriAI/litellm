@@ -49,6 +49,32 @@ def get_cached_model_info():
     return _get_model_info
 
 
+def is_bedrock_opus_4_5(model: str) -> bool:
+    """
+    Check if the model is Claude Opus 4.5.
+    
+    This helper is used to determine if Bedrock-specific features like input_examples
+    are supported, as they are only available on Claude Opus 4.5.
+    
+    Args:
+        model: The model name/identifier
+        
+    Returns:
+        True if the model is Claude Opus 4.5, False otherwise
+        
+    Examples:
+        >>> is_bedrock_opus_4_5("us.anthropic.claude-opus-4-5-20251101-v1:0")
+        True
+        >>> is_bedrock_opus_4_5("us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+        False
+    """
+    model_lower = model.lower()
+    return any(
+        pattern in model_lower
+        for pattern in ["opus-4.5", "opus_4.5", "opus-4-5", "opus_4_5"]
+    )
+
+
 class AmazonBedrockGlobalConfig:
     def __init__(self):
         pass
