@@ -1102,17 +1102,28 @@ def _resolve_vertex_model_from_router(
             # get_llm_provider returns (model, custom_llm_provider, dynamic_api_key, api_base)
             # For "vertex_ai/gemini-2.0-flash-exp" it returns:
             # model="gemini-2.0-flash-exp", custom_llm_provider="vertex_ai"
-            actual_model, custom_llm_provider, _, _ = get_llm_provider(model=model_from_config)
-            
-            verbose_proxy_logger.debug(
-                f"get_llm_provider returned: actual_model={actual_model}, "
-                f"custom_llm_provider={custom_llm_provider}, model_id={model_id}"
+            actual_model, custom_llm_provider, _, _ = get_llm_provider(
+                model=model_from_config
             )
-            
+
+            # Log only non-sensitive information (model names and provider), never API keys or secrets.
+            safe_actual_model = actual_model
+            safe_custom_llm_provider = custom_llm_provider
+            verbose_proxy_logger.debug(
+                "get_llm_provider returned: actual_model=%s, custom_llm_provider=%s, model_id=%s",
+                safe_actual_model,
+                safe_custom_llm_provider,
+                model_id,
+            )
+
             if actual_model and model_id != actual_model:
                 verbose_proxy_logger.debug(
-                    f"Resolved router model '{model_id}' to '{actual_model}' "
-                    f"(provider={custom_llm_provider}) with project={vertex_project}, location={vertex_location}"
+                    "Resolved router model '%s' to '%s' (provider=%s) with project=%s, location=%s",
+                    model_id,
+                    actual_model,
+                    custom_llm_provider,
+                    vertex_project,
+                    vertex_location,
                 )
                 encoded_endpoint = encoded_endpoint.replace(model_id, actual_model)
                 endpoint = endpoint.replace(model_id, actual_model)
