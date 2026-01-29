@@ -30727,7 +30727,6 @@
         "source": "https://docs.x.ai/docs/models/grok-4-1-fast-reasoning",
         "supports_audio_input": true,
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -30747,7 +30746,6 @@
         "source": "https://docs.x.ai/docs/models/grok-4-1-fast-reasoning",
         "supports_audio_input": true,
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -30767,7 +30765,6 @@
         "source": "https://docs.x.ai/docs/models/grok-4-1-fast-reasoning",
         "supports_audio_input": true,
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
         "supports_vision": true,
@@ -30835,7 +30832,6 @@
         "output_cost_per_token": 1.5e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "xai/grok-code-fast-1": {
@@ -30849,7 +30845,6 @@
         "output_cost_per_token": 1.5e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "xai/grok-code-fast-1-0825": {
@@ -30863,7 +30858,6 @@
         "output_cost_per_token": 1.5e-06,
         "source": "https://docs.x.ai/docs/models",
         "supports_function_calling": true,
-        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "xai/grok-vision-beta": {
