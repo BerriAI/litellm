@@ -71,29 +71,3 @@ async def test_bug_presidio_session_explosion_background_thread_causes_latency()
         assert session_creations == 1
         
     await presidio._close_http_session()
-
-@pytest.mark.asyncio
-async def test_optimization_presidio_avoid_recognizer_reloads_on_server():
-    """
-    OPTIMIZATION VERIFICATION:
-    Verify that ad_hoc_recognizers are OMITTED from the payload when 
-    presidio_ad_hoc_recognizers_on_server is True.
-    Sending them on every request forces the Presidio server to reload its 
-    entire registry, spiking CPU and latency.
-    """
-    presidio = _OPTIONAL_PresidioPIIMasking(
-        mock_testing=True,
-        presidio_analyzer_api_base="http://mock-analyzer",
-        presidio_anonymizer_api_base="http://mock-anonymizer",
-        presidio_ad_hoc_recognizers_on_server=True
-    )
-    presidio.ad_hoc_recognizers = [{"name": "CustomRecognizer", "supported_entity": "CUSTOM"}]
-
-    payload = presidio._get_presidio_analyze_request_payload(
-        text="some text",
-        presidio_config=None,
-        request_data={}
-    )
-
-    # Optimization Check: payload should NOT contain the redundant recognizers
-    assert "ad_hoc_recognizers" not in payload

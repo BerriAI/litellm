@@ -84,7 +84,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         presidio_score_thresholds: Optional[
             Dict[Union[PiiEntityType, str], float]
         ] = None,
-        presidio_ad_hoc_recognizers_on_server: Optional[bool] = None,
         **kwargs,
     ):
         if logging_only is True:
@@ -105,9 +104,6 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             presidio_score_thresholds or {}
         )
         self.presidio_language = presidio_language or "en"
-        self.presidio_ad_hoc_recognizers_on_server = (
-            presidio_ad_hoc_recognizers_on_server or False
-        )
         # Shared HTTP session to prevent memory leaks (issue #14540)
         self._http_session: Optional[aiohttp.ClientSession] = None
         # Lock to prevent race conditions when creating session under concurrent load
@@ -251,10 +247,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         ##################################################################
         ###### Check if user has configured any params for this guardrail
         ################################################################
-        if (
-            self.ad_hoc_recognizers is not None
-            and self.presidio_ad_hoc_recognizers_on_server is False
-        ):
+        if self.ad_hoc_recognizers is not None:
             analyze_payload["ad_hoc_recognizers"] = self.ad_hoc_recognizers
 
         if self.pii_entities_config:
