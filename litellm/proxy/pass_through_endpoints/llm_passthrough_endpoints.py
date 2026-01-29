@@ -1880,6 +1880,11 @@ async def vertex_proxy_route(
 
 
 @router.api_route(
+    "/openai_passthrough/{endpoint:path}",
+    methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
+    tags=["OpenAI Pass-through", "pass-through"],
+)
+@router.api_route(
     "/openai/{endpoint:path}",
     methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
     tags=["OpenAI Pass-through", "pass-through"],
@@ -1891,9 +1896,27 @@ async def openai_proxy_route(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
-    Simple pass-through for OpenAI. Use this if you want to directly send a request to OpenAI.
-
-
+    Pass-through endpoint for OpenAI API calls.
+    
+    Available on both routes:
+    - /openai/{endpoint:path} - Standard OpenAI passthrough route
+    - /openai_passthrough/{endpoint:path} - Dedicated passthrough route (recommended for Responses API)
+    
+    Use /openai_passthrough/* when you need guaranteed passthrough to OpenAI without conflicts
+    with LiteLLM's native implementations (e.g., for the Responses API at /v1/responses).
+    
+    Examples:
+        Standard route:
+        - /openai/v1/chat/completions
+        - /openai/v1/assistants
+        - /openai/v1/threads
+        
+        Dedicated passthrough (for Responses API):
+        - /openai_passthrough/v1/responses
+        - /openai_passthrough/v1/responses/{response_id}
+        - /openai_passthrough/v1/responses/{response_id}/input_items
+    
+    [Docs](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
     """
     base_target_url = os.getenv("OPENAI_API_BASE") or "https://api.openai.com/"
     # Add or update query parameters
