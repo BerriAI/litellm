@@ -1,5 +1,6 @@
 # What is this?
 ## Common checks for /v1/models and `/model/info`
+from datetime import date
 from typing import Dict, List, Optional, Set
 
 import litellm
@@ -9,6 +10,29 @@ from litellm.router import Router
 from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 from litellm.types.router import LiteLLM_Params
 from litellm.utils import get_valid_models
+
+
+def _is_model_deprecated(model_name: str) -> bool:
+    """
+    Check if a model has a deprecation_date in litellm.model_cost that is
+    in the past.  Used to filter deprecated models out of wildcard expansions.
+
+    Checks both the full model name (e.g. "anthropic/claude-3-5-sonnet-20240620")
+    and the bare name without provider prefix (e.g. "claude-3-5-sonnet-20240620").
+    """
+    model_cost = getattr(litellm, "model_cost", None)
+    if not model_cost:
+        return False
+
+    bare = model_name.split("/", 1)[1] if "/" in model_name else model_name
+    today = date.today().isoformat()
+
+    for key in [model_name, bare]:
+        info = model_cost.get(key)
+        if info and info.get("deprecation_date"):
+            return info["deprecation_date"] < today
+
+    return False
 
 
 def _check_wildcard_routing(model: str) -> bool:
@@ -301,6 +325,15 @@ def _get_wildcard_models(
 
     for model in models_to_remove:
         unique_models.remove(model)
+
+    # Filter out deprecated models from wildcard expansions.
+    # litellm.model_cost contains deprecation_date for models that providers
+    # have sunset. Including them causes 404s from the provider API when
+    # users try to call them.
+    if all_wildcard_models:
+        all_wildcard_models = [
+            m for m in all_wildcard_models if not _is_model_deprecated(m)
+        ]
 
     return all_wildcard_models
 
