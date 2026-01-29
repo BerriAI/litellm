@@ -103,7 +103,7 @@ RUN for i in 1 2 3; do \
     apk upgrade --no-cache && break || sleep 5; \
     done \
   && for i in 1 2 3; do \
-    apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
+    apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor libsndfile && break || sleep 5; \
     done
 
 # Copy artifacts from builder
