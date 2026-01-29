@@ -196,8 +196,6 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
     "litellm_cached_tokens_metric",
-    "litellm_deployment_tpm_limit",
-    "litellm_deployment_rpm_limit",
 ]
 
 
@@ -378,15 +376,6 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.API_BASE.value,
         UserAPIKeyLabelNames.API_PROVIDER.value,
     ]
-
-    litellm_deployment_tpm_limit = [
-        UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
-        UserAPIKeyLabelNames.MODEL_ID.value,
-        UserAPIKeyLabelNames.API_BASE.value,
-        UserAPIKeyLabelNames.API_PROVIDER.value,
-    ]
-
-    litellm_deployment_rpm_limit = litellm_deployment_tpm_limit
 
     litellm_deployment_cooled_down = [
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
