@@ -868,7 +868,7 @@ async def acancel_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Batch:
+) -> LiteLLMBatch:
     """
     Async: Cancels a batch.
 
@@ -912,7 +912,7 @@ def cancel_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[Batch, Coroutine[Any, Any, Batch]]:
+) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
     """
     Cancels a batch.
 

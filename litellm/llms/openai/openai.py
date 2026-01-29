@@ -1962,6 +1962,11 @@ class OpenAIBatchesAPI(BaseLLM):
                 cancel_batch_data=cancel_batch_data, openai_client=openai_client
             )
 
+        # At this point, openai_client is guaranteed to be a sync OpenAI client
+        if not isinstance(openai_client, OpenAI):
+            raise ValueError(
+                "OpenAI client is not an instance of OpenAI. Make sure you passed a sync OpenAI client."
+            )
         response = openai_client.batches.cancel(**cancel_batch_data)
         return LiteLLMBatch(**response.model_dump())
 
