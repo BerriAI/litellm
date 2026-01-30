@@ -81,9 +81,7 @@ async with ClaudeSDKClient(options=options) as client:
                     print(content_block.text, end='', flush=True)
 ```
 
-:::info
-**Important:** Don't add `/anthropic` to the base URL. LiteLLM handles routing automatically.
-:::
+
 
 ## Why Use LiteLLM with Agent SDK?
 
