@@ -812,7 +812,7 @@ async def get_file(
         version,
     )
 
-    data: Dict = {}
+    data: Dict = {"file_id": file_id}
     try:
 
         custom_llm_provider = (
@@ -992,7 +992,7 @@ async def delete_file(
         version,
     )
 
-    data: Dict = {}
+    data: Dict = {"file_id": file_id}
     try:
         custom_llm_provider = (
             provider
@@ -1001,6 +1001,22 @@ async def delete_file(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
+        
+        # Call common_processing_pre_call_logic to trigger permission checks
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="afile_delete",
+        )
+        
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -1060,11 +1076,13 @@ async def delete_file(
                     code=500,
                 )
 
+            # Remove file_id from data to avoid duplicate keyword argument
+            data_without_file_id = {k: v for k, v in data.items() if k != "file_id"}
             response = await managed_files_obj.afile_delete(
                 file_id=file_id,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 llm_router=llm_router,
-                **data,
+                **data_without_file_id,
             )
         else:
             response = await litellm.afile_delete(

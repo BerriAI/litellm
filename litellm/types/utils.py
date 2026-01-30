@@ -276,6 +276,8 @@ class CallTypes(str, Enum):
     acreate_batch = "acreate_batch"
     aretrieve_batch = "aretrieve_batch"
     retrieve_batch = "retrieve_batch"
+    acancel_batch = "acancel_batch"
+    cancel_batch = "cancel_batch"
     pass_through = "pass_through_endpoint"
     anthropic_messages = "anthropic_messages"
     get_assistants = "get_assistants"
