@@ -1043,25 +1043,21 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
     ## [Enterprise Only]
     # Add User-IP Address
     requester_ip_address = ""
-    if True:  # Always set the IP Address if available
-        # logic for tracking IP Address
-
-        # logic for tracking IP Address
-        if (
-            general_settings is not None
-            and general_settings.get("use_x_forwarded_for") is True
-            and request is not None
-            and hasattr(request, "headers")
-            and "x-forwarded-for" in request.headers
-        ):
-            requester_ip_address = request.headers["x-forwarded-for"]
-        elif (
-            request is not None
-            and hasattr(request, "client")
-            and hasattr(request.client, "host")
-            and request.client is not None
-        ):
-            requester_ip_address = request.client.host
+    if (
+        general_settings is not None
+        and general_settings.get("use_x_forwarded_for") is True
+        and request is not None
+        and hasattr(request, "headers")
+        and "x-forwarded-for" in request.headers
+    ):
+        requester_ip_address = request.headers["x-forwarded-for"]
+    elif (
+        request is not None
+        and hasattr(request, "client")
+        and hasattr(request.client, "host")
+        and request.client is not None
+    ):
+        requester_ip_address = request.client.host
     data[_metadata_variable_name]["requester_ip_address"] = requester_ip_address
 
     # Add User-Agent
