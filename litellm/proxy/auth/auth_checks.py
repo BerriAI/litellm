@@ -459,10 +459,11 @@ def allowed_routes_check(
     elif user_role == LitellmUserRoles.TEAM:
         if litellm_proxy_roles.team_allowed_routes is None:
             """
-            By default allow a team to call openai + info routes
+            By default allow a team to call openai + info + mcp routes
             """
             is_allowed = _allowed_routes_check(
-                user_route=user_route, allowed_routes=["openai_routes", "info_routes"]
+                user_route=user_route,
+                allowed_routes=["openai_routes", "info_routes", "mcp_routes"],
             )
             return is_allowed
         elif litellm_proxy_roles.team_allowed_routes is not None:

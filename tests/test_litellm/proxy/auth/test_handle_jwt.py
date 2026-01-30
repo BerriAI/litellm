@@ -963,6 +963,63 @@ async def test_jwt_auth_sets_team_id_for_mcp_permission_lookup(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_jwt_auth_allows_mcp_routes_for_teams(monkeypatch):
+    """
+    Test that JWT auth properly selects a team when accessing MCP routes.
+    
+    This tests the fix for the issue where MCP routes were not in the default
+    team_allowed_routes, causing teams to not be selected for MCP requests,
+    which meant team MCP permissions were not enforced.
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    # Team with models (standard team with model access)
+    team = LiteLLM_TeamTable(
+        team_id="team-with-models",
+        models=["gpt-4", "claude-sonnet"],
+        object_permission_id="obj-perm-456",
+    )
+
+    async def mock_get_team_object(*args, **kwargs):
+        return team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    # Test with MCP route - this should now work with the fix
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-with-models"},
+        requested_model=None,  # MCP requests don't specify a model
+        route="/mcp/tools/list",  # MCP route - now allowed for teams
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # Team should be selected for MCP routes
+    assert team_id == "team-with-models", \
+        "Team should be selected for MCP routes (mcp_routes now in team_allowed_routes)"
+    assert team_obj.team_id == "team-with-models"
+    assert team_obj.object_permission_id == "obj-perm-456"
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_returns_team_membership_object():
     """
     Test that auth_builder returns the team_membership_object when user is a member of a team.
