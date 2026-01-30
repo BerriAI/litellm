@@ -7,7 +7,6 @@ Use this if you want your logs to be stored in memory and flushed periodically.
 from __future__ import annotations
 
 import asyncio
-import os
 import time
 from typing import Any, Callable, Generic, List, Optional, TypeVar, cast
 

@@ -11,7 +11,7 @@ import base64
 import json
 import re
 import traceback
-from typing import List, Optional
+from typing import Optional
 
 import litellm
 from litellm._logging import print_verbose, verbose_logger

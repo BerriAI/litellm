@@ -15,7 +15,7 @@ For batching specific details see CustomBatchLogger class
 import asyncio
 import os
 import traceback
-from typing import List, Optional
+from typing import Optional
 
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger

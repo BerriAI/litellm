@@ -3,7 +3,7 @@ import os
 import time
 from litellm._uuid import uuid
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import Optional
 
 from litellm._logging import verbose_logger
 from litellm.constants import _DEFAULT_TTL_FOR_HTTPX_CLIENTS, AZURE_STORAGE_MSFT_VERSION

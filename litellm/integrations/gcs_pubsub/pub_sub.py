@@ -10,7 +10,7 @@ import asyncio
 import json
 import os
 import traceback
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm.types.utils import StandardLoggingPayload
 
