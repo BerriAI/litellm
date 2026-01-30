@@ -1297,7 +1297,7 @@ class Logging(LiteLLMLoggingBaseClass):
         output_cost: float,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
-        azure_model_router_flat_cost: Optional[float] = None,
+        additional_costs: Optional[dict] = None,
         original_cost: Optional[float] = None,
         discount_percent: Optional[float] = None,
         discount_amount: Optional[float] = None,
@@ -1313,7 +1313,7 @@ class Logging(LiteLLMLoggingBaseClass):
             output_cost: Cost of output/completion tokens
             cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
             total_cost: Total cost of request
-            azure_model_router_flat_cost: Azure Model Router flat infrastructure cost
+            additional_costs: Free-form additional costs dict (e.g., {"azure_model_router_flat_cost": 0.00014})
             original_cost: Cost before discount
             discount_percent: Discount percentage (0.05 = 5%)
             discount_amount: Discount amount in USD
@@ -1329,9 +1329,9 @@ class Logging(LiteLLMLoggingBaseClass):
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
 
-        # Store Azure Model Router flat cost if provided
-        if azure_model_router_flat_cost is not None and azure_model_router_flat_cost > 0:
-            self.cost_breakdown["azure_model_router_flat_cost"] = azure_model_router_flat_cost
+        # Store additional costs if provided (free-form dict for extensibility)
+        if additional_costs and isinstance(additional_costs, dict) and len(additional_costs) > 0:
+            self.cost_breakdown["additional_costs"] = additional_costs
 
         # Store discount information if provided
         if original_cost is not None:

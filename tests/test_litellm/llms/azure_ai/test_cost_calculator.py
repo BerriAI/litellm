@@ -233,3 +233,66 @@ class TestAzureModelRouterCostBreakdown:
         assert cost > expected_flat_cost
         print(f"Total cost with flat fee: ${cost:.6f}")
         print(f"Expected minimum flat cost: ${expected_flat_cost:.6f}")
+
+    def test_additional_costs_in_cost_breakdown(self):
+        """Test that Azure Model Router flat cost appears in additional_costs dict."""
+        from litellm.cost_calculator import completion_cost
+        from litellm.litellm_core_utils.litellm_logging import LitellmLoggingObject
+        from litellm.types.utils import Usage, ModelResponse, Choices, Message
+
+        # Create logging object
+        logging_obj = LitellmLoggingObject()
+
+        # Create a mock response for azure_ai model router
+        response = ModelResponse(
+            id="test-123",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content="Test response",
+                    ),
+                )
+            ],
+            created=1234567890,
+            model="azure-model-router",
+            object="chat.completion",
+            usage=Usage(
+                prompt_tokens=5000,
+                completion_tokens=2000,
+                total_tokens=7000,
+            ),
+        )
+
+        # Set hidden params for provider
+        response._hidden_params = {"custom_llm_provider": "azure_ai"}
+
+        # Calculate cost with logging object
+        cost = completion_cost(
+            completion_response=response,
+            model="azure-model-router",
+            custom_llm_provider="azure_ai",
+            litellm_logging_obj=logging_obj,
+        )
+
+        # Check that cost breakdown contains additional_costs
+        assert hasattr(logging_obj, "cost_breakdown")
+        assert logging_obj.cost_breakdown is not None
+        assert "additional_costs" in logging_obj.cost_breakdown
+        assert isinstance(logging_obj.cost_breakdown["additional_costs"], dict)
+        
+        # Check that the Azure Model Router flat cost is in additional_costs
+        additional_costs = logging_obj.cost_breakdown["additional_costs"]
+        assert "Azure Model Router Flat Cost" in additional_costs
+        
+        # Verify the flat cost value
+        expected_flat_cost = (
+            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        )
+        actual_flat_cost = additional_costs["Azure Model Router Flat Cost"]
+        assert actual_flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
+        
+        print(f"Additional costs in breakdown: {additional_costs}")
+        print(f"Azure Model Router Flat Cost: ${actual_flat_cost:.6f}")

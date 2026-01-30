@@ -2635,7 +2635,7 @@ class CostBreakdown(TypedDict, total=False):
     )
     total_cost: float  # Total cost (input + output + tool usage)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    azure_model_router_flat_cost: float  # Azure AI Foundry Model Router flat cost ($0.14 per M input tokens)
+    additional_costs: Dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
     discount_amount: float  # Discount amount in USD (optional)
