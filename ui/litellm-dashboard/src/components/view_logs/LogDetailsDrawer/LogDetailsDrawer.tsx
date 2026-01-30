@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Radio, Alert, message } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
+import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message, Collapse } from "antd";
+import { CopyOutlined, DownOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -10,7 +10,7 @@ import { ConfigInfoMessage } from "../ConfigInfoMessage";
 import { VectorStoreViewer } from "../VectorStoreViewer";
 import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
-import { JsonViewer, ViewMode } from "./JsonViewer";
+import { JsonViewer } from "./JsonViewer";
 import { DrawerHeader } from "./DrawerHeader";
 import { copyToClipboard } from "./clipboardUtils";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
@@ -21,7 +21,6 @@ import {
   METADATA_MAX_HEIGHT,
   TAB_REQUEST,
   TAB_RESPONSE,
-  VIEW_MODE_FORMATTED,
   FONT_SIZE_SMALL,
   FONT_FAMILY_MONO,
   SPACING_XLARGE,
@@ -58,7 +57,6 @@ export function LogDetailsDrawer({
   onSelectLog,
 }: LogDetailsDrawerProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
-  const [jsonViewMode, setJsonViewMode] = useState<ViewMode>(VIEW_MODE_FORMATTED);
 
   // Keyboard navigation
   const { selectNextLog, selectPreviousLog } = useKeyboardNavigation({
@@ -162,8 +160,9 @@ export function LogDetailsDrawer({
         )}
 
         {/* Request Details Section */}
-        <Card title="Request Details" size="small" style={{ marginBottom: SPACING_XLARGE }}>
-          <Descriptions column={2} size="small">
+        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
+          <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
+            <Descriptions column={2} size="small">
             <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
             <Descriptions.Item label="Provider">{logEntry.custom_llm_provider || "-"}</Descriptions.Item>
             <Descriptions.Item label="Call Type">{logEntry.call_type}</Descriptions.Item>
@@ -183,6 +182,7 @@ export function LogDetailsDrawer({
             )}
           </Descriptions>
         </Card>
+        </div>
 
         {/* Metrics Section */}
         <MetricsSection logEntry={logEntry} metadata={metadata} />
@@ -193,31 +193,19 @@ export function LogDetailsDrawer({
         {/* Configuration Info Message - Show when data is missing */}
         <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
 
-        {/* Request/Response JSON - Using Tabs with View Toggle */}
+        {/* Request/Response JSON - Collapsible */}
         <RequestResponseSection
-          activeTab={activeTab}
-          jsonViewMode={jsonViewMode}
           hasResponse={hasResponse}
-          onTabChange={setActiveTab}
-          onViewModeChange={setJsonViewMode}
           onCopy={(data, label) => copyToClipboard(JSON.stringify(data, null, 2), label)}
           getRawRequest={getRawRequest}
           getFormattedResponse={getFormattedResponse}
         />
 
         {/* Guardrail Data - Show only if present */}
-        {hasGuardrailData && (
-          <div style={{ marginBottom: SPACING_XLARGE }}>
-            <GuardrailViewer data={guardrailInfo} />
-          </div>
-        )}
+        {hasGuardrailData && <GuardrailViewer data={guardrailInfo} />}
 
         {/* Vector Store Request Data - Show only if present */}
-        {hasVectorStoreData && (
-          <div style={{ marginBottom: SPACING_XLARGE }}>
-            <VectorStoreViewer data={metadata.vector_store_request_metadata} />
-          </div>
-        )}
+        {hasVectorStoreData && <VectorStoreViewer data={metadata.vector_store_request_metadata} />}
 
         {/* Metadata Card - Only show if there's metadata */}
         {logEntry.metadata && Object.keys(logEntry.metadata).length > 0 && (
@@ -251,8 +239,8 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div style={{ marginBottom: SPACING_XLARGE }}>
-      <Text strong style={{ display: "block", marginBottom: 8 }}>
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4" style={{ marginBottom: SPACING_XLARGE }}>
+      <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </Text>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -286,8 +274,9 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       metadata.additional_usage_values.cache_read_input_tokens > 0);
 
   return (
-    <Card title="Metrics" size="small" style={{ marginBottom: SPACING_XLARGE }}>
-      <Descriptions column={2} size="small">
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
+      <Card title="Metrics" size="small" bordered={false} style={{ marginBottom: 0 }}>
+        <Descriptions column={2} size="small">
         <Descriptions.Item label="Tokens">
           <TokenFlow
             prompt={logEntry.prompt_tokens}
@@ -317,7 +306,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
           </>
         )}
 
-        {metadata?.litellm_overhead_time_ms !== undefined && (
+        {metadata?.litellm_overhead_time_ms !== undefined && metadata.litellm_overhead_time_ms !== null && (
           <Descriptions.Item label="LiteLLM Overhead">
             {metadata.litellm_overhead_time_ms.toFixed(2)} ms
           </Descriptions.Item>
@@ -331,30 +320,26 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
         </Descriptions.Item>
       </Descriptions>
     </Card>
+    </div>
   );
 }
 
 interface RequestResponseSectionProps {
-  activeTab: typeof TAB_REQUEST | typeof TAB_RESPONSE;
-  jsonViewMode: ViewMode;
   hasResponse: boolean;
-  onTabChange: (key: typeof TAB_REQUEST | typeof TAB_RESPONSE) => void;
-  onViewModeChange: (mode: ViewMode) => void;
   onCopy: (data: any, label: string) => void;
   getRawRequest: () => any;
   getFormattedResponse: () => any;
 }
 
 function RequestResponseSection({
-  activeTab,
-  jsonViewMode,
   hasResponse,
-  onTabChange,
-  onViewModeChange,
   onCopy,
   getRawRequest,
   getFormattedResponse,
 }: RequestResponseSectionProps) {
+  const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
+  const [isOpen, setIsOpen] = useState<boolean>(true);
+
   const handleCopy = () => {
     const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
     const label = activeTab === TAB_REQUEST ? "Request" : "Response";
@@ -362,98 +347,109 @@ function RequestResponseSection({
   };
 
   return (
-    <Card
-      title="Request & Response"
-      size="small"
-      style={{ marginBottom: SPACING_XLARGE }}
-      styles={{ body: { padding: 0 } }}
-    >
-      <Tabs
-        activeKey={activeTab}
-        onChange={(key) => onTabChange(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-        tabBarExtraContent={
-          <div style={{ display: "flex", alignItems: "center", gap: 8, paddingRight: SPACING_XLARGE }}>
-            {/* View Mode Toggle */}
-            <Radio.Group size="small" value={jsonViewMode} onChange={(e) => onViewModeChange(e.target.value)}>
-              <Radio.Button value={VIEW_MODE_FORMATTED}>Formatted</Radio.Button>
-              <Radio.Button value="json">JSON</Radio.Button>
-            </Radio.Group>
-
-            {/* Copy Button */}
-            <Button
-              type="text"
-              size="small"
-              icon={<CopyOutlined />}
-              onClick={handleCopy}
-              disabled={activeTab === TAB_RESPONSE && !hasResponse}
-            >
-              Copy
-            </Button>
-          </div>
-        }
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
+      <Collapse
+        activeKey={isOpen ? ["request-response"] : []}
+        onChange={(keys) => setIsOpen(keys.includes("request-response"))}
+        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
+        bordered={false}
         items={[
           {
-            key: TAB_REQUEST,
-            label: "Request",
+            key: "request-response",
+            label: <span style={{ fontSize: 16, fontWeight: 500 }}>Request & Response</span>,
             children: (
-              <div style={{ padding: SPACING_XLARGE }}>
-                <JsonViewer data={getRawRequest()} mode={jsonViewMode} />
-              </div>
-            ),
-          },
-          {
-            key: TAB_RESPONSE,
-            label: "Response",
-            children: (
-              <div style={{ padding: SPACING_XLARGE }}>
-                {hasResponse ? (
-                  <JsonViewer data={getFormattedResponse()} mode={jsonViewMode} />
-                ) : (
-                  <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                    Response data not available
-                  </div>
-                )}
-              </div>
+              <Tabs
+                activeKey={activeTab}
+                onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
+                tabBarExtraContent={
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={handleCopy}
+                    disabled={activeTab === TAB_RESPONSE && !hasResponse}
+                  >
+                    Copy
+                  </Button>
+                }
+                items={[
+                  {
+                    key: TAB_REQUEST,
+                    label: "Request",
+                    children: (
+                      <div style={{ paddingTop: SPACING_XLARGE }}>
+                        <JsonViewer data={getRawRequest()} mode="formatted" />
+                      </div>
+                    ),
+                  },
+                  {
+                    key: TAB_RESPONSE,
+                    label: "Response",
+                    children: (
+                      <div style={{ paddingTop: SPACING_XLARGE }}>
+                        {hasResponse ? (
+                          <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                        ) : (
+                          <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                            Response data not available
+                          </div>
+                        )}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
             ),
           },
         ]}
-        style={{ padding: `0 ${SPACING_XLARGE}px` }}
+        styles={{
+          header: {
+            padding: "16px",
+            borderBottom: "1px solid #f0f0f0",
+          },
+          body: {
+            padding: 0,
+          },
+        }}
       />
-    </Card>
+    </div>
   );
 }
 
 function MetadataSection({ metadata, onCopy }: { metadata: Record<string, any>; onCopy: (data: string) => void }) {
   return (
-    <Card
-      title="Metadata"
-      size="small"
-      style={{ marginBottom: SPACING_XLARGE }}
-      extra={
-        <Button
-          type="text"
-          size="small"
-          icon={<CopyOutlined />}
-          onClick={() => onCopy(JSON.stringify(metadata, null, 2))}
-        >
-          Copy
-        </Button>
-      }
-    >
-      <pre
-        style={{
-          maxHeight: METADATA_MAX_HEIGHT,
-          overflowY: "auto",
-          fontSize: FONT_SIZE_SMALL,
-          fontFamily: FONT_FAMILY_MONO,
-          whiteSpace: "pre-wrap",
-          wordBreak: "break-all",
-          margin: 0,
-        }}
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
+      <Card
+        title="Metadata"
+        size="small"
+        bordered={false}
+        style={{ marginBottom: 0 }}
+        extra={
+          <Button
+            type="text"
+            size="small"
+            icon={<CopyOutlined />}
+            onClick={() => onCopy(JSON.stringify(metadata, null, 2))}
+          >
+            Copy
+          </Button>
+        }
       >
-        {JSON.stringify(metadata, null, 2)}
-      </pre>
-    </Card>
+        <pre
+          style={{
+            maxHeight: METADATA_MAX_HEIGHT,
+            overflowY: "auto",
+            fontSize: FONT_SIZE_SMALL,
+            fontFamily: FONT_FAMILY_MONO,
+            whiteSpace: "pre-wrap",
+            wordBreak: "break-all",
+            margin: 0,
+          }}
+        >
+          {JSON.stringify(metadata, null, 2)}
+        </pre>
+      </Card>
+    </div>
   );
 }
 

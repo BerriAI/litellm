@@ -1,5 +1,4 @@
 import { Typography } from "antd";
-import { COLOR_SECONDARY, FONT_FAMILY_MONO, FONT_SIZE_MEDIUM, SPACING_SMALL, SPACING_MEDIUM } from "./constants";
 
 const { Text } = Typography;
 
@@ -10,18 +9,14 @@ interface TokenFlowProps {
 }
 
 /**
- * Displays token usage in a flow format: "prompt → completion (Σ total)"
- * Makes it easy to see the relationship between input, output, and total tokens.
+ * Displays token usage in LiteLLM format: "12 (9 prompt tokens + 3 completion tokens)"
+ * Shows total with breakdown of prompt and completion tokens.
  */
 export function TokenFlow({ prompt = 0, completion = 0, total = 0 }: TokenFlowProps) {
   return (
-    <Text style={{ fontFamily: FONT_FAMILY_MONO, fontSize: FONT_SIZE_MEDIUM }}>
-      {prompt.toLocaleString()}
-      <span style={{ color: COLOR_SECONDARY, margin: `0 ${SPACING_SMALL}px` }}>→</span>
-      {completion.toLocaleString()}
-      <span style={{ color: COLOR_SECONDARY, marginLeft: SPACING_MEDIUM }}>
-        (Σ {total.toLocaleString()})
-      </span>
+    <Text>
+      {total.toLocaleString()} ({prompt.toLocaleString()} prompt tokens + {completion.toLocaleString()} completion
+      tokens)
     </Text>
   );
 }
