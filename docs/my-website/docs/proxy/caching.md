@@ -206,6 +206,25 @@ REDIS_URL="rediss://.."
 but we **don't** recommend using REDIS_URL in prod. We've noticed a performance difference between
 using it vs. redis_host, port, etc.
 
+#### SSL for `router_settings` Redis
+
+If you use `router_settings` with `redis_host`/`redis_port` (for cooldown, RPM/TPM tracking), the `REDIS_SSL` env var and `cache_params.ssl` do **not** apply to the router's Redis connections. The router creates a separate connection pool.
+
+To enable SSL on the router's Redis, use `cache_kwargs`:
+
+```yaml
+router_settings:
+  redis_host: "master.my-cluster.cache.amazonaws.com"
+  redis_port: 6379
+  redis_password: ""
+  cache_kwargs:
+    ssl: true
+```
+
+:::warning
+Without `cache_kwargs.ssl`, the router's Redis connections use plain TCP. On TLS-required endpoints (e.g. AWS ElastiCache with encryption in-transit), this causes silent timeouts — the server drops non-TLS traffic and the client hangs until `socket_timeout` expires.
+:::
+
 #### GCP IAM Authentication
 
 For GCP Memorystore Redis with IAM authentication, install the required dependency:

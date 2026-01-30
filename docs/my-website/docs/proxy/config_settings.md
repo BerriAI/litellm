@@ -311,6 +311,9 @@ router_settings:
     "ContentPolicyViolationErrorAllowedFails": 15, # int
     "InternalServerErrorAllowedFails": 20, # int
   }
+  cache_kwargs:                                  # dict - additional kwargs for Redis cache (e.g. ssl, socket_timeout)
+    ssl: true
+    socket_timeout: 5
   content_policy_fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for content policy violations
   fallbacks=[{"claude-2": ["my-fallback-model"]}] # List[Dict[str, List[str]]]: Fallback model for all errors
 ```
@@ -341,7 +344,7 @@ router_settings:
 | stream_timeout | Optional[float] | The default timeout for a streaming request. If not set, the 'timeout' value is used. |
 | debug_level | Literal["DEBUG", "INFO"] | The debug level for the logging library in the router. Defaults to "INFO". |
 | client_ttl | int | Time-to-live for cached clients in seconds. Defaults to 3600. |
-| cache_kwargs | dict | Additional keyword arguments for the cache initialization. Use this for non-string Redis parameters that may fail when set via `REDIS_*` environment variables. |
+| cache_kwargs | dict | Additional keyword arguments for the Redis cache used by the router. Use this to pass parameters like `ssl: true` and `socket_timeout` when connecting to TLS-required Redis (e.g. AWS ElastiCache with encryption in-transit). Also useful for non-string Redis parameters that may fail when set via `REDIS_*` environment variables. |
 | routing_strategy_args | dict | Additional keyword arguments for the routing strategy - e.g. lowest latency routing default ttl |
 | model_group_alias | dict | Model group alias mapping. E.g. `{"claude-3-haiku": "claude-3-haiku-20240229"}` |
 | num_retries | int | Number of retries for a request. Defaults to 3. |
