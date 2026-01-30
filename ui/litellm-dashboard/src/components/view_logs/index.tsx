@@ -368,6 +368,10 @@ export default function SpendLogsTable({
     // Optionally keep selectedLog for animation purposes
   };
 
+  const handleSelectLog = (log: LogEntry) => {
+    setSelectedLog(log);
+  };
+
   // Function to extract unique error codes from logs
   const extractErrorCodes = (logs: LogEntry[], searchText: string = "") => {
     const errorCodes = new Set<string>();
@@ -776,6 +780,8 @@ export default function SpendLogsTable({
         onClose={handleCloseDrawer}
         logEntry={selectedLog}
         onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
+        allLogs={filteredData}
+        onSelectLog={handleSelectLog}
       />
     </div>
   );
