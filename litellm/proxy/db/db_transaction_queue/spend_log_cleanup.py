@@ -65,38 +65,49 @@ class SpendLogCleanup:
         self, prisma_client: PrismaClient, cutoff_date: datetime
     ) -> int:
         """
-        Helper method to delete old logs in batches.
+        Helper method to delete old logs in batches using raw SQL for efficiency.
+
+        Uses DELETE with a subquery LIMIT to avoid:
+        - Loading records into memory
+        - Network transfer of record data
+        - Memory constraints on batch size
+
         Returns the total number of logs deleted.
         """
         total_deleted = 0
         run_count = 0
         while True:
-            if run_count > SPEND_LOG_RUN_LOOPS:
+            if run_count >= SPEND_LOG_RUN_LOOPS:
                 verbose_proxy_logger.info(
-                    "Max logs deleted - 1,00,000, rest of the logs will be deleted in next run"
+                    f"Max loops reached ({SPEND_LOG_RUN_LOOPS}). Deleted {total_deleted} logs. "
+                    "Rest will be deleted in next run."
                 )
                 break
-            # Step 1: Find logs to delete
-            logs_to_delete = await prisma_client.db.litellm_spendlogs.find_many(
-                where={"startTime": {"lt": cutoff_date}},
-                take=self.batch_size,
-            )
-            verbose_proxy_logger.info(f"Found {len(logs_to_delete)} logs in this batch")
 
-            if not logs_to_delete:
+            # Use raw SQL with LIMIT for efficient batched deletion
+            # This avoids loading records into memory and reduces network transfer
+            deleted_count = await prisma_client.db.execute_raw(
+                '''
+                DELETE FROM "LiteLLM_SpendLogs"
+                WHERE "request_id" IN (
+                    SELECT "request_id" FROM "LiteLLM_SpendLogs"
+                    WHERE "startTime" < $1
+                    LIMIT $2
+                )
+                ''',
+                cutoff_date,
+                self.batch_size,
+            )
+
+            verbose_proxy_logger.info(f"Deleted {deleted_count} logs in this batch")
+
+            if deleted_count == 0:
                 verbose_proxy_logger.info(
                     f"No more logs to delete. Total deleted: {total_deleted}"
                 )
                 break
 
-            request_ids = [log.request_id for log in logs_to_delete]
-
-            # Step 2: Delete them in one go
-            await prisma_client.db.litellm_spendlogs.delete_many(
-                where={"request_id": {"in": request_ids}}
-            )
-
-            total_deleted += len(logs_to_delete)
+            total_deleted += deleted_count
             run_count += 1
 
             # Add a small sleep to prevent overwhelming the database

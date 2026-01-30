@@ -151,28 +151,17 @@ async def test_should_delete_spend_logs():
 
 @pytest.mark.asyncio
 async def test_cleanup_old_spend_logs_batch_deletion():
-    from types import SimpleNamespace
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     # Setup Prisma client
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
 
-    # Mock spendlogs table
-    mock_spendlogs = MagicMock()
-    mock_spendlogs.find_many = AsyncMock()
-    mock_spendlogs.delete_many = AsyncMock()
-
-    # Create 1500 mocked logs with .request_id
-    mock_logs = [SimpleNamespace(request_id=f"req_{i}") for i in range(1500)]
-    mock_spendlogs.find_many.side_effect = [
-        mock_logs[:1000],  # Batch 1
-        mock_logs[1000:],  # Batch 2
-        [],  # Done
-    ]
+    # Mock execute_raw to simulate batched deletion
+    # Returns 1000 (batch 1), 500 (batch 2), 0 (done)
+    mock_db.execute_raw = AsyncMock(side_effect=[1000, 500, 0])
 
     # Wire up mocks
-    mock_db.litellm_spendlogs = mock_spendlogs
     mock_prisma_client.db = mock_db
 
     # Mock Redis cache and pod_lock_manager
@@ -189,15 +178,16 @@ async def test_cleanup_old_spend_logs_batch_deletion():
     assert cleaner._should_delete_spend_logs() is True
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    # Validate batching and deletion
-    assert mock_spendlogs.find_many.call_count == 3
-    assert mock_spendlogs.delete_many.call_count == 2
-    mock_spendlogs.delete_many.assert_any_call(
-        where={"request_id": {"in": [f"req_{i}" for i in range(1000)]}}
-    )
-    mock_spendlogs.delete_many.assert_any_call(
-        where={"request_id": {"in": [f"req_{i}" for i in range(1000, 1500)]}}
-    )
+    # Validate execute_raw was called for batched deletion
+    # Should be called 3 times: 1000 deleted, 500 deleted, 0 deleted (done)
+    assert mock_db.execute_raw.call_count == 3
+
+    # Verify the SQL query structure in each call
+    for call in mock_db.execute_raw.call_args_list:
+        sql_query = call[0][0]
+        assert 'DELETE FROM "LiteLLM_SpendLogs"' in sql_query
+        assert '"startTime" < $1' in sql_query
+        assert "LIMIT $2" in sql_query
 
 
 @pytest.mark.asyncio
@@ -208,10 +198,8 @@ async def test_cleanup_old_spend_logs_retention_period_cutoff():
     # Setup Prisma client
     mock_prisma_client = MagicMock()
     mock_db = MagicMock()
-    mock_spendlogs = MagicMock()
-    mock_spendlogs.find_many = AsyncMock(return_value=[])
-    mock_spendlogs.delete_many = AsyncMock()
-    mock_db.litellm_spendlogs = mock_spendlogs
+    # Return 0 to indicate no logs deleted (simulating empty table)
+    mock_db.execute_raw = AsyncMock(return_value=0)
     mock_prisma_client.db = mock_db
 
     # Mock Redis cache and pod_lock_manager
@@ -228,8 +216,10 @@ async def test_cleanup_old_spend_logs_retention_period_cutoff():
     assert cleaner._should_delete_spend_logs() is True
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    # Verify the cutoff date is correct
-    cutoff_date = mock_spendlogs.find_many.call_args[1]["where"]["startTime"]["lt"]
+    # Verify execute_raw was called with the correct cutoff date
+    assert mock_db.execute_raw.call_count == 1
+    call_args = mock_db.execute_raw.call_args[0]
+    cutoff_date = call_args[1]  # Second positional arg is the cutoff date
     expected_cutoff = datetime.now(timezone.utc) - timedelta(seconds=86400)
     assert (
         abs((cutoff_date - expected_cutoff).total_seconds()) < 1
@@ -242,14 +232,12 @@ async def test_cleanup_old_spend_logs_no_retention_period():
     Test that no logs are deleted when no retention period is set
     """
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_spendlogs.find_many = AsyncMock()
-    mock_prisma_client.db.litellm_spendlogs.delete = AsyncMock()
+    mock_prisma_client.db.execute_raw = AsyncMock()
 
     cleaner = SpendLogCleanup(general_settings={})  # no retention
     await cleaner.cleanup_old_spend_logs(mock_prisma_client)
 
-    mock_prisma_client.db.litellm_spendlogs.find_many.assert_not_called()
-    mock_prisma_client.db.litellm_spendlogs.delete.assert_not_called()
+    mock_prisma_client.db.execute_raw.assert_not_called()
 
 
 def test_cleanup_batch_size_env_var(monkeypatch):
