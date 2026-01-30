@@ -15,6 +15,7 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.speech.guardrail_translation.handler import (
     OpenAITextToSpeechHandler,
 )
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.utils import CallTypes
 
 

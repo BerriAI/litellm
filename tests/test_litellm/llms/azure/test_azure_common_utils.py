@@ -1,8 +1,6 @@
-import json
 import os
 import sys
 import traceback
-from typing import Callable, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -177,12 +175,12 @@ def test_initialize_with_username_password(monkeypatch, setup_mocks):
     )
 
     # Print the call arguments for debugging
-    print("\nDebug - Call arguments for all mocks:")
-    print("username_password_token:", setup_mocks["username_password_token"].call_args)
-    print("entra_token:", setup_mocks["entra_token"].call_args)
-    print("oidc_token:", setup_mocks["oidc_token"].call_args)
-    print("token_provider:", setup_mocks["token_provider"].call_args)
-    print("\nResult:", result)
+    # Debug - Call arguments for all mocks
+    # print("username_password_token:", setup_mocks["username_password_token"].call_args)
+    # print("entra_token:", setup_mocks["entra_token"].call_args)
+    # print("oidc_token:", setup_mocks["oidc_token"].call_args)
+    # print("token_provider:", setup_mocks["token_provider"].call_args)
+    # print("Result:", result)
 
     # Verify that get_azure_ad_token_from_username_password was called
     setup_mocks["username_password_token"].assert_called_once_with(
@@ -364,7 +362,7 @@ def test_initialize_with_token_refresh_error(setup_mocks, monkeypatch):
     setup_mocks["token_provider"].side_effect = ValueError("Token provider error")
 
     # Test with token refresh enabled but raising error
-    result = BaseAzureLLM().initialize_azure_sdk_client(
+    BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key=None,
         api_base="https://test.openai.azure.com",
@@ -397,7 +395,7 @@ def test_api_version_from_env_var(setup_mocks):
 
 def test_select_azure_base_url_called(setup_mocks):
     # Test that select_azure_base_url_or_endpoint is called
-    result = BaseAzureLLM().initialize_azure_sdk_client(
+    BaseAzureLLM().initialize_azure_sdk_client(
         litellm_params={},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -597,7 +595,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
                 num_retries=0,
                 azure_ad_token="oidc/test-token",
             )
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
 
         # Verify initialize_azure_sdk_client was called
@@ -608,7 +606,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used(call_type):
         azure_calls = [call for call in calls]
 
         litellm_params = azure_calls[0].kwargs["litellm_params"]
-        print("litellm_params", litellm_params)
+        # Debug: print("litellm_params", litellm_params)
 
         assert (
             "azure_ad_token" in litellm_params
@@ -681,7 +679,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used_azure_text(call_ty
                 num_retries=0,
                 azure_ad_token="oidc/test-token",
             )
-        except Exception as e:
+        except Exception:
             traceback.print_exc()
 
         # Verify initialize_azure_sdk_client was called
@@ -692,7 +690,7 @@ async def test_ensure_initialize_azure_sdk_client_always_used_azure_text(call_ty
         azure_calls = [call for call in calls]
 
         litellm_params = azure_calls[0].kwargs["litellm_params"]
-        print("litellm_params", litellm_params)
+        # Debug: print("litellm_params", litellm_params)
 
         assert (
             "azure_ad_token" in litellm_params
@@ -967,7 +965,7 @@ def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeyp
     expected_default_scope = "https://cognitiveservices.azure.com/.default"
 
     # Test case 1: scope is None in litellm_params
-    result = base_llm.initialize_azure_sdk_client(
+    base_llm.initialize_azure_sdk_client(
         litellm_params={"azure_scope": None},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -983,7 +981,7 @@ def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeyp
     # The scope should be used internally when setting up token providers
 
     # Test case 2: azure_scope key is missing entirely
-    result = base_llm.initialize_azure_sdk_client(
+    base_llm.initialize_azure_sdk_client(
         litellm_params={},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -993,7 +991,7 @@ def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeyp
     )
 
     # Test case 3: azure_scope is an empty string
-    result = base_llm.initialize_azure_sdk_client(
+    base_llm.initialize_azure_sdk_client(
         litellm_params={"azure_scope": ""},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -1004,7 +1002,7 @@ def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeyp
 
     # Test case 4: azure_scope is a valid custom string
     custom_scope = "https://custom.scope.com/.default"
-    result = base_llm.initialize_azure_sdk_client(
+    base_llm.initialize_azure_sdk_client(
         litellm_params={"azure_scope": custom_scope},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -1015,7 +1013,7 @@ def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeyp
 
     # Test case 5: Test with token authentication to verify scope is passed correctly
     setup_mocks["entra_token"].reset_mock()
-    result = base_llm.initialize_azure_sdk_client(
+    base_llm.initialize_azure_sdk_client(
         litellm_params={
             "azure_scope": None,  # This should default to the expected scope
             "tenant_id": "test-tenant",
@@ -1042,7 +1040,7 @@ def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeyp
 
     # Test case 6: Test with environment variable set to None (edge case)
     monkeypatch.setenv("AZURE_SCOPE", "")
-    result = base_llm.initialize_azure_sdk_client(
+    base_llm.initialize_azure_sdk_client(
         litellm_params={"azure_scope": None},
         api_key="test-api-key",
         api_base="https://test.openai.azure.com",
@@ -1051,12 +1049,14 @@ def test_scope_always_string_in_initialize_azure_sdk_client(setup_mocks, monkeyp
         is_async=False,
     )
 
-    print("All scope tests passed - scope is always a string")
+    # All scope tests passed - scope is always a string
 
 
 def test_with_existing_token_provider(setup_mocks):
     """Test get_azure_ad_token with an existing token provider."""
-    token_provider = lambda: "test-token"
+    def token_provider():
+        return "test-token"
+    
     litellm_params = GenericLiteLLMParams(azure_ad_token_provider=token_provider)
 
     token = get_azure_ad_token(litellm_params)
@@ -1387,7 +1387,8 @@ def test_get_azure_ad_token_with_token_refresh_error(setup_mocks):
 def test_token_provider_returns_non_string(setup_mocks):
     """Test that get_azure_ad_token raises TypeError when token provider returns non-string value."""
     # Create a token provider that returns a non-string value
-    non_string_provider = lambda: 123  # Returns an integer instead of a string
+    def non_string_provider():
+        return 123  # Returns an integer instead of a string
 
     # Create test parameters with the non-string token provider
     litellm_params = GenericLiteLLMParams(azure_ad_token_provider=non_string_provider)
@@ -1409,7 +1410,9 @@ def test_token_provider_raises_exception(setup_mocks):
     """Test that get_azure_ad_token raises RuntimeError when token provider raises an exception."""
     # Create a token provider that raises an exception
     error_message = "Test provider error"
-    error_provider = lambda: exec('raise ValueError("' + error_message + '")')
+    
+    def error_provider():
+        raise ValueError(error_message)
 
     # Create test parameters with the error-raising token provider
     litellm_params = GenericLiteLLMParams(azure_ad_token_provider=error_provider)

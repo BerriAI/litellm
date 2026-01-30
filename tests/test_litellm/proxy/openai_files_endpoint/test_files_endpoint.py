@@ -79,8 +79,61 @@ def setup_proxy_logging_object(monkeypatch, llm_router: Router) -> ProxyLogging:
 
 def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router):
     """
-    Asserts 'create_file' is called with the correct arguments
+    Test that invalid purpose values are rejected with a 400 error.
+    
+    This test ensures no MagicMock objects leak into string operations.
     """
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    
+    # Stop any existing mocks to prevent interference
+    mocker.stopall()
+    
+    # Set up proper dependencies to avoid MagicMock issues
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    proxy_logging_object = setup_proxy_logging_object(monkeypatch, llm_router)
+    
+    # Mock user_api_key_auth to return a proper UserAPIKeyAuth object instead of MagicMock
+    mock_user_api_key_dict = UserAPIKeyAuth(
+        api_key="test-key",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="test-user",
+        team_id="test-team",
+        team_alias="test-team-alias",
+        parent_otel_span=None,
+    )
+    
+    # Mock the auth dependency function - explicitly specify return_value to avoid MagicMock
+    async def mock_user_api_key_auth(*args, **kwargs):
+        return mock_user_api_key_dict
+    
+    # Use new_callable to ensure we get the right type of mock
+    mocker.patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", 
+        new_callable=lambda: mock_user_api_key_auth
+    )
+    
+    # Mock other dependencies that might return strings/bytes but could be mocked
+    # Use return_value instead of side_effect for simple return values
+    mocker.patch(
+        "litellm.proxy.common_utils.openai_endpoint_utils.get_custom_llm_provider_from_request_body", 
+        return_value="openai"
+    )
+    
+    # Mock add_litellm_data_to_request to return a proper dict
+    async def mock_add_litellm_data_to_request(*args, **kwargs):
+        data = kwargs.get("data", {})
+        return data
+    
+    mocker.patch(
+        "litellm.proxy.litellm_pre_call_utils.add_litellm_data_to_request", 
+        new_callable=lambda: mock_add_litellm_data_to_request
+    )
+    
+    # Mock any other proxy_server dependencies that could be auto-mocked
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    monkeypatch.setattr("litellm.proxy.proxy_server.version", "test-version")
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", {})
+    
     # Create a simple test file content
     test_file_content = b"test audio content"
     test_file = ("test.wav", test_file_content, "audio/wav")
@@ -90,7 +143,6 @@ def test_invalid_purpose(mocker: MockerFixture, monkeypatch, llm_router: Router)
         files={"file": test_file},
         data={
             "purpose": "my-bad-purpose",
-            # "target_model_names": ["azure-gpt-3-5-turbo", "gpt-3.5-turbo"],
             "target_model_names": "gpt-3-5-turbo",
         },
         headers={"Authorization": "Bearer test-key"},

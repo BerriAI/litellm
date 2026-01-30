@@ -5,7 +5,6 @@ Unit tests for OpenAI Text Completion Guardrail Translation Handler
 import os
 import sys
 from typing import List, Optional, Tuple
-from unittest.mock import MagicMock
 
 import pytest
 
@@ -16,6 +15,7 @@ from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.openai.completion.guardrail_translation.handler import (
     OpenAITextCompletionHandler,
 )
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.utils import CallTypes, TextChoices, TextCompletionResponse
 
 

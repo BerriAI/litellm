@@ -167,7 +167,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             for k, v in inference_params.items()
             if k not in self.aws_authentication_params
         }
-        request_data: dict = {}
+        
         if provider == "cohere":
             if model.startswith("cohere.command-r"):
                 ## LOAD CONFIG
@@ -187,17 +187,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     ] = True  # cohere requires stream = True in inference params
                 request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
-            transformed_request = (
-                litellm.AmazonAnthropicClaudeConfig().transform_request(
-                    model=model,
-                    messages=messages,
-                    optional_params=optional_params,
-                    litellm_params=litellm_params,
-                    headers=headers,
-                )
+            return litellm.AmazonAnthropicClaudeConfig().transform_request(
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
             )
-
-            return transformed_request
         elif provider == "nova":
             return litellm.AmazonInvokeNovaConfig().transform_request(
                 model=model,
@@ -253,8 +249,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                     provider, model
                 ),
             )
-
-        return request_data
 
     def transform_response(  # noqa: PLR0915
         self,

@@ -2,7 +2,6 @@
 Unit tests for Cohere Rerank Guardrail Translation Handler
 """
 
-import asyncio
 import os
 import sys
 from typing import List, Optional, Tuple
@@ -14,6 +13,7 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.llms import get_guardrail_translation_mapping
 from litellm.llms.cohere.rerank.guardrail_translation.handler import CohereRerankHandler
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import CallTypes
 

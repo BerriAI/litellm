@@ -6,18 +6,18 @@ specifically focusing on metadata extraction and passing.
 """
 
 import os
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
-import litellm
 from litellm import ModelResponse
 from litellm.exceptions import GuardrailRaisedException
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
+from litellm.types.guardrails import GenericGuardrailAPIInputs
 from litellm.types.utils import Choices, Message
 
 
@@ -461,7 +461,7 @@ class TestImageSupport:
                 request_data=mock_request_data_input,
                 input_type="request",
             )
-            result_texts = guardrailed_inputs.get("texts", [])
+            _ = guardrailed_inputs.get("texts", [])
             result_images = guardrailed_inputs.get("images", None)
 
             # Verify API was called with images
