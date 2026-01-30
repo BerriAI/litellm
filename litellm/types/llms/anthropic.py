@@ -296,9 +296,9 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
     citations: Optional[CitationsObject]
 
 
-class AnthropicMessagesToolResultContent(TypedDict):
-    type: Literal["text"]
-    text: str
+class AnthropicMessagesToolResultContent(TypedDict, total=False):
+    type: Required[Literal["text"]]
+    text: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 

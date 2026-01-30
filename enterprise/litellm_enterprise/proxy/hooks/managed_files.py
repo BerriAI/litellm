@@ -369,6 +369,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         if (
             call_type == CallTypes.afile_content.value
             or call_type == CallTypes.afile_delete.value
+            or call_type == CallTypes.afile_retrieve.value
+            or call_type == CallTypes.afile_content.value
         ):
             await self.check_managed_file_id_access(data, user_api_key_dict)
 
@@ -433,12 +435,16 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 data["model_file_id_mapping"] = model_file_id_mapping
         elif (
             call_type == CallTypes.aretrieve_batch.value
+            or call_type == CallTypes.acancel_batch.value
             or call_type == CallTypes.acancel_fine_tuning_job.value
             or call_type == CallTypes.aretrieve_fine_tuning_job.value
         ):
             accessor_key: Optional[str] = None
             retrieve_object_id: Optional[str] = None
-            if call_type == CallTypes.aretrieve_batch.value:
+            if (
+                call_type == CallTypes.aretrieve_batch.value
+                or call_type == CallTypes.acancel_batch.value
+            ):
                 accessor_key = "batch_id"
             elif (
                 call_type == CallTypes.acancel_fine_tuning_job.value
@@ -454,6 +460,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 if retrieve_object_id
                 else False
             )
+            print(f"🔥potential_llm_object_id: {potential_llm_object_id}")
+            print(f"🔥retrieve_object_id: {retrieve_object_id}")
             if potential_llm_object_id and retrieve_object_id:
                 ## VALIDATE USER HAS ACCESS TO THE OBJECT ##
                 if not await self.can_user_call_unified_object_id(
@@ -966,8 +974,10 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         delete_response = None
         specific_model_file_id_mapping = model_file_id_mapping.get(file_id)
         if specific_model_file_id_mapping:
+            # Remove conflicting keys from data to avoid duplicate keyword arguments
+            filtered_data = {k: v for k, v in data.items() if k not in ("model", "file_id")}
             for model_id, model_file_id in specific_model_file_id_mapping.items():
-                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **data)  # type: ignore
+                delete_response = await llm_router.afile_delete(model=model_id, file_id=model_file_id, **filtered_data)  # type: ignore
 
         stored_file_object = await self.delete_unified_file_id(
             file_id, litellm_parent_otel_span
