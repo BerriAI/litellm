@@ -139,14 +139,14 @@ class DataDogLLMObsLogger(CustomBatchLogger[LLMObsPayload]):
                 f"DataDogLLMObs: Flushing {len(self.log_queue)} events"
             )
 
-            # Prepare the payload
+            # Prepare the payload (use list() so serialization gets a list, not BoundedQueue)
             payload = {
                 "data": DDIntakePayload(
                     type="span",
                     attributes=DDSpanAttributes(
                         ml_app=get_datadog_service(),
                         tags=[get_datadog_tags()],
-                        spans=self.log_queue,
+                        spans=list(self.log_queue),
                     ),
                 ),
             }

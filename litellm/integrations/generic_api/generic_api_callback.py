@@ -342,11 +342,12 @@ class GenericAPILogger(CustomBatchLogger[Union[Dict, StandardLoggingPayload]]):
                             f"Generic API Logger - sent log {idx}, status: {result.status_code}"  # type: ignore
                         )
             else:
-                # Format the payload based on log_format
+                # Format the payload based on log_format (use list() so JSON gets a list, not BoundedQueue)
+                batch = list(self.log_queue)
                 if self.log_format == "json_array":
-                    data = safe_dumps(self.log_queue)
+                    data = safe_dumps(batch)
                 elif self.log_format == "ndjson":
-                    data = "\n".join(safe_dumps(log) for log in self.log_queue)
+                    data = "\n".join(safe_dumps(log) for log in batch)
                 else:
                     raise ValueError(f"Unknown log_format: {self.log_format}")
 
