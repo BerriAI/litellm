@@ -143,7 +143,7 @@ export function LogDetailsDrawer({
         environment={environment}
       />
 
-      <div style={{ height: "calc(100vh - 100px)", overflowY: "auto", padding: DRAWER_CONTENT_PADDING }}>
+      <div style={{ height: "calc(100vh - 100px)", overflowY: "auto", padding: `${DRAWER_CONTENT_PADDING} ${DRAWER_CONTENT_PADDING} 0` }}>
         {/* Error Alert - Show prominently at top for failures */}
         {hasError && errorInfo && (
           <Alert
@@ -216,6 +216,9 @@ export function LogDetailsDrawer({
         {logEntry.metadata && Object.keys(logEntry.metadata).length > 0 && (
           <MetadataSection metadata={logEntry.metadata} onCopy={(data) => copyToClipboard(data, "Metadata")} />
         )}
+        
+        {/* Bottom spacing for scroll area */}
+        <div style={{ height: DRAWER_CONTENT_PADDING }} />
       </div>
     </Drawer>
   );
@@ -357,47 +360,49 @@ function RequestResponseSection({
           <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>
         </AccordionHeader>
         <AccordionBody className="px-0">
-          <Tabs
-            activeKey={activeTab}
-            onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-            tabBarExtraContent={
-              <Button
-                type="text"
-                size="small"
-                icon={<CopyOutlined />}
-                onClick={handleCopy}
-                disabled={activeTab === TAB_RESPONSE && !hasResponse}
-              >
-                Copy
-              </Button>
-            }
-            items={[
-              {
-                key: TAB_REQUEST,
-                label: "Request",
-                children: (
-                  <div style={{ padding: SPACING_XLARGE }}>
-                    <JsonViewer data={getRawRequest()} mode="formatted" />
-                  </div>
-                ),
-              },
-              {
-                key: TAB_RESPONSE,
-                label: "Response",
-                children: (
-                  <div style={{ padding: SPACING_XLARGE }}>
-                    {hasResponse ? (
-                      <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                    ) : (
-                      <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                        Response data not available
-                      </div>
-                    )}
-                  </div>
-                ),
-              },
-            ]}
-          />
+          <div style={{ padding: "0 24px" }}>
+            <Tabs
+              activeKey={activeTab}
+              onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
+              tabBarExtraContent={
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<CopyOutlined />}
+                  onClick={handleCopy}
+                  disabled={activeTab === TAB_RESPONSE && !hasResponse}
+                >
+                  Copy
+                </Button>
+              }
+              items={[
+                {
+                  key: TAB_REQUEST,
+                  label: "Request",
+                  children: (
+                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                      <JsonViewer data={getRawRequest()} mode="formatted" />
+                    </div>
+                  ),
+                },
+                {
+                  key: TAB_RESPONSE,
+                  label: "Response",
+                  children: (
+                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                      {hasResponse ? (
+                        <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                      ) : (
+                        <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                          Response data not available
+                        </div>
+                      )}
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </div>
         </AccordionBody>
       </Accordion>
     </div>
