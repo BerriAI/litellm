@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message, Collapse } from "antd";
-import { CopyOutlined, DownOutlined } from "@ant-design/icons";
+import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message } from "antd";
+import { CopyOutlined } from "@ant-design/icons";
+import { Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -150,7 +151,7 @@ export function LogDetailsDrawer({
             showIcon
             message="Request Failed"
             description={<ErrorDescription errorInfo={errorInfo} />}
-            style={{ marginBottom: SPACING_XLARGE }}
+            className="mb-6"
           />
         )}
 
@@ -160,7 +161,7 @@ export function LogDetailsDrawer({
         )}
 
         {/* Request Details Section */}
-        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
+        <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
           <Card title="Request Details" size="small" bordered={false} style={{ marginBottom: 0 }}>
             <Descriptions column={2} size="small">
             <Descriptions.Item label="Model">{logEntry.model}</Descriptions.Item>
@@ -191,7 +192,11 @@ export function LogDetailsDrawer({
         <CostBreakdownViewer costBreakdown={metadata?.cost_breakdown} totalSpend={logEntry.spend || 0} />
 
         {/* Configuration Info Message - Show when data is missing */}
-        <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
+        {missingData && (
+          <div className="mb-6">
+            <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
+          </div>
+        )}
 
         {/* Request/Response JSON - Collapsible */}
         <RequestResponseSection
@@ -239,7 +244,7 @@ function ErrorDescription({ errorInfo }: { errorInfo: any }) {
 
 function TagsSection({ tags }: { tags: Record<string, any> }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4" style={{ marginBottom: SPACING_XLARGE }}>
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden p-4 mb-6">
       <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </Text>
@@ -274,7 +279,7 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
       metadata.additional_usage_values.cache_read_input_tokens > 0);
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Card title="Metrics" size="small" bordered={false} style={{ marginBottom: 0 }}>
         <Descriptions column={2} size="small">
         <Descriptions.Item label="Tokens">
@@ -338,7 +343,6 @@ function RequestResponseSection({
   getFormattedResponse,
 }: RequestResponseSectionProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
-  const [isOpen, setIsOpen] = useState<boolean>(true);
 
   const handleCopy = () => {
     const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
@@ -347,78 +351,62 @@ function RequestResponseSection({
   };
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
-      <Collapse
-        activeKey={isOpen ? ["request-response"] : []}
-        onChange={(keys) => setIsOpen(keys.includes("request-response"))}
-        expandIcon={({ isActive }) => <DownOutlined rotate={isActive ? 180 : 0} />}
-        bordered={false}
-        items={[
-          {
-            key: "request-response",
-            label: <span style={{ fontSize: 16, fontWeight: 500 }}>Request & Response</span>,
-            children: (
-              <Tabs
-                activeKey={activeTab}
-                onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-                tabBarExtraContent={
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<CopyOutlined />}
-                    onClick={handleCopy}
-                    disabled={activeTab === TAB_RESPONSE && !hasResponse}
-                  >
-                    Copy
-                  </Button>
-                }
-                items={[
-                  {
-                    key: TAB_REQUEST,
-                    label: "Request",
-                    children: (
-                      <div style={{ paddingTop: SPACING_XLARGE }}>
-                        <JsonViewer data={getRawRequest()} mode="formatted" />
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Accordion>
+        <AccordionHeader className="p-4 border-b hover:bg-gray-50 transition-colors text-left">
+          <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>
+        </AccordionHeader>
+        <AccordionBody className="px-0">
+          <Tabs
+            activeKey={activeTab}
+            onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
+            tabBarExtraContent={
+              <Button
+                type="text"
+                size="small"
+                icon={<CopyOutlined />}
+                onClick={handleCopy}
+                disabled={activeTab === TAB_RESPONSE && !hasResponse}
+              >
+                Copy
+              </Button>
+            }
+            items={[
+              {
+                key: TAB_REQUEST,
+                label: "Request",
+                children: (
+                  <div style={{ padding: SPACING_XLARGE }}>
+                    <JsonViewer data={getRawRequest()} mode="formatted" />
+                  </div>
+                ),
+              },
+              {
+                key: TAB_RESPONSE,
+                label: "Response",
+                children: (
+                  <div style={{ padding: SPACING_XLARGE }}>
+                    {hasResponse ? (
+                      <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                    ) : (
+                      <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                        Response data not available
                       </div>
-                    ),
-                  },
-                  {
-                    key: TAB_RESPONSE,
-                    label: "Response",
-                    children: (
-                      <div style={{ paddingTop: SPACING_XLARGE }}>
-                        {hasResponse ? (
-                          <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                        ) : (
-                          <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                            Response data not available
-                          </div>
-                        )}
-                      </div>
-                    ),
-                  },
-                ]}
-              />
-            ),
-          },
-        ]}
-        styles={{
-          header: {
-            padding: "16px",
-            borderBottom: "1px solid #f0f0f0",
-          },
-          body: {
-            padding: 0,
-          },
-        }}
-      />
+                    )}
+                  </div>
+                ),
+              },
+            ]}
+          />
+        </AccordionBody>
+      </Accordion>
     </div>
   );
 }
 
 function MetadataSection({ metadata, onCopy }: { metadata: Record<string, any>; onCopy: (data: string) => void }) {
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden" style={{ marginBottom: SPACING_XLARGE }}>
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Card
         title="Metadata"
         size="small"
