@@ -226,6 +226,7 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
+    _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -767,6 +768,13 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
+        )
+        asyncio.create_task(
+            ProxyStartupEvent._warm_global_spend_cache(
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
         )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -4659,6 +4667,26 @@ class ProxyStartupEvent:
                 },
             )
         )
+
+    @classmethod
+    async def _warm_global_spend_cache(
+        cls,
+        litellm_proxy_admin_name: str,
+        user_api_key_cache: DualCache,
+        prisma_client: PrismaClient,
+    ) -> None:
+        """Warm global spend cache once at startup to reduce impact of first wave of requests."""
+        try:
+            cache_key = "{}:spend".format(litellm_proxy_admin_name)
+            await _fetch_global_spend_with_event_coordination(
+                cache_key=cache_key,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Global spend cache warm-up at startup skipped or failed: %s", e
+            )
 
     @classmethod
     async def _update_default_team_member_budget(cls):
