@@ -152,3 +152,84 @@ class TestAzureModelRouterFlatCost:
             f"Model Router flat cost with caching for {usage.prompt_tokens} tokens: ${expected_flat_cost:.6f}"
         )
         print(f"Total prompt cost: ${prompt_cost:.6f}")
+
+
+class TestAzureModelRouterCostBreakdown:
+    """Test that Azure Model Router flat cost is tracked in cost breakdown."""
+
+    def test_flat_cost_tracked_in_thread_local(self):
+        """Test that flat cost is stored in thread-local storage."""
+        from litellm.llms.azure_ai.cost_calculator import (
+            get_azure_model_router_flat_cost,
+        )
+
+        model = "azure-model-router"
+        usage = Usage(
+            prompt_tokens=10000,
+            completion_tokens=5000,
+            total_tokens=15000,
+        )
+
+        # Calculate cost (this should store flat cost in thread-local)
+        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
+
+        # Retrieve the flat cost from thread-local storage
+        flat_cost = get_azure_model_router_flat_cost()
+
+        # Expected flat cost
+        expected_flat_cost = (
+            usage.prompt_tokens * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        )
+
+        assert flat_cost is not None
+        assert flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
+        print(f"Flat cost tracked in thread-local: ${flat_cost:.6f}")
+
+    def test_flat_cost_integration_with_completion_cost(self):
+        """Test that flat cost is properly integrated into completion_cost calculation."""
+        import litellm
+        from litellm.cost_calculator import completion_cost
+        from litellm.types.utils import Usage, ModelResponse, Choices, Message
+
+        # Create a mock response for azure_ai model router
+        response = ModelResponse(
+            id="test-123",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        role="assistant",
+                        content="Test response",
+                    ),
+                )
+            ],
+            created=1234567890,
+            model="azure-model-router",
+            object="chat.completion",
+            usage=Usage(
+                prompt_tokens=5000,
+                completion_tokens=2000,
+                total_tokens=7000,
+            ),
+        )
+
+        # Set hidden params for provider
+        response._hidden_params = {"custom_llm_provider": "azure_ai"}
+
+        # Calculate cost
+        cost = completion_cost(
+            completion_response=response,
+            model="azure-model-router",
+            custom_llm_provider="azure_ai",
+        )
+
+        # Expected flat cost
+        expected_flat_cost = (
+            5000 * AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
+        )
+
+        # Cost should include the flat cost
+        assert cost > expected_flat_cost
+        print(f"Total cost with flat fee: ${cost:.6f}")
+        print(f"Expected minimum flat cost: ${expected_flat_cost:.6f}")

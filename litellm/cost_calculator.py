@@ -808,6 +808,7 @@ def _store_cost_breakdown_in_logging_obj(
     completion_tokens_cost_usd_dollar: float,
     cost_for_built_in_tools_cost_usd_dollar: float,
     total_cost_usd_dollar: float,
+    azure_model_router_flat_cost: Optional[float] = None,
     original_cost: Optional[float] = None,
     discount_percent: Optional[float] = None,
     discount_amount: Optional[float] = None,
@@ -824,6 +825,7 @@ def _store_cost_breakdown_in_logging_obj(
         completion_tokens_cost_usd_dollar: Cost of completion tokens (includes reasoning if applicable)
         cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
         total_cost_usd_dollar: Total cost of request
+        azure_model_router_flat_cost: Azure Model Router flat infrastructure cost
         original_cost: Cost before discount
         discount_percent: Discount percentage applied (0.05 = 5%)
         discount_amount: Discount amount in USD
@@ -841,6 +843,7 @@ def _store_cost_breakdown_in_logging_obj(
             output_cost=completion_tokens_cost_usd_dollar,
             total_cost=total_cost_usd_dollar,
             cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
+            azure_model_router_flat_cost=azure_model_router_flat_cost,
             original_cost=original_cost,
             discount_percent=discount_percent,
             discount_amount=discount_amount,
@@ -1338,6 +1341,15 @@ def completion_cost(  # noqa: PLR0915
                     service_tier=service_tier,
                     response=completion_response,
                 )
+                
+                # Get Azure Model Router flat cost if available (for azure_ai provider)
+                azure_model_router_flat_cost: Optional[float] = None
+                if custom_llm_provider == "azure_ai":
+                    from litellm.llms.azure_ai.cost_calculator import (
+                        get_azure_model_router_flat_cost,
+                    )
+                    azure_model_router_flat_cost = get_azure_model_router_flat_cost()
+                
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
@@ -1377,6 +1389,7 @@ def completion_cost(  # noqa: PLR0915
                     completion_tokens_cost_usd_dollar=completion_tokens_cost_usd_dollar,
                     cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
                     total_cost_usd_dollar=_final_cost,
+                    azure_model_router_flat_cost=azure_model_router_flat_cost,
                     original_cost=original_cost,
                     discount_percent=discount_percent,
                     discount_amount=discount_amount,
