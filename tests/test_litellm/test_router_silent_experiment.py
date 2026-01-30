@@ -1,10 +1,70 @@
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
 from litellm.router import Router
+
+
+def test_get_silent_experiment_kwargs():
+    """
+    Test _get_silent_experiment_kwargs returns isolated kwargs with silent experiment metadata.
+    Direct call for router code coverage.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    kwargs = {"metadata": {"foo": "bar"}, "litellm_call_id": "call-123"}
+    result = router._get_silent_experiment_kwargs(**kwargs)
+    assert result["metadata"]["is_silent_experiment"] is True
+    assert result["metadata"]["foo"] == "bar"
+    assert "litellm_call_id" not in result
+
+
+def test_silent_experiment_completion_direct():
+    """
+    Test _silent_experiment_completion directly (for router code coverage).
+    Mocks router.completion to avoid real API call.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    messages = [{"role": "user", "content": "hi"}]
+    with patch.object(router, "completion", return_value=None):
+        router._silent_experiment_completion(
+            silent_model="gpt-3.5-turbo",
+            messages=messages,
+        )
+
+
+@pytest.mark.asyncio
+async def test_silent_experiment_acompletion_direct():
+    """
+    Test _silent_experiment_acompletion directly (for router code coverage).
+    Mocks router.acompletion to avoid real API call.
+    """
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "fake-key"},
+        },
+    ]
+    router = Router(model_list=model_list)
+    messages = [{"role": "user", "content": "hi"}]
+    with patch.object(router, "acompletion", new_callable=AsyncMock, return_value=None):
+        await router._silent_experiment_acompletion(
+            silent_model="gpt-3.5-turbo",
+            messages=messages,
+        )
 
 
 @pytest.mark.asyncio
