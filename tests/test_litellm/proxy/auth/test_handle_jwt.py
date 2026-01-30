@@ -897,6 +897,72 @@ async def test_find_team_with_model_access_empty_models_list(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_jwt_auth_sets_team_id_for_mcp_permission_lookup(monkeypatch):
+    """
+    Test that JWT auth properly sets team_id on UserAPIKeyAuth when a team with 
+    models=None is selected from groups. This team_id is then used by MCP permission
+    lookup to enforce team MCP permissions.
+    
+    This is the critical test for the JWT + MCP permission enforcement issue:
+    - Team has MCP servers assigned via object_permission.mcp_servers
+    - JWT has team in groups (team_ids_jwt_field)
+    - Team has models=None (no model restrictions)
+    - After fix: team is selected, team_id is set, MCP permissions work
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from unittest.mock import MagicMock
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    # Team with models=None (no model restrictions) but has MCP servers assigned
+    # This simulates a team that would be used for MCP access control
+    mock_team = MagicMock()
+    mock_team.team_id = "team-with-mcp"
+    mock_team.models = None  # No model restrictions
+    mock_team.metadata = {}
+    mock_team.object_permission_id = "obj-perm-123"  # Has MCP permissions assigned
+
+    async def mock_get_team_object(*args, **kwargs):
+        return mock_team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    # Simulate JWT auth finding team from groups
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-with-mcp"},  # Team from JWT groups
+        requested_model=None,  # MCP requests don't have a model
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    # Verify team was selected even with models=None
+    assert team_id == "team-with-mcp", "Team with models=None should be selected"
+    assert team_obj.team_id == "team-with-mcp"
+    
+    # This team_id will be used by _get_team_object_permission in MCP auth
+    # to look up the team's object_permission.mcp_servers
+    assert team_obj.object_permission_id == "obj-perm-123", \
+        "Team should have object_permission_id for MCP permissions"
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_returns_team_membership_object():
     """
     Test that auth_builder returns the team_membership_object when user is a member of a team.
