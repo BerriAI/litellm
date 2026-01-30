@@ -395,6 +395,8 @@ class AnthropicMessagesHandler(BaseTranslation):
                     input_type="response",
                     logging_obj=litellm_logging_obj,
                 )
+            else:
+                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
             return responses_so_far
 
         string_so_far = self.get_streaming_string_so_far(responses_so_far)

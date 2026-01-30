@@ -447,6 +447,8 @@ class OpenAIResponsesHandler(BaseTranslation):
                         logging_obj=litellm_logging_obj,
                     )
                     return responses_so_far
+            else:
+                verbose_proxy_logger.debug("Skipping output guardrail - model response has no choices")
         # model_response_stream = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(final_chunk)
         # tool_calls = model_response_stream.choices[0].tool_calls
         # convert openai response to model response
