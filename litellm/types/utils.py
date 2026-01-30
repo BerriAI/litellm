@@ -991,6 +991,71 @@ class ChatCompletionMessageToolCall(OpenAIObject):
         setattr(self, key, value)
 
 
+class CustomToolCallDefinition(OpenAIObject):
+    """Definition for a custom tool call (GPT-5.x+)"""
+
+    def __init__(
+        self,
+        name: str,
+        input: Optional[str] = None,
+        **params,
+    ):
+        super(CustomToolCallDefinition, self).__init__(**params)
+        self.name = name
+        self.input = input
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
+class ChatCompletionMessageCustomToolCall(OpenAIObject):
+    """Custom tool call in assistant message (GPT-5.x+)"""
+
+    def __init__(
+        self,
+        custom: Union[Dict, CustomToolCallDefinition],
+        id: Optional[str] = None,
+        type: Optional[str] = None,
+        **params,
+    ):
+        super(ChatCompletionMessageCustomToolCall, self).__init__(**params)
+        if isinstance(custom, Dict):
+            self.custom = CustomToolCallDefinition(**custom)
+        else:
+            self.custom = custom
+
+        if id is not None:
+            self.id = id
+        else:
+            self.id = f"{uuid.uuid4()}"
+
+        if type is not None:
+            self.type = type
+        else:
+            self.type = "custom"
+
+    def __contains__(self, key):
+        return hasattr(self, key)
+
+    def get(self, key, default=None):
+        return getattr(self, key, default)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
+
+    def __setitem__(self, key, value):
+        setattr(self, key, value)
+
+
 from openai.types.chat.chat_completion_audio import ChatCompletionAudio
 
 
@@ -1045,7 +1110,9 @@ def add_provider_specific_fields(
 class Message(SafeAttributeModel, OpenAIObject):
     content: Optional[str]
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: Optional[List[ChatCompletionMessageToolCall]]
+    tool_calls: Optional[
+        List[Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]]
+    ]
     function_call: Optional[FunctionCall]
     audio: Optional[ChatCompletionAudioResponse] = None
     images: Optional[List[ImageURLListItem]] = None
@@ -1055,6 +1122,18 @@ class Message(SafeAttributeModel, OpenAIObject):
     ] = None
     provider_specific_fields: Optional[Dict[str, Any]] = Field(default=None)
     annotations: Optional[List[ChatCompletionAnnotation]] = None
+
+    @staticmethod
+    def _convert_tool_call(
+        tool_call: Any,
+    ) -> Union[ChatCompletionMessageToolCall, ChatCompletionMessageCustomToolCall]:
+        """Convert a tool call dict to the appropriate tool call object."""
+        if not isinstance(tool_call, dict):
+            return tool_call
+        # Check if this is a custom tool call (GPT-5.x+)
+        if tool_call.get("type") == "custom":
+            return ChatCompletionMessageCustomToolCall(**tool_call)
+        return ChatCompletionMessageToolCall(**tool_call)
 
     def __init__(
         self,
@@ -1082,11 +1161,7 @@ class Message(SafeAttributeModel, OpenAIObject):
             ),
             "tool_calls": (
                 [
-                    (
-                        ChatCompletionMessageToolCall(**tool_call)
-                        if isinstance(tool_call, dict)
-                        else tool_call
-                    )
+                    self._convert_tool_call(tool_call)
                     for tool_call in tool_calls
                 ]
                 if tool_calls is not None and len(tool_calls) > 0
