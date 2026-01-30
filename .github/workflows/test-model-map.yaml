@@ -3,6 +3,12 @@ name: Validate model_prices_and_context_window.json
 on:
   pull_request:
     branches: [ main ]
+  push:
+    branches: [ main ]
+    paths:
+      - 'model_prices_and_context_window.json'
+      - 'scripts/validate_model_cost_map.py'
+      - '.github/workflows/test-model-map.yaml'
 
 jobs:
   validate-model-prices-json:
@@ -10,6 +16,45 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Validate model_prices_and_context_window.json
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      # Step 1: Basic JSON syntax validation (fast fail)
+      - name: Validate JSON syntax
         run: |
+          echo "Checking JSON syntax..."
           jq empty model_prices_and_context_window.json
+          echo "✅ JSON syntax is valid"
+
+      # Step 2: Comprehensive schema/semantic validation
+      - name: Validate model cost map schema
+        run: |
+          echo "Running comprehensive validation..."
+          python scripts/validate_model_cost_map.py model_prices_and_context_window.json
+
+      # Step 3: Verify backup file is also valid
+      - name: Validate backup model cost map
+        run: |
+          echo "Validating backup file..."
+          python scripts/validate_model_cost_map.py litellm/model_prices_and_context_window_backup.json
+
+      # Step 4: Ensure backup stays in sync (optional check)
+      - name: Check backup freshness
+        run: |
+          echo "Checking if backup matches main file..."
+          # Compare entry counts - backup should be reasonably close to main
+          MAIN_COUNT=$(jq 'keys | length' model_prices_and_context_window.json)
+          BACKUP_COUNT=$(jq 'keys | length' litellm/model_prices_and_context_window_backup.json)
+          echo "Main file entries: $MAIN_COUNT"
+          echo "Backup file entries: $BACKUP_COUNT"
+          
+          # Warn if backup is significantly out of date (more than 100 entries behind)
+          DIFF=$((MAIN_COUNT - BACKUP_COUNT))
+          if [ $DIFF -gt 100 ]; then
+            echo "⚠️ WARNING: Backup file is $DIFF entries behind main file"
+            echo "Consider updating the backup during release"
+          else
+            echo "✅ Backup file is reasonably up to date"
+          fi
