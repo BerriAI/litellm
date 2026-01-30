@@ -28,6 +28,16 @@ python main.py
 
 That's it! You can now chat with the agent in your terminal.
 
+### Chat Commands
+
+While chatting, you can use these commands:
+- `models` - List all available models (fetched from your LiteLLM proxy)
+- `model` - Switch to a different model
+- `clear` - Start a new conversation
+- `quit` or `exit` - End the chat
+
+The chat automatically fetches available models from your LiteLLM proxy's `/models` endpoint, so you'll always see what's currently configured.
+
 ## Configuration
 
 Set these environment variables if needed:
