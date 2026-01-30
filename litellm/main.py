@@ -925,6 +925,7 @@ def mock_completion(
 def responses_api_bridge_check(
     model: str,
     custom_llm_provider: str,
+    web_search_options: Optional[OpenAIWebSearchOptions] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
     try:
@@ -938,6 +939,10 @@ def responses_api_bridge_check(
             model = model.replace("responses/", "")
             mode = "responses"
             model_info["mode"] = mode
+        
+        if web_search_options is not None and custom_llm_provider == "xai":
+            model_info["mode"] = "responses"
+            model = model.replace("responses/", "")
     except Exception as e:
         verbose_logger.debug("Error getting model info: {}".format(e))
 
@@ -1546,7 +1551,7 @@ def completion(  # type: ignore # noqa: PLR0915
 
         ## RESPONSES API BRIDGE LOGIC ## - check if model has 'mode: responses' in litellm.model_cost map
         model_info, model = responses_api_bridge_check(
-            model=model, custom_llm_provider=custom_llm_provider
+            model=model, custom_llm_provider=custom_llm_provider, web_search_options=web_search_options
         )
 
         if model_info.get("mode") == "responses":

@@ -154,6 +154,12 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
             )
             params.pop("instructions")
         
+        if "metadata" in params:
+            verbose_logger.debug(
+                "XAI Responses API does not support 'metadata' parameter. Dropping it."
+            )
+            params.pop("metadata")
+        
         # Transform tools
         if "tools" in params and params["tools"]:
             tools_list = params["tools"]
