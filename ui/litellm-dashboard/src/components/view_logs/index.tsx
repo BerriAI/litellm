@@ -1,38 +1,36 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import moment from "moment";
-import { useQuery } from "@tanstack/react-query";
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall, allEndUsersCall } from "../networking";
-import { DataTable } from "./table";
-import { columns, LogEntry } from "./columns";
-import { Row } from "@tanstack/react-table";
-import { prefetchLogDetails } from "./prefetch";
-import { RequestResponsePanel } from "./RequestResponsePanel";
-import { ErrorViewer } from "./ErrorViewer";
-import { internalUserRoles } from "../../utils/roles";
-import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { Button, Tooltip } from "antd";
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import KeyInfoView from "../templates/key_info_view";
-import { SessionView } from "./SessionView";
-import { VectorStoreViewer } from "./VectorStoreViewer";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
-import { CostBreakdownViewer } from "./CostBreakdownViewer";
-import FilterComponent from "../molecules/filter";
-import { FilterOption } from "../molecules/filter";
-import { useLogFilterLogic } from "./log_filter_logic";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/react";
-import AuditLogs from "./audit_logs";
-import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
+import { SettingOutlined } from "@ant-design/icons";
+import { Row } from "@tanstack/react-table";
+import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Button, Tooltip } from "antd";
+import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
-import NewBadge from "../common_components/NewBadge";
+import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import FilterComponent, { FilterOption } from "../molecules/filter";
+import { allEndUsersCall, keyInfoV1Call, keyListCall, sessionSpendLogsCall, uiSpendLogsCall } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
+import AuditLogs from "./audit_logs";
+import { columns, LogEntry } from "./columns";
+import { ConfigInfoMessage } from "./ConfigInfoMessage";
+import { CostBreakdownViewer } from "./CostBreakdownViewer";
+import { ErrorViewer } from "./ErrorViewer";
+import { useLogFilterLogic } from "./log_filter_logic";
+import { getTimeRangeDisplay } from "./logs_utils";
+import { prefetchLogDetails } from "./prefetch";
+import { RequestResponsePanel } from "./RequestResponsePanel";
+import { SessionView } from "./SessionView";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
-import { SettingOutlined } from "@ant-design/icons";
+import { DataTable } from "./table";
+import { VectorStoreViewer } from "./VectorStoreViewer";
+import NewBadge from "../common_components/NewBadge";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -513,8 +511,8 @@ export default function SpendLogsTable({
         <TabList>
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
-          <Tab><>Deleted Keys <NewBadge /></></Tab>
-          <Tab><>Deleted Teams <NewBadge /></></Tab>
+          <Tab>Deleted Keys</Tab>
+          <Tab>Deleted Teams</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -535,11 +533,12 @@ export default function SpendLogsTable({
                 )}
               </h1>
               {!selectedSessionId && (
-                <Button
+                <NewBadge dot><Button
                   icon={<SettingOutlined />}
                   onClick={() => setIsSpendLogsSettingsModalVisible(true)}
                   title="Spend Logs Settings"
-                />
+                /></NewBadge>
+
               )}
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
@@ -555,7 +554,7 @@ export default function SpendLogsTable({
                 <DataTable
                   columns={columns}
                   data={sessionData}
-                  renderSubComponent={RequestViewer}
+                  renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
                   getRowCanExpand={() => true}
                 // Optionally: add session-specific row expansion state
                 />
@@ -754,7 +753,7 @@ export default function SpendLogsTable({
                   <DataTable
                     columns={columns}
                     data={filteredData}
-                    renderSubComponent={RequestViewer}
+                    renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
                     getRowCanExpand={() => true}
                   />
                 </div>
@@ -780,7 +779,7 @@ export default function SpendLogsTable({
   );
 }
 
-export function RequestViewer({ row }: { row: Row<LogEntry> }) {
+export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onOpenSettings?: () => void }) {
   // Helper function to clean metadata by removing specific fields
   const formatData = (input: any) => {
     if (typeof input === "string") {
@@ -991,7 +990,7 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
       <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
 
       {/* Configuration Info Message - Show when data is missing */}
-      <ConfigInfoMessage show={missingData} />
+      <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
 
       {/* Request/Response Panel */}
       <div className="w-full max-w-full overflow-hidden">

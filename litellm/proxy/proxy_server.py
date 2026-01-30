@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 import warnings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -226,6 +226,7 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
+    _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -767,6 +768,13 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
+        )
+        asyncio.create_task(
+            ProxyStartupEvent._warm_global_spend_cache(
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
         )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -4764,6 +4772,26 @@ class ProxyStartupEvent:
         )
 
     @classmethod
+    async def _warm_global_spend_cache(
+        cls,
+        litellm_proxy_admin_name: str,
+        user_api_key_cache: DualCache,
+        prisma_client: PrismaClient,
+    ) -> None:
+        """Warm global spend cache once at startup to reduce impact of first wave of requests."""
+        try:
+            cache_key = "{}:spend".format(litellm_proxy_admin_name)
+            await _fetch_global_spend_with_event_coordination(
+                cache_key=cache_key,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Global spend cache warm-up at startup skipped or failed: %s", e
+            )
+
+    @classmethod
     async def _update_default_team_member_budget(cls):
         """Update the default team member budget"""
         if litellm.default_internal_user_params is None:
@@ -5201,7 +5229,20 @@ class ProxyStartupEvent:
                 except Exception as e:
                     raise e
 
-                await prisma_client.connect()
+                try:
+                    await prisma_client.connect()
+                except Exception as e:
+                    if "P3018" in str(e) or "P3009" in str(e):
+                        verbose_proxy_logger.debug(
+                            "CRITICAL: DATABASE MIGRATION FAILED"
+                        )
+                        verbose_proxy_logger.debug(
+                            "Your database is in a 'dirty' state."
+                        )
+                        verbose_proxy_logger.debug(
+                            "FIX: Run 'prisma migrate resolve --applied <migration_name>'"
+                        )
+                    raise e
 
                 ## Start RDS IAM token refresh background task if enabled ##
                 # This proactively refreshes IAM tokens before they expire,
@@ -8042,6 +8083,48 @@ async def _apply_search_filter_to_models(
     return filtered_models, search_total_count
 
 
+def _normalize_datetime_for_sorting(dt: Any) -> Optional[datetime]:
+    """
+    Normalize a datetime value to a timezone-aware UTC datetime for sorting.
+    
+    This function handles:
+    - None values: returns None
+    - String values: parses ISO format strings and converts to UTC-aware datetime
+    - Datetime objects: converts naive datetimes to UTC-aware, and aware datetimes to UTC
+    
+    Args:
+        dt: Datetime value (None, str, or datetime object)
+        
+    Returns:
+        UTC-aware datetime object, or None if input is None or cannot be parsed
+    """
+    if dt is None:
+        return None
+    
+    if isinstance(dt, str):
+        try:
+            # Handle ISO format strings, including 'Z' suffix
+            dt_str = dt.replace("Z", "+00:00") if dt.endswith("Z") else dt
+            parsed_dt = datetime.fromisoformat(dt_str)
+            # Ensure it's UTC-aware
+            if parsed_dt.tzinfo is None:
+                parsed_dt = parsed_dt.replace(tzinfo=timezone.utc)
+            else:
+                parsed_dt = parsed_dt.astimezone(timezone.utc)
+            return parsed_dt
+        except (ValueError, AttributeError):
+            return None
+    
+    if isinstance(dt, datetime):
+        # If naive, assume UTC and make it aware
+        if dt.tzinfo is None:
+            return dt.replace(tzinfo=timezone.utc)
+        # If aware, convert to UTC
+        return dt.astimezone(timezone.utc)
+    
+    return None
+
+
 def _sort_models(
     all_models: List[Dict[str, Any]],
     sort_by: Optional[str],
@@ -8071,26 +8154,18 @@ def _sort_models(
         
         elif sort_by == "created_at":
             created_at = model_info.get("created_at")
-            if created_at is None:
+            normalized_dt = _normalize_datetime_for_sorting(created_at)
+            if normalized_dt is None:
                 # Put None values at the end for asc, at the start for desc
-                return (datetime.max if not reverse else datetime.min)
-            if isinstance(created_at, str):
-                try:
-                    return datetime.fromisoformat(created_at.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    return datetime.min if not reverse else datetime.max
-            return created_at
+                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+            return normalized_dt
         
         elif sort_by == "updated_at":
             updated_at = model_info.get("updated_at")
-            if updated_at is None:
-                return (datetime.max if not reverse else datetime.min)
-            if isinstance(updated_at, str):
-                try:
-                    return datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-                except (ValueError, AttributeError):
-                    return datetime.min if not reverse else datetime.max
-            return updated_at
+            normalized_dt = _normalize_datetime_for_sorting(updated_at)
+            if normalized_dt is None:
+                return (datetime.max.replace(tzinfo=timezone.utc) if not reverse else datetime.min.replace(tzinfo=timezone.utc))
+            return normalized_dt
         
         elif sort_by == "costs":
             input_cost = model_info.get("input_cost_per_token", 0) or 0
@@ -10569,6 +10644,8 @@ async def get_config_list(
         "max_request_size_mb": {"type": "Integer"},
         "max_response_size_mb": {"type": "Integer"},
         "pass_through_endpoints": {"type": "PydanticModel"},
+        "store_prompts_in_spend_logs": {"type": "Boolean"},
+        "maximum_spend_logs_retention_period": {"type": "String"},
     }
 
     return_val = []

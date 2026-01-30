@@ -139,6 +139,20 @@ const sidebars = {
         "tutorials/openai_codex"
       ]
     },
+    {
+      type: "category",
+      label: "Agent SDKs",
+      link: {
+        type: "generated-index",
+        title: "Agent SDKs",
+        description: "Use LiteLLM with agent frameworks and SDKs",
+        slug: "/agent_sdks"
+      },
+      items: [
+        "tutorials/claude_agent_sdk",
+        "tutorials/google_adk",
+      ]
+    },
 
   ],
   // But you can create a sidebar manually
@@ -931,7 +945,6 @@ const sidebars = {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",

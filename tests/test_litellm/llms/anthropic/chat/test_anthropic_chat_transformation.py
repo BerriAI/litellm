@@ -548,6 +548,59 @@ def test_map_tool_choice_dict_type_function_with_name():
     assert result["name"] == "my_tool"
 
 
+def test_map_tool_choice_dict_type_auto():
+    """
+    Test that dict {"type": "auto"} maps to Anthropic type='auto'.
+    This handles Cursor's format for tool_choice.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "auto"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "auto"
+
+
+def test_map_tool_choice_dict_type_required():
+    """
+    Test that dict {"type": "required"} maps to Anthropic type='any'.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "required"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "any"
+
+
+def test_map_tool_choice_dict_type_none():
+    """
+    Test that dict {"type": "none"} maps to Anthropic type='none'.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "none"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "none"
+
+
+def test_map_tool_choice_dict_type_function_without_name():
+    """
+    Test that dict {"type": "function"} without name is handled gracefully.
+    Should return None since there's no valid tool name.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "function"},
+        parallel_tool_use=None,
+    )
+    assert result is None
+
+
 def test_transform_response_with_prefix_prompt():
     import httpx
 
