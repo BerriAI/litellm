@@ -740,6 +740,163 @@ async def test_find_team_with_model_access_model_group(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_find_team_with_model_access_models_none(monkeypatch):
+    """
+    Test that find_team_with_model_access correctly handles teams where 
+    Prisma returns models as None (which can happen from database).
+    
+    This is important for JWT auth when teams have MCP permissions but no model restrictions.
+    models=None should mean "no model restrictions" (allow all models).
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from unittest.mock import MagicMock
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = None  # No router needed for this test
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    # Create a mock team object that simulates database returning models=None
+    # This can happen when the database field is NULL
+    mock_team = MagicMock()
+    mock_team.team_id = "team-mcp"
+    mock_team.models = None  # Simulating NULL from database
+    mock_team.metadata = {}
+
+    async def mock_get_team_object(*args, **kwargs):  # type: ignore
+        return mock_team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    # Test with no model requested (like MCP requests)
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-mcp"},
+        requested_model=None,  # No model requested - typical for MCP requests
+        route="/chat/completions",  # Use a route that's in openai_routes
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert team_id == "team-mcp", "Team with models=None should be selected when no model is requested"
+    assert team_obj.team_id == "team-mcp"
+    assert team_obj.models is None
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_models_none_with_model_requested(monkeypatch):
+    """
+    Test that find_team_with_model_access correctly handles teams with models=None
+    when a model is requested.
+    
+    models=None should mean "no restrictions" so any model request should be allowed.
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    from unittest.mock import MagicMock
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    # Create a mock team object that simulates database returning models=None
+    mock_team = MagicMock()
+    mock_team.team_id = "team-no-restrictions"
+    mock_team.models = None
+    mock_team.metadata = {}
+
+    async def mock_get_team_object(*args, **kwargs):  # type: ignore
+        return mock_team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    # Test with a model requested - team with models=None should still be selected
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-no-restrictions"},
+        requested_model="gpt-4",
+        route="/chat/completions",
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert team_id == "team-no-restrictions", "Team with models=None should allow any model"
+    assert team_obj.team_id == "team-no-restrictions"
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_empty_models_list(monkeypatch):
+    """
+    Test that find_team_with_model_access correctly handles teams with models=[] (empty list).
+    
+    models=[] should mean "all models allowed" (same as models=None).
+    """
+    from litellm.caching import DualCache
+    from litellm.proxy.utils import ProxyLogging
+    import sys
+    import types
+
+    proxy_server_module = types.ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", proxy_server_module)
+
+    # Team with models=[] (empty list - all models allowed)
+    team = LiteLLM_TeamTable(team_id="team-empty-list", models=[])
+
+    async def mock_get_team_object(*args, **kwargs):  # type: ignore
+        return team
+
+    monkeypatch.setattr(
+        "litellm.proxy.auth.handle_jwt.get_team_object", mock_get_team_object
+    )
+
+    jwt_handler = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth()
+
+    user_api_key_cache = DualCache()
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=user_api_key_cache)
+
+    # Test with no model requested - use a route in openai_routes
+    team_id, team_obj = await JWTAuthManager.find_team_with_model_access(
+        team_ids={"team-empty-list"},
+        requested_model=None,
+        route="/chat/completions",  # Use a route that's in openai_routes
+        jwt_handler=jwt_handler,
+        prisma_client=None,
+        user_api_key_cache=user_api_key_cache,
+        parent_otel_span=None,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+
+    assert team_id == "team-empty-list", "Team with models=[] should be selected when no model is requested"
+    assert team_obj.team_id == "team-empty-list"
+
+
+@pytest.mark.asyncio
 async def test_auth_builder_returns_team_membership_object():
     """
     Test that auth_builder returns the team_membership_object when user is a member of a team.

@@ -960,17 +960,26 @@ class JWTAuthManager:
                     proxy_logging_obj=proxy_logging_obj,
                 )
 
-                if team_object and team_object.models is not None:
+                if team_object:
                     team_models = team_object.models
-                    if isinstance(team_models, list) and (
-                        not requested_model
-                        or can_team_access_model(
-                            model=requested_model,
-                            team_object=team_object,
-                            llm_router=llm_router,
-                            team_model_aliases=None,
+                    # Check if team can access the requested model
+                    # models = None means no model restrictions (allow all)
+                    # models = [] means all models allowed (based on _can_model_in_list_check)
+                    model_access_allowed = (
+                        team_models is None  # No restrictions
+                        or not requested_model  # No model requested
+                        or (
+                            isinstance(team_models, list)
+                            and can_team_access_model(
+                                model=requested_model,
+                                team_object=team_object,
+                                llm_router=llm_router,
+                                team_model_aliases=None,
+                            )
                         )
-                    ):
+                    )
+
+                    if model_access_allowed:
                         is_allowed = allowed_routes_check(
                             user_role=LitellmUserRoles.TEAM,
                             user_route=route,
