@@ -1,0 +1,15 @@
+name: Validate model_prices_and_context_window.json
+
+on:
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate-model-prices-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate model_prices_and_context_window.json
+        run: |
+          jq empty model_prices_and_context_window.json

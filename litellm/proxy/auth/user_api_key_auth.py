@@ -53,6 +53,7 @@ from litellm.proxy.auth.handle_jwt import JWTAuthManager, JWTHandler
 from litellm.proxy.auth.oauth2_check import Oauth2Handler
 from litellm.proxy.auth.oauth2_proxy_hook import handle_oauth2_proxy_request
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.common_utils.cache_coordinator import EventDrivenCacheCoordinator
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
@@ -211,6 +212,33 @@ def update_valid_token_with_end_user_params(
     return valid_token
 
 
+# Reusable coordinator for global spend to prevent cache stampede
+_global_spend_coordinator = EventDrivenCacheCoordinator(log_prefix="[GLOBAL SPEND]")
+
+
+async def _fetch_global_spend_with_event_coordination(
+    cache_key: str,
+    user_api_key_cache: DualCache,
+    prisma_client: PrismaClient,
+) -> Optional[float]:
+    """
+    Fetch global spend with event-driven coordination to prevent cache stampede.
+    Uses EventDrivenCacheCoordinator: first request queries DB and signals others when done.
+    """
+
+    async def _load_global_spend() -> Optional[float]:
+        sql_query = """SELECT SUM(spend) AS total_spend FROM "MonthlyGlobalSpend";"""
+        response = await prisma_client.db.query_raw(query=sql_query)
+        val = response[0]["total_spend"]
+        return float(val) if val is not None else None
+
+    return await _global_spend_coordinator.get_or_load(
+        cache_key=cache_key,
+        cache=user_api_key_cache,
+        load_fn=_load_global_spend,
+    )
+
+
 async def get_global_proxy_spend(
     litellm_proxy_admin_name: str,
     user_api_key_cache: DualCache,
@@ -219,25 +247,14 @@ async def get_global_proxy_spend(
     proxy_logging_obj: ProxyLogging,
 ) -> Optional[float]:
     global_proxy_spend = None
-    if litellm.max_budget > 0:  # user set proxy max budget
-        # check cache
-        global_proxy_spend = await user_api_key_cache.async_get_cache(
-            key="{}:spend".format(litellm_proxy_admin_name)
+    if litellm.max_budget > 0 and prisma_client is not None:  # user set proxy max budget
+        # Use event-driven coordination to prevent cache stampede
+        cache_key = "{}:spend".format(litellm_proxy_admin_name)
+        global_proxy_spend = await _fetch_global_spend_with_event_coordination(
+            cache_key=cache_key,
+            user_api_key_cache=user_api_key_cache,
+            prisma_client=prisma_client,
         )
-        if global_proxy_spend is None and prisma_client is not None:
-            # get from db
-            sql_query = (
-                """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-            )
-
-            response = await prisma_client.db.query_raw(query=sql_query)
-
-            global_proxy_spend = response[0]["total_spend"]
-
-            await user_api_key_cache.async_set_cache(
-                key="{}:spend".format(litellm_proxy_admin_name),
-                value=global_proxy_spend,
-            )
         if global_proxy_spend is not None:
             user_info = CallInfo(
                 user_id=litellm_proxy_admin_name,
@@ -1120,21 +1137,12 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
             if (
                 litellm.max_budget > 0 and prisma_client is not None
             ):  # user set proxy max budget
-                # check cache
-                global_proxy_spend = await user_api_key_cache.async_get_cache(
-                    key="{}:spend".format(litellm_proxy_admin_name)
+                cache_key = "{}:spend".format(litellm_proxy_admin_name)
+                global_proxy_spend = await _fetch_global_spend_with_event_coordination(
+                    cache_key=cache_key,
+                    user_api_key_cache=user_api_key_cache,
+                    prisma_client=prisma_client,
                 )
-                if global_proxy_spend is None:
-                    # get from db
-                    sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
-
-                    response = await prisma_client.db.query_raw(query=sql_query)
-
-                    global_proxy_spend = response[0]["total_spend"]
-                    await user_api_key_cache.async_set_cache(
-                        key="{}:spend".format(litellm_proxy_admin_name),
-                        value=global_proxy_spend,
-                    )
 
                 if global_proxy_spend is not None:
                     call_info = CallInfo(

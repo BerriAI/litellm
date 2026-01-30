@@ -76,6 +76,13 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "text_editor_",
 ]
 
+# Beta header patterns that are not supported by Bedrock Converse API
+# These will be filtered out to prevent errors
+UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
+    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
+    "prompt-caching",  # Prompt caching not supported in Converse API
+]
+
 
 class AmazonConverseConfig(BaseConfig):
     """
@@ -610,6 +617,37 @@ class AmazonConverseConfig(BaseConfig):
 
         return transformed_tools
 
+    def _filter_unsupported_beta_headers_for_bedrock(
+        self, model: str, beta_list: list
+    ) -> list:
+        """
+        Remove beta headers that are not supported on Bedrock Converse API for the given model.
+
+        Extended thinking beta headers are only supported on specific Claude 4+ models.
+        Some beta headers are universally unsupported on Bedrock Converse API.
+
+        Args:
+            model: The model name
+            beta_list: The list of beta headers to filter
+
+        Returns:
+            Filtered list of beta headers
+        """
+        filtered_betas = []
+        
+        # 1. Filter out beta headers that are universally unsupported on Bedrock Converse
+        for beta in beta_list:
+            should_keep = True
+            for unsupported_pattern in UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS:
+                if unsupported_pattern in beta.lower():
+                    should_keep = False
+                    break
+            
+            if should_keep:
+                filtered_betas.append(beta)
+                
+        return filtered_betas
+
     def _separate_computer_use_tools(
         self, tools: List[OpenAIChatCompletionToolParam], model: str
     ) -> Tuple[
@@ -1088,7 +1126,14 @@ class AmazonConverseConfig(BaseConfig):
                 if beta not in seen:
                     unique_betas.append(beta)
                     seen.add(beta)
-            additional_request_params["anthropic_beta"] = unique_betas
+            
+            # Filter out unsupported beta headers for Bedrock Converse API
+            filtered_betas = self._filter_unsupported_beta_headers_for_bedrock(
+                model=model,
+                beta_list=unique_betas,
+            )
+            
+            additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 

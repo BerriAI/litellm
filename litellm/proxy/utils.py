@@ -1901,7 +1901,18 @@ class ProxyLogging:
                 ) or _callback.should_run_guardrail(
                     data=request_data, event_type=GuardrailEventHooks.post_call
                 ):
-                    if "apply_guardrail" in type(callback).__dict__:
+                    if (
+                        "async_post_call_streaming_iterator_hook"
+                        in type(callback).__dict__
+                    ):
+                        current_response = (
+                            _callback.async_post_call_streaming_iterator_hook(
+                                user_api_key_dict=user_api_key_dict,
+                                response=current_response,
+                                request_data=request_data,
+                            )
+                        )
+                    elif "apply_guardrail" in type(callback).__dict__:
                         request_data["guardrail_to_apply"] = callback
                         current_response = (
                             unified_guardrail.async_post_call_streaming_iterator_hook(
