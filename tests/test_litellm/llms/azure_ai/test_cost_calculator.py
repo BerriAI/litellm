@@ -4,11 +4,15 @@ Test Azure AI cost calculator, especially Model Router flat cost.
 
 import pytest
 from litellm.llms.azure_ai.cost_calculator import (
-    AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS,
     _is_azure_model_router,
     cost_per_token,
 )
 from litellm.types.utils import Usage
+from litellm.utils import get_model_info
+
+# Get the flat cost from model_prices_and_context_window.json
+_model_info = get_model_info(model="azure-model-router", custom_llm_provider="azure_ai")
+AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = _model_info.get("input_cost_per_token", 0) * 1_000_000
 
 
 class TestAzureModelRouterDetection:

@@ -8,11 +8,7 @@ from typing import Optional, Tuple
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
 from litellm.types.utils import Usage
-
-
-# Azure AI Foundry Model Router pricing
-# Source: https://azure.microsoft.com/en-us/pricing/details/ai-services/
-AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS = 0.14  # $0.14 per M input tokens
+from litellm.utils import get_model_info
 
 
 def _is_azure_model_router(model: str) -> bool:
@@ -36,7 +32,7 @@ def cost_per_token(
     Calculate the cost per token for Azure AI models.
     
     For Azure AI Foundry Model Router:
-    - Adds a flat cost of $0.14 per million input tokens
+    - Adds a flat cost of $0.14 per million input tokens (from model_prices_and_context_window.json)
     - Plus the cost of the actual model used (handled by generic_cost_per_token)
     
     Args:
@@ -55,17 +51,21 @@ def cost_per_token(
     )
     
     # Add flat cost for Azure Model Router
+    # The flat cost is defined in model_prices_and_context_window.json for azure_ai/azure-model-router
     if _is_azure_model_router(model):
-        # Flat cost per million input tokens
-        flat_cost_per_token = AZURE_MODEL_ROUTER_FLAT_COST_PER_M_INPUT_TOKENS / 1_000_000
-        router_flat_cost = usage.prompt_tokens * flat_cost_per_token
+        # Get the model router pricing from model_prices_and_context_window.json
+        model_info = get_model_info(model="azure-model-router", custom_llm_provider="azure_ai")
+        router_flat_cost_per_token = model_info.get("input_cost_per_token", 0)
         
-        verbose_logger.debug(
-            f"Azure AI Model Router flat cost: ${router_flat_cost:.6f} "
-            f"({usage.prompt_tokens} tokens × ${flat_cost_per_token:.9f}/token)"
-        )
-        
-        # Add flat cost to prompt cost
-        prompt_cost += router_flat_cost
+        if router_flat_cost_per_token > 0:
+            router_flat_cost = usage.prompt_tokens * router_flat_cost_per_token
+            
+            verbose_logger.debug(
+                f"Azure AI Model Router flat cost: ${router_flat_cost:.6f} "
+                f"({usage.prompt_tokens} tokens × ${router_flat_cost_per_token:.9f}/token)"
+            )
+            
+            # Add flat cost to prompt cost
+            prompt_cost += router_flat_cost
     
     return prompt_cost, completion_cost
