@@ -804,6 +804,15 @@ class ProxyBaseLLMRequestProcessing:
                 **additional_headers,
             )
 
+            # Call response headers hook for streaming success
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=response,
+            )
+            if callback_headers:
+                custom_headers.update(callback_headers)
+
             # Preserve the original client-requested model (pre-alias mapping) for downstream
             # streaming generators. Pre-call processing can rewrite `self.data["model"]` for
             # aliasing/routing, but the OpenAI-compatible response `model` field should reflect
@@ -900,6 +909,16 @@ class ProxyBaseLLMRequestProcessing:
                 **additional_headers,
             )
         )
+
+        # Call response headers hook for non-streaming success
+        callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+            data=self.data,
+            user_api_key_dict=user_api_key_dict,
+            response=response,
+        )
+        if callback_headers:
+            fastapi_response.headers.update(callback_headers)
+
         await check_response_size_is_safe(response=response)
 
         return response
@@ -1057,6 +1076,18 @@ class ProxyBaseLLMRequestProcessing:
                 if _response_headers:
                     headers = get_response_headers(dict(_response_headers))
         headers.update(custom_headers)
+
+        # Call response headers hook for failure
+        try:
+            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                data=self.data,
+                user_api_key_dict=user_api_key_dict,
+                response=None,
+            )
+            if callback_headers:
+                headers.update(callback_headers)
+        except Exception:
+            pass
 
         if isinstance(e, HTTPException):
             raise ProxyException(
