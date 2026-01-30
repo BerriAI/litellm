@@ -2,6 +2,7 @@ import { Button, Tag, Tooltip, Typography } from "antd";
 import { CloseOutlined, CopyOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
+import { getProviderLogoAndName } from "../../provider_info_helpers";
 import {
   DRAWER_HEADER_PADDING,
   COLOR_BORDER,
@@ -29,7 +30,7 @@ interface DrawerHeaderProps {
 
 /**
  * Header component for the log details drawer.
- * Displays request ID, navigation controls, status, environment, and timestamp.
+ * Displays model/provider, request ID, navigation controls, status, environment, and timestamp.
  */
 export function DrawerHeader({
   log,
@@ -41,6 +42,9 @@ export function DrawerHeader({
   statusColor,
   environment,
 }: DrawerHeaderProps) {
+  const provider = log.custom_llm_provider || "";
+  const providerInfo = provider ? getProviderLogoAndName(provider) : null;
+
   return (
     <div
       style={{
@@ -52,6 +56,9 @@ export function DrawerHeader({
         zIndex: 10,
       }}
     >
+      {/* Row 0: Model + Provider with Logo */}
+      <ModelProviderSection model={log.model} providerLogo={providerInfo?.logo} providerName={providerInfo?.displayName} />
+
       {/* Row 1: Request ID + Actions */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}>
         <RequestIdSection requestId={log.request_id} onCopy={onCopyRequestId} />
@@ -60,6 +67,45 @@ export function DrawerHeader({
 
       {/* Row 2: Status + Env + Timestamp */}
       <StatusBar log={log} statusLabel={statusLabel} statusColor={statusColor} environment={environment} />
+    </div>
+  );
+}
+
+/**
+ * Model and Provider display with logo
+ */
+function ModelProviderSection({
+  model,
+  providerLogo,
+  providerName,
+}: {
+  model: string;
+  providerLogo?: string;
+  providerName?: string;
+}) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: SPACING_MEDIUM, marginBottom: SPACING_MEDIUM }}>
+      {providerLogo && (
+        <img
+          src={providerLogo}
+          alt={providerName || "Provider"}
+          style={{ width: 24, height: 24 }}
+          onError={(e) => {
+            const target = e.target as HTMLImageElement;
+            target.style.display = "none";
+          }}
+        />
+      )}
+      <div>
+        <Text strong style={{ fontSize: 14 }}>
+          {model}
+        </Text>
+        {providerName && (
+          <Text type="secondary" style={{ fontSize: 12, marginLeft: SPACING_MEDIUM }}>
+            {providerName}
+          </Text>
+        )}
+      </div>
     </div>
   );
 }
@@ -93,6 +139,7 @@ function RequestIdSection({ requestId, onCopy }: { requestId: string; onCopy: ()
 
 /**
  * Navigation controls (previous, next, close)
+ * Shows keyboard shortcuts with bounding boxes for visibility
  */
 function NavigationSection({
   onPrevious,
@@ -103,18 +150,32 @@ function NavigationSection({
   onNext: () => void;
   onClose: () => void;
 }) {
+  const keyboardShortcutStyle = {
+    border: "1px solid #d9d9d9",
+    borderRadius: 4,
+    padding: "0 4px",
+    fontSize: 12,
+    fontFamily: "monospace",
+    marginLeft: 4,
+    background: "#fafafa",
+  };
+
   return (
     <div style={{ display: "flex", alignItems: "center", gap: SPACING_SMALL }}>
-      <Tooltip title="Previous (K)">
-        <Button type="text" size="small" icon={<UpOutlined />} onClick={onPrevious} />
-      </Tooltip>
-      <Tooltip title="Next (J)">
-        <Button type="text" size="small" icon={<DownOutlined />} onClick={onNext} />
-      </Tooltip>
+      <Button type="text" size="small" onClick={onPrevious}>
+        <UpOutlined />
+        <span style={keyboardShortcutStyle}>K</span>
+      </Button>
+      <Button type="text" size="small" onClick={onNext}>
+        <DownOutlined />
+        <span style={keyboardShortcutStyle}>J</span>
+      </Button>
 
       <div style={{ width: 1, height: 20, background: COLOR_BORDER, margin: `0 ${SPACING_MEDIUM}px` }} />
 
-      <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
+      <Tooltip title="ESC to close">
+        <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
+      </Tooltip>
     </div>
   );
 }
