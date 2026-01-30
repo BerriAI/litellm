@@ -231,6 +231,13 @@ async def gemini_proxy_route(
     if "stream" in str(updated_url):
         is_streaming_request = True
 
+    custom_headers_dict = {}
+    is_files_init = "/upload/v1beta/files" in encoded_endpoint and request.method == "POST"
+    if is_files_init:
+        custom_headers_dict["x-goog-resumable"] = "start"
+        custom_headers_dict["X-Goog-Upload-Protocol"] = "resumable"
+        custom_headers_dict["X-Goog-Upload-Command"] = "start"
+
     ## CREATE PASS-THROUGH
     endpoint_func = create_pass_through_route(
         endpoint=endpoint,
@@ -245,6 +252,15 @@ async def gemini_proxy_route(
         user_api_key_dict,
     )
 
+    # Map Location -> x-goog-upload-url for SDK compatibility.
+    if is_files_init:
+        # Prefer already-set x-goog-upload-url; otherwise copy from Location if present
+        lower_out_headers = {k.lower(): v for k, v in fastapi_response.headers.items()}
+        if "x-goog-upload-url" not in lower_out_headers:
+            loc = fastapi_response.headers.get("location") or lower_out_headers.get("location")
+            if loc:
+                fastapi_response.headers["x-goog-upload-url"] = loc
+    
     return received_value
 
 

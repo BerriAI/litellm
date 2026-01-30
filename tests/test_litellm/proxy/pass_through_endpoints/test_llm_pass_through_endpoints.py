@@ -2189,3 +2189,76 @@ class TestMilvusProxyRoute:
             # Verify that the target URL has correct path
             create_route_args = mock_create_route.call_args[1]
             assert "/vectors/search" in create_route_args["target"]
+
+class TestGeminiProxyRoute:
+    """
+    Test cases for Gemini proxy route resumable upload headers
+    """
+
+    @pytest.mark.asyncio
+    async def test_gemini_files_upload_resumable_headers(self):
+        """
+        Test that resumable upload headers are added for Google Files API upload init.
+        
+        Verifies that POST requests to /upload/v1beta/files include:
+        - x-goog-resumable: start
+        - X-Goog-Upload-Protocol: resumable
+        - X-Goog-Upload-Command: start
+        """
+        from unittest.mock import AsyncMock, patch
+        from starlette.datastructures import URL
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            gemini_proxy_route,
+        )
+
+        # Mock request body
+        body = b'{"file": {"display_name": "test.txt"}}'
+        
+        # Create request to files upload endpoint
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/gemini/upload/v1beta/files",
+            "query_string": b"key=sk-test-key",
+            "headers": [(b"content-type", b"application/json")],
+        }
+        
+        async def async_receive():
+            return {"type": "http.request", "body": body, "more_body": False}
+        
+        from fastapi import Request, Response
+        request = Request(scope=scope, receive=async_receive)
+        
+        # Track the headers passed to create_pass_through_route
+        captured_headers = None
+        
+        def capture_create_pass_through_route(*args, **kwargs):
+            nonlocal captured_headers
+            captured_headers = kwargs.get('custom_headers', {})
+            # Return a mock endpoint function
+            async def mock_endpoint_func(req, resp, user_dict, **kw):
+                return Response(content=b'{"name": "files/test"}')
+            return mock_endpoint_func
+        
+        # Mock the necessary functions
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route",
+            side_effect=capture_create_pass_through_route
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.user_api_key_auth",
+            new=AsyncMock(return_value={"user_id": "test_user"})
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="test-gemini-key"
+        ):
+            response = await gemini_proxy_route(
+                endpoint="upload/v1beta/files",
+                request=request,
+                fastapi_response=Response(),
+            )
+        
+        # Verify the resumable upload headers were added
+        assert captured_headers is not None, "Headers were not captured"
+        assert captured_headers.get("x-goog-resumable") == "start"
+        assert captured_headers.get("X-Goog-Upload-Protocol") == "resumable"
+        assert captured_headers.get("X-Goog-Upload-Command") == "start"
