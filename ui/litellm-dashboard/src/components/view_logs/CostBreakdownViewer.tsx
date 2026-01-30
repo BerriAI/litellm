@@ -59,7 +59,7 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   }
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Accordion>
         <AccordionHeader className="p-4 border-b hover:bg-gray-50 transition-colors text-left">
           <div className="flex items-center justify-between w-full">
