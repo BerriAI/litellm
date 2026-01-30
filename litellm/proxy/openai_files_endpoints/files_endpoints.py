@@ -29,7 +29,10 @@ from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.http_parsing_utils import (
+    _read_request_body,
+    extract_nested_form_metadata,
+)
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -354,16 +357,20 @@ async def create_file(  # noqa: PLR0915
 
         data = {}
         
+        # Parse expires_after if provided
+        expires_after = None
+        form_data = await request.form()
+        litellm_metadata = extract_nested_form_metadata(
+            form_data=form_data,
+            prefix="litellm_metadata["
+        )
+        expires_after_anchor = form_data.get("expires_after[anchor]")
+        expires_after_seconds_str = form_data.get("expires_after[seconds]")
+        
         # Add litellm_metadata to data if provided (from form field)
         if litellm_metadata is not None:
             data["litellm_metadata"] = litellm_metadata
 
-        # Parse expires_after if provided
-        expires_after = None
-        form_data = await request.form()
-        expires_after_anchor = form_data.get("expires_after[anchor]")
-        expires_after_seconds_str = form_data.get("expires_after[seconds]")
-        
         if expires_after_anchor is not None or expires_after_seconds_str is not None:
             if expires_after_anchor is None or expires_after_seconds_str is None:
                 raise HTTPException(
