@@ -980,6 +980,7 @@ BEDROCK_CONVERSE_MODELS = [
     "meta.llama3-2-90b-instruct-v1:0",
     "amazon.nova-lite-v1:0",
     "amazon.nova-2-lite-v1:0",
+    "amazon.nova-2-pro-preview-20251202-v1:0",
     "amazon.nova-pro-v1:0",
     "writer.palmyra-x4-v1:0",
     "writer.palmyra-x5-v1:0",
