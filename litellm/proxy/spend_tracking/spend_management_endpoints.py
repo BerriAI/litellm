@@ -2423,7 +2423,8 @@ async def global_spend():
 
         if prisma_client is None:
             raise HTTPException(status_code=500, detail={"error": "No db connected"})
-        sql_query = """SELECT SUM(spend) as total_spend FROM "MonthlyGlobalSpend";"""
+        # Single aggregation on base table (same result, less CPU than SUM over MonthlyGlobalSpend view)
+        sql_query = """SELECT SUM("spend") AS total_spend FROM "LiteLLM_SpendLogs" WHERE "startTime" >= (CURRENT_DATE - INTERVAL '30 days')"""
         response = await prisma_client.db.query_raw(query=sql_query)
         if response is not None:
             if isinstance(response, list) and len(response) > 0:

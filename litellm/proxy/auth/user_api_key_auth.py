@@ -227,7 +227,8 @@ async def _fetch_global_spend_with_event_coordination(
     """
 
     async def _load_global_spend() -> Optional[float]:
-        sql_query = """SELECT SUM(spend) AS total_spend FROM "MonthlyGlobalSpend";"""
+        # Single aggregation on base table (same result, less CPU than SUM over MonthlyGlobalSpend view)
+        sql_query = """SELECT SUM("spend") AS total_spend FROM "LiteLLM_SpendLogs" WHERE "startTime" >= (CURRENT_DATE - INTERVAL '30 days')"""
         response = await prisma_client.db.query_raw(query=sql_query)
         val = response[0]["total_spend"]
         return float(val) if val is not None else None
