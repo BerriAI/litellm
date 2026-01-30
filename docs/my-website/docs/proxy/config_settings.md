@@ -534,6 +534,7 @@ router_settings:
 | DEFAULT_MAX_LRU_CACHE_SIZE | Default maximum size for LRU cache. Default is 16
 | DEFAULT_MAX_RECURSE_DEPTH | Default maximum recursion depth. Default is 100
 | DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER | Default maximum recursion depth for sensitive data masker. Default is 10
+| DEFAULT_MAX_QUEUE_SIZE | Maximum size of the in-memory log queue for batching integrations (e.g. Langsmith, S3, SQS). Prevents OOM when flush is slow. Default is 1000. Set to 0 or omit for unlimited (not recommended).
 | DEFAULT_MAX_RETRIES | Default maximum retry attempts. Default is 2
 | DEFAULT_MAX_TOKENS | Default maximum tokens for LLM calls. Default is 4096
 | DEFAULT_MAX_TOKENS_FOR_TRITON | Default maximum tokens for Triton models. Default is 2000
@@ -544,6 +545,7 @@ router_settings:
 | DEFAULT_NUM_WORKERS_LITELLM_PROXY | Default number of workers for LiteLLM proxy. Default is 4. **We strongly recommend setting NUM Workers to Number of vCPUs available**
 | DEFAULT_PROMPT_INJECTION_SIMILARITY_THRESHOLD | Default threshold for prompt injection similarity. Default is 0.7
 | DEFAULT_POLLING_INTERVAL | Default polling interval for schedulers in seconds. Default is 0.03
+| DEFAULT_QUEUE_OVERFLOW_STRATEGY | What to do when the batching log queue is full: "drop_oldest", "drop_newest", "reject", or "force_flush". Used by CustomBatchLogger integrations. Default is "force_flush"
 | DEFAULT_REASONING_EFFORT_DISABLE_THINKING_BUDGET | Default reasoning effort disable thinking budget. Default is 0
 | DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET | Default high reasoning effort thinking budget. Default is 4096
 | DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET | Default low reasoning effort thinking budget. Default is 1024
