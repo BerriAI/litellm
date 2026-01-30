@@ -12,59 +12,42 @@ The Claude Agent SDK provides a high-level interface for building AI agents. By 
 ### 1. Install Dependencies
 
 ```bash
-pip install claude-agent-sdk litellm
+pip install claude-agent-sdk
 ```
 
 ### 2. Start LiteLLM Proxy
 
-<Tabs>
-<TabItem value="bedrock" label="AWS Bedrock">
-
 ```yaml title="config.yaml" showLineNumbers
 model_list:
+  - model_name: bedrock-claude-sonnet-3.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      aws_region_name: "us-east-1"
+
   - model_name: bedrock-claude-sonnet-4
     litellm_params:
-      model: bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0
-      aws_region_name: us-east-1
-```
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
 
-```bash
-litellm --config config.yaml
-```
-
-</TabItem>
-<TabItem value="openai" label="OpenAI">
-
-```yaml title="config.yaml" showLineNumbers
-model_list:
-  - model_name: gpt-4
+  - model_name: bedrock-claude-sonnet-4.5
     litellm_params:
-      model: gpt-4
-      api_key: os.environ/OPENAI_API_KEY
-```
+      model: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
 
-```bash
-litellm --config config.yaml
-```
-
-</TabItem>
-<TabItem value="azure" label="Azure OpenAI">
-
-```yaml title="config.yaml" showLineNumbers
-model_list:
-  - model_name: azure-gpt-4
+  - model_name: bedrock-claude-opus-4.5
     litellm_params:
-      model: azure/gpt-4-deployment
-      api_key: os.environ/AZURE_API_KEY
-      api_base: os.environ/AZURE_API_BASE
+      model: "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"
 ```
 
 ```bash
 litellm --config config.yaml
 ```
-
-</TabItem>
-</Tabs>
 
 ### 3. Point Agent SDK to LiteLLM
 
