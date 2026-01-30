@@ -224,6 +224,8 @@ When connecting Litellm to Langfuse, you can see the guardrail information on th
 
 - **Entity Types**
   - You can configure specific entity types for PII detection and decide how to handle each entity type (mask or block).
+- **Phrase Allow List**
+  - Optionally skip detections whose matched text is in `presidio_phrase_allow_list` (case-insensitive exact matches). This can be set globally on the guardrail or per request via `metadata.guardrail_config`.
 - **Detection Confidence Score Threshold**
   - You can also provide an optional confidence score threshold at which detections will be passed to the anonymizer. Entities without an entry in `presidio_score_thresholds` keep all detections (no minimum score).
 - **Scope**
@@ -258,6 +260,13 @@ guardrails:
       guardrail: presidio
       mode: "pre_mcp_call"  # Use this mode for MCP requests
       presidio_filter_scope: both  # input | output | both, optional
+      presidio_phrase_allow_list:  # optional phrases to ignore
+        # Example: allow phrases through <PERSON> detection
+        # Can also adapt the `presidio_score_thresholds` for sensitivity of detections
+        - "Company Name"
+        - "Clippy"
+        - "Markdown"
+      presidio_skip_system_developer_message: true
       presidio_score_thresholds: # Optional
         ALL: 0.7            # Default confidence threshold applied to all entities
         CREDIT_CARD: 0.8    # Override for credit cards
@@ -271,6 +280,13 @@ guardrails:
       guardrail: presidio
       mode: "pre_call"  # Use this mode for regular LLM requests
       presidio_filter_scope: both  # input | output | both, optional
+      presidio_phrase_allow_list:  # optional phrases to ignore
+        # Example: allow phrases through <PERSON> detection
+        # Can also adapt the `presidio_score_thresholds` for sensitivity of detections
+        - "Company Name"
+        - "Clippy"
+        - "Markdown"
+      presidio_skip_system_developer_message: true
       presidio_score_thresholds: # Optional
         CREDIT_CARD: 0.8  # Only keep credit card detections scoring 0.8+
       pii_entities_config:

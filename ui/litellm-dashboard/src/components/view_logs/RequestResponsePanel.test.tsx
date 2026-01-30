@@ -34,6 +34,7 @@ const baseLogEntry: LogEntry = {
   request_tags: {},
   custom_llm_provider: "openai",
   api_base: "https://api.example.com",
+  proxy_server_request: { body: { messages: [{ role: "user", content: "hello" }] } },
 };
 
 describe("RequestResponsePanel", () => {
@@ -54,28 +55,33 @@ describe("RequestResponsePanel", () => {
   });
 
   it("should render the component with request and response panels", () => {
-    const mockGetRawRequest = vi.fn().mockReturnValue({ test: "request" });
+    const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request" });
+    const mockGetModelRequest = vi.fn().mockReturnValue({ test: "model request" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response" });
 
     render(
       <RequestResponsePanel
         row={{ original: baseLogEntry }}
-        hasMessages={true}
-        hasResponse={true}
+        hasClientRequest={true}
+        hasModelRequest={true}
+        hasClientResponse={true}
         hasError={false}
         errorInfo={null}
-        getRawRequest={mockGetRawRequest}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
         formattedResponse={mockFormattedResponse}
       />,
     );
 
-    expect(screen.getByText("Request")).toBeInTheDocument();
-    expect(screen.getByText("Response")).toBeInTheDocument();
+    expect(screen.getByText("Request from client")).toBeInTheDocument();
+    expect(screen.getByText("Request to model/endpoint")).toBeInTheDocument();
+    expect(screen.getByText("Response to client")).toBeInTheDocument();
   });
 
   it("should copy request to clipboard when copy button is clicked", async () => {
     const user = userEvent.setup();
-    const mockGetRawRequest = vi.fn().mockReturnValue({ test: "request data" });
+    const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request data" });
+    const mockGetModelRequest = vi.fn().mockReturnValue({ test: "model request data" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response" });
     const mockWriteText = vi.fn().mockResolvedValue(undefined);
 
@@ -94,17 +100,18 @@ describe("RequestResponsePanel", () => {
     render(
       <RequestResponsePanel
         row={{ original: baseLogEntry }}
-        hasMessages={true}
-        hasResponse={true}
+        hasClientRequest={true}
+        hasModelRequest={true}
+        hasClientResponse={true}
         hasError={false}
         errorInfo={null}
-        getRawRequest={mockGetRawRequest}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
         formattedResponse={mockFormattedResponse}
       />,
     );
 
-    const copyButtons = screen.getAllByRole("button");
-    const copyRequestButton = copyButtons.find((button) => button.getAttribute("title") === "Copy request");
+    const copyRequestButton = screen.getByTitle("Copy request from client");
 
     expect(copyRequestButton).toBeInTheDocument();
 
@@ -112,14 +119,15 @@ describe("RequestResponsePanel", () => {
       await user.click(copyRequestButton!);
     });
 
-    expect(mockGetRawRequest).toHaveBeenCalled();
+    expect(mockGetClientRequest).toHaveBeenCalled();
     expect(mockWriteText).toHaveBeenCalledWith(JSON.stringify({ test: "request data" }, null, 2));
-    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Request copied to clipboard");
+    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Client request copied to clipboard");
   });
 
   it("should copy response to clipboard when copy button is clicked", async () => {
     const user = userEvent.setup();
-    const mockGetRawRequest = vi.fn().mockReturnValue({ test: "request" });
+    const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request" });
+    const mockGetModelRequest = vi.fn().mockReturnValue({ test: "model request" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response data" });
     const mockWriteText = vi.fn().mockResolvedValue(undefined);
 
@@ -138,17 +146,18 @@ describe("RequestResponsePanel", () => {
     render(
       <RequestResponsePanel
         row={{ original: baseLogEntry }}
-        hasMessages={true}
-        hasResponse={true}
+        hasClientRequest={true}
+        hasModelRequest={true}
+        hasClientResponse={true}
         hasError={false}
         errorInfo={null}
-        getRawRequest={mockGetRawRequest}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
         formattedResponse={mockFormattedResponse}
       />,
     );
 
-    const copyButtons = screen.getAllByRole("button");
-    const copyResponseButton = copyButtons.find((button) => button.getAttribute("title") === "Copy response");
+    const copyResponseButton = screen.getByTitle("Copy response to client");
 
     expect(copyResponseButton).toBeInTheDocument();
     expect(copyResponseButton).not.toBeDisabled();
@@ -159,27 +168,30 @@ describe("RequestResponsePanel", () => {
 
     expect(mockFormattedResponse).toHaveBeenCalled();
     expect(mockWriteText).toHaveBeenCalledWith(JSON.stringify({ test: "response data" }, null, 2));
-    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Response copied to clipboard");
+    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Response to client copied to clipboard");
   });
 
-  it("should call formattedResponse for the response panel and not getRawRequest", () => {
-    const mockGetRawRequest = vi.fn().mockReturnValue({ requestData: "this should not appear in response" });
+  it("should call formattedResponse for the response panel and not request getters", () => {
+    const mockGetClientRequest = vi.fn().mockReturnValue({ requestData: "this should not appear in response" });
+    const mockGetModelRequest = vi.fn().mockReturnValue({ modelRequestData: "not in response" });
     const mockFormattedResponse = vi.fn().mockReturnValue({ responseData: "this should appear in response" });
 
     render(
       <RequestResponsePanel
         row={{ original: baseLogEntry }}
-        hasMessages={true}
-        hasResponse={true}
+        hasClientRequest={true}
+        hasModelRequest={true}
+        hasClientResponse={true}
         hasError={false}
         errorInfo={null}
-        getRawRequest={mockGetRawRequest}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
         formattedResponse={mockFormattedResponse}
       />,
     );
 
     expect(mockFormattedResponse).toHaveBeenCalled();
-    expect(mockGetRawRequest).toHaveBeenCalled();
+    expect(mockGetClientRequest).toHaveBeenCalled();
     
     const formattedResponseCallCount = mockFormattedResponse.mock.calls.length;
     expect(formattedResponseCallCount).toBeGreaterThanOrEqual(1);
@@ -187,5 +199,82 @@ describe("RequestResponsePanel", () => {
     const responseData = mockFormattedResponse.mock.results[0].value;
     expect(responseData).toEqual({ responseData: "this should appear in response" });
     expect(responseData).not.toEqual({ requestData: "this should not appear in response" });
+  });
+
+  it("renders model request data and copies it successfully", async () => {
+    const user = userEvent.setup();
+    const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request data" });
+    const mockGetModelRequest = vi.fn().mockReturnValue({ model: "request data" });
+    const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response data" });
+    const mockWriteText = vi.fn().mockResolvedValue(undefined);
+
+    if (navigator.clipboard) {
+      vi.spyOn(navigator.clipboard, "writeText").mockImplementation(mockWriteText);
+    }
+
+    render(
+      <RequestResponsePanel
+        row={{ original: baseLogEntry }}
+        hasClientRequest={true}
+        hasModelRequest={true}
+        hasClientResponse={true}
+        hasError={false}
+        errorInfo={null}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+
+    expect(screen.getByText("Request to model/endpoint")).toBeInTheDocument();
+    expect(mockGetModelRequest).toHaveBeenCalled();
+
+    const copyModelButton = screen.getByTitle("Copy request to model/endpoint");
+    expect(copyModelButton).not.toBeDisabled();
+
+    await act(async () => {
+      await user.click(copyModelButton);
+    });
+
+    expect(mockWriteText).toHaveBeenCalledWith(JSON.stringify({ model: "request data" }, null, 2));
+    expect(mockNotificationsManager.success).toHaveBeenCalledWith("Request to model/endpoint copied to clipboard");
+  });
+
+  it("shows guidance and disables copy when model request data is missing", () => {
+    const mockGetClientRequest = vi.fn().mockReturnValue({ test: "request data" });
+    const mockGetModelRequest = vi.fn();
+    const mockFormattedResponse = vi.fn().mockReturnValue({ test: "response" });
+
+    render(
+      <RequestResponsePanel
+        row={{ original: baseLogEntry }}
+        hasClientRequest={true}
+        hasModelRequest={false}
+        hasClientResponse={true}
+        hasError={false}
+        errorInfo={null}
+        getClientRequest={mockGetClientRequest}
+        getModelRequest={mockGetModelRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+
+    expect(screen.getByText(/Request not available/)).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "store_prompts_in_spend_logs", hidden: true }),
+    ).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/config_settings#store_prompts_in_spend_logs",
+    );
+    expect(
+      screen.getByRole("link", { name: "MAX_STRING_LENGTH_PROMPT_IN_DB", hidden: true }),
+    ).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/proxy/config_settings#store_prompts_in_spend_logs#MAX_STRING_LENGTH_PROMPT_IN_DB",
+    );
+
+    const copyModelRequestButton = screen.getByTitle("Copy request to model/endpoint");
+    expect(copyModelRequestButton).toBeDisabled();
+    expect(mockGetModelRequest).not.toHaveBeenCalled();
   });
 });
