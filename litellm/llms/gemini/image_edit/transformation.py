@@ -106,7 +106,10 @@ class GeminiImageEditConfig(BaseImageEditConfig):
         generation_config: Dict[str, Any] = {}
 
         if "aspectRatio" in image_edit_optional_request_params:
-            generation_config["aspectRatio"] = image_edit_optional_request_params[
+            # Move aspectRatio into imageConfig inside generationConfig
+            if "imageConfig" not in generation_config:
+                generation_config["imageConfig"] = {}
+            generation_config["imageConfig"]["aspectRatio"] = image_edit_optional_request_params[
                 "aspectRatio"
             ]
 

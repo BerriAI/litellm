@@ -962,6 +962,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
+            isDarkMode={false}
+            toggleDarkMode={() => { }}
           />
         )}
 

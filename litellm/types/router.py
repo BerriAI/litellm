@@ -404,6 +404,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
     aws_region_name: Optional[str]
+    ## AWS S3 VECTORS ##
+    vector_bucket_name: Optional[str]
+    index_name: Optional[str]
+    embedding_model: Optional[str]
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str]
     ## CUSTOM PRICING ##
