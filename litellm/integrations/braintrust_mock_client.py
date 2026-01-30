@@ -10,6 +10,7 @@ Usage:
 
 import os
 import time
+from urllib.parse import urlparse
 
 from litellm._logging import verbose_logger
 from litellm.integrations.mock_client_factory import MockClientConfig, MockResponse, create_mock_client_factory
@@ -18,8 +19,8 @@ from litellm.integrations.mock_client_factory import MockClientConfig, MockRespo
 # Braintrust uses both HTTPHandler (sync) and AsyncHTTPHandler (async)
 # Braintrust needs endpoint-specific responses, so we use custom HTTPHandler.post patching
 _config = MockClientConfig(
-    name="BRAINTRUST",
-    env_var="BRAINTRUST_MOCK",
+    "BRAINTRUST",
+    "BRAINTRUST_MOCK",
     default_latency_ms=100,
     default_status_code=200,
     default_json_data={"id": "mock-project-id", "status": "success"},
@@ -48,8 +49,21 @@ _MOCK_LATENCY_SECONDS = float(os.getenv("BRAINTRUST_MOCK_LATENCY_MS", "100")) / 
 
 def _is_braintrust_url(url: str) -> bool:
     """Check if URL is a Braintrust API URL."""
-    url_lower = url.lower()
-    return "braintrustdata.com" in url_lower or "braintrust.dev" in url_lower
+    if not isinstance(url, str):
+        return False
+
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+
+    if not host:
+        return False
+
+    return (
+        host == "braintrustdata.com"
+        or host.endswith(".braintrustdata.com")
+        or host == "braintrust.dev"
+        or host.endswith(".braintrust.dev")
+    )
 
 
 def _mock_http_handler_post(self, url, data=None, json=None, params=None, headers=None, timeout=None, stream=False, files=None, content=None, logging_obj=None):
