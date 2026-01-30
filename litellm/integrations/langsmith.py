@@ -15,6 +15,10 @@ from pydantic import BaseModel  # type: ignore
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.langsmith_mock_client import (
+    should_use_langsmith_mock,
+    create_mock_langsmith_client,
+)
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -45,6 +49,12 @@ class LangsmithLogger(CustomBatchLogger):
     ):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
+        self.is_mock_mode = should_use_langsmith_mock()
+        
+        if self.is_mock_mode:
+            create_mock_langsmith_client()
+            verbose_logger.debug("[LANGSMITH MOCK] LangSmith logger initialized in mock mode")
+        
         self.default_credentials = self.get_credentials_from_env(
             langsmith_api_key=langsmith_api_key,
             langsmith_project=langsmith_project,
@@ -388,6 +398,8 @@ class LangsmithLogger(CustomBatchLogger):
             verbose_logger.debug(
                 "Sending batch of %s runs to Langsmith", len(elements_to_log)
             )
+            if self.is_mock_mode:
+                verbose_logger.debug("[LANGSMITH MOCK] Mock mode enabled - API calls will be intercepted")
             response = await self.async_httpx_client.post(
                 url=url,
                 json={"post": elements_to_log},
@@ -400,9 +412,14 @@ class LangsmithLogger(CustomBatchLogger):
                     f"Langsmith Error: {response.status_code} - {response.text}"
                 )
             else:
-                verbose_logger.debug(
-                    f"Batch of {len(self.log_queue)} runs successfully created"
-                )
+                if self.is_mock_mode:
+                    verbose_logger.debug(
+                        f"[LANGSMITH MOCK] Batch of {len(elements_to_log)} runs successfully mocked"
+                    )
+                else:
+                    verbose_logger.debug(
+                        f"Batch of {len(self.log_queue)} runs successfully created"
+                    )
         except httpx.HTTPStatusError as e:
             verbose_logger.exception(
                 f"Langsmith HTTP Error: {e.response.status_code} - {e.response.text}"
