@@ -105,13 +105,11 @@ class PrometheusServicesLogger:
         return metrics
 
     def is_metric_registered(self, metric_name) -> bool:
-        # Use registry's collector dict to avoid REGISTRY.collect(), which is O(all metrics)
-        # and causes severe perf regression when a new Router (and thus this logger) is
-        # created per request (e.g. hierarchical router_settings from DB).
+        # Use _names_to_collectors (O(1)) instead of REGISTRY.collect() (O(n)) to avoid
+        # perf regression when a new Router is created per request (e.g. router_settings in DB).
         names_to_collectors = getattr(self.REGISTRY, "_names_to_collectors", None)
         if names_to_collectors is not None:
             return metric_name in names_to_collectors
-        # Fallback for custom registries that don't expose _names_to_collectors
         for metric in self.REGISTRY.collect():
             if metric_name == metric.name:
                 return True
