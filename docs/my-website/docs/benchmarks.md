@@ -48,6 +48,28 @@ In these tests the baseline latency characteristics are measured against a fake-
 - High-percentile latencies drop significantly: P95 630 ms → 150 ms, P99 1,200 ms → 240 ms.
 - Setting workers equal to CPU count gives optimal performance.
 
+## `/realtime` API Benchmarks
+
+End-to-end latency benchmarks for the `/realtime` endpoint tested against a fake realtime endpoint.
+
+### Performance Metrics
+
+| Metric          | Value      |
+| --------------- | ---------- |
+| Median latency  | 59 ms      |
+| p95 latency     | 67 ms      |
+| p99 latency     | 99 ms      |
+| Average latency | 63 ms      |
+| RPS             | 1,207      |
+
+### Test Setup
+
+| Category | Specification |
+|----------|---------------|
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
+
 ## Machine Spec used for testing
 
 Each machine deploying LiteLLM had the following specs:
