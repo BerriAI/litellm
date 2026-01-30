@@ -2144,8 +2144,6 @@ async def view_spend_logs(  # noqa: PLR0915
 
             return spend_logs
 
-        return None
-
     except Exception as e:
         if isinstance(e, HTTPException):
             raise ProxyException(
