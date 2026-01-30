@@ -19,7 +19,9 @@ class OpenAIGPT5Config(OpenAIGPTConfig):
 
     @classmethod
     def is_model_gpt_5_model(cls, model: str) -> bool:
-        return "gpt-5" in model
+        # gpt-5-chat* behaves like a regular chat model (supports temperature, etc.)
+        # Don't route it through GPT-5 reasoning-specific parameter restrictions.
+        return "gpt-5" in model and "gpt-5-chat" not in model
 
     @classmethod
     def is_model_gpt_5_codex_model(cls, model: str) -> bool:

@@ -1,3 +1,4 @@
+import { useDeleteProxyConfigField, useProxyConfig } from "@/app/(dashboard)/hooks/proxyConfig/useProxyConfig";
 import { useStoreRequestInSpendLogs } from "@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs";
 import NotificationsManager from "@/components/molecules/notifications_manager";
 import { parseErrorMessage } from "@/components/shared/errorUtils";
@@ -8,6 +9,7 @@ import { renderWithProviders } from "../../../../tests/test-utils";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal";
 
 vi.mock("@/app/(dashboard)/hooks/storeRequestInSpendLogs/useStoreRequestInSpendLogs");
+vi.mock("@/app/(dashboard)/hooks/proxyConfig/useProxyConfig");
 vi.mock("@/components/molecules/notifications_manager", () => ({
   default: {
     success: vi.fn(),
@@ -19,6 +21,8 @@ vi.mock("@/components/shared/errorUtils", () => ({
 }));
 
 const mockUseStoreRequestInSpendLogs = vi.mocked(useStoreRequestInSpendLogs);
+const mockUseProxyConfig = vi.mocked(useProxyConfig);
+const mockUseDeleteProxyConfigField = vi.mocked(useDeleteProxyConfigField);
 const mockNotificationsManager = vi.mocked(NotificationsManager);
 const mockParseErrorMessage = vi.mocked(parseErrorMessage);
 
@@ -26,6 +30,8 @@ describe("SpendLogsSettingsModal", () => {
   const mockOnCancel = vi.fn();
   const mockOnSuccess = vi.fn();
   const mockMutateAsync = vi.fn();
+  const mockDeleteField = vi.fn();
+  const mockRefetch = vi.fn();
 
   const defaultProps = {
     isVisible: true,
@@ -38,6 +44,15 @@ describe("SpendLogsSettingsModal", () => {
     mockUseStoreRequestInSpendLogs.mockReturnValue({
       mutateAsync: mockMutateAsync,
       isPending: false,
+    } as any);
+    mockUseDeleteProxyConfigField.mockReturnValue({
+      mutateAsync: mockDeleteField,
+      isPending: false,
+    } as any);
+    mockUseProxyConfig.mockReturnValue({
+      data: [],
+      isLoading: false,
+      refetch: mockRefetch,
     } as any);
     mockParseErrorMessage.mockImplementation((error: any) => error?.message || String(error));
   });
@@ -127,6 +142,7 @@ describe("SpendLogsSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
+      expect(mockDeleteField).not.toHaveBeenCalled();
       expect(mockMutateAsync).toHaveBeenCalledWith(
         {
           store_prompts_in_spend_logs: true,
@@ -139,6 +155,7 @@ describe("SpendLogsSettingsModal", () => {
 
   it("should submit form with store prompts disabled and no retention period", async () => {
     const user = userEvent.setup();
+    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
     mockMutateAsync.mockImplementation(async (params, options) => {
       await Promise.resolve();
       options?.onSuccess?.();
@@ -151,10 +168,10 @@ describe("SpendLogsSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
+      expect(mockDeleteField).toHaveBeenCalled();
       expect(mockMutateAsync).toHaveBeenCalledWith(
         {
           store_prompts_in_spend_logs: false,
-          maximum_spend_logs_retention_period: undefined,
         },
         expect.any(Object)
       );
@@ -163,6 +180,7 @@ describe("SpendLogsSettingsModal", () => {
 
   it("should show success notification and call onSuccess on successful submission", async () => {
     const user = userEvent.setup();
+    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
     mockMutateAsync.mockImplementation(async (params, options) => {
       await Promise.resolve();
       options?.onSuccess?.();
@@ -176,6 +194,7 @@ describe("SpendLogsSettingsModal", () => {
 
     await waitFor(() => {
       expect(mockNotificationsManager.success).toHaveBeenCalledWith("Spend logs settings updated successfully");
+      expect(mockRefetch).toHaveBeenCalled();
       expect(mockOnSuccess).toHaveBeenCalledTimes(1);
     });
   });
@@ -227,9 +246,47 @@ describe("SpendLogsSettingsModal", () => {
     expect(cancelButton).toBeDisabled();
   });
 
+  it("should disable cancel button when deleting field", () => {
+    mockUseDeleteProxyConfigField.mockReturnValue({
+      mutateAsync: mockDeleteField,
+      isPending: true,
+    } as any);
+
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect(cancelButton).toBeDisabled();
+  });
+
+  it("should disable cancel button when loading config", () => {
+    mockUseProxyConfig.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      refetch: mockRefetch,
+    } as any);
+
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+
+    const cancelButton = screen.getByRole("button", { name: "Cancel" });
+    expect(cancelButton).toBeDisabled();
+  });
+
   it("should show loading state on save button when pending", () => {
     mockUseStoreRequestInSpendLogs.mockReturnValue({
       mutateAsync: mockMutateAsync,
+      isPending: true,
+    } as any);
+
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+
+    const saveButton = screen.getByRole("button", { name: /Saving/i });
+    expect(saveButton).toBeInTheDocument();
+    expect(saveButton.className).toContain("ant-btn-loading");
+  });
+
+  it("should show loading state on save button when deleting field", () => {
+    mockUseDeleteProxyConfigField.mockReturnValue({
+      mutateAsync: mockDeleteField,
       isPending: true,
     } as any);
 
@@ -259,15 +316,16 @@ describe("SpendLogsSettingsModal", () => {
     expect(mockOnCancel).toHaveBeenCalledTimes(1);
   });
 
-  it("should reset form fields after successful submission", async () => {
+  it("should call refetch after successful submission", async () => {
     const user = userEvent.setup();
+    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
     mockMutateAsync.mockImplementation(async (params, options) => {
       await Promise.resolve();
       options?.onSuccess?.();
       return { message: "Success" };
     });
 
-    const { rerender } = renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
 
     const switchElement = screen.getByRole("switch");
     await user.click(switchElement);
@@ -283,20 +341,13 @@ describe("SpendLogsSettingsModal", () => {
 
     await waitFor(() => {
       expect(mockNotificationsManager.success).toHaveBeenCalled();
-    });
-
-    rerender(<SpendLogsSettingsModal {...defaultProps} />);
-
-    await waitFor(() => {
-      const updatedSwitchElement = screen.getByRole("switch");
-      const updatedRetentionInput = screen.getByPlaceholderText("e.g., 7d, 30d");
-      expect(updatedSwitchElement).not.toBeChecked();
-      expect(updatedRetentionInput).toHaveValue("");
+      expect(mockRefetch).toHaveBeenCalled();
     });
   });
 
   it("should not call onSuccess when it is not provided", async () => {
     const user = userEvent.setup();
+    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
     mockMutateAsync.mockImplementation(async (params, options) => {
       await Promise.resolve();
       options?.onSuccess?.();
@@ -319,8 +370,93 @@ describe("SpendLogsSettingsModal", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("should call refetch when modal opens", () => {
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+
+    expect(mockRefetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("should render form with initial values from config data", () => {
+    mockUseProxyConfig.mockReturnValue({
+      data: [
+        {
+          field_name: "store_prompts_in_spend_logs",
+          field_type: "bool",
+          field_description: "Store prompts in spend logs",
+          field_value: true,
+          stored_in_db: true,
+          field_default_value: false,
+        },
+        {
+          field_name: "maximum_spend_logs_retention_period",
+          field_type: "string",
+          field_description: "Maximum retention period",
+          field_value: "30d",
+          stored_in_db: true,
+          field_default_value: undefined,
+        },
+      ],
+      isLoading: false,
+      refetch: mockRefetch,
+    } as any);
+
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+
+    const switchElement = screen.getByRole("switch");
+    const retentionInput = screen.getByPlaceholderText("e.g., 7d, 30d");
+
+    expect(switchElement).toBeChecked();
+    expect(retentionInput).toHaveValue("30d");
+  });
+
+  it("should show skeleton loaders when config is loading", () => {
+    mockUseProxyConfig.mockReturnValue({
+      data: undefined,
+      isLoading: true,
+      refetch: mockRefetch,
+    } as any);
+
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+
+    // Check that switch and input are not present when loading (skeletons are shown instead)
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("e.g., 7d, 30d")).not.toBeInTheDocument();
+
+    // Check for skeleton elements (Ant Design Skeleton.Input renders with ant-skeleton class)
+    const skeletons = document.querySelectorAll(".ant-skeleton");
+    expect(skeletons.length).toBeGreaterThan(0);
+  });
+
+  it("should continue with update even if deleteField fails", async () => {
+    const user = userEvent.setup();
+    const deleteError = new Error("Field does not exist");
+    mockDeleteField.mockRejectedValue(deleteError);
+    mockMutateAsync.mockImplementation(async (params, options) => {
+      await Promise.resolve();
+      options?.onSuccess?.();
+      return { message: "Success" };
+    });
+
+    renderWithProviders(<SpendLogsSettingsModal {...defaultProps} />);
+
+    const saveButton = screen.getByRole("button", { name: "Save Settings" });
+    await user.click(saveButton);
+
+    await waitFor(() => {
+      expect(mockDeleteField).toHaveBeenCalled();
+      expect(mockMutateAsync).toHaveBeenCalledWith(
+        {
+          store_prompts_in_spend_logs: false,
+        },
+        expect.any(Object)
+      );
+      expect(mockNotificationsManager.success).toHaveBeenCalled();
+    });
+  });
+
   it("should submit form with only store prompts enabled and no retention period", async () => {
     const user = userEvent.setup();
+    mockDeleteField.mockResolvedValue({ message: "Field deleted successfully" });
     mockMutateAsync.mockImplementation(async (params, options) => {
       await Promise.resolve();
       options?.onSuccess?.();
@@ -336,10 +472,10 @@ describe("SpendLogsSettingsModal", () => {
     await user.click(saveButton);
 
     await waitFor(() => {
+      expect(mockDeleteField).toHaveBeenCalled();
       expect(mockMutateAsync).toHaveBeenCalledWith(
         {
           store_prompts_in_spend_logs: true,
-          maximum_spend_logs_retention_period: undefined,
         },
         expect.any(Object)
       );
