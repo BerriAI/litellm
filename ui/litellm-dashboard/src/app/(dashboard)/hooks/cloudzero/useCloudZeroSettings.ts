@@ -1,5 +1,5 @@
 import { CloudZeroSettings } from "@/components/CloudZeroCostTracking/types";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createQueryKeys } from "../common/queryKeysFactory";
 
@@ -12,24 +12,40 @@ const getCloudZeroSettings = async (accessToken: string): Promise<CloudZeroSetti
   const response = await fetch(url, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
   });
 
-  if (response.status === 404) {
-    // 404 means no settings are configured - this is expected and not an error
-    return null;
-  }
-
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage =
-      errorData?.error?.message || errorData?.message || errorData?.detail || "Failed to fetch CloudZero settings";
+    let errorMessage = "Failed to fetch CloudZero settings";
+    try {
+      const errorData = await response.json();
+      // Handle different error response formats
+      if (typeof errorData === "object" && errorData !== null) {
+        errorMessage =
+          errorData?.error?.message ||
+          errorData?.error ||
+          errorData?.message ||
+          errorData?.detail ||
+          (typeof errorData?.error === "string" ? errorData.error : errorMessage);
+      } else if (typeof errorData === "string") {
+        errorMessage = errorData;
+      }
+    } catch {
+      // If JSON parsing fails, use the status text
+      errorMessage = response.statusText || errorMessage;
+    }
     throw new Error(errorMessage);
   }
 
   const data = await response.json();
+
+  // Check if settings are actually configured (all required fields are present)
+  if (!data || (!data.api_key_masked && !data.connection_id)) {
+    return null;
+  }
+
   return data;
 };
 
@@ -66,7 +82,7 @@ const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams
   const response = await fetch(url, {
     method: "PUT",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -77,9 +93,22 @@ const updateCloudZeroSettings = async (accessToken: string, params: UpdateParams
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage =
-      errorData?.error?.message || errorData?.message || errorData?.detail || "Failed to update CloudZero settings";
+    let errorMessage = "Failed to update CloudZero settings";
+    try {
+      const errorData = await response.json();
+      if (typeof errorData === "object" && errorData !== null) {
+        errorMessage =
+          errorData?.error?.message ||
+          errorData?.error ||
+          errorData?.message ||
+          errorData?.detail ||
+          (typeof errorData?.error === "string" ? errorData.error : errorMessage);
+      } else if (typeof errorData === "string") {
+        errorMessage = errorData;
+      }
+    } catch {
+      errorMessage = response.statusText || errorMessage;
+    }
     throw new Error(errorMessage);
   }
 
@@ -111,15 +140,28 @@ const deleteCloudZeroSettings = async (accessToken: string): Promise<DeleteRespo
   const response = await fetch(url, {
     method: "DELETE",
     headers: {
-      Authorization: `Bearer ${accessToken}`,
+      [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
       "Content-Type": "application/json",
     },
   });
 
   if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    const errorMessage =
-      errorData?.error?.message || errorData?.message || errorData?.detail || "Failed to delete CloudZero settings";
+    let errorMessage = "Failed to delete CloudZero settings";
+    try {
+      const errorData = await response.json();
+      if (typeof errorData === "object" && errorData !== null) {
+        errorMessage =
+          errorData?.error?.message ||
+          errorData?.error ||
+          errorData?.message ||
+          errorData?.detail ||
+          (typeof errorData?.error === "string" ? errorData.error : errorMessage);
+      } else if (typeof errorData === "string") {
+        errorMessage = errorData;
+      }
+    } catch {
+      errorMessage = response.statusText || errorMessage;
+    }
     throw new Error(errorMessage);
   }
 

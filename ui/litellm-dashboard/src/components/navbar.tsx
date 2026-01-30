@@ -1,20 +1,32 @@
-import Link from "next/link";
-import React, { useState, useEffect } from "react";
-import type { MenuProps } from "antd";
-import { Dropdown, Tooltip } from "antd";
+import { useHealthReadiness } from "@/app/(dashboard)/hooks/healthReadiness/useHealthReadiness";
+import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { getProxyBaseUrl } from "@/components/networking";
+import { useTheme } from "@/contexts/ThemeContext";
+import { clearTokenCookies } from "@/utils/cookieUtils";
 import {
-  UserOutlined,
-  LogoutOutlined,
+  emitLocalStorageChange,
+  getLocalStorageItem,
+  removeLocalStorageItem,
+  setLocalStorageItem,
+} from "@/utils/localStorageUtils";
+import { fetchProxySettings } from "@/utils/proxyUtils";
+import {
   CrownOutlined,
+  GithubOutlined,
+  LogoutOutlined,
   MailOutlined,
-  SafetyOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MoonOutlined,
+  SafetyOutlined,
+  SlackOutlined,
+  SunOutlined,
+  UserOutlined,
 } from "@ant-design/icons";
-import { clearTokenCookies } from "@/utils/cookieUtils";
-import { fetchProxySettings } from "@/utils/proxyUtils";
-import { useTheme } from "@/contexts/ThemeContext";
+import type { MenuProps } from "antd";
+import { Button, Dropdown, Switch, Tooltip } from "antd";
+import Link from "next/link";
+import React, { useEffect, useState } from "react";
 
 interface NavbarProps {
   userID: string | null;
@@ -27,6 +39,8 @@ interface NavbarProps {
   isPublicPage: boolean;
   sidebarCollapsed?: boolean;
   onToggleSidebar?: () => void;
+  isDarkMode: boolean;
+  toggleDarkMode: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({
@@ -40,30 +54,19 @@ const Navbar: React.FC<NavbarProps> = ({
   isPublicPage = false,
   sidebarCollapsed = false,
   onToggleSidebar,
+  isDarkMode,
+  toggleDarkMode
 }) => {
   const baseUrl = getProxyBaseUrl();
   const [logoutUrl, setLogoutUrl] = useState("");
-  const [version, setVersion] = useState("");
+  const [disableShowNewBadge, setDisableShowNewBadge] = useState(false);
+  const disableShowPrompts = useDisableShowPrompts();
   const { logoUrl } = useTheme();
+  const { data: healthData } = useHealthReadiness();
+  const version = healthData?.litellm_version;
 
   // Simple logo URL: use custom logo if available, otherwise default
   const imageUrl = logoUrl || `${baseUrl}/get_image`;
-
-  useEffect(() => {
-    const fetchVersion = async () => {
-      try {
-        const response = await fetch(`${baseUrl}/health/readiness`);
-        const data = await response.json();
-        if (data.litellm_version) {
-          setVersion(data.litellm_version);
-        }
-      } catch (error) {
-        console.error("Failed to fetch version:", error);
-      }
-    };
-
-    fetchVersion();
-  }, [baseUrl]);
 
   useEffect(() => {
     const initializeProxySettings = async () => {
@@ -78,6 +81,11 @@ const Navbar: React.FC<NavbarProps> = ({
 
     initializeProxySettings();
   }, [accessToken]);
+
+  useEffect(() => {
+    const storedValue = getLocalStorageItem("disableShowNewBadge");
+    setDisableShowNewBadge(storedValue === "true");
+  }, []);
 
   useEffect(() => {
     setLogoutUrl(proxySettings?.PROXY_LOGOUT_URL || "");
@@ -129,6 +137,49 @@ const Navbar: React.FC<NavbarProps> = ({
                 {userEmail || "Unknown"}
               </span>
             </div>
+            <div
+              className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-gray-500 text-xs">Hide New Feature Indicators</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={disableShowNewBadge}
+                onChange={(checked) => {
+                  setDisableShowNewBadge(checked);
+                  if (checked) {
+                    setLocalStorageItem("disableShowNewBadge", "true");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  } else {
+                    removeLocalStorageItem("disableShowNewBadge");
+                    emitLocalStorageChange("disableShowNewBadge");
+                  }
+                }}
+                aria-label="Toggle hide new feature indicators"
+              />
+            </div>
+            <div
+              className="flex items-center text-sm pt-2 mt-2 border-t border-gray-100"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <span className="text-gray-500 text-xs">Hide All Prompts</span>
+              <Switch
+                className="ml-auto"
+                size="small"
+                checked={disableShowPrompts}
+                onChange={(checked) => {
+                  if (checked) {
+                    setLocalStorageItem("disableShowPrompts", "true");
+                    emitLocalStorageChange("disableShowPrompts");
+                  } else {
+                    removeLocalStorageItem("disableShowPrompts");
+                    emitLocalStorageChange("disableShowPrompts");
+                  }
+                }}
+                aria-label="Toggle hide all prompts"
+              />
+            </div>
           </div>
         </div>
       ),
@@ -148,11 +199,7 @@ const Navbar: React.FC<NavbarProps> = ({
     <nav className="bg-white border-b border-gray-200 sticky top-0 z-10">
       <div className="w-full">
         <div className="flex items-center h-14 px-4">
-          {" "}
-          {/* Increased height from h-12 to h-14 */}
-          {/* Left side with collapse toggle and logo */}
           <div className="flex items-center flex-shrink-0">
-            {/* Collapse/Expand Toggle Button - Larger */}
             {onToggleSidebar && (
               <button
                 onClick={onToggleSidebar}
@@ -164,15 +211,15 @@ const Navbar: React.FC<NavbarProps> = ({
             )}
 
             <div className="flex items-center">
-              <Link href="/" className="flex items-center">
+              <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
                   <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
-                  <span 
+                  <span
                     className="absolute -top-1 -right-2 text-lg animate-bounce"
-                    style={{ animationDuration: '2s' }}
+                    style={{ animationDuration: "2s" }}
                     title="Happy Holidays!"
                   >
-                    🎄
+                    ❄️
                   </span>
                 </div>
               </Link>
@@ -190,6 +237,33 @@ const Navbar: React.FC<NavbarProps> = ({
           </div>
           {/* Right side nav items */}
           <div className="flex items-center space-x-5 ml-auto">
+            <Button
+              href="https://www.litellm.ai/support"
+              target="_blank"
+              rel="noopener noreferrer"
+              icon={<SlackOutlined />}
+              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
+            >
+              Join Slack
+            </Button>
+            <Button
+              href="https://github.com/BerriAI/litellm"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="shadow-md shadow-indigo-500/20 hover:shadow-indigo-500/50 transition-shadow"
+              icon={<GithubOutlined />}
+            >
+              Star us on GitHub
+            </Button>
+            {/* Dark mode is currently a work in progress. To test, you can change 'false' to 'true' below.
+            Do not set this to true by default until all components are confirmed to support dark mode styles. */}
+            {false && <Switch
+              data-testid="dark-mode-toggle"
+              checked={isDarkMode}
+              onChange={toggleDarkMode}
+              checkedChildren={<MoonOutlined />}
+              unCheckedChildren={<SunOutlined />}
+            />}
             <a
               href="https://docs.litellm.ai/docs/"
               target="_blank"

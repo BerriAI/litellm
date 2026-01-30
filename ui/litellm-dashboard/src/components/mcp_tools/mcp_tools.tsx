@@ -40,7 +40,7 @@ const MCPToolsViewer = ({
       if (!accessToken) throw new Error("Access Token required");
 
       try {
-        const result: CallMCPToolResponse = await callMCPTool(accessToken, args.tool.name, args.arguments);
+        const result: CallMCPToolResponse = await callMCPTool(accessToken, serverId, args.tool.name, args.arguments);
         return result;
       } catch (error) {
         throw error;
@@ -127,11 +127,10 @@ const MCPToolsViewer = ({
                     {toolsData.map((tool: MCPTool) => (
                       <div
                         key={tool.name}
-                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${
-                          selectedTool?.name === tool.name
+                        className={`border rounded-lg p-3 cursor-pointer transition-all hover:shadow-sm ${selectedTool?.name === tool.name
                             ? "border-blue-500 bg-blue-50 ring-1 ring-blue-200"
                             : "border-gray-200 bg-white hover:border-gray-300"
-                        }`}
+                          }`}
                         onClick={() => {
                           setSelectedTool(tool);
                           setToolResult(null);

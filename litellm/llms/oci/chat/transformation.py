@@ -32,6 +32,7 @@ from litellm.types.llms.oci import (
     OCICompletionResponse,
     OCIContentPartUnion,
     OCIImageContentPart,
+    OCIImageUrl,
     OCIMessage,
     OCIRoles,
     OCIServingMode,
@@ -1124,9 +1125,12 @@ def adapt_messages_to_generic_oci_standard_content_message(
 
         elif type == "image_url":
             image_url = content_item.get("image_url")
+            # Handle both OpenAI format (object with url) and string format
+            if isinstance(image_url, dict):
+                image_url = image_url.get("url")
             if not isinstance(image_url, str):
-                raise Exception("Prop `image_url` is not a string")
-            new_content.append(OCIImageContentPart(imageUrl=image_url))
+                raise Exception("Prop `image_url` must be a string or an object with a `url` property")
+            new_content.append(OCIImageContentPart(imageUrl=OCIImageUrl(url=image_url)))
 
     return OCIMessage(
         role=open_ai_to_generic_oci_role_map[role],

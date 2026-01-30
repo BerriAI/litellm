@@ -70,6 +70,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         self,
         messages: List[AllMessageValues],
         request_data: Dict,
+        event_type: GuardrailEventHooks,
     ) -> Tuple[LakeraAIResponse, Dict]:
         """
         Call the Lakera AI v2 guard API.
@@ -128,6 +129,7 @@ class LakeraAIGuardrail(CustomGuardrail):
                 end_time=datetime.now().timestamp(),
                 duration=(datetime.now() - start_time).total_seconds(),
                 masked_entity_count=masked_entity_count,
+                event_type=event_type,
             )
 
     def _mask_pii_in_messages(
@@ -214,6 +216,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
             messages=new_messages,
             request_data=data,
+            event_type=GuardrailEventHooks.pre_call,
         )
 
         #########################################################
@@ -279,6 +282,7 @@ class LakeraAIGuardrail(CustomGuardrail):
         lakera_guardrail_response, masked_entity_count = await self.call_v2_guard(
             messages=new_messages,
             request_data=data,
+            event_type=GuardrailEventHooks.during_call,
         )
 
         #########################################################

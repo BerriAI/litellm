@@ -3,7 +3,7 @@
 from typing import Any, Optional, cast
 
 import litellm
-from litellm import get_llm_provider
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
@@ -60,6 +60,10 @@ async def _arealtime(
         api_base=api_base,
         api_key=api_key,
     )
+
+    # Ensure query params use the normalized provider model (no proxy aliases).
+    if query_params is not None:
+        query_params = {**query_params, "model": model}
 
     litellm_logging_obj.update_environment_variables(
         model=model,

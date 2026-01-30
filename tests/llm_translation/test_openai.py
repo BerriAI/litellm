@@ -836,23 +836,6 @@ def test_gpt_5_reasoning_streaming():
     print("✓ gpt_5_reasoning_streaming correctly handled streaming")
 
 
-def test_gpt_5_pro_reasoning():
-    litellm._turn_on_debug()
-    response = litellm.completion(
-        model="gpt-5-pro",
-        messages=[
-            {
-                "role": "user",
-                "content": "Think of a poem and then write it.",
-            }
-        ],
-        reasoning_effort="high",
-    )
-    print("response: ", response)
-    # reasoning_effort string param does not request summaries (opt-in since #16210)
-    assert response.choices[0].message.content is not None  # But we should get content
-
-
 def test_openai_gpt_5_codex_reasoning():
     litellm._turn_on_debug()
     completion_kwargs = {

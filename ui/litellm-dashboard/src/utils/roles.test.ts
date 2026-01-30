@@ -42,81 +42,32 @@ describe("roles", () => {
 
   describe("isUserTeamAdminForSingleTeam", () => {
     it("should return true when user is team admin", () => {
-      const team: Team = {
-        team_id: "team-1",
-        team_alias: "Test Team",
-        models: [],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-1",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [
-          { user_id: "user-1", user_email: "user1@test.com", role: "admin" },
-          { user_id: "user-2", user_email: "user2@test.com", role: "user" },
-        ],
-      };
-      expect(isUserTeamAdminForSingleTeam(team, "user-1")).toBe(true);
+      const members_with_roles = [
+        { user_id: "user-1", user_email: "user1@test.com", role: "admin" },
+        { user_id: "user-2", user_email: "user2@test.com", role: "user" },
+      ];
+      expect(isUserTeamAdminForSingleTeam(members_with_roles, "user-1")).toBe(true);
     });
 
     it("should return false when user is not team admin", () => {
-      const team: Team = {
-        team_id: "team-1",
-        team_alias: "Test Team",
-        models: [],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-1",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [
-          { user_id: "user-1", user_email: "user1@test.com", role: "user" },
-          { user_id: "user-2", user_email: "user2@test.com", role: "user" },
-        ],
-      };
-      expect(isUserTeamAdminForSingleTeam(team, "user-1")).toBe(false);
+      const members_with_roles = [
+        { user_id: "user-1", user_email: "user1@test.com", role: "user" },
+        { user_id: "user-2", user_email: "user2@test.com", role: "user" },
+      ];
+      expect(isUserTeamAdminForSingleTeam(members_with_roles, "user-1")).toBe(false);
     });
 
     it("should return false when user is not in team", () => {
-      const team: Team = {
-        team_id: "team-1",
-        team_alias: "Test Team",
-        models: [],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-1",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [{ user_id: "user-2", user_email: "user2@test.com", role: "admin" }],
-      };
-      expect(isUserTeamAdminForSingleTeam(team, "user-1")).toBe(false);
-    });
-
-    it("should return false when team is null", () => {
-      expect(isUserTeamAdminForSingleTeam(null, "user-1")).toBe(false);
+      const members_with_roles = [{ user_id: "user-2", user_email: "user2@test.com", role: "admin" }];
+      expect(isUserTeamAdminForSingleTeam(members_with_roles, "user-1")).toBe(false);
     });
 
     it("should return false when members_with_roles is null", () => {
-      const team = {
-        team_id: "team-1",
-        team_alias: "Test Team",
-        models: [],
-        max_budget: null,
-        budget_duration: null,
-        tpm_limit: null,
-        rpm_limit: null,
-        organization_id: "org-1",
-        created_at: "2024-01-01",
-        keys: [],
-        members_with_roles: [],
-      } as Team;
-      expect(isUserTeamAdminForSingleTeam(team, "user-1")).toBe(false);
+      expect(isUserTeamAdminForSingleTeam(null, "user-1")).toBe(false);
+    });
+
+    it("should return false when members_with_roles is empty array", () => {
+      expect(isUserTeamAdminForSingleTeam([], "user-1")).toBe(false);
     });
   });
 

@@ -19,9 +19,11 @@ import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_proxy_server_request_for_spend_logs_payload,
     _get_response_for_spend_logs_payload,
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
+    _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
 )
 from litellm.types.utils import (
@@ -849,3 +851,109 @@ def test_get_logging_payload_handles_missing_overhead_gracefully():
     assert (
         metadata.get("litellm_overhead_time_ms") is None
     ), "litellm_overhead_time_ms should be None when overhead is not provided"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_enabled(
+    mock_should_store,
+):
+    """
+    Test that both request body and response are redacted when turn_off_message_logging is enabled.
+    """
+    mock_should_store.return_value = True
+
+    # Test request redaction
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "messages": [{"role": "user", "content": "secret message"}],
+                "model": "gpt-4",
+            }
+        }
+    }
+    metadata = {}
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": True,
+        },
+    }
+
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    parsed_request = json.loads(request_result)
+    assert parsed_request["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert parsed_request["model"] == "gpt-4"
+
+    # Test response redaction - use dict response to verify redaction
+    response_dict = {
+        "id": "test-id",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "secret response"},
+            }
+        ],
+        "model": "gpt-4",
+    }
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": response_dict},
+    )
+
+    response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
+
+    # When redaction is enabled and response is a dict (not ModelResponse),
+    # perform_redaction returns {"text": "redacted-by-litellm"}
+    parsed_response = json.loads(response_result)
+    assert parsed_response == {"text": "redacted-by-litellm"}
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_string(
+    mock_get_secret_bool,
+):
+    """
+    Test that _should_store_prompts_and_responses_in_spend_logs handles
+    case-insensitive string values for store_prompts_in_spend_logs in general_settings.
+    """
+    # Test case-insensitive string "true" variations
+    for true_value in ["true", "TRUE", "True", "TrUe"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": true_value}):
+            mock_get_secret_bool.return_value = False  # Ensure env var is False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True for '{true_value}', got {result}"
+    
+    # Test boolean True
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}):
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, f"Expected True for boolean True, got {result}"
+    
+    # Test that non-true values fall back to environment variable
+    for false_value in [False, None, "false", "FALSE", "False", "anything"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": false_value}):
+            # When env var is True, should return True
+            mock_get_secret_bool.return_value = True
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
+            
+            # When env var is False, should return False
+            mock_get_secret_bool.return_value = False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
+    
+    # Test when general_settings doesn't have the key at all
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        mock_get_secret_bool.return_value = True
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, "Expected True (from env var) when key missing, got False"
+        
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is False, "Expected False (from env var) when key missing, got True"
+

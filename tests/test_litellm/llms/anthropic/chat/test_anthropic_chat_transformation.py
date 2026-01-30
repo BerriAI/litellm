@@ -185,7 +185,7 @@ def test_extract_response_content_with_citations():
         },
     }
 
-    _, citations, _, _, _, _ = config.extract_response_content(completion_response)
+    _, citations, _, _, _, _ , _= config.extract_response_content(completion_response)
     assert citations == [
         [
             {
@@ -342,7 +342,7 @@ def test_web_search_tool_result_extraction():
         }
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -474,7 +474,7 @@ def test_multiple_web_search_tool_results():
         ]
     }
 
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -546,6 +546,59 @@ def test_map_tool_choice_dict_type_function_with_name():
     assert result is not None
     assert result["type"] == "tool"
     assert result["name"] == "my_tool"
+
+
+def test_map_tool_choice_dict_type_auto():
+    """
+    Test that dict {"type": "auto"} maps to Anthropic type='auto'.
+    This handles Cursor's format for tool_choice.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "auto"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "auto"
+
+
+def test_map_tool_choice_dict_type_required():
+    """
+    Test that dict {"type": "required"} maps to Anthropic type='any'.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "required"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "any"
+
+
+def test_map_tool_choice_dict_type_none():
+    """
+    Test that dict {"type": "none"} maps to Anthropic type='none'.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "none"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "none"
+
+
+def test_map_tool_choice_dict_type_function_without_name():
+    """
+    Test that dict {"type": "function"} without name is handled gracefully.
+    Should return None since there's no valid tool name.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "function"},
+        parallel_tool_use=None,
+    )
+    assert result is None
 
 
 def test_transform_response_with_prefix_prompt():
@@ -679,6 +732,73 @@ def test_anthropic_chat_headers_add_context_management_beta():
         optional_params={"context_management": _sample_context_management_payload()},
     )
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def test_anthropic_beta_header_merging_with_output_format():
+    """
+    Test that anthropic-beta headers from extra_headers are merged with
+    output_format beta headers instead of being overridden.
+    
+    This is a regression test for: https://github.com/BerriAI/litellm/issues/...
+    When using response_format with a Pydantic model AND extra_headers with
+    anthropic-beta (e.g., for context-1m extension), both beta headers should
+    be present in the final request.
+    """
+    config = AnthropicConfig()
+    
+    # Simulate headers that already have the context-1m beta header from extra_headers
+    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+    
+    # Simulate output_format being set (happens when using response_format with Sonnet 4.5)
+    optional_params = {
+        "output_format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {}}
+        }
+    }
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
+    
+    # Both beta headers should be present
+    beta_value = result_headers["anthropic-beta"]
+    assert "context-1m-2025-08-07" in beta_value, \
+        f"User's context-1m beta header missing from: {beta_value}"
+    assert "structured-outputs-2025-11-13" in beta_value, \
+        f"Structured output beta header missing from: {beta_value}"
+
+
+def test_anthropic_beta_header_merging_with_multiple_features():
+    """
+    Test that multiple beta headers can be merged when using multiple features.
+    """
+    config = AnthropicConfig()
+    
+    # Start with a user-provided beta header
+    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+    
+    # Use multiple features that require beta headers
+    optional_params = {
+        "output_format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {}}
+        },
+        "context_management": _sample_context_management_payload(),
+        "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]
+    }
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
+    
+    beta_value = result_headers["anthropic-beta"]
+    
+    # All beta headers should be present
+    assert "context-1m-2025-08-07" in beta_value
+    assert "structured-outputs-2025-11-13" in beta_value
+    assert "context-management-2025-06-27" in beta_value
+    assert "web-fetch-2025-09-10" in beta_value
 
 
 def test_anthropic_chat_transform_request_includes_context_management():
@@ -923,7 +1043,7 @@ def test_server_tool_use_in_response():
         ]
     }
     
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -1051,7 +1171,7 @@ def test_tool_search_complete_response_parsing():
     }
     
     # Extract content
-    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results = config.extract_response_content(
+    text, citations, thinking_blocks, reasoning_content, tool_calls, web_search_results, tool_results = config.extract_response_content(
         completion_response
     )
 
@@ -1171,7 +1291,7 @@ def test_caller_field_in_response():
         "usage": {"input_tokens": 100, "output_tokens": 50}
     }
     
-    text, citations, thinking, reasoning, tool_calls, web_search_results = config.extract_response_content(completion_response)
+    text, citations, thinking, reasoning, tool_calls, web_search_results, tool_results = config.extract_response_content(completion_response)
 
     assert len(tool_calls) == 1
     assert tool_calls[0]["id"] == "toolu_123"
@@ -1754,3 +1874,303 @@ def test_transform_request_respects_user_max_tokens():
     )
 
     assert result["max_tokens"] == 1000
+
+
+def test_calculate_usage_completion_tokens_details_always_populated():
+    """
+    Test that completion_tokens_details is always populated in Usage object,
+    not just when there's reasoning_content.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/18772
+    Bug: completion_tokens_details was None for regular Claude responses without reasoning
+    """
+    config = AnthropicConfig()
+
+    # Test without reasoning_content - completion_tokens_details should still be populated
+    usage_object = {
+        "input_tokens": 37,
+        "output_tokens": 248,
+    }
+    usage = config.calculate_usage(usage_object=usage_object, reasoning_content=None)
+    
+    # completion_tokens_details should NOT be None
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is 0
+    assert usage.completion_tokens_details.text_tokens == 248
+    assert usage.completion_tokens == 248
+    assert usage.prompt_tokens == 37
+    assert usage.total_tokens == 285
+
+
+def test_calculate_usage_completion_tokens_details_with_reasoning():
+    """
+    Test that completion_tokens_details correctly splits text_tokens and reasoning_tokens
+    when reasoning_content is present.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/18772
+    """
+    config = AnthropicConfig()
+
+    # Test with reasoning_content - should split tokens correctly
+    usage_object = {
+        "input_tokens": 100,
+        "output_tokens": 500,
+    }
+    # Simulating reasoning content that would count as ~50 tokens
+    reasoning_content = "Let me think about this step by step. " * 10  # Roughly 50 tokens
+    
+    usage = config.calculate_usage(
+        usage_object=usage_object, 
+        reasoning_content=reasoning_content
+    )
+    
+    # completion_tokens_details should be populated with both reasoning and text tokens
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.reasoning_tokens is not None
+    assert usage.completion_tokens_details.reasoning_tokens > 0
+    # text_tokens should be total minus reasoning
+    expected_text_tokens = 500 - usage.completion_tokens_details.reasoning_tokens
+    assert usage.completion_tokens_details.text_tokens == expected_text_tokens
+    assert usage.completion_tokens == 500
+
+
+def test_code_execution_tool_results_extraction():
+    """
+    Test that code execution tool results (bash_code_execution_tool_result, 
+    text_editor_code_execution_tool_result) are properly extracted and exposed 
+    in provider_specific_fields.
+    
+    Related to: https://github.com/BerriAI/litellm/issues/xxxxx
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+    
+    config = AnthropicConfig()
+    
+    # Mock Anthropic response with code execution tool results
+    mock_anthropic_response = {
+        "id": "msg_01XYZ",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {
+                "type": "text",
+                "text": "I'll calculate that for you."
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01ABC",
+                "name": "bash_code_execution",
+                "input": {
+                    "command": "python3 << 'EOF'\nprint(2 + 2)\nEOF\n"
+                }
+            },
+            {
+                "type": "bash_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01ABC",
+                "content": {
+                    "type": "bash_code_execution_result",
+                    "stdout": "4\n",
+                    "stderr": "",
+                    "return_code": 0
+                }
+            },
+            {
+                "type": "server_tool_use",
+                "id": "srvtoolu_01DEF",
+                "name": "text_editor_code_execution",
+                "input": {
+                    "command": "create",
+                    "path": "test.txt",
+                    "file_text": "Hello"
+                }
+            },
+            {
+                "type": "text_editor_code_execution_tool_result",
+                "tool_use_id": "srvtoolu_01DEF",
+                "content": {
+                    "type": "text_editor_code_execution_result",
+                    "is_file_update": False
+                }
+            },
+            {
+                "type": "text",
+                "text": "Done!"
+            }
+        ],
+        "stop_reason": "stop",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50
+        }
+    }
+    
+    # Create mock HTTP response
+    mock_raw_response = MagicMock(spec=httpx.Response)
+    mock_raw_response.json.return_value = mock_anthropic_response
+    mock_raw_response.status_code = 200
+    mock_raw_response.headers = {}
+    
+    model_response = ModelResponse()
+    
+    transformed_response = config.transform_parsed_response(
+        completion_response=mock_anthropic_response,
+        raw_response=mock_raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    
+    # Verify tool calls are present
+    assert transformed_response.choices[0].message.tool_calls is not None
+    assert len(transformed_response.choices[0].message.tool_calls) == 2
+    
+    # Verify first tool call
+    assert transformed_response.choices[0].message.tool_calls[0].id == "srvtoolu_01ABC"
+    assert transformed_response.choices[0].message.tool_calls[0].function.name == "bash_code_execution"
+    
+    # Verify second tool call
+    assert transformed_response.choices[0].message.tool_calls[1].id == "srvtoolu_01DEF"
+    assert transformed_response.choices[0].message.tool_calls[1].function.name == "text_editor_code_execution"
+    
+    # Verify tool results are in provider_specific_fields
+    provider_fields = transformed_response.choices[0].message.provider_specific_fields
+    assert provider_fields is not None
+    assert "tool_results" in provider_fields
+    assert provider_fields["tool_results"] is not None
+    assert len(provider_fields["tool_results"]) == 2
+    
+    # Verify bash_code_execution_tool_result
+    bash_result = provider_fields["tool_results"][0]
+    assert bash_result["type"] == "bash_code_execution_tool_result"
+    assert bash_result["tool_use_id"] == "srvtoolu_01ABC"
+    assert bash_result["content"]["stdout"] == "4\n"
+    assert bash_result["content"]["return_code"] == 0
+    
+    # Verify text_editor_code_execution_tool_result
+    editor_result = provider_fields["tool_results"][1]
+    assert editor_result["type"] == "text_editor_code_execution_tool_result"
+    assert editor_result["tool_use_id"] == "srvtoolu_01DEF"
+    assert editor_result["content"]["is_file_update"] is False
+    
+    # Verify text content is properly concatenated
+    assert "I'll calculate that for you." in transformed_response.choices[0].message.content
+    assert "Done!" in transformed_response.choices[0].message.content
+
+
+def test_tool_search_tool_result_not_in_tool_results():
+    """
+    Test that tool_search_tool_result is NOT included in tool_results
+    since it's internal metadata, not actual tool execution results.
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+    
+    config = AnthropicConfig()
+    
+    mock_anthropic_response = {
+        "id": "msg_01XYZ",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {
+                "type": "text",
+                "text": "Found tools."
+            },
+            {
+                "type": "tool_search_tool_result",
+                "tool_references": ["tool1", "tool2"]
+            }
+        ],
+        "stop_reason": "stop",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50
+        }
+    }
+    
+    mock_raw_response = MagicMock(spec=httpx.Response)
+    mock_raw_response.json.return_value = mock_anthropic_response
+    mock_raw_response.status_code = 200
+    mock_raw_response.headers = {}
+    
+    model_response = ModelResponse()
+    
+    transformed_response = config.transform_parsed_response(
+        completion_response=mock_anthropic_response,
+        raw_response=mock_raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    
+    # Verify tool_search_tool_result is NOT in tool_results
+    provider_fields = transformed_response.choices[0].message.provider_specific_fields
+    assert provider_fields.get("tool_results") is None
+
+
+def test_web_search_tool_result_backwards_compatibility():
+    """
+    Test that web_search_tool_result continues to be stored in web_search_results
+    for backwards compatibility, not in tool_results.
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+    
+    config = AnthropicConfig()
+    
+    mock_anthropic_response = {
+        "id": "msg_01XYZ",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5-20250929",
+        "content": [
+            {
+                "type": "text",
+                "text": "Here are the results."
+            },
+            {
+                "type": "web_search_tool_result",
+                "search_query": "test query",
+                "results": [{"title": "Result 1", "url": "https://example.com"}]
+            }
+        ],
+        "stop_reason": "stop",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50
+        }
+    }
+    
+    mock_raw_response = MagicMock(spec=httpx.Response)
+    mock_raw_response.json.return_value = mock_anthropic_response
+    mock_raw_response.status_code = 200
+    mock_raw_response.headers = {}
+    
+    model_response = ModelResponse()
+    
+    transformed_response = config.transform_parsed_response(
+        completion_response=mock_anthropic_response,
+        raw_response=mock_raw_response,
+        model_response=model_response,
+        json_mode=False,
+        prefix_prompt=None,
+    )
+    
+    # Verify web_search_tool_result is in web_search_results (not tool_results)
+    provider_fields = transformed_response.choices[0].message.provider_specific_fields
+    assert "web_search_results" in provider_fields
+    assert provider_fields["web_search_results"] is not None
+    assert len(provider_fields["web_search_results"]) == 1
+    assert provider_fields["web_search_results"][0]["type"] == "web_search_tool_result"
+    
+    # Should NOT be in tool_results
+    assert provider_fields.get("tool_results") is None

@@ -1,10 +1,15 @@
 import useTeams from "@/app/(dashboard)/hooks/useTeams";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyResponse, Team } from "../key_team_helpers/key_list";
 import KeyInfoView from "./key_info_view";
 
 vi.mock("@/app/(dashboard)/hooks/useTeams", () => ({
+  default: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: vi.fn(),
 }));
 
@@ -85,17 +90,27 @@ describe("KeyInfoView", () => {
     key_rotation_at: undefined,
   };
 
+  // Base mock for useAuthorized hook
+  const baseUseAuthorizedMock = {
+    accessToken: "test-token",
+    userId: "test-user",
+    userRole: "admin",
+    premiumUser: true,
+    token: "test-token",
+    userEmail: null,
+    disabledPersonalKeyCreation: null,
+    showSSOBanner: false,
+  };
+
   it("should render tags", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
     const { getByText } = render(
       <KeyInfoView
         keyData={MOCK_KEY_DATA}
         onClose={() => {}}
         keyId={"test-key-id"}
         onKeyDataUpdate={() => {}}
-        accessToken={"test-token"}
-        userID={"test-user"}
-        userRole={"admin"}
-        premiumUser={true}
         teams={[]}
       />,
     );
@@ -105,16 +120,14 @@ describe("KeyInfoView", () => {
   });
 
   it("should not render tags in metadata textarea", async () => {
+    vi.mocked(useAuthorized).mockReturnValue(baseUseAuthorizedMock);
+
     const { container, getByText } = render(
       <KeyInfoView
         keyData={MOCK_KEY_DATA}
         onClose={() => {}}
         keyId={"test-key-id"}
         onKeyDataUpdate={() => {}}
-        accessToken={"test-token"}
-        userID={"test-user"}
-        userRole={"admin"}
-        premiumUser={true}
         teams={[]}
       />,
     );
@@ -132,19 +145,15 @@ describe("KeyInfoView", () => {
       setTeams: vi.fn(),
     });
 
+    vi.mocked(useAuthorized).mockReturnValue({
+      ...baseUseAuthorizedMock,
+      userId: "proxy-admin-user",
+      userRole: "proxy_admin",
+    });
+
     const keyData = { ...MOCK_KEY_DATA, user_id: "other-user-id" };
     render(
-      <KeyInfoView
-        keyData={keyData}
-        onClose={() => {}}
-        keyId={"test-key-id"}
-        onKeyDataUpdate={() => {}}
-        accessToken={"test-token"}
-        userID={"proxy-admin-user"}
-        userRole={"proxy_admin"}
-        premiumUser={true}
-        teams={[]}
-      />,
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
     );
 
     await waitFor(() => {
@@ -180,19 +189,15 @@ describe("KeyInfoView", () => {
       setTeams: vi.fn(),
     });
 
+    vi.mocked(useAuthorized).mockReturnValue({
+      ...baseUseAuthorizedMock,
+      userId: teamAdminUserId,
+      userRole: "user",
+    });
+
     const keyData = { ...MOCK_KEY_DATA, team_id: teamId, user_id: "other-user-id" };
     render(
-      <KeyInfoView
-        keyData={keyData}
-        onClose={() => {}}
-        keyId={"test-key-id"}
-        onKeyDataUpdate={() => {}}
-        accessToken={"test-token"}
-        userID={teamAdminUserId}
-        userRole={"user"}
-        premiumUser={true}
-        teams={[]}
-      />,
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
     );
 
     await waitFor(() => {
@@ -207,20 +212,16 @@ describe("KeyInfoView", () => {
       setTeams: vi.fn(),
     });
 
+    vi.mocked(useAuthorized).mockReturnValue({
+      ...baseUseAuthorizedMock,
+      userId: "owner-user-id",
+      userRole: "user",
+    });
+
     const ownerUserId = "owner-user-id";
     const keyData = { ...MOCK_KEY_DATA, user_id: ownerUserId };
     render(
-      <KeyInfoView
-        keyData={keyData}
-        onClose={() => {}}
-        keyId={"test-key-id"}
-        onKeyDataUpdate={() => {}}
-        accessToken={"test-token"}
-        userID={ownerUserId}
-        userRole={"user"}
-        premiumUser={true}
-        teams={[]}
-      />,
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
     );
 
     await waitFor(() => {
@@ -235,19 +236,15 @@ describe("KeyInfoView", () => {
       setTeams: vi.fn(),
     });
 
+    vi.mocked(useAuthorized).mockReturnValue({
+      ...baseUseAuthorizedMock,
+      userId: "other-user-id",
+      userRole: "user",
+    });
+
     const keyData = { ...MOCK_KEY_DATA, user_id: "owner-user-id" };
     render(
-      <KeyInfoView
-        keyData={keyData}
-        onClose={() => {}}
-        keyId={"test-key-id"}
-        onKeyDataUpdate={() => {}}
-        accessToken={"test-token"}
-        userID={"other-user-id"}
-        userRole={"user"}
-        premiumUser={true}
-        teams={[]}
-      />,
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
     );
 
     await waitFor(() => {
@@ -262,20 +259,60 @@ describe("KeyInfoView", () => {
       setTeams: vi.fn(),
     });
 
+    vi.mocked(useAuthorized).mockReturnValue({
+      ...baseUseAuthorizedMock,
+      userId: "internal-viewer-user-id",
+      userRole: "Internal Viewer",
+    });
+
     const ownerUserId = "internal-viewer-user-id";
     const keyData = { ...MOCK_KEY_DATA, user_id: ownerUserId };
     render(
-      <KeyInfoView
-        keyData={keyData}
-        onClose={() => {}}
-        keyId={"test-key-id"}
-        onKeyDataUpdate={() => {}}
-        accessToken={"test-token"}
-        userID={ownerUserId}
-        userRole={"Internal Viewer"}
-        premiumUser={true}
-        teams={[]}
-      />,
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
+    );
+
+    await waitFor(() => {
+      expect(screen.queryByText("Regenerate Key")).not.toBeInTheDocument();
+      expect(screen.queryByText("Delete Key")).not.toBeInTheDocument();
+    });
+  });
+
+  it("should handle case when teamsData exists but no team matches key team_id", async () => {
+    const differentTeamId = "different-team-id";
+    const mockTeam: Team = {
+      team_id: differentTeamId,
+      team_alias: "Different Team",
+      models: [],
+      max_budget: null,
+      budget_duration: null,
+      tpm_limit: null,
+      rpm_limit: null,
+      organization_id: "org-1",
+      created_at: "2025-01-01T00:00:00Z",
+      keys: [],
+      members_with_roles: [
+        {
+          user_id: "team-admin-user",
+          role: "admin",
+        },
+      ],
+    };
+
+    vi.mocked(useTeams).mockReturnValue({
+      teams: [mockTeam],
+      setTeams: vi.fn(),
+    });
+
+    vi.mocked(useAuthorized).mockReturnValue({
+      ...baseUseAuthorizedMock,
+      userId: "team-admin-user",
+      userRole: "user",
+    });
+
+    // Key has a different team_id that doesn't match any team in teamsData
+    const keyData = { ...MOCK_KEY_DATA, team_id: "non-matching-team-id", user_id: "other-user-id" };
+    render(
+      <KeyInfoView keyData={keyData} onClose={() => {}} keyId={"test-key-id"} onKeyDataUpdate={() => {}} teams={[]} />,
     );
 
     await waitFor(() => {

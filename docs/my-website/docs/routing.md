@@ -830,6 +830,12 @@ asyncio.run(router_acompletion())
 </TabItem>
 </Tabs>
 
+## Traffic Mirroring / Silent Experiments
+
+Traffic mirroring allows you to "mimic" production traffic to a secondary (silent) model for evaluation purposes. The silent model's response is gathered in the background and does not affect the latency or result of the primary request.
+
+[**See detailed guide on A/B Testing - Traffic Mirroring here**](./traffic_mirroring.md)
+
 ## Basic Reliability
 
 ### Deployment Ordering (Priority)
@@ -861,8 +867,12 @@ model_list = [
     },
 ]
 
-router = Router(model_list=model_list)
+router = Router(model_list=model_list, enable_pre_call_checks=True)  # 👈 Required for 'order' to work
 ```
+
+:::important
+The `order` parameter requires `enable_pre_call_checks=True` to be set on the Router.
+:::
 
 </TabItem>
 <TabItem value="proxy" label="PROXY">
@@ -880,6 +890,9 @@ model_list:
       model: azure/gpt-4-fallback
       api_key: os.environ/AZURE_API_KEY_2
       order: 2  # 👈 Used when order=1 is unavailable
+
+router_settings:
+  enable_pre_call_checks: true  # 👈 Required for 'order' to work
 ```
 
 </TabItem>
@@ -1325,6 +1338,10 @@ router = Router(model_list: Optional[list] = None,
 				 cache_kwargs= {}, # additional kwargs to pass to RedisCache (see caching.py)
 				 cache_responses=True)
 ```
+
+:::info
+When configuring Redis caching in router settings, use `cache_kwargs` to pass additional Redis parameters, especially for non-string values that may fail when set via `REDIS_*` environment variables.
+:::
 
 ## Pre-Call Checks (Context Window, EU-Regions)
 

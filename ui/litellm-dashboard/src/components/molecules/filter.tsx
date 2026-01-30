@@ -129,6 +129,8 @@ const FilterComponent: React.FC<FilterComponentProps> = ({
     "Key Alias",
     "User ID",
     "End User",
+    "Error Code",
+    "Error Message",
     "Key Hash",
     "Model",
   ];
