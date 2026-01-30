@@ -807,6 +807,247 @@ class TestContentTypeTransformation:
         assert result[1]["text"] == "another valid"
 
 
+class TestCustomToolTypes:
+    """Test cases for custom tool types (GPT-5.x+) support"""
+
+    def test_custom_tool_type_definition(self):
+        """Test that ChatCompletionCustomToolParam type works correctly"""
+        from litellm.types.llms.openai import (
+            ChatCompletionCustomToolParam,
+            ChatCompletionCustomToolParamChunk,
+        )
+
+        # Create a custom tool using the TypedDict
+        custom_chunk: ChatCompletionCustomToolParamChunk = {
+            "name": "code_exec",
+            "description": "Executes arbitrary python code",
+        }
+
+        custom_tool: ChatCompletionCustomToolParam = {
+            "type": "custom",
+            "custom": custom_chunk,
+        }
+
+        # Assert structure is correct
+        assert custom_tool["type"] == "custom"
+        assert custom_tool["custom"]["name"] == "code_exec"
+        assert custom_tool["custom"]["description"] == "Executes arbitrary python code"
+
+    def test_function_tool_type_definition(self):
+        """Test that ChatCompletionFunctionToolParam type works correctly"""
+        from litellm.types.llms.openai import (
+            ChatCompletionFunctionToolParam,
+            ChatCompletionToolParamFunctionChunk,
+        )
+
+        # Create a function tool using the TypedDict
+        function_chunk: ChatCompletionToolParamFunctionChunk = {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "location": {"type": "string"}
+                },
+                "required": ["location"]
+            },
+        }
+
+        function_tool: ChatCompletionFunctionToolParam = {
+            "type": "function",
+            "function": function_chunk,
+        }
+
+        # Assert structure is correct
+        assert function_tool["type"] == "function"
+        assert function_tool["function"]["name"] == "get_weather"
+
+    def test_transform_custom_tools_passthrough(self):
+        """Test that custom tools are passed through as-is in transformation"""
+        custom_tool = {
+            "type": "custom",
+            "custom": {
+                "name": "code_exec",
+                "description": "Executes arbitrary python code"
+            }
+        }
+
+        tools = [custom_tool]
+
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "custom"
+        assert result_tools[0]["custom"]["name"] == "code_exec"
+        assert result_tools[0]["custom"]["description"] == "Executes arbitrary python code"
+        assert web_search_options is None
+
+    def test_transform_custom_tool_with_minimal_fields(self):
+        """Test that custom tools with only required name field work"""
+        custom_tool = {
+            "type": "custom",
+            "custom": {
+                "name": "my_custom_tool"
+            }
+        }
+
+        tools = [custom_tool]
+
+        # Execute
+        result_tools, _ = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert
+        assert len(result_tools) == 1
+        assert result_tools[0]["type"] == "custom"
+        assert result_tools[0]["custom"]["name"] == "my_custom_tool"
+
+    def test_transform_mixed_function_and_custom_tools(self):
+        """Test transforming a list with both function and custom tools"""
+        tools = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather for a location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"}
+                    }
+                }
+            },
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "code_exec",
+                    "description": "Execute Python code"
+                }
+            },
+            {
+                "type": "function",
+                "name": "search",
+                "description": "Search the web",
+                "parameters": {
+                    "type": "object",
+                    "properties": {}
+                }
+            }
+        ]
+
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert
+        assert len(result_tools) == 3
+
+        # Check function tools
+        function_tools = [t for t in result_tools if t.get("type") == "function"]
+        assert len(function_tools) == 2
+
+        # Check custom tool
+        custom_tools = [t for t in result_tools if t.get("type") == "custom"]
+        assert len(custom_tools) == 1
+        assert custom_tools[0]["custom"]["name"] == "code_exec"
+
+        assert web_search_options is None
+
+    def test_transform_custom_tools_with_builtin_tools(self):
+        """Test transforming custom tools alongside OpenAI built-in tools"""
+        tools = [
+            {
+                "type": "custom",
+                "custom": {
+                    "name": "code_exec",
+                    "description": "Execute code"
+                }
+            },
+            {
+                "type": "web_search_preview",
+                "search_context_size": "medium"
+            },
+            {
+                "type": "file_search"
+            }
+        ]
+
+        # Execute
+        result_tools, web_search_options = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
+            tools=tools
+        )
+
+        # Assert: custom tool and file_search should be in tools
+        # web_search_preview becomes web_search_options
+        assert len(result_tools) == 2
+
+        # Custom tool
+        custom_tools = [t for t in result_tools if t.get("type") == "custom"]
+        assert len(custom_tools) == 1
+        assert custom_tools[0]["custom"]["name"] == "code_exec"
+
+        # File search (built-in tool passed through)
+        file_search_tools = [t for t in result_tools if t.get("type") == "file_search"]
+        assert len(file_search_tools) == 1
+
+        # Web search options
+        assert web_search_options is not None
+        assert web_search_options.get("search_context_size") == "medium"
+
+    def test_openai_chat_completion_tool_param_union_accepts_custom(self):
+        """Test that OpenAIChatCompletionToolParam Union accepts custom tools"""
+        from litellm.types.llms.openai import OpenAIChatCompletionToolParam
+
+        # This should be valid according to the Union type
+        custom_tool: OpenAIChatCompletionToolParam = {
+            "type": "custom",
+            "custom": {
+                "name": "test_tool",
+                "description": "A test tool"
+            }
+        }
+
+        # Should not raise any errors
+        assert custom_tool["type"] == "custom"
+
+    def test_openai_chat_completion_tool_param_union_accepts_function(self):
+        """Test that OpenAIChatCompletionToolParam Union accepts function tools"""
+        from litellm.types.llms.openai import OpenAIChatCompletionToolParam
+
+        # This should be valid according to the Union type
+        function_tool: OpenAIChatCompletionToolParam = {
+            "type": "function",
+            "function": {
+                "name": "test_function",
+                "description": "A test function",
+                "parameters": {"type": "object"}
+            }
+        }
+
+        # Should not raise any errors
+        assert function_tool["type"] == "function"
+
+    def test_openai_chat_completion_tool_param_union_accepts_arbitrary_dict(self):
+        """Test that OpenAIChatCompletionToolParam Union accepts arbitrary dicts for forward compatibility"""
+        from litellm.types.llms.openai import OpenAIChatCompletionToolParam
+
+        # This should be valid for forward compatibility with new tool types
+        future_tool: OpenAIChatCompletionToolParam = {
+            "type": "future_tool_type",
+            "future_field": {
+                "some_config": "value"
+            }
+        }
+
+        # Should not raise any errors
+        assert future_tool["type"] == "future_tool_type"
+
+
 class TestToolTransformation:
     """Test cases for tool transformation from Responses API to Chat Completion format"""
 
