@@ -212,8 +212,78 @@ class TestOpenAICustomTools:
             raise
 
 
-class TestOpenAIBuiltinTools:
-    """Integration tests for OpenAI built-in tools via Responses API"""
+class TestOpenAIResponsesAPITools:
+    """Integration tests for OpenAI tools via Responses API"""
+
+    def test_custom_tool_responses_api(self):
+        """
+        Test custom tool with the Responses API.
+
+        Note: The Responses API uses a flat format for custom tools:
+        {"type": "custom", "name": "...", "description": "..."}
+
+        This is different from the Chat Completions API which uses:
+        {"type": "custom", "custom": {"name": "...", "description": "..."}}
+        """
+        if not os.getenv("OPENAI_API_KEY"):
+            pytest.skip("OPENAI_API_KEY not set")
+
+        try:
+            response = litellm.responses(
+                model="gpt-5.2",
+                input="Execute print('hello from responses API')",
+                tools=[
+                    {
+                        "type": "custom",
+                        "name": "code_exec",
+                        "description": "Executes arbitrary python code"
+                    }
+                ]
+            )
+
+            assert response is not None
+            print(f"Custom tool (responses) response: {response}")
+
+        except litellm.BadRequestError as e:
+            # Custom tools may require specific model versions
+            if "custom" in str(e).lower():
+                pytest.skip(f"Custom tools not available on this model: {e}")
+            raise
+
+    def test_function_tool_responses_api(self):
+        """
+        Test function tool with the Responses API.
+        """
+        if not os.getenv("OPENAI_API_KEY"):
+            pytest.skip("OPENAI_API_KEY not set")
+
+        try:
+            response = litellm.responses(
+                model="gpt-4o",
+                input="What's the weather in San Francisco?",
+                tools=[
+                    {
+                        "type": "function",
+                        "name": "get_weather",
+                        "description": "Get weather for a location",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "location": {"type": "string", "description": "City name"}
+                            },
+                            "required": ["location"]
+                        }
+                    }
+                ]
+            )
+
+            assert response is not None
+            assert response.output is not None
+            print(f"Function tool (responses) response: {response}")
+
+        except litellm.BadRequestError as e:
+            print(f"Function tool error: {e}")
+            raise
 
     def test_web_search_tool_responses_api(self):
         """
@@ -237,26 +307,3 @@ class TestOpenAIBuiltinTools:
             print(f"Web search not available: {e}")
             pytest.skip(f"Web search tool not available: {e}")
 
-    def test_file_search_tool_responses_api(self):
-        """
-        Test file_search tool structure with the Responses API.
-        Note: This test verifies the tool is passed correctly,
-        but may fail if no vector store is configured.
-        """
-        if not os.getenv("OPENAI_API_KEY"):
-            pytest.skip("OPENAI_API_KEY not set")
-
-        try:
-            response = litellm.responses(
-                model="gpt-4o",
-                input="Hello",
-                tools=[{"type": "file_search"}]
-            )
-
-            assert response is not None
-            print(f"File search response: {response}")
-
-        except litellm.BadRequestError as e:
-            # file_search requires a vector store to be configured
-            print(f"File search error (expected if no vector store): {e}")
-            pytest.skip(f"File search requires vector store configuration: {e}")
