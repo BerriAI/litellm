@@ -296,9 +296,9 @@ class AnthropicMessagesDocumentParam(TypedDict, total=False):
     citations: Optional[CitationsObject]
 
 
-class AnthropicMessagesToolResultContent(TypedDict):
-    type: Literal["text"]
-    text: str
+class AnthropicMessagesToolResultContent(TypedDict, total=False):
+    type: Required[Literal["text"]]
+    text: Required[str]
     cache_control: Optional[Union[dict, ChatCompletionCachedContent]]
 
 
@@ -647,4 +647,4 @@ ANTHROPIC_EFFORT_BETA_HEADER = "effort-2025-11-24"
 ANTHROPIC_OAUTH_TOKEN_PREFIX = "sk-ant-oat"
 ANTHROPIC_OAUTH_BETA_HEADER = "oauth-2025-04-20"
 
-
+ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER = "prompt-caching-scope-2026-01-05"

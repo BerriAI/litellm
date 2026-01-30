@@ -9,6 +9,7 @@ import asyncio
 import contextvars
 import os
 import time
+import uuid
 from functools import partial
 from typing import Any, Coroutine, Dict, Literal, Optional, Union, cast
 
@@ -61,7 +62,7 @@ async def acreate_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
     expires_after: Optional[FileExpiresAfter] = None,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "manus"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -106,7 +107,7 @@ def create_file(
     file: FileTypes,
     purpose: Literal["assistants", "batch", "fine-tune"],
     expires_after: Optional[FileExpiresAfter] = None,
-    custom_llm_provider: Optional[Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "manus"]] = None,
+    custom_llm_provider: Optional[Literal["openai", "azure", "gemini", "vertex_ai", "bedrock", "hosted_vllm", "manus"]] = None,
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -294,7 +295,7 @@ def create_file(
 @client
 async def afile_retrieve(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "hosted_vllm", "manus"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "gemini", "hosted_vllm", "manus"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -493,7 +494,7 @@ def file_retrieve(
 @client
 async def afile_delete(
     file_id: str,
-    custom_llm_provider: Literal["openai", "azure", "manus"] = "openai",
+    custom_llm_provider: Literal["openai", "azure", "gemini", "manus"] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -537,7 +538,7 @@ async def afile_delete(
 def file_delete(
     file_id: str,
     model: Optional[str] = None,
-    custom_llm_provider: Union[Literal["openai", "azure", "manus"], str] = "openai",
+    custom_llm_provider: Union[Literal["openai", "azure", "gemini", "manus"], str] = "openai",
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
@@ -680,7 +681,7 @@ def file_delete(
                 )
             else:
                 raise litellm.exceptions.BadRequestError(
-                    message="LiteLLM doesn't support {} for 'file_delete'. Only 'openai', 'azure', and 'manus' are supported.".format(
+                    message="LiteLLM doesn't support {} for 'file_delete'. Only 'openai', 'azure', 'gemini', and 'manus' are supported.".format(
                         custom_llm_provider
                     ),
                     model="n/a",

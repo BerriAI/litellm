@@ -18,13 +18,54 @@ router = APIRouter()
 ########################################################
 
 
+def _check_vector_store_access(
+    vector_store: LiteLLM_ManagedVectorStore,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """
+    Check if the user has access to the vector store based on team membership.
+    
+    Args:
+        vector_store: The vector store to check access for
+        user_api_key_dict: User API key authentication info
+        
+    Returns:
+        True if user has access, False otherwise
+        
+    Access rules:
+    - If vector store has no team_id, it's accessible to all (legacy behavior)
+    - If user's team_id matches the vector store's team_id, access is granted
+    - Otherwise, access is denied
+    """
+    vector_store_team_id = vector_store.get("team_id")
+    
+    # If vector store has no team_id, it's accessible to all (legacy behavior)
+    if vector_store_team_id is None:
+        return True
+    
+    # Check if user's team matches the vector store's team
+    user_team_id = user_api_key_dict.team_id
+    if user_team_id == vector_store_team_id:
+        return True
+    
+    return False
+
+
 def _update_request_data_with_litellm_managed_vector_store_registry(
     data: Dict,
     vector_store_id: str,
+    user_api_key_dict: Optional[UserAPIKeyAuth] = None,
 ) -> Dict:
     """
     Update the request data with the litellm managed vector store registry.
-
+    
+    Args:
+        data: Request data to update
+        vector_store_id: ID of the vector store
+        user_api_key_dict: User API key authentication info for access control
+        
+    Raises:
+        HTTPException: If user doesn't have access to the vector store
     """
     if litellm.vector_store_registry is not None:
         vector_store_to_run: Optional[LiteLLM_ManagedVectorStore] = (
@@ -33,6 +74,14 @@ def _update_request_data_with_litellm_managed_vector_store_registry(
             )
         )
         if vector_store_to_run is not None:
+            # Check access control if user_api_key_dict is provided
+            if user_api_key_dict is not None:
+                if not _check_vector_store_access(vector_store_to_run, user_api_key_dict):
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Access denied: You do not have permission to access this vector store",
+                    )
+            
             if "custom_llm_provider" in vector_store_to_run:
                 data["custom_llm_provider"] = vector_store_to_run.get(
                     "custom_llm_provider"
@@ -88,7 +137,7 @@ async def vector_store_search(
         data["vector_store_id"] = vector_store_id
 
     data = _update_request_data_with_litellm_managed_vector_store_registry(
-        data=data, vector_store_id=vector_store_id
+        data=data, vector_store_id=vector_store_id, user_api_key_dict=user_api_key_dict
     )
 
     processor = ProxyBaseLLMRequestProcessing(data=data)

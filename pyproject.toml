@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "litellm"
-version = "1.81.4"
+version = "1.81.5"
 description = "Library to easily interface with LLM API providers"
 authors = ["BerriAI"]
 license = "MIT"
@@ -45,7 +45,7 @@ orjson = {version = "^3.9.7", optional = true}
 apscheduler = {version = "^3.10.4", optional = true}
 fastapi-sso = { version = "^0.16.0", optional = true }
 PyJWT = { version = "^2.10.1", optional = true, python = ">=3.9" }
-python-multipart = { version = "^0.0.18", optional = true}
+python-multipart = { version = "^0.0.22", optional = true}
 cryptography = {version = "*", optional = true}
 prisma = {version = "0.11.0", optional = true}
 azure-identity = {version = "^1.15.0", optional = true, python = ">=3.9"}
@@ -145,6 +145,7 @@ mypy = "^1.0"
 pytest = "^7.4.3"
 pytest-mock = "^3.12.0"
 pytest-asyncio = "^0.21.1"
+pytest-retry = "^1.6.3"
 requests-mock = "^1.12.1"
 responses = "^0.25.7"
 respx = "^0.22.0"
@@ -173,7 +174,7 @@ requires = ["poetry-core", "wheel"]
 build-backend = "poetry.core.masonry.api"
 
 [tool.commitizen]
-version = "1.81.4"
+version = "1.81.5"
 version_files = [
     "pyproject.toml:^version"
 ]
@@ -183,6 +184,8 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+retries = 20
+retry_delay = 5
 markers = [
     "asyncio: mark test as an asyncio test",
     "limit_leaks: mark test with memory limit for leak detection (e.g., '40 MB')",

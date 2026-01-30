@@ -60,6 +60,7 @@ async def test_completion_with_retry_policy(sync_mode):
 
     retry_number = 1
     retry_policy = RetryPolicy(
+        BadRequestErrorRetries=10,
         ContentPolicyViolationErrorRetries=retry_number,  # run 3 retries for ContentPolicyViolationErrors
         AuthenticationErrorRetries=0,  # run 0 retries for AuthenticationErrorRetries
     )

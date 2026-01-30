@@ -1108,3 +1108,309 @@ def test_streaming_chunk_with_both_text_and_tool_calls_issue_18238():
     assert block_type == "tool_use"
     assert content_block_start["name"] == "Bash"
     assert content_block_start["id"] == "toolu_bdrk_013xRVejhv3ybmLEGCoZib2b"
+
+
+# ============================================================================
+# Cache Control Transformation Tests
+# ============================================================================
+
+# Model constant for cache control tests
+CACHE_CONTROL_BEDROCK_CONVERSE_MODEL = "bedrock/converse/global.anthropic.claude-opus-4-5-20251101-v1:0"
+CACHE_CONTROL_NON_ANTHROPIC_MODEL = "gpt-4"
+
+
+def test_should_add_cache_control_for_anthropic_model():
+    """Should add cache_control to target for Anthropic Claude models."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral"}
+
+    for model in [
+        CACHE_CONTROL_BEDROCK_CONVERSE_MODEL,
+        "anthropic/claude-sonnet-4-5",
+        "claude-opus-4-5-20251101",
+        "vertex_ai/claude-3-sonnet@20240229",
+    ]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" in target
+        assert target["cache_control"] == cache_control
+
+
+def test_should_not_add_cache_control_for_non_anthropic_model():
+    """Should not add cache_control for non-Anthropic models."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral"}
+
+    for model in [CACHE_CONTROL_NON_ANTHROPIC_MODEL, "openai/gpt-4-turbo", "gemini-pro"]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" not in target
+
+
+def test_should_not_add_cache_control_when_none():
+    """Should not add cache_control when source has None or empty cache_control."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+
+    for source in [{"cache_control": None}, {"cache_control": {}}, {"cache_control": ""}, {}]:
+        target = {}
+        adapter._add_cache_control_if_applicable(source, target, CACHE_CONTROL_BEDROCK_CONVERSE_MODEL)
+        assert "cache_control" not in target
+
+
+def test_should_not_add_cache_control_when_model_none():
+    """Should not add cache_control when model is None or empty."""
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    cache_control = {"type": "ephemeral"}
+
+    for model in [None, ""]:
+        target = {}
+        adapter._add_cache_control_if_applicable({"cache_control": cache_control}, target, model)
+        assert "cache_control" not in target
+
+
+def test_cache_control_preserved_in_text_content_for_claude():
+    """Cache control should be preserved in text content for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_not_preserved_for_non_claude_model():
+    """Cache control should NOT be preserved for non-Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "text",
+                    "text": "This is cached content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_NON_ANTHROPIC_MODEL
+    )
+
+    assert len(result) == 1
+    assert "cache_control" not in result[0]["content"][0]
+
+
+def test_cache_control_preserved_in_image_content_for_claude():
+    """Cache control should be preserved in image content for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_document_content_for_claude():
+    """Cache control should be preserved in document content for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": "JVBERi0xLjQKJeLjz9MK",
+                    },
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_tool_result_for_claude():
+    """Cache control should be preserved in tool_result for Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Tool result content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    tool_message = next(msg for msg in result if msg.get("role") == "tool")
+    assert tool_message["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_not_preserved_in_tool_result_for_non_claude():
+    """Cache control should NOT be preserved in tool_result for non-Claude models."""
+    anthropic_messages = [
+        AnthropicMessagesUserMessageParam(
+            role="user",
+            content=[
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_01234",
+                    "content": "Tool result content",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_NON_ANTHROPIC_MODEL
+    )
+
+    tool_message = next(msg for msg in result if msg.get("role") == "tool")
+    assert "cache_control" not in tool_message
+
+
+def test_cache_control_preserved_in_assistant_text_for_claude():
+    """Cache control should be preserved in assistant text blocks for Claude models."""
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "text",
+                    "text": "Assistant response",
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["role"] == "assistant"
+    # When cache_control is present, content should be a list
+    assert isinstance(result[0]["content"], list)
+    assert result[0]["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_tool_use_for_claude():
+    """Cache control should be preserved in tool_use blocks for Claude models."""
+    anthropic_messages = [
+        AnthopicMessagesAssistantMessageParam(
+            role="assistant",
+            content=[
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01234",
+                    "name": "get_weather",
+                    "input": {"location": "Boston"},
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_messages_to_openai(
+        messages=anthropic_messages, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert "tool_calls" in result[0]
+    assert result[0]["tool_calls"][0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_preserved_in_tools_for_claude():
+    """Cache control should be preserved in tools for Claude models."""
+    tools = [
+        {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
+    )
+
+    assert len(result) == 1
+    assert result[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_cache_control_not_preserved_in_tools_for_non_claude():
+    """Cache control should NOT be preserved in tools for non-Claude models."""
+    tools = [
+        {
+            "name": "get_weather",
+            "description": "Get weather for a location",
+            "input_schema": {"type": "object", "properties": {"location": {"type": "string"}}},
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model=CACHE_CONTROL_NON_ANTHROPIC_MODEL
+    )
+
+    assert len(result) == 1
+    assert "cache_control" not in result[0]

@@ -9,6 +9,10 @@ import httpx
 
 import litellm
 from litellm import verbose_logger
+from litellm.integrations.braintrust_mock_client import (
+    should_use_braintrust_mock,
+    create_mock_braintrust_client,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
@@ -34,6 +38,10 @@ class BraintrustLogger(CustomLogger):
         self, api_key: Optional[str] = None, api_base: Optional[str] = None
     ) -> None:
         super().__init__()
+        self.is_mock_mode = should_use_braintrust_mock()
+        if self.is_mock_mode:
+            create_mock_braintrust_client()
+            verbose_logger.info("[BRAINTRUST MOCK] Braintrust logger initialized in mock mode")
         self.validate_environment(api_key=api_key)
         self.api_base = api_base or os.getenv("BRAINTRUST_API_BASE") or API_BASE
         self.default_project_id = None
@@ -254,6 +262,8 @@ class BraintrustLogger(CustomLogger):
                     json={"events": [request_data]},
                     headers=self.headers,
                 )
+                if self.is_mock_mode:
+                    print_verbose("[BRAINTRUST MOCK] Sync event successfully mocked")
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:
@@ -399,6 +409,8 @@ class BraintrustLogger(CustomLogger):
                     json={"events": [request_data]},
                     headers=self.headers,
                 )
+                if self.is_mock_mode:
+                    print_verbose("[BRAINTRUST MOCK] Async event successfully mocked")
             except httpx.HTTPStatusError as e:
                 raise Exception(e.response.text)
         except Exception as e:
