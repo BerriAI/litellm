@@ -141,6 +141,51 @@ def _cost_per_token_custom_pricing_helper(
     return None
 
 
+def _get_additional_costs(
+    model: str,
+    custom_llm_provider: Optional[str],
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> Optional[dict]:
+    """
+    Calculate additional costs beyond standard token costs.
+    
+    This function delegates to provider-specific config classes to calculate
+    any additional costs like routing fees, infrastructure costs, etc.
+    
+    Args:
+        model: The model name
+        custom_llm_provider: The provider name (optional)
+        prompt_tokens: Number of prompt tokens
+        completion_tokens: Number of completion tokens
+        
+    Returns:
+        Optional dictionary with cost names and amounts, or None if no additional costs
+    """
+    if not custom_llm_provider:
+        return None
+        
+    try:
+        config_class = None
+        if custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
+        # Add more providers here as needed
+        # elif custom_llm_provider == "other_provider":
+        #     config_class = get_other_provider_config(model)
+        
+        if config_class and hasattr(config_class, 'calculate_additional_costs'):
+            return config_class.calculate_additional_costs(
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+    except Exception as e:
+        verbose_logger.debug(f"Error calculating additional costs: {e}")
+    
+    return None
+
+
 def _transcription_usage_has_token_details(
     usage_block: Optional[Usage],
 ) -> bool:
@@ -1342,19 +1387,13 @@ def completion_cost(  # noqa: PLR0915
                     response=completion_response,
                 )
                 
-                # Get additional costs (e.g., Azure Model Router flat cost for azure_ai provider)
-                additional_costs: Optional[dict] = None
-                if custom_llm_provider == "azure_ai":
-                    from litellm.llms.azure_ai.cost_calculator import (
-                        calculate_azure_model_router_flat_cost,
-                    )
-                    azure_router_flat_cost = calculate_azure_model_router_flat_cost(
-                        model=model, prompt_tokens=prompt_tokens
-                    )
-                    if azure_router_flat_cost > 0:
-                        additional_costs = {
-                            "Azure Model Router Flat Cost": azure_router_flat_cost
-                        }
+                # Get additional costs from provider (e.g., routing fees, infrastructure costs)
+                additional_costs = _get_additional_costs(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
                 
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
