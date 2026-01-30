@@ -101,6 +101,23 @@ export const shouldRenderContentFilterConfigSettings = (provider: string | null)
   return providerEnum === "LiteLLM Content Filter";
 };
 
+const DEFAULT_SUPPORTED_MODES = ["pre_call", "during_call", "post_call", "logging_only"];
+
+/**
+ * Returns the list of mode options to show in the UI for a given provider.
+ * Content Filter cannot use during_call (MASK must run first); that option is excluded for that provider.
+ */
+export const getAvailableModesForProvider = (
+  provider: string | null,
+  supportedModes: string[] | undefined,
+): string[] => {
+  const base = supportedModes ?? DEFAULT_SUPPORTED_MODES;
+  if (shouldRenderContentFilterConfigSettings(provider)) {
+    return base.filter((m) => m !== "during_call");
+  }
+  return base;
+};
+
 const asset_logos_folder = "../ui/assets/logos/";
 
 export const guardrailLogoMap: Record<string, string> = {
