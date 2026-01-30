@@ -33,6 +33,7 @@ class PromptLiteLLMParams(BaseModel):
     ignore_prompt_manager_model: Optional[bool] = False
     ignore_prompt_manager_optional_params: Optional[bool] = False
 
+
     dotprompt_content: Optional[str] = None
     """
     allows saving the dotprompt file content
