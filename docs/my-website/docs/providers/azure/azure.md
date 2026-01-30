@@ -549,7 +549,8 @@ print(response)
 
 ### Entra ID - use `azure_ad_token`
 
-This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls 
+This is a walkthrough on how to use Azure Active Directory Tokens - Microsoft Entra ID to make `litellm.completion()` calls.  
+> **Note:** You can follow the same process below to use Azure Active Directory Tokens for all other Azure endpoints (e.g., chat, embeddings, image, audio, etc.) with LiteLLM.
 
 Step 1 - Download Azure CLI 
 Installation instructions: https://learn.microsoft.com/en-us/cli/azure/install-azure-cli

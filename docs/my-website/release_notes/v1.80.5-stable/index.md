@@ -27,7 +27,7 @@ import TabItem from '@theme/TabItem';
 docker run \
 -e STORE_MODEL_IN_DB=True \
 -p 4000:4000 \
-ghcr.io/berriai/litellm:v1.80.5-stable
+docker.litellm.ai/berriai/litellm:v1.80.5-stable
 ```
 
 </TabItem>
@@ -497,6 +497,11 @@ New interactive playground UI enables side-by-side comparison of multiple LLM mo
 * @justin-tahara made their first contribution in [PR #16957](https://github.com/BerriAI/litellm/pull/16957)
 * @wangsoft made their first contribution in [PR #16913](https://github.com/BerriAI/litellm/pull/16913)
 * @dsduenas made their first contribution in [PR #16891](https://github.com/BerriAI/litellm/pull/16891)
+
+---
+
+## Known Issues
+* `/audit` and `/user/available_users` routes return 404. Fixed in [PR #17337](https://github.com/BerriAI/litellm/pull/17337)
 
 ---
 

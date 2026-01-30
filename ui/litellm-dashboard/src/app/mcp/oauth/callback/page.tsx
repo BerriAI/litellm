@@ -6,6 +6,21 @@ import { useSearchParams } from "next/navigation";
 const RESULT_STORAGE_KEY = "litellm-mcp-oauth-result";
 const RETURN_URL_STORAGE_KEY = "litellm-mcp-oauth-return-url";
 
+const resolveDefaultRedirect = () => {
+  if (typeof window === "undefined") {
+    return "/ui";
+  }
+
+  const path = window.location.pathname || "";
+  const uiIndex = path.indexOf("/ui");
+  if (uiIndex >= 0) {
+    const prefix = path.slice(0, uiIndex + 3);
+    return prefix.endsWith("/") ? prefix : `${prefix}`;
+  }
+
+  return "/";
+};
+
 const McpOAuthCallbackPage = () => {
   const searchParams = useSearchParams();
 
@@ -33,11 +48,8 @@ const McpOAuthCallbackPage = () => {
 
     const returnUrl = window.sessionStorage.getItem(RETURN_URL_STORAGE_KEY);
     console.info("[MCP OAuth callback] returnUrl", returnUrl);
-    if (returnUrl) {
-      window.location.replace(returnUrl);
-    } else {
-      window.location.replace("/");
-    }
+    const destination = returnUrl || resolveDefaultRedirect();
+    window.location.replace(destination);
   }, [payload]);
 
   return (

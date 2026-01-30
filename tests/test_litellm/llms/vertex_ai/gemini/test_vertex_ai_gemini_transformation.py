@@ -1,8 +1,12 @@
-from litellm.llms.vertex_ai.gemini.transformation import (
-    check_if_part_exists_in_parts,
-    _transform_request_body,
-    _gemini_convert_messages_with_history,
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    convert_to_gemini_tool_call_result,
 )
+from litellm.llms.vertex_ai.gemini.transformation import (
+    _gemini_convert_messages_with_history,
+    _transform_request_body,
+    check_if_part_exists_in_parts,
+)
+from litellm.types.llms.vertex_ai import BlobType
 
 
 def test_check_if_part_exists_in_parts():
@@ -394,10 +398,11 @@ def test_thought_signature_with_function_call_mode():
 
 def test_dummy_signature_added_for_gemini_3_conversation_history():
     """Test that dummy signatures are added when transferring conversation history from older models (like gemini-2.5-flash) to gemini-3."""
+    import base64
+
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
     )
-    import base64
 
     # Simulate conversation history from gemini-2.5-flash (no thought signature)
     assistant_message_from_older_model = {
@@ -509,10 +514,11 @@ def test_dummy_signature_not_added_when_signature_exists():
 
 def test_dummy_signature_with_function_call_mode():
     """Test that dummy signatures are added for function_call mode when converting to gemini-3."""
+    import base64
+
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_gemini_tool_call_invoke,
     )
-    import base64
 
     # Assistant message with function_call (not tool_calls) and no signature
     assistant_message_function_call = {
@@ -538,3 +544,545 @@ def test_dummy_signature_with_function_call_mode():
     # Verify it's the expected dummy signature
     expected_dummy = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
     assert gemini_parts[0]["thoughtSignature"] == expected_dummy
+
+
+def test_convert_tool_response_with_base64_image():
+    """Test tool response with base64 data URI image."""
+    # Create a small test image (1x1 red pixel PNG)
+    test_image_base64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    image_data_uri = f"data:image/png;base64,{test_image_base64}"
+    
+    # Create tool message with image
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_test123",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"url": "https://example.com", "status": "success"}'
+            },
+            {
+                "type": "input_image",
+                "image_url": image_data_uri
+            }
+        ]
+    }
+    
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_test123",
+                "function": {
+                    "name": "click_at",
+                    "arguments": '{"x": 100, "y": 200}'
+                }
+            }
+        ]
+    }
+    
+    # Convert tool response (returns list when image is present)
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+    
+    # Verify results - should be a list with 2 parts (function_response + inline_data)
+    assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+    
+    # Find function_response part and inline_data part
+    function_response_part = None
+    inline_data_part = None
+    for part in result:
+        if "function_response" in part:
+            function_response_part = part
+        elif "inline_data" in part:
+            inline_data_part = part
+    
+    # Check function_response exists
+    assert function_response_part is not None, "Missing function_response part"
+    function_response = function_response_part["function_response"]
+    assert function_response["name"] == "click_at"
+    assert "response" in function_response
+    # Verify JSON response is parsed correctly
+    assert "url" in function_response["response"]
+    assert function_response["response"]["url"] == "https://example.com"
+    
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "image/png"
+    assert inline_data["data"] == test_image_base64
+
+
+def test_convert_tool_response_with_url_image():
+    """Test tool response with HTTP URL image (will download and convert)."""
+    import pytest
+
+    # Use a publicly accessible test image URL
+    test_image_url = "https://via.placeholder.com/1x1.png"
+    
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_test456",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"url": "https://example.com"}'
+            },
+            {
+                "type": "input_image",
+                "image_url": test_image_url
+            }
+        ]
+    }
+    
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_test456",
+                "function": {
+                    "name": "type_text_at",
+                    "arguments": '{"x": 300, "y": 400, "text": "hello"}'
+                }
+            }
+        ]
+    }
+    
+    try:
+        result = convert_to_gemini_tool_call_result(
+            tool_message, last_message_with_tool_calls
+        )
+        
+        # Should be a list with 2 parts when image is present
+        assert isinstance(result, list), f"Expected list when image present, got {type(result)}"
+        assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+        
+        # Find parts
+        function_response_part = next(p for p in result if "function_response" in p)
+        inline_data_part = next(p for p in result if "inline_data" in p)
+        
+        # Check function_response exists
+        assert function_response_part is not None, "Missing function_response part"
+        function_response = function_response_part["function_response"]
+        assert function_response["name"] == "type_text_at"
+        
+        # Check inline_data exists (URL should be downloaded and converted)
+        assert inline_data_part is not None, "Missing inline_data part"
+        inline_data: BlobType = inline_data_part["inline_data"]
+        assert "data" in inline_data
+        assert "mime_type" in inline_data
+    except Exception as e:
+        # Skip test if URL download fails (no internet connection, etc.)
+        pytest.skip(f"Failed to download image from URL: {e}")
+
+
+def test_convert_tool_response_text_only():
+    """Test tool response with only text (no image)."""
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_test789",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"status": "completed", "result": "success"}'
+            }
+        ]
+    }
+    
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_test789",
+                "function": {
+                    "name": "wait_5_seconds",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+    
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+    
+    # Should be a single part (no list) when no image
+    assert not isinstance(result, list), "Should return single part when no image"
+    
+    # Check function_response exists
+    assert "function_response" in result
+    function_response = result["function_response"]
+    assert function_response["name"] == "wait_5_seconds"
+    # Verify JSON response is parsed correctly
+    assert "status" in function_response["response"]
+    assert function_response["response"]["status"] == "completed"
+    
+    # Check inline_data does NOT exist (no image provided)
+    assert "inline_data" not in result
+
+
+def test_file_data_field_order():
+    """
+    Test that file_data fields are in the correct order (mime_type before file_uri).
+    
+    The Gemini API is sensitive to field order in the file_data object.
+    This test verifies that mime_type comes before file_uri in both:
+    1. Dictionary key order
+    2. JSON serialization
+    
+    Related issue: Gemini API returns 400 INVALID_ARGUMENT when fields are in wrong order.
+    """
+    import json
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+    
+    # Test with HTTPS URL and explicit format (audio file)
+    file_url = "https://generativelanguage.googleapis.com/v1beta/files/test123"
+    format = "audio/mpeg"
+    
+    result = _process_gemini_media(image_url=file_url, format=format)
+    
+    # Verify the result has file_data
+    assert "file_data" in result
+    file_data = result["file_data"]
+    
+    # Verify both fields are present
+    assert "mime_type" in file_data
+    assert "file_uri" in file_data
+    assert file_data["mime_type"] == "audio/mpeg"
+    assert file_data["file_uri"] == file_url
+    
+    # Verify field order by checking dictionary keys
+    # In Python 3.7+, dict maintains insertion order
+    file_data_keys = list(file_data.keys())
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
+        "mime_type must come before file_uri in the file_data dict"
+    
+    # Also verify by serializing to JSON string
+    json_str = json.dumps(file_data)
+    mime_type_pos = json_str.find('"mime_type"')
+    file_uri_pos = json_str.find('"file_uri"')
+    assert mime_type_pos < file_uri_pos, \
+        "mime_type must appear before file_uri in JSON serialization"
+
+
+def test_file_data_field_order_gcs_urls():
+    """Test that GCS URLs also maintain correct field order."""
+    import json
+    from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
+    
+    # Test with GCS URL
+    gcs_url = "gs://bucket/audio.mp3"
+    
+    result = _process_gemini_media(image_url=gcs_url)
+    
+    # Verify the result has file_data
+    assert "file_data" in result
+    file_data = result["file_data"]
+    
+    # Verify both fields are present
+    assert "mime_type" in file_data
+    assert "file_uri" in file_data
+    
+    # Verify field order
+    file_data_keys = list(file_data.keys())
+    assert file_data_keys.index("mime_type") < file_data_keys.index("file_uri"), \
+        "mime_type must come before file_uri in the file_data dict"
+
+
+def test_extract_file_data_with_path_object():
+    """
+    Test that filename is correctly extracted from Path objects for MIME type detection.
+    
+    When uploading files using Path objects (e.g., Path("speech.mp3")), the filename
+    must be extracted to enable proper MIME type detection. Without this, files get
+    uploaded with 'application/octet-stream' instead of the correct MIME type.
+    
+    Related issue: Files uploaded with wrong MIME type cause Gemini API to reject
+    requests where the specified format doesn't match the uploaded file's MIME type.
+    """
+    from pathlib import Path
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    import tempfile
+    import os
+    
+    # Create a temporary MP3 file
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp.write(b"fake mp3 content")
+        tmp_path = tmp.name
+    
+    try:
+        # Test with Path object
+        path_obj = Path(tmp_path)
+        extracted = extract_file_data(path_obj)
+        
+        # Verify filename was extracted
+        assert extracted["filename"] is not None
+        assert extracted["filename"].endswith(".mp3")
+        
+        # Verify MIME type was correctly detected
+        assert extracted["content_type"] == "audio/mpeg", \
+            f"Expected 'audio/mpeg' but got '{extracted['content_type']}'"
+        
+        # Verify content was read
+        assert extracted["content"] == b"fake mp3 content"
+        
+    finally:
+        # Clean up temporary file
+        os.unlink(tmp_path)
+
+
+def test_extract_file_data_with_string_path():
+    """Test that filename is correctly extracted from string paths."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    import tempfile
+    import os
+    
+    # Create a temporary WAV file
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        tmp.write(b"fake wav content")
+        tmp_path = tmp.name
+    
+    try:
+        # Test with string path
+        extracted = extract_file_data(tmp_path)
+        
+        # Verify filename was extracted
+        assert extracted["filename"] is not None
+        assert extracted["filename"].endswith(".wav")
+        
+        # Verify MIME type was correctly detected (can be audio/wav or audio/x-wav depending on system)
+        assert extracted["content_type"] in ["audio/wav", "audio/x-wav"], \
+            f"Expected 'audio/wav' or 'audio/x-wav' but got '{extracted['content_type']}'"
+        
+        # Verify content was read
+        assert extracted["content"] == b"fake wav content"
+        
+    finally:
+        # Clean up temporary file
+        os.unlink(tmp_path)
+
+
+def test_extract_file_data_with_tuple_format():
+    """Test that tuple format (with explicit content_type) still works correctly."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    
+    # Test with tuple format: (filename, content, content_type)
+    filename = "test_audio.mp3"
+    content = b"test audio content"
+    content_type = "audio/mpeg"
+    
+    extracted = extract_file_data((filename, content, content_type))
+    
+    # Verify all fields are correct
+    assert extracted["filename"] == filename
+    assert extracted["content"] == content
+    assert extracted["content_type"] == content_type
+
+
+def test_extract_file_data_fallback_to_octet_stream():
+    """Test that unknown file types fall back to application/octet-stream."""
+    from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
+    import tempfile
+    import os
+    
+    # Create a temporary file with unknown extension
+    with tempfile.NamedTemporaryFile(suffix=".xyz123", delete=False) as tmp:
+        tmp.write(b"unknown content")
+        tmp_path = tmp.name
+    
+    try:
+        # Test with unknown file type
+        extracted = extract_file_data(tmp_path)
+        
+        # Verify filename was extracted
+        assert extracted["filename"] is not None
+        assert extracted["filename"].endswith(".xyz123")
+        
+        # Verify MIME type falls back to octet-stream
+        assert extracted["content_type"] == "application/octet-stream", \
+            f"Expected 'application/octet-stream' for unknown type, got '{extracted['content_type']}'"
+
+    finally:
+        # Clean up temporary file
+        os.unlink(tmp_path)
+
+
+def test_convert_tool_response_with_pdf_file():
+    """Test tool response with PDF file content using file_data field."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with file
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_pdf_test",
+        "content": [
+            {
+                "type": "text",
+                "text": '{"status": "success", "pages": 1}'
+            },
+            {
+                "type": "file",
+                "file_data": file_data_uri
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_pdf_test",
+                "function": {
+                    "name": "analyze_document",
+                    "arguments": '{"path": "/tmp/doc.pdf"}'
+                }
+            }
+        ]
+    }
+
+    # Convert tool response (returns list when file is present)
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results - should be a list with 2 parts (function_response + inline_data)
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find function_response part and inline_data part
+    function_response_part = None
+    inline_data_part = None
+    for part in result:
+        if "function_response" in part:
+            function_response_part = part
+        elif "inline_data" in part:
+            inline_data_part = part
+
+    # Check function_response exists
+    assert function_response_part is not None, "Missing function_response part"
+    function_response = function_response_part["function_response"]
+    assert function_response["name"] == "analyze_document"
+    assert "response" in function_response
+    # Verify JSON response is parsed correctly
+    assert "status" in function_response["response"]
+    assert function_response["response"]["status"] == "success"
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "application/pdf"
+    assert inline_data["data"] == test_pdf_base64
+
+
+def test_convert_tool_response_with_input_file_type():
+    """Test tool response with input_file content type (Responses API format)."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with input_file type
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_input_file_test",
+        "content": [
+            {
+                "type": "input_file",
+                "file_data": file_data_uri
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_input_file_test",
+                "function": {
+                    "name": "read_file",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+
+    # Convert tool response
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find inline_data part
+    inline_data_part = None
+    for part in result:
+        if "inline_data" in part:
+            inline_data_part = part
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    assert inline_data_part["inline_data"]["mime_type"] == "application/pdf"
+
+
+def test_convert_tool_response_with_nested_file_object():
+    """Test tool response with file content using nested file object format."""
+    # Create a minimal test PDF (base64 encoded)
+    test_pdf_base64 = "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKdHJhaWxlcgo8PC9TaXplIDQvUm9vdCAxIDAgUj4+CnN0YXJ0eHJlZgoyMTYKJSVFT0Y="
+    file_data_uri = f"data:application/pdf;base64,{test_pdf_base64}"
+
+    # Create tool message with nested file object (OpenAI Agents SDK format)
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "call_nested_test",
+        "content": [
+            {
+                "type": "file",
+                "file": {
+                    "file_data": file_data_uri
+                }
+            }
+        ]
+    }
+
+    # Mock last message with tool calls
+    last_message_with_tool_calls = {
+        "tool_calls": [
+            {
+                "id": "call_nested_test",
+                "function": {
+                    "name": "process_document",
+                    "arguments": "{}"
+                }
+            }
+        ]
+    }
+
+    # Convert tool response
+    result = convert_to_gemini_tool_call_result(
+        tool_message, last_message_with_tool_calls
+    )
+
+    # Verify results - should be a list with 2 parts
+    assert isinstance(result, list), f"Expected list when file present, got {type(result)}"
+    assert len(result) == 2, f"Expected 2 parts, got {len(result)}"
+
+    # Find inline_data part
+    inline_data_part = None
+    for part in result:
+        if "inline_data" in part:
+            inline_data_part = part
+
+    # Check inline_data exists
+    assert inline_data_part is not None, "Missing inline_data part"
+    inline_data: BlobType = inline_data_part["inline_data"]
+    assert "data" in inline_data
+    assert "mime_type" in inline_data
+    assert inline_data["mime_type"] == "application/pdf"
+    assert inline_data["data"] == test_pdf_base64

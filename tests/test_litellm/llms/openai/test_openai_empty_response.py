@@ -95,3 +95,33 @@ class TestEmptyResponseHandling:
 
         assert response == mock_response
         assert headers == {"x-request-id": "123"}
+
+    def test_sync_streaming_response_passes_through_without_model_dump(self):
+        """
+        Test that streaming responses (which don't have model_dump) pass through
+        correctly without raising an error. This validates the fix for VLLM streaming.
+        """
+        openai_chat = OpenAIChatCompletion()
+
+        # Create a mock response WITHOUT model_dump (like an AsyncStream/Iterator)
+        mock_stream = MagicMock(spec=[])  # spec=[] means no attributes
+
+        mock_raw_response = MagicMock()
+        mock_raw_response.headers = {"x-request-id": "123"}
+        mock_raw_response.parse.return_value = mock_stream
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create.return_value = (
+            mock_raw_response
+        )
+
+        # Key: data has stream=True - this should bypass the model_dump check
+        headers, response = openai_chat.make_sync_openai_chat_completion_request(
+            openai_client=mock_client,
+            data={"messages": [{"role": "user", "content": "test"}], "stream": True},
+            timeout=30,
+            logging_obj=MagicMock(),
+        )
+
+        assert response == mock_stream
+        assert headers == {"x-request-id": "123"}

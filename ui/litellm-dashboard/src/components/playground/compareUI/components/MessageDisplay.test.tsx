@@ -17,6 +17,15 @@ vi.mock("../../chat_ui/SearchResultsDisplay", () => ({
   SearchResultsDisplay: () => <div data-testid="search-results">SearchResultsDisplay</div>,
 }));
 
+vi.mock("../../chat_ui/ChatImageRenderer", () => ({
+  default: ({ message }: { message: any }) =>
+    message.imagePreviewUrl ? (
+      <div data-testid="chat-image-renderer">
+        <img src={message.imagePreviewUrl} alt="User uploaded image" />
+      </div>
+    ) : null,
+}));
+
 describe("MessageDisplay", () => {
   it("should render", () => {
     const messages: MessageType[] = [
@@ -62,5 +71,25 @@ describe("MessageDisplay", () => {
     expect(getByText("calculator")).toBeInTheDocument();
     expect(getByText("2+2 equals 4")).toBeInTheDocument();
     expect(getByTestId("response-metrics")).toBeInTheDocument();
+  });
+
+  it("should display image attachment in user message", () => {
+    const messages: MessageType[] = [
+      {
+        role: "user",
+        content: "What is in this image? [Image attached]",
+        imagePreviewUrl: "blob:test-image-url",
+      },
+      {
+        role: "assistant",
+        content: "This is a test image",
+        model: "gpt-4",
+      },
+    ];
+    const { getByTestId, getByText } = render(<MessageDisplay messages={messages} isLoading={false} />);
+    expect(getByText("What is in this image? [Image attached]")).toBeInTheDocument();
+    expect(getByTestId("chat-image-renderer")).toBeInTheDocument();
+    const image = getByTestId("chat-image-renderer").querySelector("img");
+    expect(image).toHaveAttribute("src", "blob:test-image-url");
   });
 });

@@ -1,7 +1,7 @@
 import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { UploadOutlined } from "@ant-design/icons";
 import { Text, TextInput } from "@tremor/react";
-import { Button as Button2, Col, Form, Row, Select, Typography, Upload, UploadProps } from "antd";
+import { Button as Button2, Col, Form, Input, Row, Select, Typography, Upload, UploadProps } from "antd";
 import React from "react";
 import { CredentialItem, ProviderCredentialFieldMetadata } from "../networking";
 import { provider_map, Providers } from "../provider_info_helpers";
@@ -18,7 +18,7 @@ interface ProviderCredentialField {
   placeholder?: string;
   tooltip?: string;
   required?: boolean;
-  type?: "text" | "password" | "select" | "upload";
+  type?: "text" | "password" | "select" | "upload" | "textarea";
   options?: string[];
   defaultValue?: string;
 }
@@ -36,7 +36,9 @@ const mapFieldMetadataToUiField = (field: ProviderCredentialFieldMetadata): Prov
         ? "select"
         : field.field_type === "upload"
           ? "upload"
-          : "text";
+          : field.field_type === "textarea"
+            ? "textarea"
+            : "text";
 
   return {
     key: field.key,
@@ -247,6 +249,13 @@ const ProviderSpecificFields: React.FC<ProviderSpecificFieldsProps> = ({ selecte
               >
                 <Button2 icon={<UploadOutlined />}>Click to Upload</Button2>
               </Upload>
+            ) : field.type === "textarea" ? (
+              <Input.TextArea
+                placeholder={field.placeholder}
+                defaultValue={field.defaultValue}
+                rows={6}
+                style={{ fontFamily: "monospace", fontSize: "12px" }}
+              />
             ) : (
               <TextInput
                 placeholder={field.placeholder}

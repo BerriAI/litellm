@@ -6,7 +6,7 @@ The A2A SDK can point to LiteLLM's URL and invoke agents registered with LiteLLM
 """
 
 import json
-from typing import Any, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -46,35 +46,81 @@ def _get_agent(agent_id: str):
 
 
 async def _handle_stream_message(
-    a2a_client: Any,
+    api_base: Optional[str],
     request_id: str,
     params: dict,
+    litellm_params: Optional[dict] = None,
+    agent_id: Optional[str] = None,
+    metadata: Optional[dict] = None,
+    proxy_server_request: Optional[dict] = None,
 ) -> StreamingResponse:
-    """Handle message/stream method."""
-    from a2a.types import MessageSendParams, SendStreamingMessageRequest
+    """Handle message/stream method via SDK functions."""
+    from litellm.a2a_protocol import asend_message_streaming
+    from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
 
-    a2a_request = SendStreamingMessageRequest(
-        id=request_id,
-        params=MessageSendParams(**params),
+    # Check is handled in invoke_agent_a2a, but if called directly:
+    if not A2A_SDK_AVAILABLE:
+        # Return a streaming response that yields an error
+        async def _error_stream():
+            yield json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {
+                        "code": -32603,
+                        "message": "Server error: 'a2a' package not installed",
+                    },
+                }
+            ) + "\n"
+
+        return StreamingResponse(_error_stream(), media_type="application/x-ndjson")
+
+    from a2a.types import (
+        MessageSendParams,
+        SendStreamingMessageRequest,
     )
 
     async def stream_response():
         try:
-            async for chunk in a2a_client.send_message_streaming(a2a_request):
-                yield json.dumps(chunk.model_dump(mode="json", exclude_none=True)) + "\n"
+            a2a_request = SendStreamingMessageRequest(
+                id=request_id,
+                params=MessageSendParams(**params),
+            )
+            async for chunk in asend_message_streaming(
+                request=a2a_request,
+                api_base=api_base,
+                litellm_params=litellm_params,
+                agent_id=agent_id,
+                metadata=metadata,
+                proxy_server_request=proxy_server_request,
+            ):
+                # Chunk may be dict or object depending on bridge vs standard path
+                if hasattr(chunk, "model_dump"):
+                    yield json.dumps(
+                        chunk.model_dump(mode="json", exclude_none=True)
+                    ) + "\n"
+                else:
+                    yield json.dumps(chunk) + "\n"
         except Exception as e:
             verbose_proxy_logger.exception(f"Error streaming A2A response: {e}")
-            yield json.dumps({
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
-            }) + "\n"
+            yield json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request_id,
+                    "error": {"code": -32603, "message": f"Streaming error: {str(e)}"},
+                }
+            ) + "\n"
 
     return StreamingResponse(stream_response(), media_type="application/x-ndjson")
 
 
 @router.get(
     "/a2a/{agent_id}/.well-known/agent-card.json",
+    tags=["[beta] A2A Agents"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+@router.get(
+    "/a2a/{agent_id}/.well-known/agent.json",
     tags=["[beta] A2A Agents"],
     dependencies=[Depends(user_api_key_auth)],
 )
@@ -86,13 +132,32 @@ async def get_agent_card(
     """
     Get the agent card for an agent (A2A discovery endpoint).
 
+    Supports both standard paths:
+    - /.well-known/agent-card.json
+    - /.well-known/agent.json
+
     The URL in the agent card is rewritten to point to the LiteLLM proxy,
     so all subsequent A2A calls go through LiteLLM for logging and cost tracking.
     """
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
+
     try:
         agent = _get_agent(agent_id)
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found")
+
+        # Check agent permission (skip for admin users)
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent.agent_id,
+            user_api_key_auth=user_api_key_dict,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
 
         # Copy and rewrite URL to point to LiteLLM proxy
         agent_card = dict(agent.agent_card_params)
@@ -138,7 +203,11 @@ async def invoke_agent_a2a(
     - message/send: Send a message and get a response
     - message/stream: Send a message and stream the response
     """
-    from litellm.a2a_protocol import asend_message, create_a2a_client
+    from litellm.a2a_protocol import asend_message
+    from litellm.a2a_protocol.main import A2A_SDK_AVAILABLE
+    from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
+        AgentRequestHandler,
+    )
     from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
     from litellm.proxy.proxy_server import (
         general_settings,
@@ -153,30 +222,65 @@ async def invoke_agent_a2a(
 
         # Validate JSON-RPC format
         if body.get("jsonrpc") != "2.0":
-            return _jsonrpc_error(body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'")
+            return _jsonrpc_error(
+                body.get("id"), -32600, "Invalid Request: jsonrpc must be '2.0'"
+            )
 
         request_id = body.get("id")
         method = body.get("method")
         params = body.get("params", {})
 
+        if not A2A_SDK_AVAILABLE:
+            return _jsonrpc_error(
+                request_id,
+                -32603,
+                "Server error: 'a2a' package not installed. Please install 'a2a-sdk'.",
+                500,
+            )
+
         # Find the agent
         agent = _get_agent(agent_id)
         if agent is None:
-            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' not found", 404)
+            return _jsonrpc_error(
+                request_id, -32000, f"Agent '{agent_id}' not found", 404
+            )
+
+        is_allowed = await AgentRequestHandler.is_agent_allowed(
+            agent_id=agent.agent_id,
+            user_api_key_auth=user_api_key_dict,
+        )
+        if not is_allowed:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Agent '{agent_id}' is not allowed for your key/team. Contact proxy admin for access.",
+            )
 
         # Get backend URL and agent name
         agent_url = agent.agent_card_params.get("url")
         agent_name = agent.agent_card_params.get("name", agent_id)
-        if not agent_url:
-            return _jsonrpc_error(request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500)
 
-        verbose_proxy_logger.info(f"Proxying A2A request to agent '{agent_id}' at {agent_url}")
+        # Get litellm_params (may include custom_llm_provider for completion bridge)
+        litellm_params = agent.litellm_params or {}
+        custom_llm_provider = litellm_params.get("custom_llm_provider")
+
+        # URL is required unless using completion bridge with a provider that derives endpoint from model
+        # (e.g., bedrock/agentcore derives endpoint from ARN in model string)
+        if not agent_url and not custom_llm_provider:
+            return _jsonrpc_error(
+                request_id, -32000, f"Agent '{agent_id}' has no URL configured", 500
+            )
+
+        verbose_proxy_logger.info(
+            f"Proxying A2A request to agent '{agent_id}' at {agent_url or 'completion-bridge'}"
+        )
 
         # Set up data dict for litellm processing
-        body.update({
-            "model": f"a2a_agent/{agent_name}",
-            "custom_llm_provider": "a2a_agent",
-        })
+        body.update(
+            {
+                "model": f"a2a_agent/{agent_name}",
+                "custom_llm_provider": "a2a_agent",
+            }
+        )
 
         # Add litellm data (user_api_key, user_id, team_id, etc.)
         data = await add_litellm_data_to_request(
@@ -188,9 +292,7 @@ async def invoke_agent_a2a(
             version=version,
         )
 
-        # Create A2A client
-        a2a_client = await create_a2a_client(base_url=agent_url)
-
+        # Route through SDK functions
         if method == "message/send":
             from a2a.types import MessageSendParams, SendMessageRequest
 
@@ -198,18 +300,28 @@ async def invoke_agent_a2a(
                 id=request_id,
                 params=MessageSendParams(**params),
             )
-
-            # Pass litellm data through kwargs for proper logging
             response = await asend_message(
-                a2a_client=a2a_client,
                 request=a2a_request,
+                api_base=agent_url,
+                litellm_params=litellm_params,
+                agent_id=agent.agent_id,
                 metadata=data.get("metadata", {}),
                 proxy_server_request=data.get("proxy_server_request"),
             )
-            return JSONResponse(content=response.model_dump(mode="json", exclude_none=True))
+            return JSONResponse(
+                content=response.model_dump(mode="json", exclude_none=True)
+            )
 
         elif method == "message/stream":
-            return await _handle_stream_message(a2a_client, request_id, params)
+            return await _handle_stream_message(
+                api_base=agent_url,
+                request_id=request_id,
+                params=params,
+                litellm_params=litellm_params,
+                agent_id=agent.agent_id,
+                metadata=data.get("metadata", {}),
+                proxy_server_request=data.get("proxy_server_request"),
+            )
         else:
             return _jsonrpc_error(request_id, -32601, f"Method '{method}' not found")
 

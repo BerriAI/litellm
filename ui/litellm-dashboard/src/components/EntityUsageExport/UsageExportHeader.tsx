@@ -1,13 +1,14 @@
-import React, { useState } from "react";
+import type { DateRangePickerValue } from "@tremor/react";
 import { Button, Text } from "@tremor/react";
 import { Select } from "antd";
+import React, { useState } from "react";
 import EntityUsageExportModal from "./EntityUsageExportModal";
-import type { DateRangePickerValue } from "@tremor/react";
-import type { EntitySpendData } from "./types";
+import type { EntitySpendData, EntityType } from "./types";
+import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface UsageExportHeaderProps {
   dateValue: DateRangePickerValue;
-  entityType: "tag" | "team" | "organization";
+  entityType: EntityType;
   spendData: EntitySpendData;
   // Optional filter props
   showFilters?: boolean;
@@ -18,6 +19,7 @@ interface UsageExportHeaderProps {
   filterOptions?: Array<{ label: string; value: string }>;
   customTitle?: string;
   compactLayout?: boolean;
+  teams?: Team[];
 }
 
 const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
@@ -32,6 +34,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
   filterOptions = [],
   customTitle,
   compactLayout = false,
+  teams = [],
 }) => {
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
 
@@ -95,6 +98,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
         dateRange={dateValue}
         selectedFilters={selectedFilters}
         customTitle={customTitle}
+        teams={teams}
       />
     </>
   );

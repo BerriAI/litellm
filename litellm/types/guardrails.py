@@ -2,15 +2,11 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing_extensions import Required, TypedDict
 
-from litellm.types.llms.openai import ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
-)
-from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
-    GenericGuardrailAPIOptionalParams,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.grayswan import (
     GraySwanGuardrailConfigModel,
@@ -20,6 +16,12 @@ from litellm.types.proxy.guardrails.guardrail_hooks.ibm import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
+    QualifireGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
+    ContentFilterCategoryConfig,
 )
 
 """
@@ -44,6 +46,7 @@ class SupportedGuardrailIntegrations(Enum):
     LAKERA_V2 = "lakera_v2"
     PRESIDIO = "presidio"
     HIDE_SECRETS = "hide-secrets"
+    HIDDENLAYER = "hiddenlayer"
     AIM = "aim"
     PANGEA = "pangea"
     LASSO = "lasso"
@@ -61,8 +64,10 @@ class SupportedGuardrailIntegrations(Enum):
     ENKRYPTAI = "enkryptai"
     IBM_GUARDRAILS = "ibm_guardrails"
     LITELLM_CONTENT_FILTER = "litellm_content_filter"
+    ONYX = "onyx"
     PROMPT_SECURITY = "prompt_security"
     GENERIC_GUARDRAIL_API = "generic_guardrail_api"
+    QUALIFIRE = "qualifire"
 
 
 class Role(Enum):
@@ -262,6 +267,13 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default=None,
         description="Base URL for the Presidio anonymizer API",
     )
+    presidio_filter_scope: Optional[Literal["input", "output", "both"]] = Field(
+        default=None,
+        description=(
+            "Where to apply Presidio checks: 'input' (user -> model), "
+            "'output' (model -> user), or 'both' (default)."
+        ),
+    )
     output_parse_pii: Optional[bool] = Field(
         default=None,
         description="When True, LiteLLM will replace the masked text with the original text in the response",
@@ -272,6 +284,10 @@ class PresidioPresidioConfigModelUserInterface(BaseModel):
         default="en",
         description="Language code for Presidio PII analysis (e.g., 'en', 'de', 'es', 'fr')",
     )
+    presidio_run_on: Optional[Literal["input", "output", "both"]] = Field(
+        default=None,
+        description="Where to apply Presidio checks: input, output, or both (default).",
+    )
 
 
 class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
@@ -279,6 +295,20 @@ class PresidioConfigModel(PresidioPresidioConfigModelUserInterface):
 
     pii_entities_config: Optional[Dict[Union[PiiEntityType, str], PiiAction]] = Field(
         default=None, description="Configuration for PII entity types and actions"
+    )
+    presidio_filter_scope: Literal["input", "output", "both"] = Field(
+        default="both",
+        description=(
+            "Where to apply Presidio checks: 'input' runs on user → model traffic, "
+            "'output' runs on model → user traffic, and 'both' applies to both."
+        ),
+    )
+    presidio_score_thresholds: Optional[Dict[Union[PiiEntityType, str], float]] = Field(
+        default=None,
+        description=(
+            "Optional per-entity minimum confidence scores for Presidio detections. "
+            "Entities below the threshold are ignored."
+        ),
     )
     presidio_ad_hoc_recognizers: Optional[str] = Field(
         default=None,
@@ -359,6 +389,10 @@ class LakeraV2GuardrailConfigModel(BaseModel):
     dev_info: Optional[bool] = Field(
         default=True,
         description="Whether to include developer information in the response",
+    )
+    on_flagged: Optional[Literal["block", "monitor"]] = Field(
+        default="block",
+        description="Action to take when content is flagged: 'block' (raise exception) or 'monitor' (log only)",
     )
 
 
@@ -516,9 +550,27 @@ class ContentFilterConfigModel(BaseModel):
     blocked_words_file: Optional[str] = Field(
         default=None, description="Path to YAML file containing blocked_words list"
     )
+    categories: Optional[List[ContentFilterCategoryConfig]] = Field(
+        default=None,
+        description="List of prebuilt categories to enable (harmful_*, bias_*)",
+    )
+    severity_threshold: Optional[str] = Field(
+        default=None,
+        description="Minimum severity to block (high, medium, low)",
+    )
+    pattern_redaction_format: Optional[str] = Field(
+        default=None,
+        description="Format string for pattern redaction (use {pattern_name} placeholder)",
+    )
+    keyword_redaction_tag: Optional[str] = Field(
+        default=None,
+        description="Tag to use for keyword redaction",
+    )
 
 
-class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
+class BaseLitellmParams(
+    ContentFilterConfigModel
+):  # works for new and patch update guardrails
     api_key: Optional[str] = Field(
         default=None, description="API key for the guardrail service"
     )
@@ -599,7 +651,6 @@ class BaseLitellmParams(BaseModel):  # works for new and patch update guardrails
         description="Whether to fail the request if Model Armor encounters an error",
     )
 
-    # Generic Guardrail API params
     additional_provider_specific_params: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Additional provider-specific parameters for generic guardrail APIs",
@@ -626,15 +677,31 @@ class LitellmParams(
     ToolPermissionGuardrailConfigModel,
     ZscalerAIGuardConfigModel,
     JavelinGuardrailConfigModel,
-    ContentFilterConfigModel,
     BaseLitellmParams,
     EnkryptAIGuardrailConfigs,
     IBMGuardrailsBaseConfigModel,
+    QualifireGuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
     mode: Union[str, List[str], Mode] = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
+
+    @field_validator(
+        "mode",
+        "default_action",
+        "on_disallowed_action",
+        mode="before",
+        check_fields=False,
+    )
+    @classmethod
+    def normalize_lowercase(cls, v):
+        """Normalize string and list fields to lowercase for ALL guardrail types."""
+        if isinstance(v, str):
+            return v.lower()
+        if isinstance(v, list):
+            return [x.lower() if isinstance(x, str) else x for x in v]
+        return v
 
     def __init__(self, **kwargs):
         default_on = kwargs.pop("default_on", None)
@@ -642,6 +709,7 @@ class LitellmParams(
             kwargs["default_on"] = default_on
         else:
             kwargs["default_on"] = False
+
         super().__init__(**kwargs)
 
     def __contains__(self, key):
@@ -739,9 +807,3 @@ class PatchGuardrailRequest(BaseModel):
     guardrail_name: Optional[str] = None
     litellm_params: Optional[BaseLitellmParams] = None
     guardrail_info: Optional[Dict[str, Any]] = None
-
-
-class GenericGuardrailAPIInputs(TypedDict, total=False):
-    texts: List[str]
-    images: List[str]
-    tools: List[ChatCompletionToolParam]

@@ -25,6 +25,7 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_input_items": "/responses/{response_id}/input_items",
     "aimage_edit": "/images/edits",
     "acancel_responses": "/responses/{response_id}/cancel",
+    "acompact_responses": "/responses/compact",
     "aocr": "/ocr",
     "asearch": "/search",
     "avideo_generation": "/videos",
@@ -36,11 +37,22 @@ ROUTE_ENDPOINT_MAPPING = {
     "alist_containers": "/containers",
     "aretrieve_container": "/containers/{container_id}",
     "adelete_container": "/containers/{container_id}",
+    # Auto-generated container file routes
+    "aupload_container_file": "/containers/{container_id}/files",
+    "alist_container_files": "/containers/{container_id}/files",
+    "aretrieve_container_file": "/containers/{container_id}/files/{file_id}",
+    "adelete_container_file": "/containers/{container_id}/files/{file_id}",
+    "aretrieve_container_file_content": "/containers/{container_id}/files/{file_id}/content",
     "acreate_skill": "/skills",
     "alist_skills": "/skills",
     "aget_skill": "/skills/{skill_id}",
     "adelete_skill": "/skills/{skill_id}",
     "aingest": "/rag/ingest",
+    # Google Interactions API routes
+    "acreate_interaction": "/interactions",
+    "aget_interaction": "/interactions/{interaction_id}",
+    "adelete_interaction": "/interactions/{interaction_id}",
+    "acancel_interaction": "/interactions/{interaction_id}/cancel",
 }
 
 
@@ -106,6 +118,7 @@ async def route_request(
         "aget_responses",
         "adelete_responses",
         "acancel_responses",
+        "acompact_responses",
         "acreate_response_reply",
         "alist_input_items",
         "_arealtime",  # private function for realtime API
@@ -132,12 +145,21 @@ async def route_request(
         "alist_containers",
         "aretrieve_container",
         "adelete_container",
+        "aupload_container_file",
+        "alist_container_files",
+        "aretrieve_container_file",
+        "adelete_container_file",
+        "aretrieve_container_file_content",
         "acreate_skill",
         "alist_skills",
         "aget_skill",
         "adelete_skill",
         "aingest",
         "anthropic_messages",
+        "acreate_interaction",
+        "aget_interaction",
+        "adelete_interaction",
+        "acancel_interaction",
     ],
 ):
     """
@@ -159,24 +181,32 @@ async def route_request(
         else:
             return getattr(litellm, f"{route_type}")(**data)
 
-    elif "user_config" in data:
-        router_config = data.pop("user_config")
-        user_router = litellm.Router(**router_config)
-        ret_val = getattr(user_router, f"{route_type}")(**data)
-        user_router.discard()
-        return ret_val
-
     elif (
         route_type == "acompletion"
         and data.get("model", "") is not None
         and "," in data.get("model", "")
         and llm_router is not None
     ):
+        # Handle batch completions with comma-separated models BEFORE user_config check
+        # This ensures batch completion logic is applied even when user_config is set
         if data.get("fastest_response", False):
             return llm_router.abatch_completion_fastest_response(**data)
         else:
             models = [model.strip() for model in data.pop("model").split(",")]
             return llm_router.abatch_completion(models=models, **data)
+
+    elif "user_config" in data:
+        router_config = data.pop("user_config")
+
+        # Filter router_config to only include valid Router.__init__ arguments
+        # This prevents TypeError when invalid parameters are stored in the database
+        valid_args = litellm.Router.get_valid_args()
+        filtered_config = {k: v for k, v in router_config.items() if k in valid_args}
+
+        user_router = litellm.Router(**filtered_config)
+        ret_val = getattr(user_router, f"{route_type}")(**data)
+        user_router.discard()
+        return ret_val
     elif llm_router is not None:
         # Skip model-based routing for container operations
         if route_type in [
@@ -184,6 +214,19 @@ async def route_request(
             "alist_containers",
             "aretrieve_container",
             "adelete_container",
+            "aupload_container_file",
+            "alist_container_files",
+            "aretrieve_container_file",
+            "adelete_container_file",
+            "aretrieve_container_file_content",
+        ]:
+            return getattr(llm_router, f"{route_type}")(**data)
+        # Interactions API: create with agent, get/delete/cancel don't need model routing
+        if route_type in [
+            "acreate_interaction",
+            "aget_interaction",
+            "adelete_interaction",
+            "acancel_interaction",
         ]:
             return getattr(llm_router, f"{route_type}")(**data)
         if route_type in [
@@ -224,12 +267,9 @@ async def route_request(
         ):
             return getattr(llm_router, f"{route_type}")(**data)
 
-        elif data["model"] in llm_router.deployment_names:
-            return getattr(llm_router, f"{route_type}")(
-                **data, specific_deployment=True
-            )
-
         elif data["model"] not in router_model_names:
+            # Check wildcards before checking deployment_names
+            # Priority: 1. Exact model_name match, 2. Wildcard match, 3. deployment_names match
             if llm_router.router_general_settings.pass_through_all_models:
                 return getattr(litellm, f"{route_type}")(**data)
             elif (
@@ -237,6 +277,11 @@ async def route_request(
                 or len(llm_router.pattern_router.patterns) > 0
             ):
                 return getattr(llm_router, f"{route_type}")(**data)
+            elif data["model"] in llm_router.deployment_names:
+                # Only match deployment_names if no wildcard matched
+                return getattr(llm_router, f"{route_type}")(
+                    **data, specific_deployment=True
+                )
             elif route_type in [
                 "amoderation",
                 "aget_responses",
@@ -256,9 +301,25 @@ async def route_request(
                 "alist_containers",
                 "aretrieve_container",
                 "adelete_container",
+                "aupload_container_file",
+                "alist_container_files",
+                "aretrieve_container_file",
+                "adelete_container_file",
+                "aretrieve_container_file_content",
             ]:
-                # moderation endpoint does not require `model` parameter
+                # These endpoints can work with or without model parameter
                 return getattr(llm_router, f"{route_type}")(**data)
+            elif route_type in [
+                "avideo_status",
+                "avideo_content",
+                "avideo_remix",
+            ]:
+                # Video endpoints: If model is provided (e.g., from decoded video_id), try router first
+                try:
+                    return getattr(llm_router, f"{route_type}")(**data)
+                except Exception:
+                    # If router fails (e.g., model not found in router), fall back to direct call
+                    return getattr(litellm, f"{route_type}")(**data)
 
     elif user_model is not None:
         return getattr(litellm, f"{route_type}")(**data)

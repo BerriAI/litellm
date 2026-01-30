@@ -19,24 +19,22 @@ import {
 } from "@tremor/react";
 import { Form } from "antd";
 import { UploadProps } from "antd/es/upload";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import AddCredentialsTab from "./AddCredentialModal";
 import EditCredentialsModal from "./EditCredentialModal";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 interface CredentialsPanelProps {
-  accessToken: string | null;
   uploadProps: UploadProps;
-  credentialList: CredentialItem[];
-  fetchCredentials: (accessToken: string) => Promise<void>;
 }
 
-const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
-  accessToken,
-  uploadProps,
-  credentialList,
-  fetchCredentials,
-}) => {
+const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
+  const { accessToken } = useAuthorized();
+  const { data: credentialsResponse, refetch: refetchCredentials } = useCredentials();
+  const credentialList = credentialsResponse?.credentials || [];
+
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
   const [selectedCredential, setSelectedCredential] = useState<CredentialItem | null>(null);
@@ -66,7 +64,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
     await credentialUpdateCall(accessToken, values.credential_name, newCredential);
     NotificationsManager.success("Credential updated successfully");
     setIsUpdateModalOpen(false);
-    await fetchCredentials(accessToken);
+    await refetchCredentials();
   };
 
   const handleAddCredential = async (values: any) => {
@@ -90,15 +88,8 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
     await credentialCreateCall(accessToken, newCredential);
     NotificationsManager.success("Credential added successfully");
     setIsAddModalOpen(false);
-    await fetchCredentials(accessToken);
+    await refetchCredentials();
   };
-
-  useEffect(() => {
-    if (!accessToken) {
-      return;
-    }
-    fetchCredentials(accessToken);
-  }, [accessToken]);
 
   const renderProviderBadge = (provider: string) => {
     const providerColors: Record<string, string> = {
@@ -124,7 +115,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({
     try {
       await credentialDeleteCall(accessToken, credentialToDelete.credential_name);
       NotificationsManager.success("Credential deleted successfully");
-      await fetchCredentials(accessToken);
+      await refetchCredentials();
     } catch (error) {
       NotificationsManager.error("Failed to delete credential");
     } finally {

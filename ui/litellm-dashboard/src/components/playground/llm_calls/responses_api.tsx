@@ -4,6 +4,15 @@ import { TokenUsage } from "../chat_ui/ResponseMetrics";
 import { getProxyBaseUrl } from "@/components/networking";
 import NotificationManager from "@/components/molecules/notifications_manager";
 import { MCPEvent } from "../chat_ui/MCPEventsDisplay";
+import { MCPServer } from "../../mcp_tools/types";
+import {
+  CodeInterpreterResult,
+  CodeInterpreterState,
+  handleCodeInterpreterCall,
+  handleCodeInterpreterOutput,
+} from "./code_interpreter_handler";
+
+export type { CodeInterpreterResult } from "./code_interpreter_handler";
 
 export async function makeOpenAIResponsesRequest(
   messages: MessageType[],
@@ -18,13 +27,23 @@ export async function makeOpenAIResponsesRequest(
   traceId?: string,
   vector_store_ids?: string[],
   guardrails?: string[],
-  selectedMCPTools?: string[],
+  policies?: string[],
+  selectedMCPServers?: string[],
   previousResponseId?: string | null,
   onResponseId?: (responseId: string) => void,
   onMCPEvent?: (event: MCPEvent) => void,
+  codeInterpreterEnabled?: boolean,
+  onCodeInterpreterResult?: (result: CodeInterpreterResult) => void,
+  customBaseUrl?: string,
+  mcpServers?: MCPServer[],
+  mcpServerToolRestrictions?: Record<string, string[]>,
 ) {
   if (!accessToken) {
     throw new Error("Virtual Key is required");
+  }
+
+  if (!selectedModel || selectedModel.trim() === "") {
+    throw new Error("Model is required. Please select a model before sending a request.");
   }
 
   // Base URL should be the current base_url
@@ -33,7 +52,7 @@ export async function makeOpenAIResponsesRequest(
     console.log = function () {};
   }
 
-  const proxyBaseUrl = getProxyBaseUrl();
+  const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   // Prepare headers with tags and trace ID
   const headers: Record<string, string> = {};
   if (tags && tags.length > 0) {
@@ -69,19 +88,44 @@ export async function makeOpenAIResponsesRequest(
       };
     });
 
-    // Format MCP tools if selected
-    const tools =
-      selectedMCPTools && selectedMCPTools.length > 0
-        ? [
-            {
-              type: "mcp",
-              server_label: "litellm",
-              server_url: `litellm_proxy/mcp`,
-              require_approval: "never",
-              allowed_tools: selectedMCPTools,
-            },
-          ]
-        : undefined;
+    // Build tools array
+    const tools: any[] = [];
+
+    // Add MCP servers if selected
+    if (selectedMCPServers && selectedMCPServers.length > 0) {
+      if (selectedMCPServers.includes("__all__")) {
+        // All MCP Servers selected
+        tools.push({
+          type: "mcp",
+          server_label: "litellm",
+          server_url: "litellm_proxy/mcp",
+          require_approval: "never",
+        });
+      } else {
+        // Individual servers selected - create one entry per server
+        selectedMCPServers.forEach((serverId) => {
+          const server = mcpServers?.find((s) => s.server_id === serverId);
+          const serverName = server?.alias || server?.server_name || serverId;
+          const allowedTools = mcpServerToolRestrictions?.[serverId] || [];
+
+          tools.push({
+            type: "mcp",
+            server_label: "litellm",
+            server_url: `litellm_proxy/mcp/${serverName}`,
+            require_approval: "never",
+            ...(allowedTools.length > 0 ? { allowed_tools: allowedTools } : {}),
+          });
+        });
+      }
+    }
+
+    // Add code_interpreter tool if enabled (OpenAI auto-creates container)
+    if (codeInterpreterEnabled) {
+      tools.push({
+        type: "code_interpreter",
+        container: { type: "auto" },
+      });
+    }
 
     // Create request to OpenAI responses API
     // Use 'any' type to avoid TypeScript issues with the experimental API
@@ -94,12 +138,14 @@ export async function makeOpenAIResponsesRequest(
         ...(previousResponseId ? { previous_response_id: previousResponseId } : {}),
         ...(vector_store_ids ? { vector_store_ids } : {}),
         ...(guardrails ? { guardrails } : {}),
-        ...(tools ? { tools, tool_choice: "required" } : {}),
+        ...(policies ? { policies } : {}),
+        ...(tools.length > 0 ? { tools, tool_choice: "auto" } : {}),
       },
       { signal },
     );
 
     let mcpToolUsed = "";
+    let codeInterpreterState: CodeInterpreterState = { code: "", containerId: "" };
 
     for await (const event of response) {
       console.log("Response event:", event);
@@ -136,6 +182,10 @@ export async function makeOpenAIResponsesRequest(
           mcpToolUsed = event.item.name;
           console.log("MCP tool used:", mcpToolUsed);
         }
+
+        // Handle code interpreter events
+        codeInterpreterState = handleCodeInterpreterCall(event, codeInterpreterState);
+        handleCodeInterpreterOutput(event, codeInterpreterState, onCodeInterpreterResult);
 
         // Handle output text delta
         // 1) drop any "role" streams

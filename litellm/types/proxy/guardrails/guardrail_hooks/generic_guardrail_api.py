@@ -1,10 +1,15 @@
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+from typing_extensions import TYPE_CHECKING, TypedDict
 
-from litellm.types.llms.openai import ChatCompletionToolParam
+from litellm.types.llms.openai import (
+    AllMessageValues,
+    ChatCompletionToolCallChunk,
+    ChatCompletionToolParam,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
+from litellm.types.utils import ChatCompletionMessageToolCall
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
@@ -42,48 +47,24 @@ class GenericGuardrailAPIConfigModel(
         return "Generic Guardrail API"
 
 
-class GenericGuardrailAPIRequest:
+class GenericGuardrailAPIRequest(BaseModel):
     """Request model for the Generic Guardrail API"""
 
     input_type: Literal["request", "response"]
-    litellm_call_id: Optional[str]  # the call id of the individual LLM call
+    litellm_call_id: Optional[str] = None  # the call id of the individual LLM call
     litellm_trace_id: Optional[
         str
-    ]  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
-
-    def __init__(
-        self,
-        texts: List[str],
-        request_data: GenericGuardrailAPIMetadata,
-        input_type: Literal["request", "response"],
-        litellm_call_id: Optional[str],
-        litellm_trace_id: Optional[str],
-        additional_provider_specific_params: Optional[Dict[str, Any]] = None,
-        images: Optional[List[str]] = None,
-        tools: Optional[List[ChatCompletionToolParam]] = None,
-    ):
-        self.texts = texts
-        self.request_data = request_data
-        self.additional_provider_specific_params = (
-            additional_provider_specific_params or {}
-        )
-        self.images = images
-        self.input_type = input_type
-        self.litellm_call_id = litellm_call_id
-        self.litellm_trace_id = litellm_trace_id
-        self.tools = tools
-
-    def to_dict(self) -> dict:
-        return {
-            "texts": self.texts,
-            "request_data": self.request_data,
-            "images": self.images,
-            "tools": self.tools,
-            "additional_provider_specific_params": self.additional_provider_specific_params,
-            "input_type": self.input_type,
-            "litellm_call_id": self.litellm_call_id,
-            "litellm_trace_id": self.litellm_trace_id,
-        }
+    ] = None  # the trace id of the LLM call - useful if there are multiple LLM calls for the same conversation
+    structured_messages: Optional[List[AllMessageValues]] = None
+    images: Optional[List[str]] = None
+    tools: Optional[List[ChatCompletionToolParam]] = None
+    texts: Optional[List[str]] = None
+    request_data: GenericGuardrailAPIMetadata
+    additional_provider_specific_params: Optional[Dict[str, Any]] = None
+    tool_calls: Optional[
+        Union[List[ChatCompletionToolCallChunk], List[ChatCompletionMessageToolCall]]
+    ] = None
+    model: Optional[str] = None  # the model being used for the LLM call
 
 
 class GenericGuardrailAPIResponse:
@@ -116,4 +97,5 @@ class GenericGuardrailAPIResponse:
             blocked_reason=data.get("blocked_reason"),
             texts=data.get("texts"),
             images=data.get("images"),
+            tools=data.get("tools"),
         )

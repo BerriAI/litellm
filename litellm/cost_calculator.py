@@ -23,7 +23,11 @@ from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import
 from litellm.litellm_core_utils.llm_cost_calc.utils import (
     CostCalculatorUtils,
     _generic_cost_per_character,
+    _get_service_tier_cost_key,
+    _parse_prompt_tokens_details,
+    calculate_cost_component,
     generic_cost_per_token,
+    get_billable_input_tokens,
     select_cost_metric_for_model,
 )
 from litellm.llms.anthropic.cost_calculation import (
@@ -422,17 +426,27 @@ def cost_per_token(  # noqa: PLR0915
         )
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
+    elif custom_llm_provider == "azure_ai":
+        return generic_cost_per_token(
+            model=model, usage=usage_block, custom_llm_provider=custom_llm_provider
+        )
     else:
         model_info = _cached_get_model_info_helper(
             model=model, custom_llm_provider=custom_llm_provider
         )
 
-        if model_info["input_cost_per_token"] > 0:
-            ## COST PER TOKEN ##
-            prompt_tokens_cost_usd_dollar = (
-                model_info["input_cost_per_token"] * prompt_tokens
+        if (
+            model_info.get("input_cost_per_token", 0) > 0
+            or model_info.get("output_cost_per_token", 0) > 0
+        ):
+            return generic_cost_per_token(
+                model=model,
+                usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
             )
-        elif (
+
+        if (
             model_info.get("input_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
@@ -447,11 +461,7 @@ def cost_per_token(  # noqa: PLR0915
                 model_info["input_cost_per_second"] * response_time_ms / 1000  # type: ignore
             )
 
-        if model_info["output_cost_per_token"] > 0:
-            completion_tokens_cost_usd_dollar = (
-                model_info["output_cost_per_token"] * completion_tokens
-            )
-        elif (
+        if (
             model_info.get("output_cost_per_second", None) is not None
             and response_time_ms is not None
         ):
@@ -587,6 +597,24 @@ def _model_contains_known_llm_provider(model: str) -> bool:
     return _provider_prefix in LlmProvidersSet
 
 
+def _get_response_model(completion_response: Any) -> Optional[str]:
+    """
+    Extract the model name from a completion response object.
+
+    Used as a fallback for cost calculation when the input model name
+    doesn't exist in model_cost (e.g., Azure Model Router).
+    """
+    if completion_response is None:
+        return None
+
+    if isinstance(completion_response, BaseModel):
+        return getattr(completion_response, "model", None)
+    elif isinstance(completion_response, dict):
+        return completion_response.get("model", None)
+
+    return None
+
+
 def _get_usage_object(
     completion_response: Any,
 ) -> Optional[Usage]:
@@ -708,6 +736,69 @@ def _apply_cost_discount(
     return base_cost, discount_percent, discount_amount
 
 
+def _apply_cost_margin(
+    base_cost: float,
+    custom_llm_provider: Optional[str],
+) -> Tuple[float, float, float, float]:
+    """
+    Apply provider-specific or global cost margin from module-level config.
+
+    Args:
+        base_cost: The base cost before margin (after discount if applicable)
+        custom_llm_provider: The LLM provider name
+
+    Returns:
+        Tuple of (final_cost, margin_percent, margin_fixed_amount, margin_total_amount)
+    """
+    original_cost = base_cost
+    margin_percent = 0.0
+    margin_fixed_amount = 0.0
+    margin_total_amount = 0.0
+
+    # Get margin config - check provider-specific first, then global
+    margin_config = None
+    if custom_llm_provider and custom_llm_provider in litellm.cost_margin_config:
+        margin_config = litellm.cost_margin_config[custom_llm_provider]
+        verbose_logger.debug(
+            f"Found provider-specific margin config for {custom_llm_provider}: {margin_config}"
+        )
+    elif "global" in litellm.cost_margin_config:
+        margin_config = litellm.cost_margin_config["global"]
+        verbose_logger.debug(f"Using global margin config: {margin_config}")
+    else:
+        verbose_logger.debug(
+            f"No margin config found. Provider: {custom_llm_provider}, "
+            f"Available configs: {list(litellm.cost_margin_config.keys())}"
+        )
+
+    if margin_config is not None:
+        # Handle different margin config formats
+        if isinstance(margin_config, (int, float)):
+            # Simple percentage: {"openai": 0.10}
+            margin_percent = float(margin_config)
+            margin_total_amount = original_cost * margin_percent
+        elif isinstance(margin_config, dict):
+            # Complex config: {"percentage": 0.08, "fixed_amount": 0.0005}
+            if "percentage" in margin_config:
+                margin_percent = float(margin_config["percentage"])
+                margin_total_amount += original_cost * margin_percent
+            if "fixed_amount" in margin_config:
+                margin_fixed_amount = float(margin_config["fixed_amount"])
+                margin_total_amount += margin_fixed_amount
+
+        final_cost = original_cost + margin_total_amount
+
+        verbose_logger.debug(
+            f"Applied margin to {custom_llm_provider or 'global'}: "
+            f"${original_cost:.6f} -> ${final_cost:.6f} "
+            f"(margin: {margin_percent*100 if margin_percent > 0 else 0}% + ${margin_fixed_amount:.6f} = ${margin_total_amount:.6f})"
+        )
+
+        return final_cost, margin_percent, margin_fixed_amount, margin_total_amount
+
+    return base_cost, margin_percent, margin_fixed_amount, margin_total_amount
+
+
 def _store_cost_breakdown_in_logging_obj(
     litellm_logging_obj: Optional[LitellmLoggingObject],
     prompt_tokens_cost_usd_dollar: float,
@@ -717,6 +808,9 @@ def _store_cost_breakdown_in_logging_obj(
     original_cost: Optional[float] = None,
     discount_percent: Optional[float] = None,
     discount_amount: Optional[float] = None,
+    margin_percent: Optional[float] = None,
+    margin_fixed_amount: Optional[float] = None,
+    margin_total_amount: Optional[float] = None,
 ) -> None:
     """
     Helper function to store cost breakdown in the logging object.
@@ -730,6 +824,9 @@ def _store_cost_breakdown_in_logging_obj(
         original_cost: Cost before discount
         discount_percent: Discount percentage applied (0.05 = 5%)
         discount_amount: Discount amount in USD
+        margin_percent: Margin percentage applied (0.10 = 10%)
+        margin_fixed_amount: Fixed margin amount in USD
+        margin_total_amount: Total margin added in USD
     """
     if litellm_logging_obj is None:
         return
@@ -744,6 +841,9 @@ def _store_cost_breakdown_in_logging_obj(
             original_cost=original_cost,
             discount_percent=discount_percent,
             discount_amount=discount_amount,
+            margin_percent=margin_percent,
+            margin_fixed_amount=margin_fixed_amount,
+            margin_total_amount=margin_total_amount,
         )
 
     except Exception as breakdown_error:
@@ -836,6 +936,22 @@ def completion_cost(  # noqa: PLR0915
         if service_tier is None and optional_params is not None:
             service_tier = optional_params.get("service_tier")
 
+        # Extract service_tier from completion_response if not provided
+        if service_tier is None and completion_response is not None:
+            if isinstance(completion_response, BaseModel):
+                service_tier = getattr(completion_response, "service_tier", None)
+            elif isinstance(completion_response, dict):
+                service_tier = completion_response.get("service_tier")
+
+        # Extract service_tier from usage object if not provided
+        if service_tier is None and cost_per_token_usage_object is not None:
+            if isinstance(cost_per_token_usage_object, BaseModel):
+                service_tier = getattr(
+                    cost_per_token_usage_object, "service_tier", None
+                )
+            elif isinstance(cost_per_token_usage_object, dict):
+                service_tier = cost_per_token_usage_object.get("service_tier")
+
         selected_model = _select_model_name_for_cost_calc(
             model=model,
             completion_response=completion_response,
@@ -845,7 +961,10 @@ def completion_cost(  # noqa: PLR0915
             router_model_id=router_model_id,
         )
 
-        potential_model_names = [selected_model]
+        potential_model_names = [
+            selected_model,
+            _get_response_model(completion_response),
+        ]
         if model is not None:
             potential_model_names.append(model)
 
@@ -860,9 +979,9 @@ def completion_cost(  # noqa: PLR0915
                     or isinstance(completion_response, dict)
                 ):  # tts returns a custom class
                     if isinstance(completion_response, dict):
-                        usage_obj: Optional[Union[dict, Usage]] = (
-                            completion_response.get("usage", {})
-                        )
+                        usage_obj: Optional[
+                            Union[dict, Usage]
+                        ] = completion_response.get("usage", {})
                     else:
                         usage_obj = getattr(completion_response, "usage", {})
                     if isinstance(usage_obj, BaseModel) and not _is_known_usage_objects(
@@ -1066,13 +1185,14 @@ def completion_cost(  # noqa: PLR0915
                         # If model is like "tavily-search", construct "tavily/search" for cost lookup
                         search_model = f"{custom_llm_provider}/search"
 
-                    prompt_cost, completion_cost_result = (
-                        search_provider_cost_per_query(
-                            model=search_model,
-                            custom_llm_provider=custom_llm_provider,
-                            number_of_queries=number_of_queries,
-                            optional_params=optional_params,
-                        )
+                    (
+                        prompt_cost,
+                        completion_cost_result,
+                    ) = search_provider_cost_per_query(
+                        model=search_model,
+                        custom_llm_provider=custom_llm_provider,
+                        number_of_queries=number_of_queries,
+                        optional_params=optional_params,
                     )
 
                     # Return the total cost (prompt_cost + completion_cost, but for search it's just prompt_cost)
@@ -1080,11 +1200,24 @@ def completion_cost(  # noqa: PLR0915
 
                     # Apply discount
                     original_cost = _final_cost
-                    _final_cost, discount_percent, discount_amount = (
-                        _apply_cost_discount(
-                            base_cost=_final_cost,
-                            custom_llm_provider=custom_llm_provider,
-                        )
+                    (
+                        _final_cost,
+                        discount_percent,
+                        discount_amount,
+                    ) = _apply_cost_discount(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
+                    )
+
+                    # Apply margin from module-level config if configured
+                    (
+                        _final_cost,
+                        margin_percent,
+                        margin_fixed_amount,
+                        margin_total_amount,
+                    ) = _apply_cost_margin(
+                        base_cost=_final_cost,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
                     # Store cost breakdown in logging object if available
@@ -1097,6 +1230,9 @@ def completion_cost(  # noqa: PLR0915
                         original_cost=original_cost,
                         discount_percent=discount_percent,
                         discount_amount=discount_amount,
+                        margin_percent=margin_percent,
+                        margin_fixed_amount=margin_fixed_amount,
+                        margin_total_amount=margin_total_amount,
                     )
 
                     return _final_cost
@@ -1220,6 +1356,17 @@ def completion_cost(  # noqa: PLR0915
                     custom_llm_provider=custom_llm_provider,
                 )
 
+                # Apply margin from module-level config if configured
+                (
+                    _final_cost,
+                    margin_percent,
+                    margin_fixed_amount,
+                    margin_total_amount,
+                ) = _apply_cost_margin(
+                    base_cost=_final_cost,
+                    custom_llm_provider=custom_llm_provider,
+                )
+
                 # Store cost breakdown in logging object if available
                 _store_cost_breakdown_in_logging_obj(
                     litellm_logging_obj=litellm_logging_obj,
@@ -1230,6 +1377,9 @@ def completion_cost(  # noqa: PLR0915
                     original_cost=original_cost,
                     discount_percent=discount_percent,
                     discount_amount=discount_amount,
+                    margin_percent=margin_percent,
+                    margin_fixed_amount=margin_fixed_amount,
+                    margin_total_amount=margin_total_amount,
                 )
 
                 return _final_cost
@@ -1329,9 +1479,8 @@ def response_cost_calculator(
             response_cost = 0.0
         else:
             if isinstance(response_object, BaseModel):
-                response_object._hidden_params["optional_params"] = optional_params
-
                 if hasattr(response_object, "_hidden_params"):
+                    response_object._hidden_params["optional_params"] = optional_params
                     provider_response_cost = get_response_cost_from_hidden_params(
                         response_object._hidden_params
                     )
@@ -1537,7 +1686,7 @@ def default_image_cost_calculator(
 
     # gpt-image-1 models use low, medium, high quality. If user did not specify quality, use medium fot gpt-image-1 model family
     model_name_with_v2_quality = (
-        f"{ImageGenerationRequestQuality.MEDIUM.value}/{base_model_name}"
+        f"{ImageGenerationRequestQuality.HIGH.value}/{base_model_name}"
     )
 
     verbose_logger.debug(
@@ -1569,7 +1718,22 @@ def default_image_cost_calculator(
             f"Model not found in cost map. Tried checking {models_to_check}"
         )
 
-    return cost_info["input_cost_per_pixel"] * height * width * n
+    # Priority 1: Use per-image pricing if available (for gpt-image-1 and similar models)
+    if (
+        "input_cost_per_image" in cost_info
+        and cost_info["input_cost_per_image"] is not None
+    ):
+        return cost_info["input_cost_per_image"] * n
+    # Priority 2: Fall back to per-pixel pricing for backward compatibility
+    elif (
+        "input_cost_per_pixel" in cost_info
+        and cost_info["input_cost_per_pixel"] is not None
+    ):
+        return cost_info["input_cost_per_pixel"] * height * width * n
+    else:
+        raise Exception(
+            f"No pricing information found for model {model}. Tried checking {models_to_check}"
+        )
 
 
 def default_video_cost_calculator(
@@ -1684,9 +1848,22 @@ def batch_cost_calculator(
     if input_cost_per_token_batches:
         total_prompt_cost = usage.prompt_tokens * input_cost_per_token_batches
     elif input_cost_per_token:
+        # Subtract cached tokens from prompt_tokens before calculating cost
+        # Fixes issue where cached tokens are being charged again
         total_prompt_cost = (
-            usage.prompt_tokens * (input_cost_per_token) / 2
+            get_billable_input_tokens(usage) * (input_cost_per_token) / 2
         )  # batch cost is usually half of the regular token cost
+
+        # Add cache read cost if applicable
+        details = _parse_prompt_tokens_details(usage)
+        cache_read_tokens = details["cache_hit_tokens"]
+        cache_read_cost_key = _get_service_tier_cost_key(
+            "cache_read_input_token_cost", None
+        )
+        total_prompt_cost += (
+            calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens)
+            / 2
+        )
     if output_cost_per_token_batches:
         total_completion_cost = usage.completion_tokens * output_cost_per_token_batches
     elif output_cost_per_token:

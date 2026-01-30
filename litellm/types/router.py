@@ -404,6 +404,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
     aws_region_name: Optional[str]
+    ## AWS S3 VECTORS ##
+    vector_bucket_name: Optional[str]
+    index_name: Optional[str]
+    embedding_model: Optional[str]
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str]
     ## CUSTOM PRICING ##
@@ -635,6 +639,29 @@ class SearchToolTypedDict(TypedDict):
 
     search_tool_name: Required[str]
     litellm_params: Required[SearchToolLiteLLMParams]
+
+
+class GuardrailLiteLLMParams(TypedDict, total=False):
+    """
+    LiteLLM params for guardrails.
+    """
+
+    guardrail: Required[str]
+    mode: Required[str]
+    api_key: Optional[str]
+    api_base: Optional[str]
+    weight: Optional[int]  # For load balancing
+
+
+class GuardrailTypedDict(TypedDict, total=False):
+    """
+    Configuration for a guardrail in the router.
+    """
+
+    guardrail_name: Required[str]
+    litellm_params: Required[GuardrailLiteLLMParams]
+    callback: Any  # The CustomGuardrail instance
+    id: Optional[str]  # Unique identifier for the guardrail deployment
 
 
 class FineTuningConfig(BaseModel):

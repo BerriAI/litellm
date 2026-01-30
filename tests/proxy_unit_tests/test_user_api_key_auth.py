@@ -696,7 +696,7 @@ def test_is_allowed_route():
         "request": request,
         "request_data": {"input": ["hello world"], "model": "embedding-small"},
         "valid_token": UserAPIKeyAuth(
-            token="9644159bc181998825c44c788b1526341ed2e825d1b6f562e23173759e14bb86",
+            token="sk-test-mock-token-101",
             key_name="sk-...CJjQ",
             key_alias=None,
             spend=0.0,
@@ -1036,7 +1036,7 @@ async def test_jwt_non_admin_team_route_access(monkeypatch):
 
     # Create request
     request = Request(
-        scope={"type": "http", "headers": [("Authorization", "Bearer fake.jwt.token")]}
+        scope={"type": "http", "headers": [(b"authorization", b"Bearer fake.jwt.token")]}
     )
     request._url = URL(url="/team/new")
 

@@ -23,11 +23,10 @@ class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
     async def apply_guardrail(
-        self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
-    ) -> GenericGuardrailAPIInputs:
+        self, inputs: dict, request_data: dict, input_type: str, **kwargs
+    ) -> dict:
         texts = inputs.get("texts", [])
-        inputs["texts"] = [f"{text} [GUARDRAILED]" for text in texts]
-        return inputs
+        return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
 
 class TestHandlerDiscovery:
@@ -248,11 +247,12 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, texts: List[str], request_data: dict, input_type: str, **kwargs
-            ) -> Tuple[List[str], Optional[List[str]]]:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 # Simple mock: replace email-like patterns
                 import re
 
+                texts = inputs.get("texts", [])
                 masked_texts = []
                 for text in texts:
                     masked = re.sub(
@@ -263,7 +263,7 @@ class TestPIIMaskingScenario:
                     # Replace names (simple mock)
                     masked = masked.replace("John Doe", "[NAME_REDACTED]")
                     masked_texts.append(masked)
-                return (masked_texts, None)
+                return {"texts": masked_texts}
 
         handler = OpenAITextCompletionHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
@@ -311,8 +311,8 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
-            ) -> GenericGuardrailAPIInputs:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 import re
 
                 texts = inputs.get("texts", [])
@@ -324,8 +324,7 @@ class TestPIIMaskingScenario:
                         text,
                     )
                     masked_texts.append(masked)
-                inputs["texts"] = masked_texts
-                return inputs
+                return {"texts": masked_texts}
 
         handler = OpenAITextCompletionHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")

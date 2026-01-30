@@ -22,11 +22,10 @@ class MockGuardrail(CustomGuardrail):
     """Mock guardrail for testing"""
 
     async def apply_guardrail(
-        self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
-    ) -> GenericGuardrailAPIInputs:
+        self, inputs: dict, request_data: dict, input_type: str, **kwargs
+    ) -> dict:
         texts = inputs.get("texts", [])
-        inputs["texts"] = [f"{text} [GUARDRAILED]" for text in texts]
-        return inputs
+        return {"texts": [f"{text} [GUARDRAILED]" for text in texts]}
 
 
 class TestHandlerDiscovery:
@@ -188,10 +187,11 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, texts: List[str], request_data: dict, input_type: str, **kwargs
-            ) -> Tuple[List[str], Optional[List[str]]]:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 import re
 
+                texts = inputs.get("texts", [])
                 masked_texts = []
                 for text in texts:
                     masked = re.sub(
@@ -201,7 +201,7 @@ class TestPIIMaskingScenario:
                     )
                     masked = masked.replace("John Doe", "[NAME_REDACTED]")
                     masked_texts.append(masked)
-                return (masked_texts, None)
+                return {"texts": masked_texts}
 
         handler = CohereRerankHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
@@ -239,10 +239,11 @@ class TestPIIMaskingScenario:
             """Mock PII masking guardrail"""
 
             async def apply_guardrail(
-                self, texts: List[str], request_data: dict, input_type: str, **kwargs
-            ) -> Tuple[List[str], Optional[List[str]]]:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 import re
 
+                texts = inputs.get("texts", [])
                 masked_texts = []
                 for text in texts:
                     # Mask emails
@@ -256,7 +257,7 @@ class TestPIIMaskingScenario:
                     # Mask names
                     masked = masked.replace("Alice Smith", "[NAME_REDACTED]")
                     masked_texts.append(masked)
-                return (masked_texts, None)
+                return {"texts": masked_texts}
 
         handler = CohereRerankHandler()
         guardrail = PIIMaskingGuardrail(guardrail_name="mask_pii")
@@ -351,8 +352,8 @@ class TestContentFilteringScenario:
             """Mock content filter guardrail"""
 
             async def apply_guardrail(
-                self, inputs: GenericGuardrailAPIInputs, request_data: dict, input_type: str, **kwargs
-            ) -> GenericGuardrailAPIInputs:
+                self, inputs: dict, request_data: dict, input_type: str, **kwargs
+            ) -> dict:
                 bad_words = ["inappropriate", "offensive"]
                 texts = inputs.get("texts", [])
                 filtered_texts = []
@@ -361,8 +362,7 @@ class TestContentFilteringScenario:
                     for word in bad_words:
                         filtered = filtered.replace(word, "[FILTERED]")
                     filtered_texts.append(filtered)
-                inputs["texts"] = filtered_texts
-                return inputs
+                return {"texts": filtered_texts}
 
         handler = CohereRerankHandler()
         guardrail = ContentFilterGuardrail(guardrail_name="content_filter")

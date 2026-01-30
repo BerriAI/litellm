@@ -117,17 +117,18 @@ def test_virtual_key_allowed_routes_with_litellm_routes_member_name_denied():
         allowed_routes=["info_routes"],  # This is a member name in LiteLLMRoutes enum
     )
 
-    # Test that a route NOT in the info_routes group raises an exception
-    with pytest.raises(Exception) as exc_info:
+    # Test that a route NOT in the info_routes group raises an HTTPException
+    with pytest.raises(HTTPException) as exc_info:
         RouteChecks.is_virtual_key_allowed_to_call_route(
             route="/chat/completions",  # This is NOT in LiteLLMRoutes.info_routes.value
             valid_token=valid_token,
         )
 
-    # Verify the exception message
-    assert "Virtual key is not allowed to call this route" in str(exc_info.value)
-    assert "Only allowed to call routes: ['info_routes']" in str(exc_info.value)
-    assert "Tried to call route: /chat/completions" in str(exc_info.value)
+    # Verify the exception has correct status and message
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
+    assert "Only allowed to call routes: ['info_routes']" in str(exc_info.value.detail)
+    assert "Tried to call route: /chat/completions" in str(exc_info.value.detail)
 
 
 @pytest.mark.parametrize(
@@ -160,9 +161,11 @@ def test_virtual_key_llm_api_route_includes_passthrough_prefix(route):
     [
         "/v1beta/models/gemini-2.5-flash:countTokens",
         "/v1beta/models/gemini-2.0-flash:generateContent",
+        "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
         "/v1beta/models/gemini-1.5-pro:streamGenerateContent",
         "/models/gemini-2.5-flash:countTokens",
         "/models/gemini-2.0-flash:generateContent",
+        "/models/bedrock/claude-sonnet-3.7:generateContent",
         "/models/gemini-1.5-pro:streamGenerateContent",
     ],
 )
@@ -178,6 +181,76 @@ def test_virtual_key_llm_api_routes_allows_google_routes(route):
     )
 
     assert result is True
+
+
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
+        "/v1beta/models/gemini-2.5-flash-exp:countTokens",
+        "/v1beta/models/custom-model-name-123:streamGenerateContent",
+        "/v1beta/models/bedrock/claude-sonnet-3.7:generateContent",
+        "/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
+        "/models/gemini-2.5-flash-exp:countTokens",
+        "/models/custom-model-name-123:streamGenerateContent",
+        "/models/bedrock/claude-sonnet-3.7:generateContent",
+    ],
+)
+def test_google_routes_with_dynamic_model_names_recognized_as_llm_api_route(route):
+    """
+    Test that Google routes with dynamic model names (including custom names) are recognized as LLM API routes.
+    
+    This test verifies the fix for the issue where routes like:
+    /v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent
+    were incorrectly classified as "custom admin only route" instead of LLM API routes.
+    
+    The fix adds pattern matching for Google routes with placeholders like {model_name}.
+    """
+    
+    # Test that the route is recognized as an LLM API route
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
+def test_google_routes_with_dynamic_model_names_accessible_to_internal_users():
+    """
+    Test that internal users can access Google routes with dynamic model names.
+    
+    This ensures that routes like /v1beta/models/{model_name}:generateContent
+    are properly accessible to internal users and not blocked as admin-only routes.
+    """
+    
+    # Create an internal user object
+    user_obj = LiteLLM_UserTable(
+        user_id="test_user",
+        user_email="test@example.com",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    
+    # Create an internal user API key auth
+    valid_token = UserAPIKeyAuth(
+        user_id="test_user",
+        user_role=LitellmUserRoles.INTERNAL_USER.value,
+    )
+    
+    # Create a mock request
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    
+    # Test that calling Google route with dynamic model name does NOT raise an exception
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.INTERNAL_USER.value,
+            route="/v1beta/models/google-gemini-2-5-pro-code-reviewer-k8s:generateContent",
+            request=request,
+            valid_token=valid_token,
+            request_data={"contents": [{"parts": [{"text": "test"}]}]},
+        )
+        # If no exception is raised, the test passes
+    except Exception as e:
+        pytest.fail(
+            f"Internal user should be able to access Google generateContent route. Got error: {str(e)}"
+        )
 
 
 def test_virtual_key_allowed_routes_with_multiple_litellm_routes_member_names():
@@ -247,13 +320,14 @@ def test_virtual_key_allowed_routes_with_no_member_names_only_explicit():
     assert result1 is True
     assert result2 is True
 
-    # Test that non-allowed route raises exception
-    with pytest.raises(Exception) as exc_info:
+    # Test that non-allowed route raises HTTPException
+    with pytest.raises(HTTPException) as exc_info:
         RouteChecks.is_virtual_key_allowed_to_call_route(
             route="/user/info", valid_token=valid_token  # Not in allowed routes
         )
 
-    assert "Virtual key is not allowed to call this route" in str(exc_info.value)
+    assert exc_info.value.status_code == 403
+    assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 def test_anthropic_count_tokens_route_is_llm_api_route():
@@ -301,6 +375,9 @@ def test_virtual_key_llm_api_routes_allows_registered_pass_through_endpoints():
     with patch(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
         mock_registered_routes,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+        return_value="/",
     ):
         # Create a virtual key with llm_api_routes permission
         valid_token = UserAPIKeyAuth(
@@ -347,6 +424,9 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
     with patch(
         "litellm.proxy.pass_through_endpoints.pass_through_endpoints._registered_pass_through_routes",
         mock_registered_routes,
+    ), patch(
+        "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_server_root_path",
+        return_value="/",
     ):
         # Create a virtual key without llm_api_routes permission
         valid_token = UserAPIKeyAuth(
@@ -355,13 +435,14 @@ def test_virtual_key_without_llm_api_routes_cannot_access_pass_through():
         )
 
         # Test that access is denied
-        with pytest.raises(Exception) as exc_info:
+        with pytest.raises(HTTPException) as exc_info:
             RouteChecks.is_virtual_key_allowed_to_call_route(
                 route="/azure-assistant",
                 valid_token=valid_token,
             )
 
-        assert "Virtual key is not allowed to call this route" in str(exc_info.value)
+        assert exc_info.value.status_code == 403
+        assert "Virtual key is not allowed to call this route" in str(exc_info.value.detail)
 
 
 def test_check_passthrough_route_access_key_metadata_exact_match():
@@ -661,6 +742,25 @@ def test_videos_route_is_llm_api_route(route):
     assert RouteChecks.is_llm_api_route(route) is True
 
 
+@pytest.mark.parametrize(
+    "route",
+    [
+        "/containers",
+        "/v1/containers",
+        "/containers/container_123",
+        "/v1/containers/container_123",
+        "/containers/container_123/files",
+        "/v1/containers/container_123/files",
+        "/containers/container_123/files/file_456",
+        "/v1/containers/container_123/files/file_456",
+    ],
+)
+def test_containers_routes_are_llm_api_routes(route):
+    """Test that container routes are recognized as LLM API routes"""
+
+    assert RouteChecks.is_llm_api_route(route) is True
+
+
 def test_videos_route_accessible_to_internal_users():
     """
     Test that internal users can access the videos routes.
@@ -759,4 +859,79 @@ def test_non_proxy_admin_wildcard_allowed_routes():
         valid_token=valid_token,
         request_data={},
     )
+
+
+def test_proxy_admin_viewer_can_access_global_spend_tags():
+    """
+    Test that proxy_admin_viewer can access /global/spend/tags endpoint.
+    
+    This test verifies the fix for the issue where proxy_admin_viewer was getting
+    403 errors when trying to access /global/spend/tags endpoint.
+    
+    Related: Slack thread from 10/9/2025 - Erik Kristensen reported this issue.
+    proxy_admin_viewer role should have access to "view all spend" endpoints.
+    """
+    
+    # Create a proxy admin viewer user object
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    # Create a proxy admin viewer user API key auth
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+
+    # Create a mock request
+    request = MagicMock(spec=Request)
+    request.query_params = {"start_date": "2025-05-12", "end_date": "2025-10-09"}
+
+    # Test that calling /global/spend/tags route does NOT raise an exception
+    try:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route="/global/spend/tags",
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+        # If no exception is raised, the test passes
+    except Exception as e:
+        pytest.fail(
+            f"proxy_admin_viewer should be able to access /global/spend/tags route. Got error: {str(e)}"
+        )
+
+
+def test_route_in_additional_public_routes_wildcard_match():
+    """
+    Test that route_in_additonal_public_routes supports wildcard patterns.
+    """
+    from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/api/*"]}), \
+         patch("litellm.proxy.proxy_server.premium_user", True):
+        # Wildcard should match subpaths
+        assert route_in_additonal_public_routes("/api/users") is True
+        assert route_in_additonal_public_routes("/api/users/123") is True
+        # Should not match different prefix
+        assert route_in_additonal_public_routes("/other/path") is False
+
+
+def test_route_in_additional_public_routes_exact_match():
+    """
+    Test that route_in_additonal_public_routes supports exact matches.
+    """
+    from litellm.proxy.auth.auth_utils import route_in_additonal_public_routes
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"public_routes": ["/health", "/status"]}), \
+         patch("litellm.proxy.proxy_server.premium_user", True):
+        # Exact matches should work
+        assert route_in_additonal_public_routes("/health") is True
+        assert route_in_additonal_public_routes("/status") is True
+        # Non-matching routes should fail
+        assert route_in_additonal_public_routes("/other") is False
         

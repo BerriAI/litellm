@@ -18,11 +18,13 @@ sys.path.insert(
 import litellm
 from litellm.proxy._types import LiteLLM_UserTable, NewTeamRequest, NewUserResponse
 from litellm.proxy.auth.handle_jwt import JWTHandler
+from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
 from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    normalize_email,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -112,6 +114,47 @@ def test_microsoft_sso_handler_with_empty_response():
     assert result.first_name is None
     assert result.last_name is None
     assert result.team_ids == []
+
+
+def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
+    """
+    Test that MicrosoftSSOHandler.openid_from_response uses custom attribute names
+    from constants when environment variables are set.
+    """
+    # Arrange
+    mock_response = {
+        "custom_email_field": "custom@example.com",
+        "custom_display_name": "Custom Display Name",
+        "custom_id_field": "custom_user_123",
+        "custom_first_name": "CustomFirst",
+        "custom_last_name": "CustomLast",
+    }
+    expected_team_ids = ["team1"]
+
+    # Act
+    with patch("litellm.constants.MICROSOFT_USER_EMAIL_ATTRIBUTE", "custom_email_field"), \
+         patch("litellm.constants.MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "custom_display_name"), \
+         patch("litellm.constants.MICROSOFT_USER_ID_ATTRIBUTE", "custom_id_field"), \
+         patch("litellm.constants.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"), \
+         patch("litellm.constants.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_EMAIL_ATTRIBUTE", "custom_email_field"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_DISPLAY_NAME_ATTRIBUTE", "custom_display_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_ID_ATTRIBUTE", "custom_id_field"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_FIRST_NAME_ATTRIBUTE", "custom_first_name"), \
+         patch("litellm.proxy.management_endpoints.ui_sso.MICROSOFT_USER_LAST_NAME_ATTRIBUTE", "custom_last_name"):
+        result = MicrosoftSSOHandler.openid_from_response(
+            response=mock_response, team_ids=expected_team_ids, user_role=None
+        )
+
+    # Assert
+    assert isinstance(result, CustomOpenID)
+    assert result.email == "custom@example.com"
+    assert result.display_name == "Custom Display Name"
+    assert result.provider == "microsoft"
+    assert result.id == "custom_user_123"
+    assert result.first_name == "CustomFirst"
+    assert result.last_name == "CustomLast"
+    assert result.team_ids == expected_team_ids
 
 
 def test_get_microsoft_callback_response():
@@ -572,6 +615,284 @@ def test_apply_user_info_values_sso_role_takes_precedence():
     assert sso_user_defined_values["models"] == ["model-1"]
 
 
+def test_build_sso_user_update_data_with_valid_role():
+    """
+    Test that _build_sso_user_update_data includes role when SSO provides a valid role.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="test-user-123",
+        email="test@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="test@example.com",
+        user_id="test-user-123",
+    )
+
+    assert update_data["user_email"] == "test@example.com"
+    assert update_data["user_role"] == "proxy_admin"
+
+
+def test_build_sso_user_update_data_without_role():
+    """
+    Test that _build_sso_user_update_data only includes email when SSO has no role.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="test-user-456",
+        email="test@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="test@example.com",
+        user_id="test-user-456",
+    )
+
+    assert update_data["user_email"] == "test@example.com"
+    assert "user_role" not in update_data
+
+
+def test_normalize_email():
+    """
+    Test that normalize_email correctly lowercases email addresses and handles edge cases.
+    """
+    # Test with lowercase email
+    assert normalize_email("test@example.com") == "test@example.com"
+    
+    # Test with uppercase email
+    assert normalize_email("TEST@EXAMPLE.COM") == "test@example.com"
+    
+    # Test with mixed case email
+    assert normalize_email("Test.User@Example.COM") == "test.user@example.com"
+    
+    # Test with None
+    assert normalize_email(None) is None
+    
+    # Test with empty string
+    assert normalize_email("") == ""
+
+
+def test_build_sso_user_update_data_normalizes_email():
+    """
+    Test that _build_sso_user_update_data normalizes email addresses to lowercase.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="test-user-789",
+        email="Test.User@Example.COM",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="Test.User@Example.COM",
+        user_id="test-user-789",
+    )
+
+    # Email should be normalized to lowercase
+    assert update_data["user_email"] == "test.user@example.com"
+    assert "user_role" not in update_data
+
+
+def test_generic_response_convertor_normalizes_email():
+    """
+    Test that generic_response_convertor normalizes email addresses.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    mock_response = {
+        "preferred_username": "user123",
+        "email": "Test.User@Example.COM",
+        "sub": "Test User",
+        "first_name": "Test",
+        "last_name": "User",
+        "provider": "generic",
+    }
+
+    # Mock JWT handler
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+
+    # Email should be normalized to lowercase
+    assert result.email == "test.user@example.com"
+    assert result.id == "user123"
+    assert result.display_name == "Test User"
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_updates_role_for_existing_user():
+    """
+    Test that upsert_sso_user updates the user role in database when SSO provides a valid role.
+
+    When a user's role is updated in the SSO provider (e.g., Azure), the role should be
+    updated in the LiteLLM database on subsequent logins, not just at initial user creation.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    # Mock prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    # Existing user in DB with old role
+    existing_user = LiteLLM_UserTable(
+        user_id="test-user-123",
+        user_email="test@example.com",
+        user_role="internal_user",
+        models=["model-1"],
+    )
+
+    # SSO result with new role (e.g., user was promoted to admin in Azure)
+    sso_result = CustomOpenID(
+        id="test-user-123",
+        email="test@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=["team-1"],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    # Act
+    await SSOAuthenticationHandler.upsert_sso_user(
+        result=sso_result,
+        user_info=existing_user,
+        user_email="test@example.com",
+        user_defined_values=None,
+        prisma_client=mock_prisma,
+    )
+
+    # Assert - verify database was updated with both email and role
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once()
+    call_args = mock_prisma.db.litellm_usertable.update_many.call_args
+    assert call_args.kwargs["where"] == {"user_id": "test-user-123"}
+    assert call_args.kwargs["data"]["user_email"] == "test@example.com"
+    assert call_args.kwargs["data"]["user_role"] == "proxy_admin"
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_does_not_update_invalid_role():
+    """
+    Test that upsert_sso_user does not update the role if SSO provides an invalid role.
+
+    If the SSO returns a role that is not a valid LiteLLM role, it should be ignored
+    and only the email should be updated.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    # Mock prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    # Existing user in DB
+    existing_user = LiteLLM_UserTable(
+        user_id="test-user-456",
+        user_email="test@example.com",
+        user_role="internal_user",
+        models=[],
+    )
+
+    # SSO result with invalid role - use MagicMock to bypass validation
+    # This simulates a raw SSO response that has an invalid role string
+    sso_result = MagicMock()
+    sso_result.user_role = "invalid_role_not_in_enum"
+
+    # Act
+    await SSOAuthenticationHandler.upsert_sso_user(
+        result=sso_result,
+        user_info=existing_user,
+        user_email="test@example.com",
+        user_defined_values=None,
+        prisma_client=mock_prisma,
+    )
+
+    # Assert - verify only email was updated, not role
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once()
+    call_args = mock_prisma.db.litellm_usertable.update_many.call_args
+    assert call_args.kwargs["where"] == {"user_id": "test-user-456"}
+    assert call_args.kwargs["data"]["user_email"] == "test@example.com"
+    assert "user_role" not in call_args.kwargs["data"]
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_no_role_in_sso_response():
+    """
+    Test that upsert_sso_user only updates email when SSO response has no role.
+
+    When the SSO provider does not return a role, only the email should be updated.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    # Mock prisma client
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    # Existing user in DB
+    existing_user = LiteLLM_UserTable(
+        user_id="test-user-789",
+        user_email="old@example.com",
+        user_role="internal_user",
+        models=[],
+    )
+
+    # SSO result without role
+    sso_result = CustomOpenID(
+        id="test-user-789",
+        email="new@example.com",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    # Act
+    await SSOAuthenticationHandler.upsert_sso_user(
+        result=sso_result,
+        user_info=existing_user,
+        user_email="new@example.com",
+        user_defined_values=None,
+        prisma_client=mock_prisma,
+    )
+
+    # Assert - verify only email was updated
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once()
+    call_args = mock_prisma.db.litellm_usertable.update_many.call_args
+    assert call_args.kwargs["where"] == {"user_id": "test-user-789"}
+    assert call_args.kwargs["data"]["user_email"] == "new@example.com"
+    assert "user_role" not in call_args.kwargs["data"]
+
+
 def test_get_user_email_and_id_extracts_microsoft_role():
     """
     Test that _get_user_email_and_id_from_result extracts user_role from Microsoft SSO.
@@ -603,9 +924,9 @@ def test_get_user_email_and_id_extracts_microsoft_role():
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db():
+async def test_get_user_info_from_db_user_exists():
     """
-    received args in get_user_info_from_db: {'result': CustomOpenID(id='krrishd', email='krrishdholakia@gmail.com', first_name=None, last_name=None, display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce', picture=None, provider=None, team_ids=[]), 'prisma_client': <litellm.proxy.utils.PrismaClient object at 0x14a74e3c0>, 'user_api_key_cache': <litellm.caching.dual_cache.DualCache object at 0x148d37110>, 'proxy_logging_obj': <litellm.proxy.utils.ProxyLogging object at 0x148dd9090>, 'user_email': 'krrishdholakia@gmail.com', 'user_defined_values': {'models': [], 'user_id': 'krrishd', 'user_email': 'krrishdholakia@gmail.com', 'max_budget': None, 'user_role': None, 'budget_duration': None}}
+    Test that get_user_info_from_db finds existing user and calls upsert_sso_user to update.
     """
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
@@ -647,7 +968,7 @@ async def test_get_user_info_from_db():
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_alternate_user_id():
+async def test_get_user_info_from_db_user_exists_alternate_user_id():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     prisma_client = MagicMock()
@@ -687,6 +1008,190 @@ async def test_get_user_info_from_db_alternate_user_id():
         mock_get_user_object.assert_called_once()
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd-email1234"
 
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_user_not_exists_creates_user():
+    """
+    Test that get_user_info_from_db creates a new user when user doesn't exist in DB.
+    
+    When get_existing_user_info_from_db returns None, get_user_info_from_db should:
+    1. Call upsert_sso_user with user_info=None
+    2. upsert_sso_user should call insert_sso_user to create the user
+    3. Add user to teams from SSO response
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "newuser@example.com"
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "new-user-123",
+        "user_email": "newuser@example.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+
+    sso_result = CustomOpenID(
+        id="new-user-123",
+        email="newuser@example.com",
+        first_name="New",
+        last_name="User",
+        display_name="New User",
+        picture=None,
+        provider="microsoft",
+        team_ids=["team-1", "team-2"],
+    )
+
+    args = {
+        "result": sso_result,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+    }
+
+    # Mock new user response
+    mock_new_user = NewUserResponse(
+        user_id="new-user-123",
+        key="sk-xxxxx",
+        teams=None,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+        return_value=None,  # User doesn't exist
+    ) as mock_get_existing, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+        return_value=mock_new_user,
+    ) as mock_upsert, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+    ) as mock_add_teams:
+        # Act
+        user_info = await get_user_info_from_db(**args)
+
+        # Assert
+        # Should try to find user by id
+        mock_get_existing.assert_called_once()
+        assert mock_get_existing.call_args.kwargs["user_id"] == "new-user-123"
+        assert mock_get_existing.call_args.kwargs["user_email"] == "newuser@example.com"
+
+        # Should call upsert_sso_user with None user_info
+        mock_upsert.assert_called_once()
+        upsert_call_args = mock_upsert.call_args
+        assert upsert_call_args.kwargs["user_info"] is None
+        assert upsert_call_args.kwargs["user_email"] == "newuser@example.com"
+        assert upsert_call_args.kwargs["user_defined_values"] == user_defined_values
+
+        # Should add user to teams
+        mock_add_teams.assert_called_once()
+        add_teams_call_args = mock_add_teams.call_args
+        assert add_teams_call_args.kwargs["result"] == sso_result
+        assert add_teams_call_args.kwargs["user_info"] == mock_new_user
+
+        # Should return the new user
+        assert user_info == mock_new_user
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_user_exists_updates_user():
+    """
+    Test that get_user_info_from_db updates existing user when user exists in DB.
+    
+    When get_existing_user_info_from_db returns a user, get_user_info_from_db should:
+    1. Call upsert_sso_user with the existing user_info
+    2. upsert_sso_user should update the user in the database
+    3. Add user to teams from SSO response
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "existing@example.com"
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "existing-user-456",
+        "user_email": "existing@example.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+
+    sso_result = CustomOpenID(
+        id="existing-user-456",
+        email="existing@example.com",
+        first_name="Existing",
+        last_name="User",
+        display_name="Existing User",
+        picture=None,
+        provider="microsoft",
+        team_ids=["team-3"],
+    )
+
+    # Existing user in DB
+    existing_user = LiteLLM_UserTable(
+        user_id="existing-user-456",
+        user_email="old@example.com",
+        user_role="internal_user",
+        models=["gpt-4"],
+        teams=[],
+    )
+
+    # Updated user after upsert
+    updated_user = LiteLLM_UserTable(
+        user_id="existing-user-456",
+        user_email="existing@example.com",  # Updated email
+        user_role="internal_user",
+        models=["gpt-4"],
+        teams=[],
+    )
+
+    args = {
+        "result": sso_result,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+        return_value=existing_user,  # User exists
+    ) as mock_get_existing, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+        return_value=updated_user,
+    ) as mock_upsert, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+    ) as mock_add_teams:
+        # Act
+        user_info = await get_user_info_from_db(**args)
+
+        # Assert
+        # Should find existing user
+        mock_get_existing.assert_called_once()
+        assert mock_get_existing.call_args.kwargs["user_id"] == "existing-user-456"
+
+        # Should call upsert_sso_user with existing user_info
+        mock_upsert.assert_called_once()
+        upsert_call_args = mock_upsert.call_args
+        assert upsert_call_args.kwargs["user_info"] == existing_user
+        assert upsert_call_args.kwargs["user_email"] == "existing@example.com"
+
+        # Should add user to teams
+        mock_add_teams.assert_called_once()
+        add_teams_call_args = mock_add_teams.call_args
+        assert add_teams_call_args.kwargs["result"] == sso_result
+        assert add_teams_call_args.kwargs["user_info"] == updated_user
+
+        # Should return the updated user
+        assert user_info == updated_user
 
 @pytest.mark.asyncio
 async def test_check_and_update_if_proxy_admin_id():
@@ -1851,7 +2356,7 @@ class TestProcessSSOJWTAccessToken:
     @pytest.fixture
     def sample_jwt_token(self):
         """Create a sample JWT token string"""
-        return "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+        return "test-jwt-token-header.payload.signature"
 
     @pytest.fixture
     def sample_jwt_payload(self):
@@ -2237,6 +2742,70 @@ class TestGenericResponseConvertorNestedAttributes:
                 result.last_name == "Doe"
             )  # Can't access "attributes.family_name" with .get()
             assert result.display_name == "user-sub-123"  # Top-level attribute works
+
+
+class TestGenericResponseConvertorUserRole:
+    """Test generic_response_convertor user role extraction from SSO token"""
+
+    def test_generic_response_convertor_extracts_valid_user_role(self):
+        """
+        Test that generic_response_convertor extracts a valid LiteLLM user role
+        from the SSO token using the GENERIC_USER_ROLE_ATTRIBUTE env var.
+        """
+        from litellm.proxy._types import LitellmUserRoles
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        sso_response = {
+            "preferred_username": "testuser",
+            "email": "test@example.com",
+            "sub": "Test User",
+            "role": "proxy_admin",
+        }
+
+        with patch.dict(
+            os.environ,
+            {"GENERIC_USER_ROLE_ATTRIBUTE": "role"},
+        ):
+            result = generic_response_convertor(
+                response=sso_response,
+                jwt_handler=mock_jwt_handler,
+                sso_jwt_handler=None,
+            )
+
+            assert isinstance(result, CustomOpenID)
+            assert result.user_role == LitellmUserRoles.PROXY_ADMIN
+
+    def test_generic_response_convertor_ignores_invalid_user_role(self):
+        """
+        Test that generic_response_convertor ignores invalid role values
+        and sets user_role to None.
+        """
+        from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+        mock_jwt_handler = MagicMock(spec=JWTHandler)
+        mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+        sso_response = {
+            "preferred_username": "testuser",
+            "email": "test@example.com",
+            "role": "invalid_role_value",
+        }
+
+        with patch.dict(
+            os.environ,
+            {"GENERIC_USER_ROLE_ATTRIBUTE": "role"},
+        ):
+            result = generic_response_convertor(
+                response=sso_response,
+                jwt_handler=mock_jwt_handler,
+                sso_jwt_handler=None,
+            )
+
+            assert isinstance(result, CustomOpenID)
+            assert result.user_role is None
 
 
 class TestGetGenericSSORedirectParams:
@@ -2780,3 +3349,469 @@ class TestAddMissingTeamMember:
         assert set(added_teams) == set(
             expected_teams_added
         ), f"Expected teams {expected_teams_added}, but got {added_teams}"
+
+
+@pytest.mark.asyncio
+async def test_role_mappings_override_default_internal_user_params():
+    """
+    Test that when role_mappings is configured in SSO settings,
+    the SSO-extracted role overrides default_internal_user_params role.
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+    # Save original default_internal_user_params
+    original_default_params = getattr(litellm, "default_internal_user_params", None)
+
+    try:
+        # Set default_internal_user_params with a role that should be overridden
+        litellm.default_internal_user_params = {
+            "user_role": "internal_user",
+            "max_budget": 100,
+            "budget_duration": "30d",
+            "models": ["gpt-3.5-turbo"],
+        }
+
+        # Mock SSO result
+        mock_result_openid = CustomOpenID(
+            id="test-user-123",
+            email="test@example.com",
+            display_name="Test User",
+            provider="microsoft",
+            team_ids=[],
+        )
+
+        # User defined values with SSO-extracted role (from role_mappings)
+        user_defined_values: SSOUserDefinedValues = {
+            "user_id": "test-user-123",
+            "user_email": "test@example.com",
+            "user_role": "proxy_admin",  # Role from SSO role_mappings
+            "max_budget": None,
+            "budget_duration": None,
+            "models": [],
+        }
+
+        # Mock Prisma client with SSO config that has role_mappings configured
+        mock_prisma = MagicMock()
+        mock_sso_config = MagicMock()
+        mock_sso_config.sso_settings = {
+            "role_mappings": {
+                "Admin": "proxy_admin",
+                "User": "internal_user",
+            }
+        }
+        mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+            return_value=mock_sso_config
+        )
+
+        # Mock new_user function
+        mock_new_user_response = NewUserResponse(
+            user_id="test-user-123",
+            key="sk-xxxxx",
+            teams=None,
+        )
+
+        with patch(
+            "litellm.proxy.utils.get_prisma_client_or_throw",
+            return_value=mock_prisma,
+        ), patch(
+            "litellm.proxy.management_endpoints.ui_sso.new_user",
+            return_value=mock_new_user_response,
+        ) as mock_new_user:
+            # Act
+            result = await insert_sso_user(
+                result_openid=mock_result_openid,
+                user_defined_values=user_defined_values,
+            )
+
+            # Assert - verify new_user was called with preserved SSO role
+            mock_new_user.assert_called_once()
+            call_args = mock_new_user.call_args
+            new_user_request = call_args.kwargs["data"]
+
+            # The role from SSO should be preserved, not overridden by default_internal_user_params
+            assert (
+                new_user_request.user_role == "proxy_admin"
+            ), "SSO-extracted role should override default_internal_user_params role"
+
+            # Other default params should still be applied
+            assert (
+                new_user_request.max_budget == 100
+            ), "max_budget from default_internal_user_params should be applied"
+            assert (
+                new_user_request.budget_duration == "30d"
+            ), "budget_duration from default_internal_user_params should be applied"
+            
+            # Note: models are applied via _update_internal_new_user_params inside new_user,
+            # not in insert_sso_user, so we verify user_defined_values was updated correctly
+            # by checking that the function completed successfully and other defaults were applied
+            # The models will be applied when new_user processes the request
+
+    finally:
+        # Restore original default_internal_user_params
+        if original_default_params is not None:
+            litellm.default_internal_user_params = original_default_params
+        else:
+            if hasattr(litellm, "default_internal_user_params"):
+                delattr(litellm, "default_internal_user_params")
+
+
+class TestSSOReadinessEndpoint:
+    """Test the /sso/readiness endpoint"""
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_no_sso_configured(self):
+        """Test that readiness returns healthy when no SSO is configured"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, {}, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "healthy"
+                assert data["sso_configured"] is False
+                assert data["message"] == "No SSO provider configured"
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_google_fully_configured(self):
+        """Test that readiness returns healthy when Google SSO is fully configured"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(
+                os.environ,
+                {
+                    "GOOGLE_CLIENT_ID": "test-google-client-id",
+                    "GOOGLE_CLIENT_SECRET": "test-google-secret",
+                },
+                clear=True,
+            ):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 200
+                data = response.json()
+                assert data["status"] == "healthy"
+                assert data["sso_configured"] is True
+                assert data["provider"] == "google"
+                assert "Google SSO is properly configured" in data["message"]
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    async def test_sso_readiness_google_missing_secret(self):
+        """Test that readiness returns unhealthy when Google SSO is missing GOOGLE_CLIENT_SECRET"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(
+                os.environ,
+                {"GOOGLE_CLIENT_ID": "test-google-client-id"},
+                clear=True,
+            ):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == 503
+                data = response.json()["detail"]
+                assert data["status"] == "unhealthy"
+                assert data["sso_configured"] is True
+                assert data["provider"] == "google"
+                assert "GOOGLE_CLIENT_SECRET" in data["missing_environment_variables"]
+                assert "Google SSO is configured but missing required environment variables" in data["message"]
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_vars,expected_status,expected_provider,expected_missing_vars",
+        [
+            (
+                {
+                    "MICROSOFT_CLIENT_ID": "test-microsoft-client-id",
+                    "MICROSOFT_CLIENT_SECRET": "test-microsoft-secret",
+                    "MICROSOFT_TENANT": "test-tenant",
+                },
+                200,
+                "microsoft",
+                [],
+            ),
+            (
+                {"MICROSOFT_CLIENT_ID": "test-microsoft-client-id"},
+                503,
+                "microsoft",
+                ["MICROSOFT_CLIENT_SECRET", "MICROSOFT_TENANT"],
+            ),
+        ],
+    )
+    async def test_sso_readiness_microsoft_configurations(
+        self, env_vars, expected_status, expected_provider, expected_missing_vars
+    ):
+        """Test Microsoft SSO readiness with both fully configured and missing variables"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, env_vars, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == expected_status
+                
+                if expected_status == 200:
+                    data = response.json()
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "healthy"
+                    assert "Microsoft SSO is properly configured" in data["message"]
+                else:
+                    data = response.json()["detail"]
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "unhealthy"
+                    assert set(data["missing_environment_variables"]) == set(
+                        expected_missing_vars
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "env_vars,expected_status,expected_provider,expected_missing_vars",
+        [
+            (
+                {
+                    "GENERIC_CLIENT_ID": "test-generic-client-id",
+                    "GENERIC_CLIENT_SECRET": "test-generic-secret",
+                    "GENERIC_AUTHORIZATION_ENDPOINT": "https://auth.example.com/authorize",
+                    "GENERIC_TOKEN_ENDPOINT": "https://auth.example.com/token",
+                    "GENERIC_USERINFO_ENDPOINT": "https://auth.example.com/userinfo",
+                },
+                200,
+                "generic",
+                [],
+            ),
+            (
+                {"GENERIC_CLIENT_ID": "test-generic-client-id"},
+                503,
+                "generic",
+                [
+                    "GENERIC_CLIENT_SECRET",
+                    "GENERIC_AUTHORIZATION_ENDPOINT",
+                    "GENERIC_TOKEN_ENDPOINT",
+                    "GENERIC_USERINFO_ENDPOINT",
+                ],
+            ),
+        ],
+    )
+    async def test_sso_readiness_generic_configurations(
+        self, env_vars, expected_status, expected_provider, expected_missing_vars
+    ):
+        """Test Generic SSO readiness with both fully configured and missing variables"""
+        from fastapi.testclient import TestClient
+
+        from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+        from litellm.proxy.proxy_server import app
+
+        mock_user_auth = UserAPIKeyAuth(
+            user_id="test-user-123",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        )
+        app.dependency_overrides[user_api_key_auth] = lambda: mock_user_auth
+
+        try:
+            client = TestClient(app)
+
+            with patch.dict(os.environ, env_vars, clear=True):
+                response = client.get("/sso/readiness")
+
+                assert response.status_code == expected_status
+                
+                if expected_status == 200:
+                    data = response.json()
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "healthy"
+                    assert "Generic SSO is properly configured" in data["message"]
+                else:
+                    data = response.json()["detail"]
+                    assert data["sso_configured"] is True
+                    assert data["provider"] == expected_provider
+                    assert data["status"] == "unhealthy"
+                    assert set(data["missing_environment_variables"]) == set(
+                        expected_missing_vars
+                    )
+        finally:
+            app.dependency_overrides.clear()
+
+
+class TestCustomMicrosoftSSO:
+    """Tests for CustomMicrosoftSSO class."""
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_default_endpoints_when_no_env_vars(self):
+        """
+        Test that CustomMicrosoftSSO uses default Microsoft endpoints
+        when no custom environment variables are set.
+        """
+        # Ensure no custom endpoints are set
+        for key in [
+            "MICROSOFT_AUTHORIZATION_ENDPOINT",
+            "MICROSOFT_TOKEN_ENDPOINT",
+            "MICROSOFT_USERINFO_ENDPOINT",
+        ]:
+            os.environ.pop(key, None)
+
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        discovery = await sso.get_discovery_document()
+
+        assert discovery["authorization_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/authorize"
+        assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
+        assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_custom_endpoints_when_env_vars_set(self):
+        """
+        Test that CustomMicrosoftSSO uses custom endpoints
+        when environment variables are set.
+        """
+        custom_auth_endpoint = "https://custom.example.com/oauth2/v2.0/authorize"
+        custom_token_endpoint = "https://custom.example.com/oauth2/v2.0/token"
+        custom_userinfo_endpoint = "https://custom.example.com/v1.0/me"
+
+        with patch.dict(
+            os.environ,
+            {
+                "MICROSOFT_AUTHORIZATION_ENDPOINT": custom_auth_endpoint,
+                "MICROSOFT_TOKEN_ENDPOINT": custom_token_endpoint,
+                "MICROSOFT_USERINFO_ENDPOINT": custom_userinfo_endpoint,
+            },
+        ):
+            sso = CustomMicrosoftSSO(
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                tenant="test-tenant",
+                redirect_uri="http://localhost:4000/sso/callback",
+            )
+
+            discovery = await sso.get_discovery_document()
+
+            assert discovery["authorization_endpoint"] == custom_auth_endpoint
+            assert discovery["token_endpoint"] == custom_token_endpoint
+            assert discovery["userinfo_endpoint"] == custom_userinfo_endpoint
+
+    @pytest.mark.asyncio
+    async def test_custom_microsoft_sso_uses_partial_custom_endpoints(self):
+        """
+        Test that CustomMicrosoftSSO uses custom endpoints for those set,
+        and defaults for others.
+        """
+        custom_auth_endpoint = "https://custom.example.com/oauth2/v2.0/authorize"
+
+        # Clear other env vars first
+        os.environ.pop("MICROSOFT_TOKEN_ENDPOINT", None)
+        os.environ.pop("MICROSOFT_USERINFO_ENDPOINT", None)
+
+        with patch.dict(
+            os.environ,
+            {
+                "MICROSOFT_AUTHORIZATION_ENDPOINT": custom_auth_endpoint,
+            },
+        ):
+            sso = CustomMicrosoftSSO(
+                client_id="test-client-id",
+                client_secret="test-client-secret",
+                tenant="test-tenant",
+                redirect_uri="http://localhost:4000/sso/callback",
+            )
+
+            discovery = await sso.get_discovery_document()
+
+            # Custom auth endpoint
+            assert discovery["authorization_endpoint"] == custom_auth_endpoint
+            # Default token and userinfo endpoints
+            assert discovery["token_endpoint"] == "https://login.microsoftonline.com/test-tenant/oauth2/v2.0/token"
+            assert discovery["userinfo_endpoint"] == "https://graph.microsoft.com/v1.0/me"
+
+    def test_custom_microsoft_sso_uses_common_tenant_when_none(self):
+        """
+        Test that CustomMicrosoftSSO uses 'common' tenant when tenant is None.
+        """
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant=None,
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        assert sso.tenant == "common"
+
+    def test_custom_microsoft_sso_is_subclass_of_microsoft_sso(self):
+        """
+        Test that CustomMicrosoftSSO is a subclass of MicrosoftSSO.
+        """
+        from fastapi_sso.sso.microsoft import MicrosoftSSO
+
+        sso = CustomMicrosoftSSO(
+            client_id="test-client-id",
+            client_secret="test-client-secret",
+            tenant="test-tenant",
+            redirect_uri="http://localhost:4000/sso/callback",
+        )
+
+        assert isinstance(sso, MicrosoftSSO)

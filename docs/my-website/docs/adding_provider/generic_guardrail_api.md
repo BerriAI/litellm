@@ -54,7 +54,7 @@ Implement `POST /beta/litellm_basic_guardrail_api`
 {
   "texts": ["extracted text from the request"],  // array of text strings
   "images": ["base64_encoded_image_data"],  // optional array of images
-  "tools": [  // optional array of tools (OpenAI ChatCompletionToolParam format)
+  "tools": [  // tool calls sent to the LLM (in the OpenAI Chat Completions spec)
     {
       "type": "function",
       "function": {
@@ -68,6 +68,20 @@ Implement `POST /beta/litellm_basic_guardrail_api`
         }
       }
     }
+  ],
+  "tool_calls": [  // tool calls received from the LLM (in the OpenAI Chat Completions spec)
+    {
+      "id": "call_abc123",
+      "type": "function",
+      "function": {
+        "name": "get_weather",
+        "arguments": "{\"location\": \"San Francisco\"}"
+      }
+    }
+  ],
+  "structured_messages": [  // optional, full messages in OpenAI format (for chat endpoints)
+    {"role": "system", "content": "You are a helpful assistant"},
+    {"role": "user", "content": "Hello"}
   ],
   "request_data": {
     "user_api_key_hash": "hash of the litellm virtual key used",
@@ -137,8 +151,8 @@ The `tools` parameter provides information about available function/tool definit
 }
 ```
 
-**Limitations:**
-- **Input only:** Tools are only passed for `input_type="request"` (pre-call guardrails). Output/response guardrails do not currently receive tool information.
+**Availability:**
+- **Input only:** Tools are only passed for `input_type="request"` (pre-call guardrails). Output/response guardrails do not currently receive tool definitions.
 - **Supported endpoints:** The `tools` parameter is supported on: `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`. Other endpoints do not have tool support.
 
 **Use cases:**
@@ -146,6 +160,63 @@ The `tools` parameter provides information about available function/tool definit
 - Validate tool schemas before sending to LLM
 - Log tool usage for audit purposes
 - Block sensitive tools based on user context
+
+### `tool_calls` Parameter
+
+The `tool_calls` parameter contains actual function/tool invocations being made in the request or response.
+
+**Format:** OpenAI `ChatCompletionMessageToolCall` format (see [OpenAI API reference](https://platform.openai.com/docs/api-reference/chat/object#chat/object-tool_calls))
+
+**Example:**
+```json
+{
+  "id": "call_abc123",
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "arguments": "{\"location\": \"San Francisco\", \"unit\": \"celsius\"}"
+  }
+}
+```
+
+**Key Difference from `tools`:**
+- **`tools`** = Tool definitions/schemas (what tools are *available*)
+- **`tool_calls`** = Tool invocations/executions (what tools are *being called* with what arguments)
+
+**Availability:**
+- **Both input and output:** Tool calls can be present in both `input_type="request"` (assistant messages requesting tool calls) and `input_type="response"` (LLM responses with tool calls).
+- **Supported endpoints:** The `tool_calls` parameter is supported on: `/v1/chat/completions`, `/v1/responses`, and `/v1/messages`.
+
+**Use cases:**
+- Validate tool call arguments before execution
+- Redact sensitive data from tool call arguments (e.g., PII)
+- Log tool invocations for audit/debugging
+- Block tool calls with dangerous parameters
+- Modify tool call arguments (e.g., enforce constraints, sanitize inputs)
+- Monitor tool usage patterns across users/teams
+
+### `structured_messages` Parameter
+
+The `structured_messages` parameter provides the full input in OpenAI chat completion spec format, useful for distinguishing between system and user messages.
+
+**Format:** Array of OpenAI chat completion messages (see [OpenAI API reference](https://platform.openai.com/docs/api-reference/chat/create#chat-create-messages))
+
+**Example:**
+```json
+[
+  {"role": "system", "content": "You are a helpful assistant"},
+  {"role": "user", "content": "Hello"}
+]
+```
+
+**Availability:**
+- **Supported endpoints:** `/v1/chat/completions`, `/v1/messages`, `/v1/responses`
+- **Input only:** Only passed for `input_type="request"` (pre-call guardrails)
+
+**Use cases:**
+- Apply different policies for system vs user messages
+- Enforce role-based content restrictions
+- Log structured conversation context
 
 ## LiteLLM Configuration
 
@@ -165,6 +236,27 @@ litellm_settings:
           threshold: 0.8
           language: "en"
 ```
+
+### Example: Pillar Security
+
+[Pillar Security](https://pillar.security) uses the Generic Guardrail API to provide comprehensive AI security scanning including prompt injection protection, PII/PCI detection, secret detection, and content moderation.
+
+```yaml
+guardrails:
+  - guardrail_name: "pillar-security"
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: https://api.pillar.security/api/v1/integrations/litellm
+      api_key: os.environ/PILLAR_API_KEY
+      default_on: true
+      additional_provider_specific_params:
+        plr_mask: true      # Enable automatic masking of sensitive data
+        plr_evidence: true  # Include detection evidence in response
+        plr_scanners: true  # Include scanner details in response
+```
+
+See the [Pillar Security documentation](../proxy/guardrails/pillar_security.md) for full configuration options.
 
 ## Usage
 
@@ -210,7 +302,9 @@ app = FastAPI()
 class GuardrailRequest(BaseModel):
     texts: List[str]
     images: Optional[List[str]] = None
-    tools: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionToolParam format
+    tools: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionToolParam format (tool definitions)
+    tool_calls: Optional[List[Dict[str, Any]]] = None  # OpenAI ChatCompletionMessageToolCall format (tool invocations)
+    structured_messages: Optional[List[Dict[str, Any]]] = None  # OpenAI messages format (for chat endpoints)
     request_data: Dict[str, Any]
     input_type: str  # "request" or "response"
     litellm_call_id: Optional[str] = None
@@ -235,16 +329,47 @@ async def apply_guardrail(request: GuardrailRequest):
                 blocked_reason="Content contains prohibited terms"
             )
     
-    # Example: Check tools (if present in request)
+    # Example: Check tool definitions (if present in request)
     if request.tools:
         for tool in request.tools:
             if tool.get("type") == "function":
                 function_name = tool.get("function", {}).get("name", "")
-                # Block sensitive tools
+                # Block sensitive tool definitions
                 if function_name in ["delete_data", "access_admin_panel"]:
                     return GuardrailResponse(
                         action="BLOCKED",
                         blocked_reason=f"Tool '{function_name}' is not allowed"
+                    )
+    
+    # Example: Check tool calls (if present in request or response)
+    if request.tool_calls:
+        for tool_call in request.tool_calls:
+            if tool_call.get("type") == "function":
+                function_name = tool_call.get("function", {}).get("name", "")
+                arguments_str = tool_call.get("function", {}).get("arguments", "{}")
+                
+                # Parse arguments and validate
+                import json
+                try:
+                    arguments = json.loads(arguments_str)
+                    # Block dangerous arguments
+                    if "file_path" in arguments and ".." in str(arguments["file_path"]):
+                        return GuardrailResponse(
+                            action="BLOCKED",
+                            blocked_reason="Tool call contains path traversal attempt"
+                        )
+                except json.JSONDecodeError:
+                    pass
+    
+    # Example: Check structured messages (if present in request)
+    if request.structured_messages:
+        for message in request.structured_messages:
+            if message.get("role") == "system":
+                # Apply stricter policies to system messages
+                if "admin" in message.get("content", "").lower():
+                    return GuardrailResponse(
+                        action="BLOCKED",
+                        blocked_reason="System message contains restricted terms"
                     )
     
     return GuardrailResponse(action="NONE")

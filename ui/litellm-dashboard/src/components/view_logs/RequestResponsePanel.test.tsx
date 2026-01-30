@@ -161,4 +161,31 @@ describe("RequestResponsePanel", () => {
     expect(mockWriteText).toHaveBeenCalledWith(JSON.stringify({ test: "response data" }, null, 2));
     expect(mockNotificationsManager.success).toHaveBeenCalledWith("Response copied to clipboard");
   });
+
+  it("should call formattedResponse for the response panel and not getRawRequest", () => {
+    const mockGetRawRequest = vi.fn().mockReturnValue({ requestData: "this should not appear in response" });
+    const mockFormattedResponse = vi.fn().mockReturnValue({ responseData: "this should appear in response" });
+
+    render(
+      <RequestResponsePanel
+        row={{ original: baseLogEntry }}
+        hasMessages={true}
+        hasResponse={true}
+        hasError={false}
+        errorInfo={null}
+        getRawRequest={mockGetRawRequest}
+        formattedResponse={mockFormattedResponse}
+      />,
+    );
+
+    expect(mockFormattedResponse).toHaveBeenCalled();
+    expect(mockGetRawRequest).toHaveBeenCalled();
+    
+    const formattedResponseCallCount = mockFormattedResponse.mock.calls.length;
+    expect(formattedResponseCallCount).toBeGreaterThanOrEqual(1);
+    
+    const responseData = mockFormattedResponse.mock.results[0].value;
+    expect(responseData).toEqual({ responseData: "this should appear in response" });
+    expect(responseData).not.toEqual({ requestData: "this should not appear in response" });
+  });
 });

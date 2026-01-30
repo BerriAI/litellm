@@ -24,23 +24,17 @@ export const searchToolColumns = (
   {
     accessorKey: "search_tool_name",
     header: "Name",
-    cell: ({ getValue }) => (
-      <span className="font-medium">{getValue() as string}</span>
-    ),
+    cell: ({ getValue }) => <span className="font-medium">{getValue() as string}</span>,
   },
   {
     id: "provider",
     header: "Provider",
     cell: ({ row }) => {
       const provider = row.original.litellm_params.search_provider;
-      const providerInfo = availableProviders.find(p => p.provider_name === provider);
+      const providerInfo = availableProviders.find((p) => p.provider_name === provider);
       const displayName = providerInfo?.ui_friendly_name || provider;
-      
-      return (
-        <span className="text-sm">
-          {displayName}
-        </span>
-      );
+
+      return <span className="text-sm">{displayName}</span>;
     },
   },
   {
@@ -49,11 +43,7 @@ export const searchToolColumns = (
     sortingFn: "datetime",
     cell: ({ row }) => {
       const tool = row.original;
-      return (
-        <span className="text-xs">
-          {tool.created_at ? new Date(tool.created_at).toLocaleDateString() : "-"}
-        </span>
-      );
+      return <span className="text-xs">{tool.created_at ? new Date(tool.created_at).toLocaleDateString() : "-"}</span>;
     },
   },
   {
@@ -62,11 +52,7 @@ export const searchToolColumns = (
     sortingFn: "datetime",
     cell: ({ row }) => {
       const tool = row.original;
-      return (
-        <span className="text-xs">
-          {tool.updated_at ? new Date(tool.updated_at).toLocaleDateString() : "-"}
-        </span>
-      );
+      return <span className="text-xs">{tool.updated_at ? new Date(tool.updated_at).toLocaleDateString() : "-"}</span>;
     },
   },
   {
@@ -90,4 +76,3 @@ export const searchToolColumns = (
     ),
   },
 ];
-

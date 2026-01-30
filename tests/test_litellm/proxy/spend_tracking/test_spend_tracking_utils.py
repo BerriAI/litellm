@@ -19,12 +19,19 @@ import litellm
 from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _get_proxy_server_request_for_spend_logs_payload,
     _get_response_for_spend_logs_payload,
     _get_vector_store_request_for_spend_logs_payload,
     _sanitize_request_body_for_spend_logs_payload,
+    _should_store_prompts_and_responses_in_spend_logs,
     get_logging_payload,
 )
-from litellm.types.utils import StandardLoggingPayload
+from litellm.types.utils import (
+    StandardLoggingHiddenParams,
+    StandardLoggingMetadata,
+    StandardLoggingModelInformation,
+    StandardLoggingPayload,
+)
 
 
 def test_sanitize_request_body_for_spend_logs_payload_basic():
@@ -593,4 +600,360 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     print("- Failed requests preserve api_key through entire flow")
     print("- Both SpendLogs AND DailyUserSpend will have correct api_key")
     print("="*80 + "\n")
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_includes_agent_id_from_kwargs():
+    """
+    Test that get_logging_payload extracts agent_id from kwargs and includes it in the payload.
+    """
+    test_agent_id = "agent-uuid-12345"
+
+    kwargs = {
+        "model": "a2a_agent/test-agent",
+        "custom_llm_provider": "a2a_agent",
+        "agent_id": test_agent_id,
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+    }
+
+    response_obj = {
+        "id": "test-response-123",
+        "jsonrpc": "2.0",
+        "result": {"status": "completed"},
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    assert payload["agent_id"] == test_agent_id, f"Expected agent_id '{test_agent_id}', got '{payload.get('agent_id')}'"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_includes_overhead_in_spend_logs_metadata():
+    """
+    Test that get_logging_payload extracts litellm_overhead_time_ms from hidden_params
+    and stores it in spend_logs_metadata within the metadata JSON.
+    """
+    test_overhead_ms = 123.45
+
+    # Create StandardLoggingPayload with hidden_params containing overhead
+    standard_logging_payload = StandardLoggingPayload(
+        id="test-id-123",
+        call_type="completion",
+        stream=False,
+        response_cost=0.001,
+        status="success",
+        total_tokens=100,
+        prompt_tokens=50,
+        completion_tokens=50,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=None,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+            user_api_key_end_user_id=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address=None,
+        messages=[],
+        response={},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.001",
+            litellm_overhead_time_ms=test_overhead_ms,
+            additional_headers=None,
+            batch_models=None,
+            litellm_model_name=None,
+            usage_object=None,
+        ),
+    )
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    response_obj = {
+        "id": "test-response-123",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    # Parse the metadata JSON string
+    metadata_json = payload.get("metadata")
+    assert metadata_json is not None, "metadata should not be None"
+    
+    metadata = json.loads(metadata_json)
+    
+    # Verify overhead is stored directly in metadata
+    assert (
+        metadata.get("litellm_overhead_time_ms") == test_overhead_ms
+    ), f"Expected overhead '{test_overhead_ms}', got '{metadata.get('litellm_overhead_time_ms')}'"
+
+
+@patch("litellm.proxy.proxy_server.master_key", None)
+@patch("litellm.proxy.proxy_server.general_settings", {})
+def test_get_logging_payload_handles_missing_overhead_gracefully():
+    """
+    Test that get_logging_payload handles missing overhead gracefully
+    (backward compatibility - when overhead is not present, it should not break).
+    """
+    # Create StandardLoggingPayload WITHOUT overhead in hidden_params
+    standard_logging_payload = StandardLoggingPayload(
+        id="test-id-456",
+        call_type="completion",
+        stream=False,
+        response_cost=0.001,
+        status="success",
+        total_tokens=100,
+        prompt_tokens=50,
+        completion_tokens=50,
+        startTime=1234567890.0,
+        endTime=1234567891.0,
+        completionStartTime=None,
+        model_map_information=StandardLoggingModelInformation(
+            model_map_key="gpt-3.5-turbo", model_map_value=None
+        ),
+        model="gpt-3.5-turbo",
+        model_id="model-123",
+        model_group="openai",
+        custom_llm_provider="openai",
+        api_base="https://api.openai.com",
+        metadata=StandardLoggingMetadata(
+            user_api_key_hash="test_hash",
+            user_api_key_alias=None,
+            user_api_key_team_id=None,
+            user_api_key_org_id=None,
+            user_api_key_user_id=None,
+            user_api_key_team_alias=None,
+            spend_logs_metadata=None,
+            requester_ip_address=None,
+            requester_metadata=None,
+            user_api_key_end_user_id=None,
+        ),
+        cache_hit=False,
+        cache_key=None,
+        saved_cache_cost=0.0,
+        request_tags=[],
+        end_user=None,
+        requester_ip_address=None,
+        messages=[],
+        response={},
+        error_str=None,
+        model_parameters={},
+        hidden_params=StandardLoggingHiddenParams(
+            model_id="model-123",
+            cache_key=None,
+            api_base="https://api.openai.com",
+            response_cost="0.001",
+            litellm_overhead_time_ms=None,  # No overhead
+            additional_headers=None,
+            batch_models=None,
+            litellm_model_name=None,
+            usage_object=None,
+        ),
+    )
+
+    kwargs = {
+        "model": "gpt-3.5-turbo",
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "sk-test-key",
+            }
+        },
+        "standard_logging_object": standard_logging_payload,
+    }
+
+    response_obj = {
+        "id": "test-response-456",
+        "choices": [{"message": {"content": "Hello!"}}],
+        "usage": {
+            "total_tokens": 100,
+            "prompt_tokens": 50,
+            "completion_tokens": 50,
+        },
+    }
+
+    start_time = datetime.datetime.now(timezone.utc)
+    end_time = datetime.datetime.now(timezone.utc)
+
+    # Should not raise an exception
+    payload = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    # Parse the metadata JSON string
+    metadata_json = payload.get("metadata")
+    assert metadata_json is not None, "metadata should not be None"
+    
+    metadata = json.loads(metadata_json)
+    
+    # When overhead is None, litellm_overhead_time_ms should be None or not present
+    assert (
+        metadata.get("litellm_overhead_time_ms") is None
+    ), "litellm_overhead_time_ms should be None when overhead is not provided"
+
+
+@patch(
+    "litellm.proxy.spend_tracking.spend_tracking_utils._should_store_prompts_and_responses_in_spend_logs"
+)
+def test_spend_logs_redacts_request_and_response_when_turn_off_message_logging_enabled(
+    mock_should_store,
+):
+    """
+    Test that both request body and response are redacted when turn_off_message_logging is enabled.
+    """
+    mock_should_store.return_value = True
+
+    # Test request redaction
+    litellm_params = {
+        "proxy_server_request": {
+            "body": {
+                "messages": [{"role": "user", "content": "secret message"}],
+                "model": "gpt-4",
+            }
+        }
+    }
+    metadata = {}
+    kwargs = {
+        "litellm_params": litellm_params,
+        "standard_callback_dynamic_params": {
+            "turn_off_message_logging": True,
+        },
+    }
+
+    request_result = _get_proxy_server_request_for_spend_logs_payload(
+        metadata=metadata, litellm_params=litellm_params, kwargs=kwargs
+    )
+
+    parsed_request = json.loads(request_result)
+    assert parsed_request["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert parsed_request["model"] == "gpt-4"
+
+    # Test response redaction - use dict response to verify redaction
+    response_dict = {
+        "id": "test-id",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "secret response"},
+            }
+        ],
+        "model": "gpt-4",
+    }
+    payload = cast(
+        StandardLoggingPayload,
+        {"response": response_dict},
+    )
+
+    response_result = _get_response_for_spend_logs_payload(payload=payload, kwargs=kwargs)
+
+    # When redaction is enabled and response is a dict (not ModelResponse),
+    # perform_redaction returns {"text": "redacted-by-litellm"}
+    parsed_response = json.loads(response_result)
+    assert parsed_response == {"text": "redacted-by-litellm"}
+
+
+@patch("litellm.secret_managers.main.get_secret_bool")
+def test_should_store_prompts_and_responses_in_spend_logs_case_insensitive_string(
+    mock_get_secret_bool,
+):
+    """
+    Test that _should_store_prompts_and_responses_in_spend_logs handles
+    case-insensitive string values for store_prompts_in_spend_logs in general_settings.
+    """
+    # Test case-insensitive string "true" variations
+    for true_value in ["true", "TRUE", "True", "TrUe"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": true_value}):
+            mock_get_secret_bool.return_value = False  # Ensure env var is False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True for '{true_value}', got {result}"
+    
+    # Test boolean True
+    with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": True}):
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, f"Expected True for boolean True, got {result}"
+    
+    # Test that non-true values fall back to environment variable
+    for false_value in [False, None, "false", "FALSE", "False", "anything"]:
+        with patch("litellm.proxy.proxy_server.general_settings", {"store_prompts_in_spend_logs": false_value}):
+            # When env var is True, should return True
+            mock_get_secret_bool.return_value = True
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is True, f"Expected True (from env var) for '{false_value}', got {result}"
+            
+            # When env var is False, should return False
+            mock_get_secret_bool.return_value = False
+            result = _should_store_prompts_and_responses_in_spend_logs()
+            assert result is False, f"Expected False (from env var) for '{false_value}', got {result}"
+    
+    # Test when general_settings doesn't have the key at all
+    with patch("litellm.proxy.proxy_server.general_settings", {}):
+        mock_get_secret_bool.return_value = True
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is True, "Expected True (from env var) when key missing, got False"
+        
+        mock_get_secret_bool.return_value = False
+        result = _should_store_prompts_and_responses_in_spend_logs()
+        assert result is False, "Expected False (from env var) when key missing, got True"
 

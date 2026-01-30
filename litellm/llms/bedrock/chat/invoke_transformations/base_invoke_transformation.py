@@ -134,59 +134,11 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
             fake_stream=fake_stream,
         )
 
-    def _build_cohere_request(
-        self, model: str, prompt: str, chat_history: Optional[list], inference_params: dict, stream: Optional[bool]
-    ) -> dict:
-        """Build request data for Cohere models."""
-        if model.startswith("cohere.command-r"):
-            config = litellm.AmazonCohereChatConfig().get_config()
-            for k, v in config.items():
-                if k not in inference_params:
-                    inference_params[k] = v
-            _data = {"message": prompt, **inference_params}
-            if chat_history is not None:
-                _data["chat_history"] = chat_history
-            return _data
-        else:
-            config = litellm.AmazonCohereConfig.get_config()
-            for k, v in config.items():
-                if k not in inference_params:
-                    inference_params[k] = v
-            if stream is True:
-                inference_params["stream"] = True
-            return {"prompt": prompt, **inference_params}
-
-    def _build_ai21_request(self, prompt: str, inference_params: dict) -> dict:
-        """Build request data for AI21 models."""
-        config = litellm.AmazonAI21Config.get_config()
+    def _apply_config_to_params(self, config: dict, inference_params: dict) -> None:
+        """Apply config values to inference_params if not already set."""
         for k, v in config.items():
             if k not in inference_params:
                 inference_params[k] = v
-        return {"prompt": prompt, **inference_params}
-
-    def _build_mistral_request(self, prompt: str, inference_params: dict) -> dict:
-        """Build request data for Mistral models."""
-        config = litellm.AmazonMistralConfig.get_config()
-        for k, v in config.items():
-            if k not in inference_params:
-                inference_params[k] = v
-        return {"prompt": prompt, **inference_params}
-
-    def _build_amazon_titan_request(self, prompt: str, inference_params: dict) -> dict:
-        """Build request data for Amazon Titan models."""
-        config = litellm.AmazonTitanConfig.get_config()
-        for k, v in config.items():
-            if k not in inference_params:
-                inference_params[k] = v
-        return {"inputText": prompt, "textGenerationConfig": inference_params}
-
-    def _build_llama_request(self, prompt: str, inference_params: dict) -> dict:
-        """Build request data for Meta/Llama/DeepSeek models."""
-        config = litellm.AmazonLlamaConfig.get_config()
-        for k, v in config.items():
-            if k not in inference_params:
-                inference_params[k] = v
-        return {"prompt": prompt, **inference_params}
 
     def transform_request(
         self,
@@ -217,7 +169,23 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         }
         
         if provider == "cohere":
-            return self._build_cohere_request(model, prompt, chat_history, inference_params, stream)
+            if model.startswith("cohere.command-r"):
+                ## LOAD CONFIG
+                config = litellm.AmazonCohereChatConfig().get_config()
+                self._apply_config_to_params(config, inference_params)
+                _data = {"message": prompt, **inference_params}
+                if chat_history is not None:
+                    _data["chat_history"] = chat_history
+                request_data = _data
+            else:
+                ## LOAD CONFIG
+                config = litellm.AmazonCohereConfig.get_config()
+                self._apply_config_to_params(config, inference_params)
+                if stream is True:
+                    inference_params[
+                        "stream"
+                    ] = True  # cohere requires stream = True in inference params
+                request_data = {"prompt": prompt, **inference_params}
         elif provider == "anthropic":
             return litellm.AmazonAnthropicClaudeConfig().transform_request(
                 model=model,
@@ -235,13 +203,28 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
                 headers=headers,
             )
         elif provider == "ai21":
-            return self._build_ai21_request(prompt, inference_params)
+            ## LOAD CONFIG
+            config = litellm.AmazonAI21Config.get_config()
+            self._apply_config_to_params(config, inference_params)
+            request_data = {"prompt": prompt, **inference_params}
         elif provider == "mistral":
-            return self._build_mistral_request(prompt, inference_params)
+            ## LOAD CONFIG
+            config = litellm.AmazonMistralConfig.get_config()
+            self._apply_config_to_params(config, inference_params)
+            request_data = {"prompt": prompt, **inference_params}
         elif provider == "amazon":  # amazon titan
-            return self._build_amazon_titan_request(prompt, inference_params)
+            ## LOAD CONFIG
+            config = litellm.AmazonTitanConfig.get_config()
+            self._apply_config_to_params(config, inference_params)
+            request_data = {
+                "inputText": prompt,
+                "textGenerationConfig": inference_params,
+            }
         elif provider == "meta" or provider == "llama" or provider == "deepseek_r1":
-            return self._build_llama_request(prompt, inference_params)
+            ## LOAD CONFIG
+            config = litellm.AmazonLlamaConfig.get_config()
+            self._apply_config_to_params(config, inference_params)
+            request_data = {"prompt": prompt, **inference_params}
         elif provider == "twelvelabs":
             return litellm.AmazonTwelveLabsPegasusConfig().transform_request(
                 model=model,
@@ -535,6 +518,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         if model.startswith("invoke/"):
             model = model.replace("invoke/", "", 1)
 
+        # Special case: Check for "nova" in model name first (before "amazon")
+        # This handles amazon.nova-* models which would otherwise match "amazon" (Titan)
+        if "nova" in model.lower():
+            if "nova" in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
+                return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, "nova")
+
         _split_model = model.split(".")[0]
         if _split_model in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
             return cast(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL, _split_model)
@@ -543,10 +532,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         provider = AmazonInvokeConfig._get_provider_from_model_path(model)
         if provider is not None:
             return provider
-
-        # check if provider == "nova"
-        if "nova" in model:
-            return "nova"
 
         for provider in get_args(litellm.BEDROCK_INVOKE_PROVIDERS_LITERAL):
             if provider in model:

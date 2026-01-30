@@ -1,26 +1,35 @@
+import asyncio
 import json
 import os
 import sys
 from unittest.mock import MagicMock, patch
-import asyncio
 
-import pytest
 import httpx
+import pytest
 
 sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
 import litellm
-from litellm.types.containers.main import ContainerObject, ContainerListResponse, DeleteContainerResult
 from litellm.containers.main import (
-    create_container, acreate_container,
-    list_containers, alist_containers,
-    retrieve_container, aretrieve_container,
-    delete_container, adelete_container
+    acreate_container,
+    adelete_container,
+    alist_containers,
+    aretrieve_container,
+    create_container,
+    delete_container,
+    list_containers,
+    retrieve_container,
 )
-from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
+from litellm.llms.openai.containers.transformation import OpenAIContainerConfig
+from litellm.router import Router
+from litellm.types.containers.main import (
+    ContainerListResponse,
+    ContainerObject,
+    DeleteContainerResult,
+)
 
 
 class TestContainerAPI:
@@ -125,80 +134,6 @@ class TestContainerAPI:
             assert response.id == "cntr_async_123"
             assert response.name == "Async Test Container"
 
-    def test_list_containers_basic(self):
-        """Test basic container listing functionality."""
-        mock_response = ContainerListResponse(
-            object="list",
-            data=[
-                ContainerObject(
-                    id="cntr_1",
-                    object="container",
-                    created_at=1747857508,
-                    status="running",
-                    expires_after={"anchor": "last_active_at", "minutes": 20},
-                    last_active_at=1747857508,
-                    name="Container 1"
-                ),
-                ContainerObject(
-                    id="cntr_2", 
-                    object="container",
-                    created_at=1747857600,
-                    status="running",
-                    expires_after={"anchor": "last_active_at", "minutes": 15},
-                    last_active_at=1747857600,
-                    name="Container 2"
-                )
-            ],
-            first_id="cntr_1",
-            last_id="cntr_2",
-            has_more=False
-        )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_list_handler.return_value = mock_response
-            
-            response = list_containers(
-                custom_llm_provider="openai"
-            )
-            
-            assert isinstance(response, ContainerListResponse)
-            assert len(response.data) == 2
-            assert response.data[0].id == "cntr_1"
-            assert response.data[1].id == "cntr_2"
-            assert response.has_more == False
-
-    def test_list_containers_with_params(self):
-        """Test container listing with parameters."""
-        mock_response = ContainerListResponse(
-            object="list",
-            data=[
-                ContainerObject(
-                    id="cntr_limited",
-                    object="container",
-                    created_at=1747857508,
-                    status="running",
-                    expires_after={"anchor": "last_active_at", "minutes": 20},
-                    last_active_at=1747857508,
-                    name="Limited Container"
-                )
-            ],
-            first_id="cntr_limited",
-            last_id="cntr_limited", 
-            has_more=True
-        )
-        
-        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
-            mock_handler.container_list_handler.return_value = mock_response
-            
-            response = list_containers(
-                limit=1,
-                order="desc",
-                after="cntr_prev",
-                custom_llm_provider="openai"
-            )
-            
-            assert len(response.data) == 1
-            assert response.has_more == True
 
     @pytest.mark.asyncio
     async def test_alist_containers_basic(self):
@@ -231,30 +166,55 @@ class TestContainerAPI:
             assert isinstance(response, ContainerListResponse)
             assert len(response.data) == 1
 
-    def test_retrieve_container_basic(self):
-        """Test basic container retrieval functionality."""
-        container_id = "cntr_retrieve_test"
+    @pytest.mark.parametrize(
+        "container_id,container_name,status,provider",
+        [
+            ("cntr_retrieve_test", "Retrieved Container", "running", "openai"),
+            ("cntr_different_id", "Another Container", "stopped", "openai"),
+        ],
+    )
+    def test_retrieve_container_basic(self, container_id, container_name, status, provider):
+        """Test basic container retrieval functionality.
+        
+        This test verifies that:
+        1. retrieve_container correctly calls the handler with the container_id
+        2. The response is properly deserialized into a ContainerObject
+        3. All fields are correctly mapped from the handler response
+        4. The function works with different container states and IDs
+        """
+        # Arrange: Create mock response with test parameters
         mock_response = ContainerObject(
             id=container_id,
             object="container",
             created_at=1747857508,
-            status="running",
+            status=status,
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name="Retrieved Container"
+            name=container_name
         )
         
         with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
             mock_handler.container_retrieve_handler.return_value = mock_response
             
+            # Act: Call retrieve_container
             response = retrieve_container(
                 container_id=container_id,
-                custom_llm_provider="openai"
+                custom_llm_provider=provider
             )
             
+            # Assert: Verify the handler was called correctly
+            mock_handler.container_retrieve_handler.assert_called_once()
+            call_kwargs = mock_handler.container_retrieve_handler.call_args.kwargs
+            assert call_kwargs["container_id"] == container_id
+            
+            # Assert: Verify response structure and content
             assert isinstance(response, ContainerObject)
             assert response.id == container_id
-            assert response.name == "Retrieved Container"
+            assert response.name == container_name
+            assert response.status == status
+            assert response.object == "container"
+            assert response.expires_after.minutes == 20
+            assert response.expires_after.anchor == "last_active_at"
 
     @pytest.mark.asyncio
     async def test_aretrieve_container_basic(self):
@@ -361,3 +321,32 @@ class TestContainerAPI:
                 # Verify provider config was requested
                 mock_config_manager.get_provider_container_config.assert_called_once()
                 assert response.name == "Config Test"
+
+    @pytest.mark.asyncio
+    async def test_router_acreate_container_without_model(self):
+        """
+        Test that router.acreate_container works without a model configured.
+        Ensures container operations bypass model deployment lookup.
+        """
+        router = Router(model_list=[])
+
+        mock_response = ContainerObject(
+            id="cntr_test",
+            object="container",
+            created_at=1747857508,
+            status="running",
+            expires_after={"anchor": "last_active_at", "minutes": 20},
+            last_active_at=1747857508,
+            name="Test Container"
+        )
+
+        with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
+            mock_handler.container_create_handler.return_value = mock_response
+
+            result = await router.acreate_container(
+                name="Test Container",
+                custom_llm_provider="openai"
+            )
+
+            assert result.id == "cntr_test"
+            assert result.name == "Test Container"

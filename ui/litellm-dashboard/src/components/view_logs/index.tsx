@@ -1,32 +1,36 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import moment from "moment";
-import { useQuery } from "@tanstack/react-query";
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall, allEndUsersCall } from "../networking";
-import { DataTable } from "./table";
-import { columns, LogEntry } from "./columns";
-import { Row } from "@tanstack/react-table";
-import { prefetchLogDetails } from "./prefetch";
-import { RequestResponsePanel } from "./RequestResponsePanel";
-import { ErrorViewer } from "./ErrorViewer";
-import { internalUserRoles } from "../../utils/roles";
-import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { Tooltip } from "antd";
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import KeyInfoView from "../templates/key_info_view";
-import { SessionView } from "./SessionView";
-import { VectorStoreViewer } from "./VectorStoreViewer";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
-import FilterComponent from "../molecules/filter";
-import { FilterOption } from "../molecules/filter";
-import { useLogFilterLogic } from "./log_filter_logic";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/react";
-import AuditLogs from "./audit_logs";
-import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
+import { SettingOutlined } from "@ant-design/icons";
+import { Row } from "@tanstack/react-table";
+import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Button, Tooltip } from "antd";
+import { internalUserRoles } from "../../utils/roles";
+import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
+import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
+import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import FilterComponent, { FilterOption } from "../molecules/filter";
+import { allEndUsersCall, keyInfoV1Call, keyListCall, sessionSpendLogsCall, uiSpendLogsCall } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
+import AuditLogs from "./audit_logs";
+import { columns, LogEntry } from "./columns";
+import { ConfigInfoMessage } from "./ConfigInfoMessage";
+import { CostBreakdownViewer } from "./CostBreakdownViewer";
+import { ErrorViewer } from "./ErrorViewer";
+import { useLogFilterLogic } from "./log_filter_logic";
+import { getTimeRangeDisplay } from "./logs_utils";
+import { prefetchLogDetails } from "./prefetch";
+import { RequestResponsePanel } from "./RequestResponsePanel";
+import { SessionView } from "./SessionView";
+import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
+import { DataTable } from "./table";
+import { VectorStoreViewer } from "./VectorStoreViewer";
+import NewBadge from "../common_components/NewBadge";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -87,6 +91,7 @@ export default function SpendLogsTable({
 
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
 
   const queryClient = useQueryClient();
 
@@ -354,7 +359,7 @@ export default function SpendLogsTable({
     sessionLogs.data?.data?.map((log) => ({
       ...log,
       onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-      onSessionClick: (sessionId: string) => {},
+      onSessionClick: (sessionId: string) => { },
     })) || [];
 
   // Add this function to handle manual refresh
@@ -364,6 +369,24 @@ export default function SpendLogsTable({
 
   const handleRowExpand = (requestId: string | null) => {
     setExpandedRequestId(requestId);
+  };
+
+  // Function to extract unique error codes from logs
+  const extractErrorCodes = (logs: LogEntry[], searchText: string = "") => {
+    const errorCodes = new Set<string>();
+    logs.forEach((log) => {
+      const metadata = log.metadata || {};
+      if (metadata.status === "failure" && metadata.error_information) {
+        const errorCode = metadata.error_information.error_code;
+        if (errorCode && (!searchText || errorCode.toLowerCase().includes(searchText.toLowerCase()))) {
+          errorCodes.add(errorCode);
+        }
+      }
+    });
+    return Array.from(errorCodes).map((code) => ({
+      label: code,
+      value: code,
+    }));
   };
 
   const logFilterOptions: FilterOption[] = [
@@ -427,8 +450,21 @@ export default function SpendLogsTable({
       },
     },
     {
+      name: "Error Code",
+      label: "Error Code",
+      isSearchable: true,
+      searchFn: async (searchText: string) => {
+        return extractErrorCodes(logsData.data, searchText);
+      },
+    },
+    {
       name: "Key Hash",
       label: "Key Hash",
+      isSearchable: false,
+    },
+    {
+      name: "Error Message",
+      label: "Error Message",
       isSearchable: false,
     },
   ];
@@ -475,6 +511,8 @@ export default function SpendLogsTable({
         <TabList>
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
+          <Tab>Deleted Keys</Tab>
+          <Tab>Deleted Teams</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -494,17 +532,21 @@ export default function SpendLogsTable({
                   "Request Logs"
                 )}
               </h1>
+              {!selectedSessionId && (
+                <NewBadge dot><Button
+                  icon={<SettingOutlined />}
+                  onClick={() => setIsSpendLogsSettingsModalVisible(true)}
+                  title="Spend Logs Settings"
+                /></NewBadge>
+
+              )}
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
                 keyId={selectedKeyIdInfoView}
                 keyData={selectedKeyInfo}
-                accessToken={accessToken}
-                userID={userID}
-                userRole={userRole}
                 teams={allTeams}
                 onClose={() => setSelectedKeyIdInfoView(null)}
-                premiumUser={premiumUser}
                 backButtonText="Back to Logs"
               />
             ) : selectedSessionId ? (
@@ -512,9 +554,9 @@ export default function SpendLogsTable({
                 <DataTable
                   columns={columns}
                   data={sessionData}
-                  renderSubComponent={RequestViewer}
+                  renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
                   getRowCanExpand={() => true}
-                  // Optionally: add session-specific row expansion state
+                // Optionally: add session-specific row expansion state
                 />
               </div>
             ) : (
@@ -523,6 +565,11 @@ export default function SpendLogsTable({
                   options={logFilterOptions}
                   onApplyFilters={handleFilterChange}
                   onResetFilters={handleFilterReset}
+                />
+                <SpendLogsSettingsModal
+                  isVisible={isSpendLogsSettingsModalVisible}
+                  onCancel={() => setIsSpendLogsSettingsModalVisible(false)}
+                  onSuccess={() => setIsSpendLogsSettingsModalVisible(false)}
                 />
                 <div className="bg-white rounded-lg shadow w-full max-w-full box-border">
                   <div className="border-b px-6 py-4 w-full max-w-full box-border">
@@ -574,9 +621,8 @@ export default function SpendLogsTable({
                                   {quickSelectOptions.map((option) => (
                                     <button
                                       key={option.label}
-                                      className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                        displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
-                                      }`}
+                                      className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${displayLabel === option.label ? "bg-blue-50 text-blue-600" : ""
+                                        }`}
                                       onClick={() => {
                                         setEndTime(moment().format("YYYY-MM-DDTHH:mm"));
                                         setStartTime(
@@ -594,9 +640,8 @@ export default function SpendLogsTable({
                                   ))}
                                   <div className="border-t my-2" />
                                   <button
-                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${
-                                      isCustomDate ? "bg-blue-50 text-blue-600" : ""
-                                    }`}
+                                    className={`w-full px-3 py-2 text-left text-sm hover:bg-gray-50 rounded-md ${isCustomDate ? "bg-blue-50 text-blue-600" : ""
+                                      }`}
                                     onClick={() => setIsCustomDate(!isCustomDate)}
                                   >
                                     Custom Range
@@ -708,7 +753,7 @@ export default function SpendLogsTable({
                   <DataTable
                     columns={columns}
                     data={filteredData}
-                    renderSubComponent={RequestViewer}
+                    renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
                     getRowCanExpand={() => true}
                   />
                 </div>
@@ -726,13 +771,15 @@ export default function SpendLogsTable({
               allTeams={allTeams}
             />
           </TabPanel>
+          <TabPanel><DeletedKeysPage /></TabPanel>
+          <TabPanel><DeletedTeamsPage /></TabPanel>
         </TabPanels>
       </TabGroup>
     </div>
   );
 }
 
-export function RequestViewer({ row }: { row: Row<LogEntry> }) {
+export function RequestViewer({ row, onOpenSettings }: { row: Row<LogEntry>; onOpenSettings?: () => void }) {
   // Helper function to clean metadata by removing specific fields
   const formatData = (input: any) => {
     if (typeof input === "string") {
@@ -909,11 +956,10 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
             <div className="flex">
               <span className="font-medium w-1/3">Status:</span>
               <span
-                className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${
-                  (row.original.metadata?.status || "Success").toLowerCase() !== "failure"
-                    ? "bg-green-100 text-green-800"
-                    : "bg-red-100 text-red-800"
-                }`}
+                className={`px-2 py-1 rounded-md text-xs font-medium inline-block text-center w-16 ${(row.original.metadata?.status || "Success").toLowerCase() !== "failure"
+                  ? "bg-green-100 text-green-800"
+                  : "bg-red-100 text-red-800"
+                  }`}
               >
                 {(row.original.metadata?.status || "Success").toLowerCase() !== "failure" ? "Success" : "Failure"}
               </span>
@@ -930,12 +976,21 @@ export function RequestViewer({ row }: { row: Row<LogEntry> }) {
               <span className="font-medium w-1/3">Duration:</span>
               <span>{row.original.duration} s.</span>
             </div>
+            {row.original.metadata?.litellm_overhead_time_ms !== undefined && (
+              <div className="flex">
+                <span className="font-medium w-1/3">LiteLLM Overhead:</span>
+                <span>{row.original.metadata.litellm_overhead_time_ms} ms</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
 
+      {/* Cost Breakdown - Show if cost breakdown data is available */}
+      <CostBreakdownViewer costBreakdown={row.original.metadata?.cost_breakdown} totalSpend={row.original.spend || 0} />
+
       {/* Configuration Info Message - Show when data is missing */}
-      <ConfigInfoMessage show={missingData} />
+      <ConfigInfoMessage show={missingData} onOpenSettings={onOpenSettings} />
 
       {/* Request/Response Panel */}
       <div className="w-full max-w-full overflow-hidden">

@@ -78,10 +78,19 @@ class ExceptionCheckers:
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
             "`inputs` tokens + `max_new_tokens` must be",
+            "exceeds the maximum number of tokens allowed",  # Gemini
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
                 return True
+
+        # Cerebras pattern: "Current length is X while limit is Y"
+        if (
+            "current length is" in _error_str_lowercase
+            and "while limit is" in _error_str_lowercase
+        ):
+            return True
+
         return False
     
     @staticmethod
@@ -133,7 +142,14 @@ def get_error_message(error_obj) -> Optional[str]:
         if hasattr(error_obj, "body"):
             _error_obj_body = getattr(error_obj, "body")
             if isinstance(_error_obj_body, dict):
-                return _error_obj_body.get("message")
+                # OpenAI-style: {"message": "...", "type": "...", ...}
+                if _error_obj_body.get("message"):
+                    return _error_obj_body.get("message")
+
+                # Azure-style: {"error": {"message": "...", ...}}
+                nested_error = _error_obj_body.get("error")
+                if isinstance(nested_error, dict):
+                    return nested_error.get("message")
 
         # If all else fails, return None
         return None
@@ -188,12 +204,22 @@ def extract_and_raise_litellm_exception(
         exception_name = exception_name.strip().replace("litellm.", "")
         raised_exception_obj = getattr(litellm, exception_name, None)
         if raised_exception_obj:
-            raise raised_exception_obj(
-                message=error_str,
-                llm_provider=custom_llm_provider,
-                model=model,
-                response=response,
-            )
+            # Try with response parameter first, fall back to without it
+            # Some exceptions (e.g., APIConnectionError) don't accept response param
+            try:
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    response=response,
+                )
+            except TypeError:
+                # Exception doesn't accept response parameter
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
 
 
 def exception_type(  # type: ignore  # noqa: PLR0915
@@ -1251,6 +1277,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider=custom_llm_provider,
                     )
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"ContextWindowExceededError: {custom_llm_provider.capitalize()}Exception - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        litellm_debug_info=extra_information,
+                    )
                 elif (
                     "None Unknown Error." in error_str
                     or "Content has no parts." in error_str
@@ -2017,6 +2051,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     else:
                         message = str(original_exception)
 
+                # Azure OpenAI (especially Images) often nests error details under
+                # body["error"]. Detect content policy violations using the structured
+                # payload in addition to string matching.
+                azure_error_code: Optional[str] = None
+                try:
+                    body_dict = getattr(original_exception, "body", None) or {}
+                    if isinstance(body_dict, dict):
+                        if isinstance(body_dict.get("error"), dict):
+                            azure_error_code = body_dict["error"].get("code")  # type: ignore[index]
+                        else:
+                            azure_error_code = body_dict.get("code")
+                except Exception:
+                    azure_error_code = None
+
                 if "Internal server error" in error_str:
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
@@ -2045,7 +2093,8 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                     )
                 elif (
-                    ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
+                    azure_error_code == "content_policy_violation"
+                    or ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
                 ):
                     exception_mapping_worked = True
                     from litellm.llms.azure.exception_mapping import (

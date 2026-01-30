@@ -201,6 +201,12 @@ ignored_keys = [
     "metadata.usage_object",
     "metadata.cold_storage_object_key",
     "metadata.additional_usage_values.prompt_tokens_details.cache_creation_tokens",
+    "metadata.additional_usage_values.completion_tokens_details",
+    "metadata.additional_usage_values.prompt_tokens_details",
+    "metadata.additional_usage_values.cache_creation_input_tokens",
+    "metadata.additional_usage_values.cache_read_input_tokens",
+    "metadata.litellm_overhead_time_ms",
+    "metadata.cost_breakdown",
 ]
 
 MODEL_LIST = [
@@ -1164,6 +1170,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
@@ -1239,7 +1246,7 @@ class TestSpendLogsPayload:
                     "model": "claude-3-7-sonnet-20250219",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1257,6 +1264,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
@@ -1330,7 +1338,7 @@ class TestSpendLogsPayload:
                     "model": "claude-3-7-sonnet-20250219",
                     "user": "",
                     "team_id": "",
-                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
+                    "metadata": '{"applied_guardrails": [], "batch_models": null, "mcp_tool_call_metadata": null, "vector_store_request_metadata": null, "guardrail_information": null, "usage_object": {"completion_tokens": 503, "prompt_tokens": 2095, "total_tokens": 2598, "completion_tokens_details": null, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}, "model_map_information": {"model_map_key": "claude-3-7-sonnet-20250219", "model_map_value": {"key": "claude-3-7-sonnet-20250219", "max_tokens": 128000, "max_input_tokens": 200000, "max_output_tokens": 128000, "input_cost_per_token": 3e-06, "cache_creation_input_token_cost": 3.75e-06, "cache_read_input_token_cost": 3e-07, "input_cost_per_character": null, "input_cost_per_token_above_128k_tokens": null, "input_cost_per_token_above_200k_tokens": null, "input_cost_per_query": null, "input_cost_per_second": null, "input_cost_per_audio_token": null, "input_cost_per_token_batches": null, "output_cost_per_token_batches": null, "output_cost_per_token": 1.5e-05, "output_cost_per_audio_token": null, "output_cost_per_character": null, "output_cost_per_token_above_128k_tokens": null, "output_cost_per_character_above_128k_tokens": null, "output_cost_per_token_above_200k_tokens": null, "output_cost_per_second": null, "output_cost_per_image": null, "output_vector_size": null, "litellm_provider": "anthropic", "mode": "chat", "supports_system_messages": null, "supports_response_schema": true, "supports_vision": true, "supports_function_calling": true, "supports_tool_choice": true, "supports_assistant_prefill": true, "supports_prompt_caching": true, "supports_audio_input": false, "supports_audio_output": false, "supports_pdf_input": true, "supports_embedding_image_input": false, "supports_native_streaming": null, "supports_web_search": false, "supports_reasoning": true, "search_context_cost_per_query": null, "tpm": null, "rpm": null, "supported_openai_params": ["stream", "stop", "temperature", "top_p", "max_tokens", "max_completion_tokens", "tools", "tool_choice", "extra_headers", "parallel_tool_calls", "response_format", "user", "reasoning_effort", "thinking"]}}, "additional_usage_values": {"completion_tokens_details": {"accepted_prediction_tokens": null, "audio_tokens": null, "reasoning_tokens": null, "rejected_prediction_tokens": null, "text_tokens": 503, "image_tokens": null}, "prompt_tokens_details": {"audio_tokens": null, "cached_tokens": 0, "text_tokens": null, "image_tokens": null}, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}',
                     "cache_key": "Cache OFF",
                     "spend": 0.01383,
                     "total_tokens": 2598,
@@ -1348,6 +1356,7 @@ class TestSpendLogsPayload:
                     "proxy_server_request": "{}",
                     "status": "success",
                     "mcp_namespaced_tool_name": None,
+                    "agent_id": None,
                 }
             )
 
@@ -1853,3 +1862,286 @@ async def test_view_spend_logs_with_date_range_summarized(client, monkeypatch):
     assert "spend" in data[0]
     assert "users" in data[0]
     assert "models" in data[0]
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_code(client):
+    """Test filtering spend logs by error code"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"error_information": {"error_code": "404"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"error_information": {"error_code": "500"}}',
+        },
+    ]
+
+    with patch.object(ps, "prisma_client") as mock_prisma:
+        # Mock the find_many method to return filtered results
+        async def mock_find_many(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_code"]:
+                    error_code = metadata_filter.get("equals")
+                    # Handle both string and integer error codes
+                    # The endpoint wraps error_code in quotes, so strip them for comparison
+                    error_code_value = str(error_code).strip('"')
+                    if error_code_value == "404":
+                        return [mock_spend_logs[0]]
+                    elif error_code_value == "500":
+                        return [mock_spend_logs[1]]
+            return mock_spend_logs
+
+        async def mock_count(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_code"]:
+                    error_code = metadata_filter.get("equals")
+                    # Handle both string and integer error codes
+                    # The endpoint wraps error_code in quotes, so strip them for comparison
+                    error_code_value = str(error_code).strip('"')
+                    if error_code_value == "404":
+                        return 1
+                    elif error_code_value == "500":
+                        return 1
+            return len(mock_spend_logs)
+
+        mock_prisma.db.litellm_spendlogs.find_many = mock_find_many
+        mock_prisma.db.litellm_spendlogs.count = mock_count
+
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_code": "404",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "error_information" in metadata
+        assert metadata["error_information"]["error_code"] == "404"
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_message(client):
+    """Test filtering spend logs by error message"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"error_information": {"error_message": "Rate limit exceeded"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"error_information": {"error_message": "Invalid API key"}}',
+        },
+    ]
+
+    with patch.object(ps, "prisma_client") as mock_prisma:
+        # Mock the find_many method to return filtered results
+        async def mock_find_many(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_message"]:
+                    error_message_filter = metadata_filter.get("string_contains")
+                    # Check if the error message contains the filter string
+                    if error_message_filter == "Rate limit":
+                        return [mock_spend_logs[0]]
+                    elif error_message_filter == "Invalid API":
+                        return [mock_spend_logs[1]]
+            return mock_spend_logs
+
+        async def mock_count(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "metadata" in where_conditions:
+                metadata_filter = where_conditions["metadata"]
+                if metadata_filter.get("path") == ["error_information", "error_message"]:
+                    error_message_filter = metadata_filter.get("string_contains")
+                    if error_message_filter == "Rate limit":
+                        return 1
+                    elif error_message_filter == "Invalid API":
+                        return 1
+            return len(mock_spend_logs)
+
+        mock_prisma.db.litellm_spendlogs.find_many = mock_find_many
+        mock_prisma.db.litellm_spendlogs.count = mock_count
+
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_message": "Rate limit",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log1"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "error_information" in metadata
+        assert "Rate limit exceeded" in metadata["error_information"]["error_message"]
+
+
+@pytest.mark.asyncio
+async def test_ui_view_spend_logs_with_error_code_and_key_alias(client):
+    """Test merging error_code and key_alias filters with AND logic"""
+    mock_spend_logs = [
+        {
+            "id": "log1",
+            "request_id": "req1",
+            "api_key": "sk-test-key",
+            "user": "test_user_1",
+            "team_id": "team1",
+            "spend": 0.05,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5-turbo",
+            "metadata": '{"user_api_key_alias": "test-key-1", "error_information": {"error_code": "404"}}',
+        },
+        {
+            "id": "log2",
+            "request_id": "req2",
+            "api_key": "sk-test-key",
+            "user": "test_user_2",
+            "team_id": "team1",
+            "spend": 0.10,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"user_api_key_alias": "test-key-2", "error_information": {"error_code": "500"}}',
+        },
+        {
+            "id": "log3",
+            "request_id": "req3",
+            "api_key": "sk-test-key",
+            "user": "test_user_3",
+            "team_id": "team1",
+            "spend": 0.15,
+            "startTime": datetime.datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "metadata": '{"user_api_key_alias": "test-key-1", "error_information": {"error_code": "500"}}',
+        },
+    ]
+
+    with patch.object(ps, "prisma_client") as mock_prisma:
+        # Mock the find_many method to handle AND conditions
+        async def mock_find_many(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "AND" in where_conditions:
+                key_alias_filter = None
+                error_code_filter = None
+                for condition in where_conditions["AND"]:
+                    if "metadata" in condition:
+                        metadata_filter = condition["metadata"]
+                        if metadata_filter.get("path") == ["user_api_key_alias"]:
+                            key_alias_filter = metadata_filter.get("string_contains")
+                        elif metadata_filter.get("path") == ["error_information", "error_code"]:
+                            error_code_filter = metadata_filter.get("equals")
+
+                # Handle both string and integer error codes
+                # The endpoint wraps error_code in quotes, so strip them for comparison
+                error_code_value = str(error_code_filter).strip('"')
+                if key_alias_filter == "test-key-1" and error_code_value == "500":
+                    return [mock_spend_logs[2]]  # Only log3 matches both conditions
+            return mock_spend_logs
+
+        async def mock_count(*args, **kwargs):
+            where_conditions = kwargs.get("where", {})
+            if "AND" in where_conditions:
+                key_alias_filter = None
+                error_code_filter = None
+                for condition in where_conditions["AND"]:
+                    if "metadata" in condition:
+                        metadata_filter = condition["metadata"]
+                        if metadata_filter.get("path") == ["user_api_key_alias"]:
+                            key_alias_filter = metadata_filter.get("string_contains")
+                        elif metadata_filter.get("path") == ["error_information", "error_code"]:
+                            error_code_filter = metadata_filter.get("equals")
+
+                # Handle both string and integer error codes
+                # The endpoint wraps error_code in quotes, so strip them for comparison
+                error_code_value = str(error_code_filter).strip('"')
+                if key_alias_filter == "test-key-1" and error_code_value == "500":
+                    return 1
+            return len(mock_spend_logs)
+
+        mock_prisma.db.litellm_spendlogs.find_many = mock_find_many
+        mock_prisma.db.litellm_spendlogs.count = mock_count
+
+        start_date = (
+            datetime.datetime.now(timezone.utc) - datetime.timedelta(days=7)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        end_date = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+        response = client.get(
+            "/spend/logs/ui",
+            params={
+                "error_code": "500",
+                "key_alias": "test-key-1",
+                "start_date": start_date,
+                "end_date": end_date,
+            },
+            headers={"Authorization": "Bearer sk-test"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 1
+        assert len(data["data"]) == 1
+        assert data["data"][0]["id"] == "log3"
+        metadata = json.loads(data["data"][0]["metadata"])
+        assert "user_api_key_alias" in metadata
+        assert metadata["user_api_key_alias"] == "test-key-1"
+        assert "error_information" in metadata
+        assert metadata["error_information"]["error_code"] == "500"

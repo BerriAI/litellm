@@ -42,6 +42,7 @@ def get_litellm_params(
     input_cost_per_token=None,
     output_cost_per_token=None,
     output_cost_per_second=None,
+    cost_per_query=None,
     cooldown_time=None,
     text_completion=None,
     azure_ad_token_provider=None,
@@ -87,12 +88,17 @@ def get_litellm_params(
         "input_cost_per_second": input_cost_per_second,
         "output_cost_per_token": output_cost_per_token,
         "output_cost_per_second": output_cost_per_second,
+        "cost_per_query": cost_per_query,
         "cooldown_time": cooldown_time,
         "text_completion": text_completion,
         "azure_ad_token_provider": azure_ad_token_provider,
         "user_continue_message": user_continue_message,
         "base_model": base_model
-        or _get_base_model_from_litellm_call_metadata(metadata=metadata),
+        or (
+            _get_base_model_from_litellm_call_metadata(metadata=metadata)
+            if metadata
+            else None
+        ),
         "litellm_trace_id": litellm_trace_id,
         "litellm_session_id": litellm_session_id,
         "hf_model_name": hf_model_name,
@@ -136,5 +142,7 @@ def get_litellm_params(
         "aws_sts_endpoint": kwargs.get("aws_sts_endpoint"),
         "aws_external_id": kwargs.get("aws_external_id"),
         "aws_bedrock_runtime_endpoint": kwargs.get("aws_bedrock_runtime_endpoint"),
+        "tpm": kwargs.get("tpm"),
+        "rpm": kwargs.get("rpm"),
     }
     return litellm_params

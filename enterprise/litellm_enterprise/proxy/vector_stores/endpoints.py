@@ -141,28 +141,36 @@ async def list_vector_stores(
     """
     from litellm.proxy.proxy_server import prisma_client
 
-    seen_vector_store_ids = set()
-
     try:
-        # Get in-memory vector stores
-        in_memory_vector_stores: List[LiteLLM_ManagedVectorStore] = []
-        if litellm.vector_store_registry is not None:
-            in_memory_vector_stores = copy.deepcopy(
-                litellm.vector_store_registry.vector_stores
-            )
-
-        # Get vector stores from database
+        # Get vector stores from database (source of truth)
+        # Only return what's in the database to ensure consistency across instances
         vector_stores_from_db = await VectorStoreRegistry._get_vector_stores_from_db(
             prisma_client=prisma_client
         )
+        
+        # Also clean up in-memory registry to remove any deleted vector stores
+        if litellm.vector_store_registry is not None:
+            db_vector_store_ids = {
+                vs.get("vector_store_id") 
+                for vs in vector_stores_from_db 
+                if vs.get("vector_store_id")
+            }
+            # Remove any in-memory vector stores that no longer exist in database
+            vector_stores_to_remove = []
+            for vs in litellm.vector_store_registry.vector_stores:
+                vs_id = vs.get("vector_store_id")
+                if vs_id and vs_id not in db_vector_store_ids:
+                    vector_stores_to_remove.append(vs_id)
+            for vs_id in vector_stores_to_remove:
+                litellm.vector_store_registry.delete_vector_store_from_registry(
+                    vector_store_id=vs_id
+                )
+                verbose_proxy_logger.debug(
+                    f"Removed deleted vector store {vs_id} from in-memory registry"
+                )
 
-        # Combine in-memory and database vector stores
-        combined_vector_stores: List[LiteLLM_ManagedVectorStore] = []
-        for vector_store in in_memory_vector_stores + vector_stores_from_db:
-            vector_store_id = vector_store.get("vector_store_id", None)
-            if vector_store_id not in seen_vector_store_ids:
-                combined_vector_stores.append(vector_store)
-                seen_vector_store_ids.add(vector_store_id)
+        # Use database as single source of truth for listing
+        combined_vector_stores: List[LiteLLM_ManagedVectorStore] = vector_stores_from_db
 
         total_count = len(combined_vector_stores)
         total_pages = (total_count + page_size - 1) // page_size

@@ -2,7 +2,7 @@
 This file contains common utils for anthropic calls.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import httpx
 
@@ -12,9 +12,38 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
-from litellm.types.llms.anthropic import AllAnthropicToolsValues, AnthropicMcpServerTool
+from litellm.types.llms.anthropic import (
+    ANTHROPIC_HOSTED_TOOLS,
+    ANTHROPIC_OAUTH_BETA_HEADER,
+    ANTHROPIC_OAUTH_TOKEN_PREFIX,
+    AllAnthropicToolsValues,
+    AnthropicMcpServerTool,
+)
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import TokenCountResponse
+
+
+def optionally_handle_anthropic_oauth(
+    headers: dict, api_key: Optional[str]
+) -> tuple[dict, Optional[str]]:
+    """
+    Handle Anthropic OAuth token detection and header setup.
+
+    If an OAuth token is detected in the Authorization header, extracts it
+    and sets the required OAuth headers.
+
+    Args:
+        headers: Request headers dict
+        api_key: Current API key (may be None)
+
+    Returns:
+        Tuple of (updated headers, api_key)
+    """
+    auth_header = headers.get("authorization", "")
+    if auth_header and auth_header.startswith(f"Bearer {ANTHROPIC_OAUTH_TOKEN_PREFIX}"):
+        api_key = auth_header.replace("Bearer ", "")
+        headers["anthropic-beta"] = ANTHROPIC_OAUTH_BETA_HEADER
+        headers["anthropic-dangerous-direct-browser-access"] = "true"
+    return headers, api_key
 
 
 class AnthropicError(BaseLLMException):
@@ -71,6 +100,17 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             if "type" in tool and tool["type"].startswith("computer_"):
                 return tool["type"]
         return None
+
+    def is_web_search_tool_used(
+        self, tools: Optional[List[AllAnthropicToolsValues]]
+    ) -> bool:
+        """Returns True if web_search tool is used"""
+        if tools is None:
+            return False
+        for tool in tools:
+            if "type" in tool and tool["type"].startswith(ANTHROPIC_HOSTED_TOOLS.WEB_SEARCH.value):
+                return True
+        return False
 
     def is_pdf_used(self, messages: List[AllMessageValues]) -> bool:
         """
@@ -175,6 +215,37 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         
         return False
 
+    def is_code_execution_tool_used(self, tools: Optional[List]) -> bool:
+        """
+        Check if code execution tool is being used.
+        
+        Returns True if any tool has type "code_execution_20250825".
+        """
+        if not tools:
+            return False
+        
+        for tool in tools:
+            tool_type = tool.get("type", "")
+            if tool_type == "code_execution_20250825":
+                return True
+        return False
+    
+    def is_container_with_skills_used(self, optional_params: Optional[dict]) -> bool:
+        """
+        Check if container with skills is being used.
+        
+        Returns True if optional_params contains container with skills.
+        """
+        if not optional_params:
+            return False
+        
+        container = optional_params.get("container")
+        if container and isinstance(container, dict):
+            skills = container.get("skills")
+            if skills and isinstance(skills, list) and len(skills) > 0:
+                return True
+        return False
+
     def _get_user_anthropic_beta_headers(
         self, anthropic_beta_header: Optional[str]
     ) -> Optional[List[str]]:
@@ -231,8 +302,9 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.append(beta_header)
         
-        if prompt_caching_set:
-            betas.append("prompt-caching-2024-07-31")
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         
         if file_id_used:
             betas.append("files-api-2025-04-14")
@@ -252,16 +324,20 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         pdf_used: bool = False,
         file_id_used: bool = False,
         mcp_server_used: bool = False,
+        web_search_tool_used: bool = False,
         tool_search_used: bool = False,
         programmatic_tool_calling_used: bool = False,
         input_examples_used: bool = False,
         effort_used: bool = False,
         is_vertex_request: bool = False,
         user_anthropic_beta_headers: Optional[List[str]] = None,
+        code_execution_tool_used: bool = False,
+        container_with_skills_used: bool = False,
     ) -> dict:
         betas = set()
-        if prompt_caching_set:
-            betas.add("prompt-caching-2024-07-31")
+        # Anthropic no longer requires the prompt-caching beta header
+        # Prompt caching now works automatically when cache_control is used in messages
+        # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
         if computer_tool_used:
             beta_header = self.get_computer_tool_beta_header(computer_tool_used)
             betas.add(beta_header)
@@ -281,6 +357,14 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if effort_used:
             from litellm.types.llms.anthropic import ANTHROPIC_EFFORT_BETA_HEADER
             betas.add(ANTHROPIC_EFFORT_BETA_HEADER)
+        
+        # Code execution tool uses a separate beta header
+        if code_execution_tool_used:
+            betas.add("code-execution-2025-08-25")
+        
+        # Container with skills uses a separate beta header
+        if container_with_skills_used:
+            betas.add("skills-2025-10-02")
 
         headers = {
             "anthropic-version": anthropic_version or "2023-06-01",
@@ -292,9 +376,12 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if user_anthropic_beta_headers is not None:
             betas.update(user_anthropic_beta_headers)
 
-        # Don't send any beta headers to Vertex, Vertex has failed requests when they are sent
+        # Don't send any beta headers to Vertex, except web search which is required
         if is_vertex_request is True:
-            pass
+            # Vertex AI requires web search beta header for web search to work
+            if web_search_tool_used:
+                from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
+                headers["anthropic-beta"] = ANTHROPIC_BETA_HEADER_VALUES.WEB_SEARCH_2025_03_05.value
         elif len(betas) > 0:
             headers["anthropic-beta"] = ",".join(betas)
 
@@ -310,6 +397,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
     ) -> Dict:
+        # Check for Anthropic OAuth token in headers
+        headers, api_key = optionally_handle_anthropic_oauth(headers=headers, api_key=api_key)
         if api_key is None:
             raise litellm.AuthenticationError(
                 message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` in your environment vars",
@@ -325,10 +414,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         )
         pdf_used = self.is_pdf_used(messages=messages)
         file_id_used = self.is_file_id_used(messages=messages)
+        web_search_tool_used = self.is_web_search_tool_used(tools=tools)
         tool_search_used = self.is_tool_search_used(tools=tools)
         programmatic_tool_calling_used = self.is_programmatic_tool_calling_used(tools=tools)
         input_examples_used = self.is_input_examples_used(tools=tools)
         effort_used = self.is_effort_used(optional_params=optional_params, model=model)
+        code_execution_tool_used = self.is_code_execution_tool_used(tools=tools)
+        container_with_skills_used = self.is_container_with_skills_used(optional_params=optional_params)
         user_anthropic_beta_headers = self._get_user_anthropic_beta_headers(
             anthropic_beta_header=headers.get("anthropic-beta")
         )
@@ -338,6 +430,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             pdf_used=pdf_used,
             api_key=api_key,
             file_id_used=file_id_used,
+            web_search_tool_used=web_search_tool_used,
             is_vertex_request=optional_params.get("is_vertex_request", False),
             user_anthropic_beta_headers=user_anthropic_beta_headers,
             mcp_server_used=mcp_server_used,
@@ -345,6 +438,8 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             programmatic_tool_calling_used=programmatic_tool_calling_used,
             input_examples_used=input_examples_used,
             effort_used=effort_used,
+            code_execution_tool_used=code_execution_tool_used,
+            container_with_skills_used=container_with_skills_used,
         )
 
         headers = {**headers, **anthropic_headers}
@@ -408,45 +503,11 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         Returns:
             AnthropicTokenCounter instance for this provider.
         """
-        return AnthropicTokenCounter()
-
-
-class AnthropicTokenCounter(BaseTokenCounter):
-    """Token counter implementation for Anthropic provider."""
-
-    def should_use_token_counting_api(
-        self, 
-        custom_llm_provider: Optional[str] = None,
-    ) -> bool:
-        from litellm.types.utils import LlmProviders
-        return custom_llm_provider == LlmProviders.ANTHROPIC.value
-    
-    async def count_tokens(
-        self,
-        model_to_use: str,
-        messages: Optional[List[Dict[str, Any]]],
-        contents: Optional[List[Dict[str, Any]]],
-        deployment: Optional[Dict[str, Any]] = None,
-        request_model: str = "",
-    ) -> Optional[TokenCountResponse]:
-        from litellm.proxy.utils import count_tokens_with_anthropic_api
-        
-        result = await count_tokens_with_anthropic_api(
-            model_to_use=model_to_use,
-            messages=messages,
-            deployment=deployment,
+        from litellm.llms.anthropic.count_tokens.token_counter import (
+            AnthropicTokenCounter,
         )
-        
-        if result is not None:
-            return TokenCountResponse(
-                total_tokens=result.get("total_tokens", 0),
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
-            )
-        
-        return None
+
+        return AnthropicTokenCounter()
 
 
 def process_anthropic_headers(headers: Union[httpx.Headers, dict]) -> dict:
