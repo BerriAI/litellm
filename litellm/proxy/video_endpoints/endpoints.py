@@ -253,6 +253,11 @@ async def video_status(
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
+    # Resolve model from headers
+    model = request.headers.get("x-litellm-model-id")
+    if model:
+        data["model"] = model
+
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
     if model_id_from_decoded and llm_router:
@@ -350,6 +355,11 @@ async def video_content(
     )
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
+
+    # Resolve model from headers
+    model = request.headers.get("x-litellm-model-id")
+    if model:
+        data["model"] = model
 
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config
@@ -462,6 +472,11 @@ async def video_remix(
     )
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
+
+    # Resolve model from headers
+    model = request.headers.get("x-litellm-model-id")
+    if model:
+        data["model"] = model
 
     # Resolve model_name from model_id if available
     # This allows the router to automatically inject litellm_params from the model config

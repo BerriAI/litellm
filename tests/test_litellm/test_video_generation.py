@@ -1169,5 +1169,50 @@ class TestVideoEndpointsProxyLitellmParams:
                 )
 
 
+    @pytest.mark.asyncio
+    async def test_video_status_plain_id_with_header(
+        self, client_with_vertex_config, mock_video_status_response
+    ):
+        """Test video status with plain video ID (no encoding) but with explicit model header."""
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        plain_video_id = "video_plain_123"
+
+        # Mock router
+        mock_router_instance = MagicMock()
+        mock_router_instance.resolve_model_name_from_model_id.return_value = "vertex-ai-sora-2"
+        mock_router_instance.model_names = {"vertex-ai-sora-2"}
+        mock_router_instance.has_model_id.return_value = False
+
+        # Mock route_request
+        async def mock_route_request_func(*args, **kwargs):
+            return mock_video_status_response
+        
+        def create_mock_coroutine(*args, **kwargs):
+            return mock_route_request_func(*args, **kwargs)
+
+        with patch("litellm.proxy.proxy_server.llm_router", mock_router_instance):
+            with patch("litellm.proxy.common_request_processing.route_request", side_effect=create_mock_coroutine) as mock_route_request:
+                
+                # Make request WITH header
+                response = client_with_vertex_config.get(
+                    f"/v1/videos/{plain_video_id}",
+                    headers={
+                        "Authorization": "Bearer sk-1234",
+                        "x-litellm-model-id": "vertex-ai-sora-2"
+                    },
+                )
+
+                assert response.status_code == 200
+                
+                # Verify passed data
+                assert mock_route_request.called
+                call_args = mock_route_request.call_args
+                data_passed = call_args.kwargs.get("data", {}) if call_args.kwargs else (call_args.args[0] if call_args.args and len(call_args.args) > 0 else {})
+
+                # Verify 'model' was set correctly from header
+                assert data_passed.get("model") == "vertex-ai-sora-2"
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
