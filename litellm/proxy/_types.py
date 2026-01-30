@@ -383,6 +383,7 @@ class LiteLLMRoutes(enum.Enum):
         "/azure",
         "/azure_ai",
         "/openai",
+        "/openai_passthrough",
         "/assemblyai",
         "/eu.assemblyai",
         "/vllm",
