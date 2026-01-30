@@ -139,7 +139,7 @@ function RequestIdSection({ requestId, onCopy }: { requestId: string; onCopy: ()
 
 /**
  * Navigation controls (previous, next, close)
- * Shows keyboard shortcuts with bounding boxes for visibility
+ * Shows keyboard shortcuts styled as buttons for visibility
  */
 function NavigationSection({
   onPrevious,
@@ -150,14 +150,21 @@ function NavigationSection({
   onNext: () => void;
   onClose: () => void;
 }) {
-  const keyboardShortcutStyle = {
-    border: "1px solid #d9d9d9",
-    borderRadius: 4,
-    padding: "0 4px",
-    fontSize: 12,
+  const keyboardShortcutStyle: React.CSSProperties = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: "20px",
+    height: "20px",
+    padding: "0 6px",
+    fontSize: 11,
+    fontWeight: 600,
     fontFamily: "monospace",
     marginLeft: 4,
-    background: "#fafafa",
+    background: "#fff",
+    border: "1px solid #d9d9d9",
+    borderRadius: 4,
+    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
   };
 
   return (
