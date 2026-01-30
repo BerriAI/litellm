@@ -9,13 +9,9 @@ export const API_BASE_MAX_WIDTH = 200;
 export const JSON_MAX_HEIGHT = 400;
 export const METADATA_MAX_HEIGHT = 300;
 
-// Tab keys
+// Tab keys (kept for backwards compatibility if needed)
 export const TAB_REQUEST = "request" as const;
 export const TAB_RESPONSE = "response" as const;
-
-// View modes
-export const VIEW_MODE_FORMATTED = "formatted" as const;
-export const VIEW_MODE_JSON = "json" as const;
 
 // Keyboard shortcuts
 export const KEY_ESCAPE = "Escape";
