@@ -950,3 +950,181 @@ def test_managed_files_with_loadbalancing(mocker: MockerFixture, monkeypatch, ll
     assert router_acreate_file_calls[0]["model"] == "azure-gpt-3-5-turbo"
     assert router_acreate_file_calls[1]["model"] == "gpt-3.5-turbo"
     assert all(call["via_router"] for call in router_acreate_file_calls), "All calls should go through router"
+
+
+def test_create_file_with_nested_litellm_metadata(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """
+    Test that nested litellm_metadata is correctly parsed from form data in bracket notation.
+    
+    Regression test for: litellm_metadata[spend_logs_metadata][owner] format should be
+    correctly parsed into nested dictionary structure.
+    """
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.types.llms.openai import OpenAIFileObject
+    
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+    
+    captured_litellm_metadata = {}
+    
+    class DummyManagedFiles(BaseFileEndpoints):
+        async def acreate_file(self, llm_router, create_file_request, target_model_names_list, litellm_parent_otel_span, user_api_key_dict):
+            # Capture litellm_metadata for verification
+            if isinstance(create_file_request, dict):
+                captured_litellm_metadata.update(
+                    create_file_request.get("litellm_metadata", {})
+                )
+            else:
+                captured_litellm_metadata.update(
+                    getattr(create_file_request, "litellm_metadata", {})
+                )
+            
+            return OpenAIFileObject(
+                id="file-test-123",
+                object="file",
+                bytes=100,
+                created_at=1234567890,
+                filename="test.jsonl",
+                purpose="fine-tune",
+                status="uploaded",
+            )
+        
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_list(self, purpose, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_delete(self, file_id, litellm_parent_otel_span, llm_router, **data):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
+            raise NotImplementedError("Not implemented for test")
+    
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+    
+    test_file_content = b'{"prompt": "Hello", "completion": "Hi"}'
+    test_file = ("test.jsonl", test_file_content, "application/jsonl")
+    
+    # Test with nested litellm_metadata in bracket notation
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "fine-tune",
+            "target_model_names": "gpt-3.5-turbo",
+            "litellm_metadata[spend_logs_metadata][owner]": "john_doe",
+            "litellm_metadata[spend_logs_metadata][team]": "engineering",
+            "litellm_metadata[tags]": "production",
+            "litellm_metadata[environment]": "prod",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+    
+    # Verify success
+    assert response.status_code == 200
+    result = response.json()
+    assert result["id"] == "file-test-123"
+    
+    # Verify nested metadata was correctly parsed
+    assert "spend_logs_metadata" in captured_litellm_metadata
+    assert captured_litellm_metadata["spend_logs_metadata"]["owner"] == "john_doe"
+    assert captured_litellm_metadata["spend_logs_metadata"]["team"] == "engineering"
+    assert captured_litellm_metadata["tags"] == "production"
+    assert captured_litellm_metadata["environment"] == "prod"
+
+
+def test_create_file_with_deep_nested_litellm_metadata(
+    mocker: MockerFixture, monkeypatch, llm_router: Router
+):
+    """
+    Test that deeply nested litellm_metadata is correctly parsed from form data.
+    
+    Regression test for: litellm_metadata[a][b][c] format should be correctly parsed.
+    """
+    from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
+    from litellm.types.llms.openai import OpenAIFileObject
+    
+    proxy_logging_obj = ProxyLogging(
+        user_api_key_cache=DualCache(default_in_memory_ttl=1)
+    )
+    proxy_logging_obj._add_proxy_hooks(llm_router)
+    
+    captured_litellm_metadata = {}
+    
+    class DummyManagedFiles(BaseFileEndpoints):
+        async def acreate_file(self, llm_router, create_file_request, target_model_names_list, litellm_parent_otel_span, user_api_key_dict):
+            if isinstance(create_file_request, dict):
+                captured_litellm_metadata.update(
+                    create_file_request.get("litellm_metadata", {})
+                )
+            else:
+                captured_litellm_metadata.update(
+                    getattr(create_file_request, "litellm_metadata", {})
+                )
+            
+            return OpenAIFileObject(
+                id="file-test-456",
+                object="file",
+                bytes=50,
+                created_at=1234567890,
+                filename="nested.jsonl",
+                purpose="batch",
+                status="uploaded",
+            )
+        
+        async def afile_retrieve(self, file_id, litellm_parent_otel_span, llm_router):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_list(self, purpose, litellm_parent_otel_span):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_delete(self, file_id, litellm_parent_otel_span, llm_router, **data):
+            raise NotImplementedError("Not implemented for test")
+        
+        async def afile_content(self, file_id, litellm_parent_otel_span, llm_router, **data):
+            raise NotImplementedError("Not implemented for test")
+    
+    proxy_logging_obj.proxy_hook_mapping["managed_files"] = DummyManagedFiles()
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", llm_router)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+    )
+    
+    test_file_content = b'{"custom_id": "req-1", "method": "POST", "url": "/v1/chat/completions", "body": {"model": "gpt-3.5-turbo"}}'
+    test_file = ("nested.jsonl", test_file_content, "application/jsonl")
+    
+    # Test with deeply nested metadata
+    response = client.post(
+        "/v1/files",
+        files={"file": test_file},
+        data={
+            "purpose": "batch",
+            "target_model_names": "gpt-3.5-turbo",
+            "litellm_metadata[config][database][host]": "localhost",
+            "litellm_metadata[config][database][port]": "5432",
+            "litellm_metadata[config][cache][enabled]": "true",
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+    
+    # Verify success
+    assert response.status_code == 200
+    result = response.json()
+    assert result["id"] == "file-test-456"
+    
+    # Verify deeply nested metadata was correctly parsed
+    assert "config" in captured_litellm_metadata
+    assert "database" in captured_litellm_metadata["config"]
+    assert captured_litellm_metadata["config"]["database"]["host"] == "localhost"
+    assert captured_litellm_metadata["config"]["database"]["port"] == "5432"
+    assert "cache" in captured_litellm_metadata["config"]
+    assert captured_litellm_metadata["config"]["cache"]["enabled"] == "true"
