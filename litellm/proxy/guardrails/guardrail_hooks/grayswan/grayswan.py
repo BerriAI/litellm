@@ -23,6 +23,8 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+GRAYSWAN_BLOCK_ERROR_MSG = "Blocked by Gray Swan Guardrail"
+
 
 class GraySwanGuardrailMissingSecrets(Exception):
     """Raised when the Gray Swan API key is missing."""
@@ -228,33 +230,9 @@ class GraySwanGuardrail(CustomGuardrail):
                 is_output=is_output,
             )
             return result
-        except ModifyResponseException:
-            # Guardrail decision (passthrough) should always propagate,
-            # regardless of fail_open.
-            raise
-        except HTTPException as exc:
-            # HTTP Exception could be from "blocked", should not be fail-open in this case.
-            if self._is_grayswan_block_exception(exc):
-                raise
-            end_time = time.time()
-            status_code = getattr(exc, "status_code", None) or getattr(
-                exc, "exception_status_code", None
-            )
-            self._log_guardrail_failure(
-                exc=exc,
-                request_data=request_data or {},
-                start_time=start_time,
-                end_time=end_time,
-                status_code=status_code,
-            )
-            if self.fail_open:
-                verbose_proxy_logger.warning(
-                    "Gray Swan Guardrail: fail_open=True. Allowing request to proceed despite error: %s",
-                    exc,
-                )
-                return inputs
-            raise GraySwanGuardrailAPIError(str(exc), status_code=status_code) from exc
         except Exception as exc:
+            if self._is_grayswan_exception(exc):
+                raise
             end_time = time.time()
             status_code = getattr(exc, "status_code", None) or getattr(
                 exc, "exception_status_code", None
@@ -276,10 +254,14 @@ class GraySwanGuardrail(CustomGuardrail):
                 raise exc
             raise GraySwanGuardrailAPIError(str(exc), status_code=status_code) from exc
 
-    def _is_grayswan_block_exception(self, exc: HTTPException) -> bool:
+    def _is_grayswan_exception(self, exc: Exception) -> bool:
+        # Guardrail decision (passthrough) should always propagate,
+        # regardless of fail_open.
+        if isinstance(exc, ModifyResponseException):
+            return True
         detail = getattr(exc, "detail", None)
         if isinstance(detail, dict):
-            return detail.get("error") == "Blocked by Gray Swan Guardrail"
+            return detail.get("error") == GRAYSWAN_BLOCK_ERROR_MSG
         return False
 
     # ------------------------------------------------------------------
@@ -364,7 +346,7 @@ class GraySwanGuardrail(CustomGuardrail):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Blocked by Gray Swan Guardrail",
+                    "error": GRAYSWAN_BLOCK_ERROR_MSG,
                     "violation_location": violation_location,
                     "violation": violation_score,
                     "violated_rules": violated_rules,
@@ -485,7 +467,7 @@ class GraySwanGuardrail(CustomGuardrail):
             raise HTTPException(
                 status_code=400,
                 detail={
-                    "error": "Blocked by Gray Swan Guardrail",
+                    "error": GRAYSWAN_BLOCK_ERROR_MSG,
                     "violation_location": violation_location,
                     "violation": violation_score,
                     "violated_rules": violated_rules,
