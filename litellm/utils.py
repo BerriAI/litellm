@@ -7408,7 +7408,13 @@ def is_cached_message(message: AllMessageValues) -> bool:
     Used for anthropic/gemini context caching.
 
     Follows the anthropic format {"cache_control": {"type": "ephemeral"}}
+    
+    Can be disabled globally by setting litellm.disable_anthropic_gemini_context_caching_transform = True
     """
+    # Check if context caching is disabled globally
+    if litellm.disable_anthropic_gemini_context_caching_transform is True:
+        return False
+    
     if "content" not in message:
         return False
 
