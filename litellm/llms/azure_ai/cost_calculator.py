@@ -4,7 +4,6 @@ Handles Azure AI Foundry Model Router flat cost and other Azure AI specific pric
 """
 
 from typing import Optional, Tuple
-import threading
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_cost_calc.utils import generic_cost_per_token
@@ -12,11 +11,7 @@ from litellm.types.utils import Usage
 from litellm.utils import get_model_info
 
 
-# Thread-local storage for tracking Azure Model Router flat cost
-_thread_local = threading.local()
-
-
-def _is_azure_model_router(model: str) -> bool:
+def is_azure_model_router(model: str) -> bool:
     """
     Check if the model is Azure AI Foundry Model Router.
     
@@ -30,20 +25,35 @@ def _is_azure_model_router(model: str) -> bool:
     return "model-router" in model_lower or model_lower == "azure-model-router"
 
 
-def get_azure_model_router_flat_cost() -> Optional[float]:
+def get_azure_model_router_flat_cost(model: str, usage: Usage) -> Optional[float]:
     """
-    Get the most recently calculated Azure Model Router flat cost from thread-local storage.
+    Calculate the Azure Model Router flat cost if applicable.
+    
+    Args:
+        model: The model name
+        usage: Usage object with token counts
     
     Returns:
-        Optional[float]: The flat cost, or None if not available
+        Optional[float]: The flat cost, or None if not a model router
     """
-    return getattr(_thread_local, 'azure_model_router_flat_cost', None)
-
-
-def _clear_azure_model_router_flat_cost() -> None:
-    """Clear the thread-local Azure Model Router flat cost."""
-    if hasattr(_thread_local, 'azure_model_router_flat_cost'):
-        delattr(_thread_local, 'azure_model_router_flat_cost')
+    if not is_azure_model_router(model):
+        return None
+    
+    # Get the model router pricing from model_prices_and_context_window.json
+    model_info = get_model_info(model="azure-model-router", custom_llm_provider="azure_ai")
+    router_flat_cost_per_token = model_info.get("input_cost_per_token", 0)
+    
+    if router_flat_cost_per_token > 0:
+        router_flat_cost = usage.prompt_tokens * router_flat_cost_per_token
+        
+        verbose_logger.debug(
+            f"Azure AI Model Router flat cost: ${router_flat_cost:.6f} "
+            f"({usage.prompt_tokens} tokens × ${router_flat_cost_per_token:.9f}/token)"
+        )
+        
+        return router_flat_cost
+    
+    return None
 
 
 def cost_per_token(
@@ -55,7 +65,6 @@ def cost_per_token(
     For Azure AI Foundry Model Router:
     - Adds a flat cost of $0.14 per million input tokens (from model_prices_and_context_window.json)
     - Plus the cost of the actual model used (handled by generic_cost_per_token)
-    - Stores the flat cost in thread-local storage for cost breakdown tracking
     
     Args:
         model: str, the model name without provider prefix
@@ -65,9 +74,6 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    # Clear any previous flat cost
-    _clear_azure_model_router_flat_cost()
-    
     # Calculate base cost using generic cost calculator
     prompt_cost, completion_cost = generic_cost_per_token(
         model=model,
@@ -76,24 +82,8 @@ def cost_per_token(
     )
     
     # Add flat cost for Azure Model Router
-    # The flat cost is defined in model_prices_and_context_window.json for azure_ai/azure-model-router
-    if _is_azure_model_router(model):
-        # Get the model router pricing from model_prices_and_context_window.json
-        model_info = get_model_info(model="azure-model-router", custom_llm_provider="azure_ai")
-        router_flat_cost_per_token = model_info.get("input_cost_per_token", 0)
-        
-        if router_flat_cost_per_token > 0:
-            router_flat_cost = usage.prompt_tokens * router_flat_cost_per_token
-            
-            # Store the flat cost in thread-local storage for cost breakdown
-            _thread_local.azure_model_router_flat_cost = router_flat_cost
-            
-            verbose_logger.debug(
-                f"Azure AI Model Router flat cost: ${router_flat_cost:.6f} "
-                f"({usage.prompt_tokens} tokens × ${router_flat_cost_per_token:.9f}/token)"
-            )
-            
-            # Add flat cost to prompt cost
-            prompt_cost += router_flat_cost
+    router_flat_cost = get_azure_model_router_flat_cost(model, usage)
+    if router_flat_cost:
+        prompt_cost += router_flat_cost
     
     return prompt_cost, completion_cost

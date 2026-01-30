@@ -1344,11 +1344,13 @@ def completion_cost(  # noqa: PLR0915
                 
                 # Get additional costs (e.g., Azure Model Router flat cost for azure_ai provider)
                 additional_costs: Optional[dict] = None
-                if custom_llm_provider == "azure_ai":
+                if custom_llm_provider == "azure_ai" and cost_per_token_usage_object:
                     from litellm.llms.azure_ai.cost_calculator import (
                         get_azure_model_router_flat_cost,
                     )
-                    azure_router_flat_cost = get_azure_model_router_flat_cost()
+                    azure_router_flat_cost = get_azure_model_router_flat_cost(
+                        model=model, usage=cost_per_token_usage_object
+                    )
                     if azure_router_flat_cost is not None and azure_router_flat_cost > 0:
                         additional_costs = {
                             "Azure Model Router Flat Cost": azure_router_flat_cost

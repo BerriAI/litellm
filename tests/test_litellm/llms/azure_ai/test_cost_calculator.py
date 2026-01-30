@@ -4,8 +4,9 @@ Test Azure AI cost calculator, especially Model Router flat cost.
 
 import pytest
 from litellm.llms.azure_ai.cost_calculator import (
-    _is_azure_model_router,
+    is_azure_model_router,
     cost_per_token,
+    get_azure_model_router_flat_cost,
 )
 from litellm.types.utils import Usage
 from litellm.utils import get_model_info
@@ -33,7 +34,7 @@ class TestAzureModelRouterDetection:
     )
     def test_is_azure_model_router(self, model: str, expected: bool):
         """Test Azure Model Router detection."""
-        assert _is_azure_model_router(model) == expected
+        assert is_azure_model_router(model) == expected
 
 
 class TestAzureModelRouterFlatCost:
@@ -157,12 +158,8 @@ class TestAzureModelRouterFlatCost:
 class TestAzureModelRouterCostBreakdown:
     """Test that Azure Model Router flat cost is tracked in cost breakdown."""
 
-    def test_flat_cost_tracked_in_thread_local(self):
-        """Test that flat cost is stored in thread-local storage."""
-        from litellm.llms.azure_ai.cost_calculator import (
-            get_azure_model_router_flat_cost,
-        )
-
+    def test_flat_cost_calculation(self):
+        """Test that flat cost is calculated correctly."""
         model = "azure-model-router"
         usage = Usage(
             prompt_tokens=10000,
@@ -170,11 +167,8 @@ class TestAzureModelRouterCostBreakdown:
             total_tokens=15000,
         )
 
-        # Calculate cost (this should store flat cost in thread-local)
-        prompt_cost, completion_cost = cost_per_token(model=model, usage=usage)
-
-        # Retrieve the flat cost from thread-local storage
-        flat_cost = get_azure_model_router_flat_cost()
+        # Calculate the flat cost directly
+        flat_cost = get_azure_model_router_flat_cost(model=model, usage=usage)
 
         # Expected flat cost
         expected_flat_cost = (
@@ -183,7 +177,7 @@ class TestAzureModelRouterCostBreakdown:
 
         assert flat_cost is not None
         assert flat_cost == pytest.approx(expected_flat_cost, rel=1e-9)
-        print(f"Flat cost tracked in thread-local: ${flat_cost:.6f}")
+        print(f"Flat cost calculated: ${flat_cost:.6f}")
 
     def test_flat_cost_integration_with_completion_cost(self):
         """Test that flat cost is properly integrated into completion_cost calculation."""
