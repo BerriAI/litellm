@@ -21,9 +21,11 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
     _update_request_data_with_litellm_managed_vector_store_registry,
 )
 from litellm.proxy.vector_store_endpoints.management_endpoints import (
+    _check_vector_store_access,
     _resolve_embedding_config,
     _resolve_embedding_config_from_db,
     _resolve_embedding_config_from_router,
+    create_vector_store_in_db,
     new_vector_store,
 )
 from litellm.proxy.vector_store_endpoints.utils import (
@@ -1651,3 +1653,187 @@ async def test_new_vector_store_auto_resolves_from_router():
     assert litellm_params_dict["litellm_embedding_config"]["api_key"] == "router-resolved-api-key"
     assert litellm_params_dict["litellm_embedding_config"]["api_base"] == "https://router-resolved-base.com"
     assert litellm_params_dict["litellm_embedding_config"]["api_version"] == "2024-03-01"
+
+
+class TestCheckVectorStoreAccess:
+    """Test suite for _check_vector_store_access function."""
+
+    def test_access_granted_when_no_team_id(self):
+        """Test that access is granted when vector store has no team_id (legacy behavior)."""
+        vector_store: LiteLLM_ManagedVectorStore = {
+            "vector_store_id": "test-store",
+            "custom_llm_provider": "openai",
+            # No team_id field
+        }
+        
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.team_id = "team-123"
+        
+        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        assert result is True
+
+    def test_access_granted_when_team_ids_match(self):
+        """Test that access is granted when user's team_id matches vector store's team_id."""
+        vector_store: LiteLLM_ManagedVectorStore = {
+            "vector_store_id": "test-store",
+            "custom_llm_provider": "openai",
+            "team_id": "team-123",
+        }
+        
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.team_id = "team-123"
+        
+        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        assert result is True
+
+    def test_access_denied_when_team_ids_dont_match(self):
+        """Test that access is denied when user's team_id doesn't match vector store's team_id."""
+        vector_store: LiteLLM_ManagedVectorStore = {
+            "vector_store_id": "test-store",
+            "custom_llm_provider": "openai",
+            "team_id": "team-123",
+        }
+        
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.team_id = "team-456"
+        
+        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        assert result is False
+
+    def test_access_denied_when_vector_store_has_team_id_but_user_doesnt(self):
+        """Test that access is denied when vector store has team_id but user doesn't."""
+        vector_store: LiteLLM_ManagedVectorStore = {
+            "vector_store_id": "test-store",
+            "custom_llm_provider": "openai",
+            "team_id": "team-123",
+        }
+        
+        mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
+        mock_user_api_key.team_id = None
+        
+        result = _check_vector_store_access(vector_store, mock_user_api_key)
+        assert result is False
+
+
+@pytest.mark.asyncio
+async def test_create_vector_store_in_db():
+    """Test that create_vector_store_in_db correctly creates a vector store in the database."""
+    from datetime import datetime, timezone
+    
+    mock_prisma_client = MagicMock()
+    
+    # Mock vector store data
+    vector_store_id = "test-create-store-001"
+    custom_llm_provider = "openai"
+    vector_store_name = "Test Store"
+    vector_store_description = "Test Description"
+    vector_store_metadata = {"key": "value"}
+    litellm_params = {"api_key": "test-key"}
+    team_id = "team-123"
+    user_id = "user-456"
+    
+    # Mock database operations
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=None  # Vector store doesn't exist yet
+    )
+    
+    created_vector_store_data = {
+        "vector_store_id": vector_store_id,
+        "custom_llm_provider": custom_llm_provider,
+        "vector_store_name": vector_store_name,
+        "vector_store_description": vector_store_description,
+        "vector_store_metadata": '{"key": "value"}',
+        "litellm_params": '{"api_key": "test-key"}',
+        "team_id": team_id,
+        "user_id": user_id,
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
+    }
+    
+    mock_created_vector_store = MagicMock()
+    mock_created_vector_store.model_dump.return_value = created_vector_store_data
+    
+    mock_prisma_client.db.litellm_managedvectorstorestable.create = AsyncMock(
+        return_value=mock_created_vector_store
+    )
+    
+    mock_registry = MagicMock()
+    mock_registry.add_vector_store_to_registry = MagicMock()
+    
+    with patch.object(litellm, "vector_store_registry", mock_registry):
+        result = await create_vector_store_in_db(
+            vector_store_id=vector_store_id,
+            custom_llm_provider=custom_llm_provider,
+            prisma_client=mock_prisma_client,
+            vector_store_name=vector_store_name,
+            vector_store_description=vector_store_description,
+            vector_store_metadata=vector_store_metadata,
+            litellm_params=litellm_params,
+            team_id=team_id,
+            user_id=user_id,
+        )
+    
+    # Verify the result
+    assert result is not None
+    assert result["vector_store_id"] == vector_store_id
+    assert result["custom_llm_provider"] == custom_llm_provider
+    
+    # Verify database was called correctly
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique.assert_called_once_with(
+        where={"vector_store_id": vector_store_id}
+    )
+    mock_prisma_client.db.litellm_managedvectorstorestable.create.assert_called_once()
+    
+    # Verify registry was updated
+    mock_registry.add_vector_store_to_registry.assert_called_once()
+    
+    # Verify that create was called with correct data structure
+    create_call_args = mock_prisma_client.db.litellm_managedvectorstorestable.create.call_args
+    create_data = create_call_args.kwargs.get("data", {})
+    assert create_data["vector_store_id"] == vector_store_id
+    assert create_data["custom_llm_provider"] == custom_llm_provider
+    assert create_data["vector_store_name"] == vector_store_name
+    assert create_data["vector_store_description"] == vector_store_description
+    assert create_data["team_id"] == team_id
+    assert create_data["user_id"] == user_id
+
+
+@pytest.mark.asyncio
+async def test_create_vector_store_in_db_raises_when_exists():
+    """Test that create_vector_store_in_db raises HTTPException when vector store already exists."""
+    mock_prisma_client = MagicMock()
+    
+    vector_store_id = "existing-store"
+    
+    # Mock that vector store already exists
+    existing_vector_store = MagicMock()
+    mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(
+        return_value=existing_vector_store
+    )
+    
+    with pytest.raises(HTTPException) as exc_info:
+        await create_vector_store_in_db(
+            vector_store_id=vector_store_id,
+            custom_llm_provider="openai",
+            prisma_client=mock_prisma_client,
+        )
+    
+    assert exc_info.value.status_code == 400
+    assert "already exists" in exc_info.value.detail.lower()
+    
+    # Verify create was not called
+    mock_prisma_client.db.litellm_managedvectorstorestable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_vector_store_in_db_raises_when_no_db():
+    """Test that create_vector_store_in_db raises HTTPException when database is not connected."""
+    with pytest.raises(HTTPException) as exc_info:
+        await create_vector_store_in_db(
+            vector_store_id="test-store",
+            custom_llm_provider="openai",
+            prisma_client=None,
+        )
+    
+    assert exc_info.value.status_code == 500
+    assert "database not connected" in exc_info.value.detail.lower()
