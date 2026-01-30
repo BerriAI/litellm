@@ -48,6 +48,7 @@ export const guardrail_provider_map: Record<string, string> = {
   LitellmContentFilter: "litellm_content_filter",
   ToolPermission: "tool_permission",
   BlockCodeExecution: "block_code_execution",
+  QostodianNexus: "qostodian_nexus",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -126,6 +127,7 @@ export const guardrailLogoMap: Record<string, string> = {
   "Prompt Security": `${asset_logos_folder}prompt_security.png`,
   "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
   "Akto": `${asset_logos_folder}akto.svg`,
+  "Qohash Qostodian Nexus": `${asset_logos_folder}qohash.jpg`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {
