@@ -24,8 +24,8 @@ class TestAlertingHangingRequestCheck:
     """Test suite for AlertingHangingRequestCheck class"""
 
     @pytest.fixture
-    def mock_proxy_server_module(self):
-        """Factory to build a dummy litellm.proxy.proxy_server module."""
+    def proxy_server_module_factory(self):
+        """Factory for a dummy litellm.proxy.proxy_server module used by tests."""
 
         _UNSET = object()
 
@@ -36,6 +36,9 @@ class TestAlertingHangingRequestCheck:
             dummy_proxy_server = types.ModuleType("litellm.proxy.proxy_server")
             proxy_logging_obj = MagicMock()
 
+            # Distinguish between:
+            # - internal_usage_cache is None: litellm should return early
+            # - internal_usage_cache exists but async_get_cache returns None: request is still hanging
             if internal_usage_cache is _UNSET:
                 mock_internal_cache = AsyncMock()
                 mock_internal_cache.async_get_cache.return_value = internal_usage_cache_return_value
@@ -164,13 +167,13 @@ class TestAlertingHangingRequestCheck:
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_no_proxy_logging(
-        self, hanging_request_checker, mock_proxy_server_module
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when proxy_logging_obj.internal_usage_cache is None.
         Should return early without processing when internal usage cache is unavailable.
         """
-        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache=None)
+        dummy_proxy_server = proxy_server_module_factory(internal_usage_cache=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             result = await hanging_request_checker.send_alerts_for_hanging_requests()
@@ -178,7 +181,7 @@ class TestAlertingHangingRequestCheck:
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_with_completed_request(
-        self, hanging_request_checker, mock_proxy_server_module
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when request has completed (not hanging).
@@ -194,8 +197,7 @@ class TestAlertingHangingRequestCheck:
             key="completed_request_789", value=hanging_data, ttl=300
         )
 
-        # Mock internal usage cache to return a request status (meaning request completed)
-        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value={"status": "success"})
+        dummy_proxy_server = proxy_server_module_factory(internal_usage_cache_return_value={"status": "success"})
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             # Mock the cache method to return our test request
@@ -210,7 +212,7 @@ class TestAlertingHangingRequestCheck:
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_with_actual_hanging_request(
-        self, hanging_request_checker, mock_proxy_server_module
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when request is actually hanging.
@@ -233,7 +235,7 @@ class TestAlertingHangingRequestCheck:
         )
 
         # Mock internal usage cache to return None (meaning request is still hanging)
-        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value=None)
+        dummy_proxy_server = proxy_server_module_factory(internal_usage_cache_return_value=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             # Mock the cache method to return our test request
@@ -253,7 +255,7 @@ class TestAlertingHangingRequestCheck:
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_does_not_alert_before_threshold(
-        self, hanging_request_checker, mock_proxy_server_module
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """Should not send hanging alert before alerting_threshold has elapsed."""
         hanging_data = HangingRequestData(
@@ -266,7 +268,7 @@ class TestAlertingHangingRequestCheck:
             key="not_yet_hanging_request", value=hanging_data, ttl=300
         )
 
-        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value=None)
+        dummy_proxy_server = proxy_server_module_factory(internal_usage_cache_return_value=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
@@ -279,7 +281,7 @@ class TestAlertingHangingRequestCheck:
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_prevents_duplicate_alerts(
-        self, hanging_request_checker, mock_proxy_server_module
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """Should not send duplicate alerts for the same request_id after alert_sent is True."""
         hanging_data = HangingRequestData(
@@ -296,7 +298,7 @@ class TestAlertingHangingRequestCheck:
             key="duplicate_alert_test", value=hanging_data, ttl=300
         )
 
-        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache_return_value=None)
+        dummy_proxy_server = proxy_server_module_factory(internal_usage_cache_return_value=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             hanging_request_checker.hanging_request_cache.async_get_oldest_n_keys = AsyncMock(
@@ -309,13 +311,13 @@ class TestAlertingHangingRequestCheck:
 
     @pytest.mark.asyncio
     async def test_send_alerts_for_hanging_requests_with_missing_hanging_data(
-        self, hanging_request_checker, mock_proxy_server_module
+        self, hanging_request_checker, proxy_server_module_factory
     ):
         """
         Test send_alerts_for_hanging_requests when hanging request data is missing from cache.
         Should continue processing other requests when individual request data is missing.
         """
-        dummy_proxy_server = mock_proxy_server_module(internal_usage_cache=AsyncMock())
+        dummy_proxy_server = proxy_server_module_factory(internal_usage_cache_return_value=None)
 
         with patch.dict(sys.modules, {"litellm.proxy.proxy_server": dummy_proxy_server}):
             # Mock cache to return request ID but no data (simulating expired or missing data)
