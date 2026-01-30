@@ -27,7 +27,7 @@ from litellm.types.utils import StandardLoggingPayload
 from .custom_batch_logger import CustomBatchLogger
 
 
-class S3Logger(CustomBatchLogger, BaseAWSLLM):
+class S3Logger(CustomBatchLogger[s3BatchLoggingElement], BaseAWSLLM):
     def __init__(
         self,
         s3_bucket_name: Optional[str] = None,
@@ -105,7 +105,6 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 flush_interval=s3_flush_interval,
                 batch_size=s3_batch_size,
             )
-            self.log_queue: List[s3BatchLoggingElement] = []
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)

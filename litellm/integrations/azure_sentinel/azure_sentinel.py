@@ -26,7 +26,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import StandardLoggingPayload
 
 
-class AzureSentinelLogger(CustomBatchLogger):
+class AzureSentinelLogger(CustomBatchLogger[StandardLoggingPayload]):
     """
     Logger that sends LiteLLM logs to Azure Sentinel via Azure Monitor Logs Ingestion API
     """
@@ -115,7 +115,6 @@ class AzureSentinelLogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[StandardLoggingPayload] = []
 
     async def _get_oauth_token(self) -> str:
         """

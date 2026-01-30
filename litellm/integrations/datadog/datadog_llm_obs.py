@@ -39,7 +39,7 @@ from litellm.types.utils import (
 )
 
 
-class DataDogLLMObsLogger(CustomBatchLogger):
+class DataDogLLMObsLogger(CustomBatchLogger[LLMObsPayload]):
     def __init__(self, **kwargs):
         try:
             verbose_logger.debug("DataDogLLMObs: Initializing logger")
@@ -66,7 +66,6 @@ class DataDogLLMObsLogger(CustomBatchLogger):
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
-            self.log_queue: List[LLMObsPayload] = []
 
             #########################################################
             # Handle datadog_llm_observability_params set as litellm.datadog_llm_observability_params

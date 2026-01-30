@@ -33,7 +33,7 @@ def _should_skip_event(kwargs: Dict[str, Any]) -> bool:
     return False
 
 
-class OpikLogger(CustomBatchLogger):
+class OpikLogger(CustomBatchLogger[Dict[str, Any]]):
     """
     Opik Logger for logging events to an Opik Server
     """
@@ -294,7 +294,7 @@ class OpikLogger(CustomBatchLogger):
             return
 
         # Split the log_queue into traces and spans
-        traces, spans = utils.get_traces_and_spans_from_payload(self.log_queue)
+        traces, spans = utils.get_traces_and_spans_from_payload(list(self.log_queue))
 
         # Send trace batch
         if len(traces) > 0:

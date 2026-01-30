@@ -18,7 +18,7 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.types.utils import StandardLoggingPayload
 
 
-class AzureBlobStorageLogger(CustomBatchLogger):
+class AzureBlobStorageLogger(CustomBatchLogger[StandardLoggingPayload]):
     def __init__(
         self,
         **kwargs,
@@ -63,7 +63,6 @@ class AzureBlobStorageLogger(CustomBatchLogger):
 
             asyncio.create_task(self.periodic_flush())
             self.flush_lock = asyncio.Lock()
-            self.log_queue: List[StandardLoggingPayload] = []
             super().__init__(**kwargs, flush_lock=self.flush_lock)
         except Exception as e:
             verbose_logger.exception(

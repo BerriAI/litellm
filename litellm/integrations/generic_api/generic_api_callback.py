@@ -95,7 +95,7 @@ def substitute_env_variables(value: str) -> str:
     return re.sub(pattern, replace_env_var, value)
 
 
-class GenericAPILogger(CustomBatchLogger):
+class GenericAPILogger(CustomBatchLogger[Union[Dict, StandardLoggingPayload]]):
     def __init__(
         self,
         endpoint: Optional[str] = None,
@@ -180,7 +180,6 @@ class GenericAPILogger(CustomBatchLogger):
         self.flush_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
         asyncio.create_task(self.periodic_flush())
-        self.log_queue: List[Union[Dict, StandardLoggingPayload]] = []
 
     def _get_headers(self, headers: Optional[dict] = None):
         """
