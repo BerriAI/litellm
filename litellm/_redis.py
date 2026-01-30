@@ -212,6 +212,12 @@ def _get_redis_client_logic(**env_overrides):
         **env_overrides,
     }
 
+    # Apply default socket_timeout if not set by env var or explicit config.
+    # This preserves the 5.0s default while allowing REDIS_SOCKET_TIMEOUT env
+    # var to take effect when no explicit socket_timeout is provided in config.
+    if "socket_timeout" not in redis_kwargs:
+        redis_kwargs["socket_timeout"] = 5.0
+
     _startup_nodes: Optional[Union[str, list]] = redis_kwargs.get("startup_nodes", None) or get_secret(  # type: ignore
         "REDIS_CLUSTER_NODES"
     )
