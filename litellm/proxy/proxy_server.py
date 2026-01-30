@@ -11,7 +11,8 @@ import sys
 import time
 import traceback
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
+import enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -28,7 +29,41 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+from pydantic import BaseModel, Json
 
+from litellm.proxy._types import (
+    ProxyException,
+    UserAPIKeyAuth,
+    LiteLLM_UserTable,
+    CommonProxyErrors,
+    LitellmUserRoles,
+    ConfigList,
+    ConfigYAML,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigFieldInfo,
+    PassThroughGenericEndpoint,
+    FieldDetail,
+    ConfigFieldDelete,
+    CallbackDelete,
+    InvitationClaim,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    InvitationDelete,
+    CallInfo,
+    Litellm_EntityType,
+    TeamDefaultSettings,
+    RoleBasedPermissions,
+    SupportedDBObjectType,
+    ProxyErrorTypes,
+    EnterpriseLicenseData,
+    LiteLLM_JWTAuth,
+    TokenCountRequest,
+    TransformRequestBody,
+    LiteLLM_TeamTable,
+    SpecialModelNames,
+)
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -44,6 +79,9 @@ from litellm.constants import (
     DEFAULT_SLACK_ALERTING_THRESHOLD,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy.common_utils.callback_utils import (
@@ -2155,6 +2193,12 @@ class ProxyConfig:
         """
         search_tools_raw = config.get("search_tools", None)
         if not search_tools_raw:
+            # Check in general_settings
+            general_settings = config.get("general_settings", {})
+            if general_settings:
+                search_tools_raw = general_settings.get("search_tools", None)
+
+        if not search_tools_raw:
             return None
 
         search_tools_parsed: List[SearchToolTypedDict] = []
@@ -2898,9 +2942,6 @@ class ProxyConfig:
         """
         Initialize alerting settings
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            _init_custom_logger_compatible_class,
-        )
 
         _alerting_callbacks = general_settings.get("alerting", None)
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
@@ -3198,6 +3239,8 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
+                if search_tools is not None and llm_router is not None:
+                    llm_router.search_tools = search_tools
                 ## DELETE MODEL LOGIC
                 await self._delete_deployment(db_models=models_list)
 
@@ -4579,6 +4622,68 @@ async def async_assistants_data_generator(
         yield f"data: {error_returned}\n\n"
 
 
+def _get_client_requested_model_for_streaming(request_data: dict) -> str:
+    """
+    Prefer the original client-requested model (pre-alias mapping) when available.
+
+    Pre-call processing can rewrite `request_data["model"]` for aliasing/routing purposes.
+    The OpenAI-compatible public `model` field should reflect what the client sent.
+    """
+    requested_model = request_data.get("_litellm_client_requested_model")
+    if isinstance(requested_model, str):
+        return requested_model
+
+    requested_model = request_data.get("model")
+    return requested_model if isinstance(requested_model, str) else ""
+
+
+def _restamp_streaming_chunk_model(
+    *,
+    chunk: Any,
+    requested_model_from_client: str,
+    request_data: dict,
+    model_mismatch_logged: bool,
+) -> Tuple[Any, bool]:
+    # Always return the client-requested model name (not provider-prefixed internal identifiers)
+    # on streaming chunks.
+    #
+    # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
+    # internal provider/deployment identifier is leaking into the public API, and helps
+    # maintainers/operators catch regressions while preserving OpenAI-compatible output.
+    if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+        return chunk, model_mismatch_logged
+
+    downstream_model = (
+        chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
+    )
+    if not model_mismatch_logged and downstream_model != requested_model_from_client:
+        verbose_proxy_logger.warning(
+            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+            request_data.get("litellm_call_id"),
+            requested_model_from_client,
+            downstream_model,
+        )
+        model_mismatch_logged = True
+
+    if isinstance(chunk, dict):
+        chunk["model"] = requested_model_from_client
+        return chunk, model_mismatch_logged
+
+    try:
+        setattr(chunk, "model", requested_model_from_client)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
+            request_data.get("litellm_call_id"),
+            requested_model_from_client,
+            type(chunk),
+            str(e),
+            exc_info=True,
+        )
+
+    return chunk, model_mismatch_logged
+
+
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -4587,6 +4692,10 @@ async def async_data_generator(
         # Use a list to accumulate response segments to avoid O(n^2) string concatenation
         str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
+        requested_model_from_client = _get_client_requested_model_for_streaming(
+            request_data=request_data
+        )
+        model_mismatch_logged = False
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -4607,6 +4716,13 @@ async def async_data_generator(
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
                 str_so_far_parts.append(response_str)
+
+            chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
+                chunk=chunk,
+                requested_model_from_client=requested_model_from_client,
+                request_data=request_data,
+                model_mismatch_logged=model_mismatch_logged,
+            )
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
