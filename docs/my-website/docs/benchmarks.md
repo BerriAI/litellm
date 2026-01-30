@@ -48,6 +48,34 @@ In these tests the baseline latency characteristics are measured against a fake-
 - High-percentile latencies drop significantly: P95 630 ms → 150 ms, P99 1,200 ms → 240 ms.
 - Setting workers equal to CPU count gives optimal performance.
 
+## `/realtime` API Benchmarks
+
+LiteLLM's `/realtime` endpoint has been optimized for low-latency WebSocket connections, achieving significant performance improvements through removal of redundant encodings, SSL context reuse, and caching of formatting strings.
+
+### Performance Metrics
+
+| Metric          | Before    | After     | Improvement                |
+| --------------- | --------- | --------- | -------------------------- |
+| Median latency  | 2,200 ms  | **59 ms** | **−97% (~37× faster)**     |
+| p95 latency     | 8,500 ms  | **67 ms** | **−99% (~127× faster)**    |
+| p99 latency     | 18,000 ms | **99 ms** | **−99% (~182× faster)**    |
+| Average latency | 3,214 ms  | **63 ms** | **−98% (~51× faster)**     |
+| RPS             | 165       | **1,207** | **+631% (~7.3× increase)** |
+
+### Test Setup
+
+| Category | Specification |
+|----------|---------------|
+| **Load Testing** | Locust: 1,000 concurrent users, 500 ramp-up |
+| **System** | 4 vCPUs, 8 GB RAM, 4 workers, 4 instances |
+| **Database** | PostgreSQL (Redis unused) |
+
+### Key Optimizations
+
+- Removed redundant encodings on the hot path
+- Reused shared SSL contexts to prevent excessive memory allocation
+- Cached formatting strings that were being regenerated twice per request
+
 ## Machine Spec used for testing
 
 Each machine deploying LiteLLM had the following specs:
