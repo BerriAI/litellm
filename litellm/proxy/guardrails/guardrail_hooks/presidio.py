@@ -77,6 +77,8 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         apply_to_output: bool = False,
         presidio_ad_hoc_recognizers: Optional[str] = None,
         logging_only: Optional[bool] = None,
+        presidio_phrase_allow_list: Optional[List[str]] = None,
+        presidio_skip_system_developer_message: Optional[bool] = None,
         pii_entities_config: Optional[
             Dict[Union[PiiEntityType, str], PiiAction]
         ] = None,
@@ -100,8 +102,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         self.pii_entities_config: Dict[Union[PiiEntityType, str], PiiAction] = (
             pii_entities_config or {}
         )
+        self.presidio_phrase_allow_list: List[str] = presidio_phrase_allow_list or []
         self.presidio_score_thresholds: Dict[Union[PiiEntityType, str], float] = (
             presidio_score_thresholds or {}
+        )
+        self.presidio_skip_system_developer_message: bool = (
+            presidio_skip_system_developer_message or False
+        )
+        verbose_proxy_logger.debug(
+            "[presidio:init] guardrail=%s allow_list=%s skip_system=%s",
+            getattr(self, "guardrail_name", None),
+            self.presidio_phrase_allow_list,
+            self.presidio_skip_system_developer_message,
         )
         self.presidio_language = presidio_language or "en"
         # Shared HTTP session to prevent memory leaks (issue #14540)
@@ -440,6 +452,63 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
 
         return filtered_results
 
+    def filter_analyze_results_by_allow_list(
+        self,
+        analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict],
+        text: str,
+        allow_list: List[str],
+    ) -> Union[List[PresidioAnalyzeResponseItem], Dict]:
+        """
+        Remove detections whose matched text is explicitly allowed.
+        """
+        verbose_proxy_logger.debug(
+            "[presidio] allow_list input: %s; raw analyze_results: %s",
+            allow_list,
+            analyze_results,
+        )
+
+        if not allow_list or not isinstance(analyze_results, list):
+            return analyze_results
+
+        normalized_allow = {p.lower().strip() for p in allow_list if p}
+        verbose_proxy_logger.debug("[presidio] normalized_allow: %s", normalized_allow)
+        if not normalized_allow:
+            return analyze_results
+
+        filtered_results: List[PresidioAnalyzeResponseItem] = []
+        for item in analyze_results:
+            start = item.get("start")
+            end = item.get("end")
+            verbose_proxy_logger.debug("[presidio] inspecting item: %s", item)
+            if (
+                isinstance(start, int)
+                and isinstance(end, int)
+                and 0 <= start < end <= len(text)
+            ):
+                matched_phrase = text[start:end].lower().strip()
+                verbose_proxy_logger.debug("[presidio] matched_phrase: %s", matched_phrase)
+                if matched_phrase in normalized_allow:
+                    continue
+            filtered_results.append(item)
+
+        verbose_proxy_logger.debug("[presidio] filtered_results: %s", filtered_results)
+
+        return filtered_results
+
+    def _select_allow_list(
+        self, presidio_config: Optional[PresidioPerRequestConfig]
+    ) -> List[str]:
+        """
+        Choose the allow list (per-request overrides guardrail default).
+        """
+        if presidio_config and presidio_config.presidio_phrase_allow_list is not None:
+            return presidio_config.presidio_phrase_allow_list
+        return self.presidio_phrase_allow_list
+
+    @staticmethod
+    def _should_skip_role(role: Optional[str], skip_flag: bool) -> bool:
+        return bool(skip_flag and role in ["system", "developer"])
+
     def raise_exception_if_blocked_entities_detected(
         self, analyze_results: Union[List[PresidioAnalyzeResponseItem], Dict]
     ):
@@ -495,6 +564,25 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
 
                 verbose_proxy_logger.debug("analyze_results: %s", analyze_results)
+
+                allow_list: List[str] = self._select_allow_list(presidio_config)
+
+                verbose_proxy_logger.debug(
+                    "[presidio] guardrail=%s allow_list_selected=%s self_allow_list=%s presidio_config_allow=%s",
+                    getattr(self, "guardrail_name", None),
+                    allow_list,
+                    self.presidio_phrase_allow_list,
+                    getattr(presidio_config, "presidio_phrase_allow_list", None)
+                    if presidio_config
+                    else None,
+                )
+
+                # Drop detections that are explicitly allowed
+                analyze_results = self.filter_analyze_results_by_allow_list(
+                    analyze_results=analyze_results,
+                    text=text,
+                    allow_list=allow_list,
+                )
 
                 # Apply score threshold filtering if configured
                 analyze_results = self.filter_analyze_results_by_score(
@@ -564,6 +652,19 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             content_safety = data.get("content_safety", None)
             verbose_proxy_logger.debug("content_safety: %s", content_safety)
             presidio_config = self.get_presidio_settings_from_request_data(data)
+            skip_system_developer = (
+                presidio_config.presidio_skip_system_developer_message
+                if presidio_config and presidio_config.presidio_skip_system_developer_message is not None
+                else self.presidio_skip_system_developer_message
+            )
+            verbose_proxy_logger.debug(
+                "[presidio] pre_call guardrail=%s skip_system_developer=%s presidio_config=%s",
+                getattr(self, "guardrail_name", None),
+                skip_system_developer,
+                getattr(presidio_config, "model_dump", lambda: presidio_config)()
+                if presidio_config
+                else None,
+            )
             messages = data.get("messages", None)
             if messages is None:
                 return data
@@ -573,6 +674,29 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             ] = []  # Track (message_index, content_index) for each task
 
             for msg_idx, m in enumerate(messages):
+                role = m.get("role")
+                verbose_proxy_logger.debug(
+                    "[presidio] pre_call guardrail=%s inspecting message_index=%s role=%s skip_system_developer=%s",
+                    getattr(self, "guardrail_name", None),
+                    msg_idx,
+                    role,
+                    skip_system_developer,
+                )
+                should_skip = self._should_skip_role(role, skip_system_developer)
+                verbose_proxy_logger.debug(
+                    "[presidio] pre_call guardrail=%s should_skip=%s role=%s",
+                    getattr(self, "guardrail_name", None),
+                    should_skip,
+                    role,
+                )
+                if should_skip:
+                    verbose_proxy_logger.debug(
+                        "[presidio] pre_call guardrail=%s skipping message_index=%s role=%s",
+                        getattr(self, "guardrail_name", None),
+                        msg_idx,
+                        role,
+                    )
+                    continue
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -679,8 +803,24 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 return kwargs, result
 
             presidio_config = self.get_presidio_settings_from_request_data(kwargs)
+            skip_system_developer = (
+                presidio_config.presidio_skip_system_developer_message
+                if presidio_config and presidio_config.presidio_skip_system_developer_message is not None
+                else self.presidio_skip_system_developer_message
+            )
 
             for msg_idx, m in enumerate(messages):
+                role = m.get("role")
+                should_skip = self._should_skip_role(role, skip_system_developer)
+                verbose_proxy_logger.debug(
+                    "[presidio] logging_hook guardrail=%s message_index=%s role=%s should_skip=%s",
+                    getattr(self, "guardrail_name", None),
+                    msg_idx,
+                    role,
+                    should_skip,
+                )
+                if should_skip:
+                    continue
                 content = m.get("content", None)
                 if content is None:
                     continue
@@ -1022,5 +1162,14 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         super().update_in_memory_litellm_params(litellm_params)
         if litellm_params.pii_entities_config:
             self.pii_entities_config = litellm_params.pii_entities_config
+        if litellm_params.presidio_phrase_allow_list:
+            self.presidio_phrase_allow_list = litellm_params.presidio_phrase_allow_list
+        if (
+            litellm_params.presidio_skip_system_developer_message
+            is not None
+        ):
+            self.presidio_skip_system_developer_message = (
+                litellm_params.presidio_skip_system_developer_message
+            )
         if litellm_params.presidio_score_thresholds:
             self.presidio_score_thresholds = litellm_params.presidio_score_thresholds
