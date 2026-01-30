@@ -36,6 +36,9 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
+from litellm.llms.azure_ai.cost_calculator import (
+    cost_per_token as azure_ai_cost_per_token,
+)
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
@@ -427,8 +430,8 @@ def cost_per_token(  # noqa: PLR0915
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure_ai":
-        return generic_cost_per_token(
-            model=model, usage=usage_block, custom_llm_provider=custom_llm_provider
+        return azure_ai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
         )
     else:
         model_info = _cached_get_model_info_helper(

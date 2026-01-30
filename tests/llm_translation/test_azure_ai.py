@@ -373,6 +373,7 @@ def test_completion_azure_ai_gpt_4o_with_flexible_api_base(api_base):
 async def test_azure_ai_model_router():
     """
     Test Azure AI model router non-streaming response cost tracking.
+    Verifies that the flat cost of $0.14 per M input tokens is applied.
     """
     litellm._turn_on_debug()
     response = await litellm.acompletion(
@@ -387,6 +388,18 @@ async def test_azure_ai_model_router():
     tracked_cost = response._hidden_params["response_cost"]
     assert tracked_cost > 0
     print("Tracked cost: ", tracked_cost)
+    
+    # Verify flat cost is included
+    # Flat cost = prompt_tokens * $0.14 / 1M = prompt_tokens * 0.00000014
+    usage = response.usage
+    if usage and usage.prompt_tokens:
+        expected_flat_cost = usage.prompt_tokens * 0.14 / 1_000_000
+        print(f"Prompt tokens: {usage.prompt_tokens}")
+        print(f"Expected minimum flat cost: ${expected_flat_cost:.9f}")
+        # Total cost should be at least the flat cost
+        assert tracked_cost >= expected_flat_cost, (
+            f"Cost ${tracked_cost:.9f} should be >= flat cost ${expected_flat_cost:.9f}"
+        )
 
 
 @pytest.mark.asyncio
