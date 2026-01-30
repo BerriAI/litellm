@@ -45,6 +45,24 @@ def set_salt_key(monkeypatch):
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
 
 
+@pytest.fixture(autouse=True)
+def reset_constants_module():
+    """Reset constants module to ensure clean state before each test"""
+    import importlib
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+    
+    # Reload modules before test
+    importlib.reload(constants)
+    importlib.reload(auth_checks)
+    
+    yield
+    
+    # Reload modules after test to clean up
+    importlib.reload(constants)
+    importlib.reload(auth_checks)
+
+
 @pytest.fixture
 def valid_sso_user_defined_values():
     return LiteLLM_UserTable(
@@ -160,16 +178,19 @@ def test_get_cli_jwt_auth_token_custom_expiration(
     valid_sso_user_defined_values, monkeypatch
 ):
     """Test generating CLI JWT token with custom expiration via environment variable"""
+    import importlib
+    from litellm import constants
+    from litellm.proxy.auth import auth_checks
+    
     # Set custom expiration to 48 hours
     monkeypatch.setenv("LITELLM_CLI_JWT_EXPIRATION_HOURS", "48")
     
     # Reload the constants module to pick up the new env var
-    import importlib
-
-    from litellm import constants
     importlib.reload(constants)
+    # Also reload auth_checks to pick up the new constant value
+    importlib.reload(auth_checks)
     
-    token = ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
+    token = auth_checks.ExperimentalUIJWTToken.get_cli_jwt_auth_token(valid_sso_user_defined_values)
 
     # Decrypt and verify token contents
     decrypted_token = decrypt_value_helper(

@@ -7347,8 +7347,11 @@ def _get_encoding():
 def __getattr__(name: str) -> Any:
     """Lazy import handler for main module"""
     if name == "encoding":
-        # Lazy load encoding to avoid heavy tiktoken import at module load time
-        _encoding = tiktoken.get_encoding("cl100k_base")
+        # Use _get_default_encoding which properly sets TIKTOKEN_CACHE_DIR
+        # before loading tiktoken, ensuring the local cache is used
+        # instead of downloading from the internet
+        from litellm._lazy_imports import _get_default_encoding
+        _encoding = _get_default_encoding()
         # Cache it in the module's __dict__ for subsequent accesses
         import sys
 
