@@ -2658,6 +2658,36 @@ class Logging(LiteLLMLoggingBaseClass):
             )
             metadata.update(exception.headers)
 
+        if self.model_call_details.get("applied_guardrails") is None:
+            # Check if any guardrails were run and logged in metadata
+            try:
+                metadata = (
+                    self.model_call_details.get("metadata", {})
+                    or self.model_call_details.get("litellm_metadata", {})
+                    or {}
+                )
+                if hasattr(self.model_call_details.get("litellm_params"), "get"):
+                    litellm_params = self.model_call_details.get("litellm_params") or {}
+                    metadata.update(litellm_params.get("metadata", {}) or {})
+                    metadata.update(litellm_params.get("litellm_metadata", {}) or {})
+
+                header_guardrails = metadata.get(
+                    "standard_logging_guardrail_information", []
+                )
+                if header_guardrails:
+                    self.model_call_details["applied_guardrails"] = list(
+                        set(
+                            [
+                                g.guardrail_name
+                                if hasattr(g, "guardrail_name")
+                                else g.get("guardrail_name")
+                                for g in header_guardrails
+                            ]
+                        )
+                    )
+            except Exception:
+                pass
+
         ## STANDARDIZED LOGGING PAYLOAD
 
         self.model_call_details[
@@ -4451,6 +4481,23 @@ class StandardLoggingPayloadSetup:
                     prompt_integration=prompt_integration,
                 )
 
+        if applied_guardrails is None or len(applied_guardrails) == 0:
+            # Check if any guardrails were run and logged in metadata
+            if metadata:
+                header_guardrails = metadata.get(
+                    "standard_logging_guardrail_information", []
+                )
+                if header_guardrails:
+                    try:
+                        # Handle both object and dict access
+                        applied_guardrails = list(
+                            set([
+                                g.guardrail_name if hasattr(g, "guardrail_name") else g.get("guardrail_name")
+                                for g in header_guardrails
+                            ])
+                        )
+                    except Exception:
+                        pass
         # Initialize with default values
         clean_metadata = StandardLoggingMetadata(
             user_api_key_hash=None,
@@ -5008,6 +5055,9 @@ def get_standard_logging_object_payload(
         metadata: dict = StandardLoggingPayloadSetup.merge_litellm_metadata(
             litellm_params
         )
+
+        if kwargs.get("metadata") and isinstance(kwargs.get("metadata"), dict):
+            metadata.update(kwargs.get("metadata"))  # type: ignore
 
         completion_start_time = kwargs.get("completion_start_time", end_time)
         call_type = kwargs.get("call_type")
