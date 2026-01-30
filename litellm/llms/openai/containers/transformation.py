@@ -16,20 +16,17 @@ from litellm.types.containers.main import (
 )
 from litellm.types.router import GenericLiteLLMParams
 
+from ...base_llm.containers.transformation import BaseContainerConfig
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
-    from ...base_llm.containers.transformation import (
-        BaseContainerConfig as _BaseContainerConfig,
-    )
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
-    BaseContainerConfig = _BaseContainerConfig
     BaseLLMException = _BaseLLMException
 else:
     LiteLLMLoggingObj = Any
-    from ...base_llm.containers.transformation import BaseContainerConfig
     BaseLLMException = Any
 
 
