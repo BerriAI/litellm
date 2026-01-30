@@ -2301,6 +2301,9 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,
@@ -2362,6 +2365,9 @@ class Router:
                 setattr(e, "priority", priority)
                 raise e
         else:
+            await self.scheduler.remove_request(
+                request_id=item.request_id, model_name=item.model_name
+            )
             raise litellm.Timeout(
                 message="Request timed out while polling queue",
                 model=model,

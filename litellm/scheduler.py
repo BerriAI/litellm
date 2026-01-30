@@ -55,6 +55,26 @@ class Scheduler:
         # save the queue
         await self.save_queue(queue=queue, model_name=request.model_name)
 
+    async def remove_request(self, request_id: str, model_name: str):
+        """
+        Remove a request from the queue by ID.
+        Used for cleaning up timeouts.
+        """
+        queue = await self.get_queue(model_name=model_name)
+        
+        # Find and remove item
+        # Since it's a list, we can filter it.
+        # Queue format: [(priority, request_id), ...]
+        original_length = len(queue)
+        queue = [item for item in queue if item[1] != request_id]
+        
+        if len(queue) < original_length:
+            # Re-heapify to ensure order is maintained
+            heapq.heapify(queue)
+            await self.save_queue(queue=queue, model_name=model_name)
+            print_verbose(f"Removed request_id={request_id} from queue")
+        
+
     async def poll(self, id: str, model_name: str, health_deployments: list) -> bool:
         """
         Return if request can be processed.
