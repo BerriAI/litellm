@@ -61,12 +61,10 @@ from litellm.proxy._types import (
     LiteLLM_TeamTable,
     SpecialModelNames,
 )
-from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
     AIOHTTP_CONNECTOR_LIMIT_PER_HOST,
     AIOHTTP_KEEPALIVE_TIMEOUT,
-    AIOHTTP_NEEDS_CLEANUP_CLOSED,
     AIOHTTP_TTL_DNS_CACHE,
     AUDIO_SPEECH_CHUNK_SIZE,
     BASE_MCP_ROUTE,
@@ -89,7 +87,6 @@ from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
-    TextCompletionResponse,
     TokenCountResponse,
 )
 from litellm.utils import (
@@ -194,7 +191,6 @@ from litellm.constants import (
     APSCHEDULER_COALESCE,
     APSCHEDULER_MAX_INSTANCES,
     APSCHEDULER_MISFIRE_GRACE_TIME,
-    APSCHEDULER_REPLACE_EXISTING,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -207,16 +203,10 @@ from litellm.constants import (
 )
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
-from litellm.litellm_core_utils.core_helpers import (
-    _get_parent_otel_span_from_kwargs,
-    get_litellm_metadata_from_kwargs,
-)
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
     router as mcp_discoverable_endpoints_router,
@@ -242,19 +232,11 @@ from litellm.proxy.anthropic_endpoints.endpoints import router as anthropic_rout
 from litellm.proxy.anthropic_endpoints.skills_endpoints import (
     router as anthropic_skills_router,
 )
-from litellm.proxy.auth.auth_checks import (
-    ExperimentalUIJWTToken,
-    get_team_object,
-    log_db_metrics,
-)
-from litellm.proxy.auth.auth_utils import check_response_size_is_safe
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import LicenseCheck
 from litellm.proxy.auth.model_checks import (
-    get_all_fallbacks,
     get_complete_model_list,
     get_key_models,
-    get_mcp_server_ids,
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
@@ -326,7 +308,6 @@ from litellm.proxy.management_endpoints.cache_settings_endpoints import (
 from litellm.proxy.management_endpoints.callback_management_endpoints import (
     router as callback_management_endpoints_router,
 )
-from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.proxy.management_endpoints.cost_tracking_settings import (
     router as cost_tracking_settings_router,
 )
@@ -339,11 +320,7 @@ from litellm.proxy.management_endpoints.fallback_management_endpoints import (
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     router as internal_user_router,
 )
-from litellm.proxy.management_endpoints.internal_user_endpoints import (
-    user_update,
-)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
-    delete_verification_tokens,
     duration_in_seconds,
     generate_key_helper_fn,
 )
@@ -357,8 +334,6 @@ from litellm.proxy.management_endpoints.model_access_group_management_endpoints 
     router as model_access_group_management_router,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
-    _add_model_to_db,
-    _add_team_model_to_db,
     _deduplicate_litellm_router_models,
 )
 from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -379,10 +354,6 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
     router as team_callback_router,
 )
 from litellm.proxy.management_endpoints.team_endpoints import router as team_router
-from litellm.proxy.management_endpoints.team_endpoints import (
-    update_team,
-    validate_membership,
-)
 from litellm.proxy.management_endpoints.ui_sso import (
     get_disabled_non_admin_personal_key_creation,
 )
@@ -390,7 +361,6 @@ from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
-from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -429,7 +399,6 @@ from litellm.proxy.spend_tracking.cloudzero_endpoints import router as cloudzero
 from litellm.proxy.spend_tracking.spend_management_endpoints import (
     router as spend_management_router,
 )
-from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
     router as ui_crud_endpoints_router,
@@ -437,15 +406,11 @@ from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
-    ProxyUpdateSpend,
-    _cache_user_row,
     _get_docs_url,
     _get_projected_spend_over_limit,
     _get_redoc_url,
     _is_projected_spend_over_limit,
-    _is_valid_team_configs,
     get_custom_url,
-    get_error_message_str,
     get_server_root_path,
     handle_exception_on_proxy,
     hash_token,
@@ -467,9 +432,7 @@ from litellm.router import (
     AssistantsTypedDict,
     Deployment,
     LiteLLM_Params,
-    ModelGroupInfo,
 )
-from litellm.scheduler import FlowItem, Scheduler
 from litellm.secret_managers.aws_secret_manager import load_aws_kms
 from litellm.secret_managers.google_kms import load_google_kms
 from litellm.secret_managers.main import (
@@ -479,18 +442,11 @@ from litellm.secret_managers.main import (
     str_to_bool,
 )
 from litellm.types.integrations.slack_alerting import SlackAlertingArgs
-from litellm.types.llms.anthropic import (
-    AnthropicMessagesRequest,
-    AnthropicResponse,
-    AnthropicResponseContentBlockText,
-    AnthropicResponseUsageBlock,
-)
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
-    DefaultTeamSSOParams,
     LiteLLM_UpperboundKeyGenerateParams,
 )
 from litellm.types.realtime import RealtimeQueryParams
@@ -501,16 +457,14 @@ from litellm.types.router import ModelInfo as RouterModelInfo
 from litellm.types.router import (
     RouterGeneralSettings,
     SearchToolTypedDict,
-    updateDeployment,
 )
-from litellm.types.scheduler import DefaultPriorities
 from litellm.types.secret_managers.main import (
     KeyManagementSettings,
     KeyManagementSystem,
 )
 from litellm.types.utils import CredentialItem, CustomHuggingfaceTokenizer
 from litellm.types.utils import ModelInfo as ModelMapInfo
-from litellm.types.utils import RawRequestTypedDict, StandardLoggingPayload
+from litellm.types.utils import RawRequestTypedDict
 from litellm.utils import _add_custom_logger_callback_to_specific_event
 
 try:
