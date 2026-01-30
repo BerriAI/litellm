@@ -1,10 +1,8 @@
 import asyncio
 import copy
-import inspect
 import io
 import os
 import random
-import secrets
 import shutil
 import subprocess
 import sys
@@ -27,7 +25,6 @@ from typing import (
     cast,
     get_args,
     get_origin,
-    get_type_hints,
 )
 from pydantic import BaseModel, Json
 
@@ -136,9 +133,6 @@ sys.path.insert(
 )  # Adds the parent directory to the system path - for litellm local dev
 
 try:
-    import logging
-
-    import backoff
     import fastapi
     import orjson
     import yaml  # type: ignore
@@ -3138,8 +3132,6 @@ class ProxyConfig:
 
         Return - number of deployments added
         """
-        import base64
-
         if llm_router is None:
             return 0
 
@@ -10425,8 +10417,6 @@ async def update_config(config_info: ConfigYAML):  # noqa: PLR0915
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key, prisma_client
     try:
-        import base64
-
         """
         - Update the ConfigTable DB
         - Run 'add_deployment'
@@ -11024,8 +11014,6 @@ async def get_config():  # noqa: PLR0915
     """
     global llm_router, llm_model_list, general_settings, proxy_config, proxy_logging_obj, master_key
     try:
-        import base64
-
         all_available_callbacks = AllCallbacks()
 
         config_data = await proxy_config.get_config()
