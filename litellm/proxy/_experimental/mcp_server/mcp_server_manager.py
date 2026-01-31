@@ -67,7 +67,6 @@ from litellm.types.utils import CallTypes
 try:
     from mcp.shared.tool_name_validation import (  # type: ignore
         SEP_986_URL,
-        ToolNameValidationResult,
         validate_tool_name,
     )
 except ImportError:
