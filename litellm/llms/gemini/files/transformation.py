@@ -4,7 +4,7 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -17,6 +17,7 @@ from litellm.llms.base_llm.files.transformation import (
 )
 from litellm.types.llms.gemini import GeminiCreateFilesResponseObject
 from litellm.types.llms.openai import (
+    AllMessageValues,
     CreateFileRequest,
     HttpxBinaryResponseContent,
     OpenAICreateFileRequestOptionalParams,
@@ -37,22 +38,23 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
 
     def validate_environment(
         self,
-        api_key: Optional[str],
-        headers: dict,
+        headers: dict[Any, Any],
         model: str,
-        messages: list,
-        optional_params: dict,
-        litellm_params: dict,
-    ) -> dict:
+        messages: List[AllMessageValues],
+        optional_params: dict[Any, Any],
+        litellm_params: dict[Any, Any],
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+    ) -> dict[Any, Any]:
         """
         Validate environment and add Gemini API key to headers.
         Google AI Studio uses x-goog-api-key header for authentication.
         """
-        api_key = self.get_api_key(api_key)
-        if not api_key:
+        resolved_api_key = self.get_api_key(api_key)
+        if not resolved_api_key:
             raise ValueError("GEMINI_API_KEY is required for Google AI Studio file operations")
         
-        headers["x-goog-api-key"] = api_key
+        headers["x-goog-api-key"] = resolved_api_key
         return headers
 
     def get_complete_url(
