@@ -34,6 +34,7 @@ export function ToolsSection({ log }: ToolsSectionProps) {
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Collapse
+        expandIconPosition="start"
         items={[
           {
             key: "1",

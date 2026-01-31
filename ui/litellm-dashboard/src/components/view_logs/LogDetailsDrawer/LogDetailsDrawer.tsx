@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message } from "antd";
+import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message, Collapse } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
-import { Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -359,56 +358,61 @@ function RequestResponseSection({
 
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Accordion>
-        <AccordionHeader className="p-4 border-b hover:bg-gray-50 transition-colors text-left">
-          <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>
-        </AccordionHeader>
-        <AccordionBody className="px-0">
-          <div style={{ padding: "0 24px" }}>
-            <Tabs
-              activeKey={activeTab}
-              onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-              tabBarExtraContent={
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CopyOutlined />}
-                  onClick={handleCopy}
-                  disabled={activeTab === TAB_RESPONSE && !hasResponse}
-                >
-                  Copy
-                </Button>
-              }
-              items={[
-                {
-                  key: TAB_REQUEST,
-                  label: "Request",
-                  children: (
-                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                      <JsonViewer data={getRawRequest()} mode="formatted" />
-                    </div>
-                  ),
-                },
-                {
-                  key: TAB_RESPONSE,
-                  label: "Response",
-                  children: (
-                    <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                      {hasResponse ? (
-                        <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                      ) : (
-                        <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                          Response data not available
+      <Collapse
+        defaultActiveKey={["1"]}
+        expandIconPosition="start"
+        items={[
+          {
+            key: "1",
+            label: <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>,
+            children: (
+              <div style={{ padding: "0 24px" }}>
+                <Tabs
+                  activeKey={activeTab}
+                  onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
+                  tabBarExtraContent={
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<CopyOutlined />}
+                      onClick={handleCopy}
+                      disabled={activeTab === TAB_RESPONSE && !hasResponse}
+                    >
+                      Copy
+                    </Button>
+                  }
+                  items={[
+                    {
+                      key: TAB_REQUEST,
+                      label: "Request",
+                      children: (
+                        <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                          <JsonViewer data={getRawRequest()} mode="formatted" />
                         </div>
-                      )}
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          </div>
-        </AccordionBody>
-      </Accordion>
+                      ),
+                    },
+                    {
+                      key: TAB_RESPONSE,
+                      label: "Response",
+                      children: (
+                        <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                          {hasResponse ? (
+                            <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                          ) : (
+                            <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                              Response data not available
+                            </div>
+                          )}
+                        </div>
+                      ),
+                    },
+                  ]}
+                />
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }
@@ -416,36 +420,42 @@ function RequestResponseSection({
 function MetadataSection({ metadata, onCopy }: { metadata: Record<string, any>; onCopy: (data: string) => void }) {
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Card
-        title="Metadata"
-        size="small"
-        bordered={false}
-        style={{ marginBottom: 0 }}
-        extra={
-          <Button
-            type="text"
-            size="small"
-            icon={<CopyOutlined />}
-            onClick={() => onCopy(JSON.stringify(metadata, null, 2))}
-          >
-            Copy
-          </Button>
-        }
-      >
-        <pre
-          style={{
-            maxHeight: METADATA_MAX_HEIGHT,
-            overflowY: "auto",
-            fontSize: FONT_SIZE_SMALL,
-            fontFamily: FONT_FAMILY_MONO,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-all",
-            margin: 0,
-          }}
-        >
-          {JSON.stringify(metadata, null, 2)}
-        </pre>
-      </Card>
+      <Collapse
+        expandIconPosition="start"
+        items={[
+          {
+            key: "1",
+            label: <h3 className="text-lg font-medium text-gray-900">Metadata</h3>,
+            children: (
+              <div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={<CopyOutlined />}
+                    onClick={() => onCopy(JSON.stringify(metadata, null, 2))}
+                  >
+                    Copy
+                  </Button>
+                </div>
+                <pre
+                  style={{
+                    maxHeight: METADATA_MAX_HEIGHT,
+                    overflowY: "auto",
+                    fontSize: FONT_SIZE_SMALL,
+                    fontFamily: FONT_FAMILY_MONO,
+                    whiteSpace: "pre-wrap",
+                    wordBreak: "break-all",
+                    margin: 0,
+                  }}
+                >
+                  {JSON.stringify(metadata, null, 2)}
+                </pre>
+              </div>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 }

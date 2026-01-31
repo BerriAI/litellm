@@ -1,5 +1,5 @@
 import React from "react";
-import { Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { Collapse } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface CostBreakdown {
@@ -60,18 +60,22 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
 
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
-      <Accordion>
-        <AccordionHeader className="p-4 border-b hover:bg-gray-50 transition-colors text-left">
-          <div className="flex items-center justify-between w-full">
-            <h3 className="text-lg font-medium text-gray-900">Cost Breakdown</h3>
-            <div className="flex items-center space-x-2 mr-4">
-              <span className="text-sm text-gray-500">Total:</span>
-              <span className="text-sm font-semibold text-gray-900">{formatCost(totalSpend)}</span>
-            </div>
-          </div>
-        </AccordionHeader>
-        <AccordionBody className="px-0">
-          <div className="p-6 space-y-4">
+      <Collapse
+        expandIconPosition="start"
+        items={[
+          {
+            key: "1",
+            label: (
+              <div className="flex items-center justify-between w-full">
+                <h3 className="text-lg font-medium text-gray-900">Cost Breakdown</h3>
+                <div className="flex items-center space-x-2 mr-4">
+                  <span className="text-sm text-gray-500">Total:</span>
+                  <span className="text-sm font-semibold text-gray-900">{formatCost(totalSpend)}</span>
+                </div>
+              </div>
+            ),
+            children: (
+              <div className="p-6 space-y-4">
             {/* Step 1: Base Token Costs */}
             <div className="space-y-2 max-w-2xl">
               <div className="flex text-sm">
@@ -149,8 +153,10 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
               </div>
             </div>
           </div>
-        </AccordionBody>
-      </Accordion>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 };
