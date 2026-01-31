@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message, Collapse } from "antd";
+import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message, Collapse, Radio } from "antd";
 import { CopyOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
@@ -27,6 +27,7 @@ import {
   MESSAGE_REQUEST_ID_COPIED,
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
+import { PrettyMessagesView } from "./PrettyMessagesView";
 
 const { Text } = Typography;
 
@@ -349,6 +350,7 @@ function RequestResponseSection({
   getFormattedResponse,
 }: RequestResponseSectionProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
+  const [viewMode, setViewMode] = useState<'pretty' | 'json'>('pretty');
 
   const handleCopy = () => {
     const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
@@ -367,47 +369,66 @@ function RequestResponseSection({
             label: <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>,
             children: (
               <div style={{ padding: "0 24px" }}>
-                <Tabs
-                  activeKey={activeTab}
-                  onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-                  tabBarExtraContent={
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CopyOutlined />}
-                      onClick={handleCopy}
-                      disabled={activeTab === TAB_RESPONSE && !hasResponse}
-                    >
-                      Copy
-                    </Button>
-                  }
-                  items={[
-                    {
-                      key: TAB_REQUEST,
-                      label: "Request",
-                      children: (
-                        <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                          <JsonViewer data={getRawRequest()} mode="formatted" />
-                        </div>
-                      ),
-                    },
-                    {
-                      key: TAB_RESPONSE,
-                      label: "Response",
-                      children: (
-                        <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                          {hasResponse ? (
-                            <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                          ) : (
-                            <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                              Response data not available
-                            </div>
-                          )}
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
+                {/* View Mode Toggle - Top Right */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+                  <Radio.Group
+                    size="small"
+                    value={viewMode}
+                    onChange={(e) => setViewMode(e.target.value)}
+                  >
+                    <Radio.Button value="pretty">Pretty</Radio.Button>
+                    <Radio.Button value="json">JSON</Radio.Button>
+                  </Radio.Group>
+                </div>
+
+                {viewMode === 'pretty' ? (
+                  <PrettyMessagesView
+                    request={getRawRequest()}
+                    response={getFormattedResponse()}
+                  />
+                ) : (
+                  <Tabs
+                    activeKey={activeTab}
+                    onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
+                    tabBarExtraContent={
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<CopyOutlined />}
+                        onClick={handleCopy}
+                        disabled={activeTab === TAB_RESPONSE && !hasResponse}
+                      >
+                        Copy
+                      </Button>
+                    }
+                    items={[
+                      {
+                        key: TAB_REQUEST,
+                        label: "Request",
+                        children: (
+                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                            <JsonViewer data={getRawRequest()} mode="formatted" />
+                          </div>
+                        ),
+                      },
+                      {
+                        key: TAB_RESPONSE,
+                        label: "Response",
+                        children: (
+                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                            {hasResponse ? (
+                              <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                            ) : (
+                              <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                                Response data not available
+                              </div>
+                            )}
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
+                )}
               </div>
             ),
           },
