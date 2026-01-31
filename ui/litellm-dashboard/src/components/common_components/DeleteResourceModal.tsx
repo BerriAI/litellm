@@ -1,4 +1,5 @@
-import { Alert, Descriptions, Input, Modal, Typography } from "antd";
+import { Alert, Card, Descriptions, Input, Modal, Typography, theme } from "antd";
+import { ExclamationCircleOutlined } from "@ant-design/icons";
 import React, { useState, useEffect } from "react";
 
 interface DeleteResourceModalProps {
@@ -32,6 +33,7 @@ export default function DeleteResourceModal({
   requiredConfirmation,
 }: DeleteResourceModalProps) {
   const { Title, Text } = Typography;
+  const { token } = theme.useToken();
   const [requiredConfirmationInput, setRequiredConfirmationInput] = useState("");
 
   useEffect(() => {
@@ -57,25 +59,36 @@ export default function DeleteResourceModal({
     >
       <div className="space-y-4">
         {alertMessage && <Alert message={alertMessage} type="warning" />}
-        <div className="mt-4 p-4 bg-red-50 rounded-lg border border-red-200">
-          <Title level={5} className="mb-3 text-gray-900">
-            {resourceInformationTitle}
-          </Title>
+        <Card
+          title={resourceInformationTitle}
+          className="mt-4"
+          styles={{
+            body: { padding: "16px" },
+            header: {
+              backgroundColor: token.colorErrorBg,
+              borderColor: token.colorErrorBorder,
+            },
+          }}
+          style={{
+            backgroundColor: token.colorErrorBg,
+            borderColor: token.colorErrorBorder,
+          }}
+        >
           <Descriptions column={1} size="small">
             {resourceInformation &&
               resourceInformation.map(({ label, value, ...textProps }) => (
-                <Descriptions.Item key={label} label={<span className="font-semibold text-gray-700">{label}</span>}>
+                <Descriptions.Item key={label} label={<span className="font-semibold">{label}</span>}>
                   <Text {...textProps}>{value ?? "-"}</Text>
                 </Descriptions.Item>
               ))}
           </Descriptions>
-        </div>
+        </Card>
         <div>
           <Text>{message}</Text>
         </div>
         {requiredConfirmation && (
-          <div className="mb-6 mt-4 pt-4 border-t border-gray-200">
-            <Text className="block text-base font-medium text-gray-700 mb-2">
+          <div className="mb-6 mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <Text className="block text-base font-medium text-gray-700 dark:text-gray-300 mb-2">
               <Text>Type </Text>
               <Text strong type="danger">
                 {requiredConfirmation}
@@ -86,7 +99,8 @@ export default function DeleteResourceModal({
               value={requiredConfirmationInput}
               onChange={(e) => setRequiredConfirmationInput(e.target.value)}
               placeholder={requiredConfirmation}
-              className="rounded-md text-base border-gray-200"
+              className="rounded-md"
+              prefix={<ExclamationCircleOutlined style={{ color: token.colorError }} />}
               autoFocus
             />
           </div>
