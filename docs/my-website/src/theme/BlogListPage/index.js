@@ -104,7 +104,7 @@ export default function BlogListPage(props) {
       description={metadata.blogDescription || 'Guides, announcements, and best practices from the LiteLLM team.'}
     >
       <header className={styles.hero}>
-        <h1 className={styles.heroTitle}>Blog</h1>
+        <h1 className={styles.heroTitle}>The LiteLLM Blog</h1>
         <p className={styles.heroSubtitle}>Guides, announcements, and best practices from the LiteLLM team.</p>
       </header>
 
