@@ -623,6 +623,16 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
+    @staticmethod
+    def _get_model_id_from_response(hidden_params: dict, data: dict) -> str:
+        """Extract model_id from hidden_params with fallback to litellm_metadata."""
+        model_id = hidden_params.get("model_id", None) or ""
+        if not model_id:
+            litellm_metadata = data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+        return model_id
+
     async def base_process_llm_request(
         self,
         request: Request,
@@ -757,13 +767,7 @@ class ProxyBaseLLMRequestProcessing:
         response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-
-        # Fallback: extract model_id from litellm_metadata if not in hidden_params
-        if not model_id:
-            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
-            model_info = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", "") or ""
+        model_id = self._get_model_id_from_response(hidden_params, self.data)
 
         cache_key, api_base, response_cost = (
             hidden_params.get("cache_key", None) or "",
