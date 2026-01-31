@@ -255,9 +255,27 @@ def _override_openai_response_model(
     paths stay observable for maintainers/operators without breaking client compatibility.
 
     Errors are reserved for cases where the proxy cannot read/override the response model field.
+
+    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
+    we should preserve the actual model that was used (the fallback model) rather than
+    overriding it with the originally requested model.
     """
     if not requested_model:
         return
+
+    # Check if a fallback occurred - if so, preserve the actual model used
+    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
+    if isinstance(hidden_params, dict):
+        fallback_headers = hidden_params.get("additional_headers", {}) or {}
+        attempted_fallbacks = fallback_headers.get("x-litellm-attempted-fallbacks", None)
+        if attempted_fallbacks is not None and attempted_fallbacks > 0:
+            # A fallback occurred - preserve the actual model that was used
+            verbose_proxy_logger.debug(
+                "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
+                log_context,
+                attempted_fallbacks,
+            )
+            return
 
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")

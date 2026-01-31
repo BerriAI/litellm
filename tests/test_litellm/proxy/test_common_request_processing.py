@@ -13,6 +13,7 @@ from litellm.proxy.common_request_processing import (
     ProxyConfig,
     _extract_error_from_sse_chunk,
     _get_cost_breakdown_from_logging_obj,
+    _override_openai_response_model,
     _parse_event_data_for_error,
     create_response,
 )
@@ -1022,5 +1023,231 @@ class TestExtractErrorFromSSEChunk:
 
         assert error["message"] == "error occurred"
         # Other fields should be obtained from the original error object (if exists)
+
+
+class TestOverrideOpenAIResponseModel:
+    """Tests for _override_openai_response_model function"""
+
+    def test_override_model_preserves_fallback_model_when_fallback_occurred_object(self):
+        """
+        Test that when a fallback occurred (x-litellm-attempted-fallbacks > 0),
+        the actual model used (fallback model) is preserved instead of being
+        overridden with the requested model.
+        
+        This is the regression test to ensure the model being called is properly
+        displayed when a fallback happens.
+        """
+        requested_model = "gpt-4"
+        fallback_model = "gpt-3.5-turbo"
+        
+        # Create a mock object response with fallback model
+        # _hidden_params is an attribute (not a dict key) accessed via getattr
+        response_obj = MagicMock()
+        response_obj.model = fallback_model
+        response_obj._hidden_params = {
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1
+            }
+        }
+        
+        # Call the function - should preserve fallback model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model was NOT overridden - should still be the fallback model
+        assert response_obj.model == fallback_model
+        assert response_obj.model != requested_model
+
+    def test_override_model_preserves_fallback_model_multiple_fallbacks(self):
+        """
+        Test that when multiple fallbacks occurred, the actual model used
+        (fallback model) is preserved.
+        """
+        requested_model = "gpt-4"
+        fallback_model = "claude-haiku-4-5-20251001"
+        
+        # Create a mock object response with fallback model
+        response_obj = MagicMock()
+        response_obj.model = fallback_model
+        response_obj._hidden_params = {
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 2  # Multiple fallbacks
+            }
+        }
+        
+        # Call the function - should preserve fallback model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model was NOT overridden - should still be the fallback model
+        assert response_obj.model == fallback_model
+        assert response_obj.model != requested_model
+
+    def test_override_model_overrides_when_no_fallback_dict(self):
+        """
+        Test that when no fallback occurred, the model is overridden
+        to match the requested model (dict response).
+        """
+        requested_model = "gpt-4"
+        downstream_model = "gpt-3.5-turbo"
+        
+        # Create a dict response without fallback
+        # For dict responses, _hidden_params won't be found via getattr,
+        # so the fallback check won't trigger and model will be overridden
+        response_obj = {"model": downstream_model}
+        
+        # Call the function - should override to requested model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model WAS overridden to requested model
+        assert response_obj["model"] == requested_model
+
+    def test_override_model_overrides_when_no_fallback_object(self):
+        """
+        Test that when no fallback occurred (object response), the model is overridden
+        to match the requested model.
+        """
+        requested_model = "gpt-4"
+        downstream_model = "gpt-3.5-turbo"
+        
+        # Create a mock object response without fallback
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "additional_headers": {}  # No attempted_fallbacks header
+        }
+        
+        # Call the function - should override to requested model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model WAS overridden to requested model
+        assert response_obj.model == requested_model
+
+    def test_override_model_overrides_when_attempted_fallbacks_is_zero(self):
+        """
+        Test that when attempted_fallbacks is 0 (no fallback occurred),
+        the model is overridden to match the requested model.
+        """
+        requested_model = "gpt-4"
+        downstream_model = "gpt-3.5-turbo"
+        
+        # Create a mock object response
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 0  # Zero means no fallback occurred
+            }
+        }
+        
+        # Call the function - should override to requested model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model WAS overridden to requested model
+        assert response_obj.model == requested_model
+
+    def test_override_model_overrides_when_attempted_fallbacks_is_none(self):
+        """
+        Test that when attempted_fallbacks is None (not set),
+        the model is overridden to match the requested model.
+        """
+        requested_model = "gpt-4"
+        downstream_model = "gpt-3.5-turbo"
+        
+        # Create a mock object response
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        response_obj._hidden_params = {
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": None
+            }
+        }
+        
+        # Call the function - should override to requested model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model WAS overridden to requested model
+        assert response_obj.model == requested_model
+
+    def test_override_model_no_hidden_params(self):
+        """
+        Test that when _hidden_params is not present, the model is overridden
+        to match the requested model.
+        """
+        requested_model = "gpt-4"
+        downstream_model = "gpt-3.5-turbo"
+        
+        # Create a mock object response without _hidden_params
+        response_obj = MagicMock()
+        response_obj.model = downstream_model
+        # Don't set _hidden_params - getattr will return {}
+        
+        # Call the function - should override to requested model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=requested_model,
+            log_context="test_context",
+        )
+        
+        # Verify the model WAS overridden to requested model
+        assert response_obj.model == requested_model
+
+    def test_override_model_no_requested_model(self):
+        """
+        Test that when requested_model is None or empty, the function returns early
+        without modifying the response.
+        """
+        fallback_model = "gpt-3.5-turbo"
+        
+        # Create a mock object response
+        response_obj = MagicMock()
+        response_obj.model = fallback_model
+        response_obj._hidden_params = {
+            "additional_headers": {
+                "x-litellm-attempted-fallbacks": 1
+            }
+        }
+        
+        # Call the function with None requested_model
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model=None,
+            log_context="test_context",
+        )
+        
+        # Verify the model was not changed
+        assert response_obj.model == fallback_model
+        
+        # Call with empty string
+        _override_openai_response_model(
+            response_obj=response_obj,
+            requested_model="",
+            log_context="test_context",
+        )
+        
+        # Verify the model was not changed
+        assert response_obj.model == fallback_model
 
 
