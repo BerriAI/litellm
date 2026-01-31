@@ -67,9 +67,11 @@ from litellm.types.mcp_server.mcp_server_manager import (
 try:
     from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name  # type: ignore
 except ImportError:
+    from typing import Any
+    
     SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
 
-    def validate_tool_name(name: str):
+    def validate_tool_name(name: str) -> Any:
         from pydantic import BaseModel
 
         class MockResult(BaseModel):

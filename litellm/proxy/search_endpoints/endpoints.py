@@ -245,8 +245,9 @@ async def list_search_tools(
                 }
                 
                 # Add description if available
-                if "search_tool_info" in tool and tool["search_tool_info"]:
-                    description = tool["search_tool_info"].get("description")
+                search_tool_info = tool.get("search_tool_info")  # type: ignore[typeddict-item]
+                if search_tool_info:
+                    description = search_tool_info.get("description")
                     if description:
                         tool_info["description"] = description
                 

@@ -59,8 +59,9 @@ if MCP_AVAILABLE:
     try:
         from mcp.shared.tool_name_validation import validate_tool_name  # type: ignore
     except ImportError:
+        from typing import Any
 
-        def validate_tool_name(name: str):
+        def validate_tool_name(name: str) -> Any:
             from pydantic import BaseModel
 
             class MockResult(BaseModel):

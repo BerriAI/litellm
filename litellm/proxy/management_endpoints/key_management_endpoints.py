@@ -1531,6 +1531,12 @@ async def _process_single_key_update(
     Raises:
         HTTPException: For various validation and permission errors
     """
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Database not connected",
+        )
+    
     # Validate max_budget
     _validate_max_budget(key_update_item.max_budget)
     

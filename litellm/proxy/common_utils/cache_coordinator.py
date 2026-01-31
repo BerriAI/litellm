@@ -23,9 +23,11 @@ class AsyncCacheProtocol(Protocol):
     """Protocol for cache backends used by EventDrivenCacheCoordinator."""
 
     async def async_get_cache(self, key: str, **kwargs: Any) -> Any:
+        """Get value from cache."""
         ...
 
-    async def async_set_cache(self, key: str, value: Any, **kwargs: Any) -> Any:
+    async def async_set_cache(self, key: str, value: Any, **kwargs: Any) -> None:
+        """Set value in cache."""
         ...
 
 
