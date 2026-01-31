@@ -305,6 +305,7 @@ LLM_CONFIG_NAMES = (
     "LemonadeChatConfig",
     "SnowflakeEmbeddingConfig",
     "AmazonNovaChatConfig",
+    "A2AAgentConfig",
 )
 
 # Types that support lazy loading via _lazy_import_types
@@ -1118,6 +1119,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "AmazonNovaChatConfig": (
         ".llms.amazon_nova.chat.transformation",
         "AmazonNovaChatConfig",
+    ),
+    "A2AAgentConfig": (
+        ".llms.a2a.chat.transformation",
+        "A2AAgentConfig",
     ),
 }
 

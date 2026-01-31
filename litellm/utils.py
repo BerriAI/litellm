@@ -7900,6 +7900,7 @@ class ProviderConfigManager:
                 lambda: ProviderConfigManager._get_langgraph_config(),
                 False,
             ),
+            LlmProviders.A2A_AGENT: (lambda: litellm.A2AAgentConfig(), False),
         }
 
     @staticmethod
