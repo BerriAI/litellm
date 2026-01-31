@@ -2983,7 +2983,8 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     assert response.headers["location"] == test_redirect_url
 
 
-def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     """
     Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
     """
@@ -3012,13 +3013,14 @@ def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
 
-def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     """
     Test that get_image falls back to default_site_logo when logo doesn't exist
     in /var/lib/litellm/assets for non-root case.
@@ -3058,7 +3060,7 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
@@ -3072,7 +3074,8 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         assert mock_file_response.called, "FileResponse should be called"
 
 
-def test_get_image_root_case_uses_current_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_root_case_uses_current_dir(monkeypatch):
     """
     Test that get_image uses current_dir when LITELLM_NON_ROOT is not true.
     """
@@ -3101,7 +3104,7 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was NOT called with /var/lib/litellm/assets (should not create it for root case)
         var_lib_assets_calls = [
@@ -3937,7 +3940,7 @@ async def test_model_info_v2_filter_by_team_id(monkeypatch):
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.proxy._types import UserAPIKeyAuth, LiteLLM_TeamTable
+    from litellm.proxy._types import LiteLLM_TeamTable, UserAPIKeyAuth
     from litellm.proxy.proxy_server import app, proxy_config, user_api_key_auth
 
     # Create mock models with different access configurations
@@ -4764,7 +4767,8 @@ def test_enrich_model_info_with_litellm_data():
 async def test_model_list_scope_parameter_validation(monkeypatch):
     """Test that invalid scope parameter raises HTTPException"""
     from fastapi import HTTPException
-    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.proxy_server import model_list
 
     mock_user_api_key_dict = UserAPIKeyAuth(
@@ -4788,7 +4792,7 @@ async def test_model_list_scope_parameter_validation(monkeypatch):
 @pytest.mark.asyncio
 async def test_model_list_scope_expand_proxy_admin(monkeypatch):
     """Test that proxy admin with scope=expand returns all proxy models"""
-    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, LiteLLM_UserTable
+    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.proxy_server import model_list
 
     # Mock user API key dict for proxy admin
@@ -4855,9 +4859,9 @@ async def test_model_list_scope_expand_proxy_admin(monkeypatch):
 async def test_model_list_scope_expand_org_admin(monkeypatch):
     """Test that org admin with scope=expand returns all proxy models"""
     from litellm.proxy._types import (
-        UserAPIKeyAuth,
-        LitellmUserRoles,
         LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
     )
     from litellm.proxy.proxy_server import model_list
 
@@ -4869,8 +4873,9 @@ async def test_model_list_scope_expand_org_admin(monkeypatch):
     )
 
     # Mock user object with org admin membership
-    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
     from datetime import datetime
+
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
     
     mock_user_obj = LiteLLM_UserTable(
         user_id="org-admin-user",
@@ -4953,10 +4958,10 @@ async def test_model_list_scope_expand_org_admin(monkeypatch):
 async def test_model_list_scope_expand_team_admin(monkeypatch):
     """Test that team admin with scope=expand returns all proxy models"""
     from litellm.proxy._types import (
-        UserAPIKeyAuth,
-        LitellmUserRoles,
-        LiteLLM_UserTable,
         LiteLLM_TeamTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
     )
     from litellm.proxy.proxy_server import model_list
 
@@ -5053,7 +5058,7 @@ async def test_model_list_scope_expand_team_admin(monkeypatch):
 @pytest.mark.asyncio
 async def test_model_list_scope_expand_normal_user(monkeypatch):
     """Test that normal internal user with scope=expand returns only their models (not expanded)"""
-    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, LiteLLM_UserTable
+    from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.proxy_server import model_list
 
     # Mock user API key dict for normal internal user
@@ -5136,7 +5141,7 @@ async def test_model_list_scope_expand_normal_user(monkeypatch):
 @pytest.mark.asyncio
 async def test_model_list_no_scope_parameter(monkeypatch):
     """Test that model_list without scope parameter uses normal behavior"""
-    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.proxy_server import model_list
 
     # Mock user API key dict
