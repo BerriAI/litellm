@@ -49,6 +49,9 @@ model_list:
       model: openai/fake
       api_key: fake-key
       api_base: https://exampleopenaiendpoint-production.up.railway.app/
+    model_info:
+      input_cost_per_token: 0.0001  # $0.10 per 1K tokens - for budget testing
+      output_cost_per_token: 0.0002  # $0.20 per 1K tokens - for budget testing
   - model_name: fake-openai-endpoint-2
     litellm_params:
       model: openai/my-fake-model

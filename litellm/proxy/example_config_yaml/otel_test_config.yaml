@@ -7,6 +7,8 @@ model_list:
      tags: ["teamA"]
    model_info:
      id: "team-a-model"
+     input_cost_per_token: 0.0001  # $0.10 per 1K tokens - for budget testing
+     output_cost_per_token: 0.0002  # $0.20 per 1K tokens - for budget testing
  - model_name: fake-openai-endpoint
    litellm_params:
      model: openai/fake
@@ -15,6 +17,8 @@ model_list:
      tags: ["teamB"]
    model_info:
      id: "team-b-model"
+     input_cost_per_token: 0.0001  # $0.10 per 1K tokens - for budget testing
+     output_cost_per_token: 0.0002  # $0.20 per 1K tokens - for budget testing
  - model_name: rerank-english-v3.0
    litellm_params:
      model: cohere/rerank-english-v3.0

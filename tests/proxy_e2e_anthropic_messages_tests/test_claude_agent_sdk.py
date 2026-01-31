@@ -16,10 +16,12 @@ from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 # Test models from proxy_config.yaml
 # Note: bedrock-converse-claude-sonnet-4.5 removed temporarily as the Bedrock Converse API 
 # for Claude Sonnet 4.5 may not be available in all regions/accounts
+# Note: bedrock-nova-premier removed - Nova Premier is NOT a Claude model and doesn't support
+# Claude Agent SDK format (expects Anthropic-compatible response format)
 TEST_MODELS = [
     ("bedrock-claude-sonnet-4.5", "Bedrock Invoke API"),
     # ("bedrock-converse-claude-sonnet-4.5", "Bedrock Converse API"),  # Disabled: not yet available in CI
-    ("bedrock-nova-premier", "AWS Nova Premier"),
+    # ("bedrock-nova-premier", "AWS Nova Premier"),  # Disabled: Nova Premier is not a Claude model
 ]
 
 
