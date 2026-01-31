@@ -748,7 +748,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if isinstance(web_search_options, dict):
             web_search_tool.update(web_search_options)
 
-        responses_api_request["tools"].append(web_search_tool)
+        responses_api_request["tools"].append(web_search_tool)  # type: ignore[union-attr, arg-type]
 
     def _transform_response_format_to_text_format(
         self, response_format: Union[Dict[str, Any], Any]

@@ -172,7 +172,7 @@ class EventDrivenCacheCoordinator:
         Returns the value from cache or from load_fn, or None if load failed or
         cache was still empty after waiting.
         """
-        value = await self._get_cached(cache_key, cache)
+        value = await self._get_cached(cache_key, cache)  # type: ignore[func-returns-value]
         if value is not None:
             self._log_cache_hit(value)
             return value

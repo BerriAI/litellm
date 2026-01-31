@@ -751,7 +751,7 @@ class ProxyBaseLLMRequestProcessing:
         # Do not change this - it should be a constant time fetch - ALWAYS
         llm_call = await route_request(
             data=self.data,
-            route_type=route_type,
+            route_type=route_type,  # type: ignore[arg-type]
             llm_router=llm_router,
             user_model=user_model,
         )

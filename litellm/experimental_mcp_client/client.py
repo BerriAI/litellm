@@ -14,7 +14,7 @@ from mcp.client.stdio import stdio_client
 try:
     from mcp.client.streamable_http import streamable_http_client  # type: ignore
 except ImportError:
-    streamable_http_client = None
+    streamable_http_client = None  # type: ignore[assignment]
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import (
