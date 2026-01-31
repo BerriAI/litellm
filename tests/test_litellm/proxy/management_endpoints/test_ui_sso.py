@@ -25,12 +25,14 @@ from litellm.proxy.management_endpoints.ui_sso import (
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
     normalize_email,
+    _setup_team_mappings,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
+    TeamMappings,
 )
 
 
@@ -3815,3 +3817,34 @@ class TestCustomMicrosoftSSO:
         )
 
         assert isinstance(sso, MicrosoftSSO)
+
+
+@pytest.mark.asyncio
+async def test_setup_team_mappings():
+    """Test _setup_team_mappings function loads team mappings from database."""
+    # Arrange
+    mock_prisma = MagicMock()
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {
+        "team_mappings": {
+            "team_ids_jwt_field": "groups"
+        }
+    }
+    mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=mock_sso_config
+    )
+
+    with patch(
+        "litellm.proxy.utils.get_prisma_client_or_throw",
+        return_value=mock_prisma,
+    ):
+        # Act
+        result = await _setup_team_mappings()
+
+        # Assert
+        assert result is not None
+        assert isinstance(result, TeamMappings)
+        assert result.team_ids_jwt_field == "groups"
+        mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once_with(
+            where={"id": "sso_config"}
+        )

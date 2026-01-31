@@ -449,7 +449,6 @@ async def get_sso_settings():
         # Load settings from database
         sso_settings_dict = dict(sso_db_record.sso_settings)
 
-    # Extract role_mappings before removing it (it's a dict, not an env variable)
     role_mappings_data = sso_settings_dict.pop("role_mappings", None)
     role_mappings = None
     if role_mappings_data:
@@ -459,6 +458,16 @@ async def get_sso_settings():
             role_mappings = RoleMappings(**role_mappings_data)
         elif isinstance(role_mappings_data, RoleMappings):
             role_mappings = role_mappings_data
+
+    team_mappings_data = sso_settings_dict.pop("team_mappings", None)
+    team_mappings = None
+    if team_mappings_data:
+        from litellm.types.proxy.management_endpoints.ui_sso import TeamMappings
+
+        if isinstance(team_mappings_data, dict):
+            team_mappings = TeamMappings(**team_mappings_data)
+        elif isinstance(team_mappings_data, TeamMappings):
+            team_mappings = team_mappings_data
 
     decrypted_sso_settings_dict = proxy_config._decrypt_and_set_db_env_variables(
         environment_variables=sso_settings_dict
@@ -495,6 +504,7 @@ async def get_sso_settings():
         user_email=decrypted_sso_settings_dict.get("user_email"),
         ui_access_mode=decrypted_sso_settings_dict.get("ui_access_mode"),
         role_mappings=role_mappings,
+        team_mappings=team_mappings,
     )
 
     # Get the schema for UI display

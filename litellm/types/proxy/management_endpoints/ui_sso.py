@@ -86,6 +86,20 @@ class RoleMappings(LiteLLMPydanticObjectBase):
     )
 
 
+class TeamMappings(LiteLLMPydanticObjectBase):
+    """
+    Configuration for mapping SSO JWT fields to team IDs.
+
+    This allows configuring team_ids_jwt_field via the database instead of
+    requiring config file changes and restarts.
+    """
+
+    team_ids_jwt_field: Optional[str] = Field(
+        default=None,
+        description="The field name in the SSO/JWT token that contains the team IDs array (e.g., 'groups', 'teams'). Supports dot notation for nested fields.",
+    )
+
+
 class SSOConfig(LiteLLMPydanticObjectBase):
     """
     Configuration for SSO environment variables and settings
@@ -157,6 +171,12 @@ class SSOConfig(LiteLLMPydanticObjectBase):
     role_mappings: Optional[RoleMappings] = Field(
         default=None,
         description="Configuration for mapping SSO groups to LiteLLM roles based on group claims in the SSO token",
+    )
+
+    # Team Mappings
+    team_mappings: Optional[TeamMappings] = Field(
+        default=None,
+        description="Configuration for mapping SSO JWT fields to team IDs. Takes precedence over config file settings.",
     )
 
 
