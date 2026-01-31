@@ -156,13 +156,21 @@ class PointGuardAIGuardrail(CustomGuardrail):
                 )
                 return None
 
-            # Only add input field if there are input messages
-            if new_messages:
-                data["input"] = new_messages
-            
-            # Only add output field if there's a response string (for output endpoint)
+            # Output endpoint requires BOTH input and output fields
+            # Input endpoint requires only input field
             if response_string:
+                # Output endpoint - include both fields (input can be empty array)
+                data["input"] = new_messages if new_messages else []
                 data["output"] = [{"role": "assistant", "content": response_string}]
+            else:
+                # Input endpoint - include only input field
+                if new_messages:
+                    data["input"] = new_messages
+                else:
+                    verbose_proxy_logger.warning(
+                        "PointGuardAI v2: No input messages for input endpoint"
+                    )
+                    return None
 
             verbose_proxy_logger.debug("PointGuardAI v2 request: %s", data)
             return data
@@ -317,26 +325,25 @@ class PointGuardAIGuardrail(CustomGuardrail):
         )
         
         # Extract modified content from content items
+        # Returns items with originalContent and modifiedContent for comparison
         def extract_modified_content(content_items: List[dict]) -> List[dict]:
             modified_messages = []
             for item in content_items:
                 if not isinstance(item, dict):
                     continue
                 
-                # Use modifiedContent if present, otherwise use originalContent
-                content = item.get("modifiedContent") or item.get("originalContent", "")
-                role = item.get("role", "user")
-                
+                # Return with both original and modified content for apply_guardrail to use
                 modified_messages.append({
-                    "role": role,
-                    "content": content
+                    "role": item.get("role", "user"),
+                    "originalContent": item.get("originalContent", ""),
+                    "modifiedContent": item.get("modifiedContent"),
                 })
                 
                 # Log if content was actually modified
-                if item.get("modifiedContent"):
+                if item.get("modifiedContent") is not None:
                     verbose_proxy_logger.info(
                         "PointGuardAI v2: Content modified for role '%s'",
-                        role
+                        item.get("role", "user")
                     )
             
             return modified_messages
@@ -526,146 +533,202 @@ class PointGuardAIGuardrail(CustomGuardrail):
         logging_obj: Optional["LiteLLMLoggingObj"] = None,
     ) -> GenericGuardrailAPIInputs:
         """
-        Apply PointGuardAI guardrail to the given inputs.
-
-        This method is called by the unified guardrail system for both
-        input (request) and output (response) validation.
-
+        Apply PointGuardAI guardrail to the given inputs using the unified guardrail system.
+        
         Args:
             inputs: Dictionary containing:
                 - texts: List of texts to check
                 - structured_messages: Structured messages from the request (pre-call only)
-                - tool_calls: Tool calls if present
             request_data: The original request data
-            input_type: "request" for pre-call, "response" for post-call
+            input_type: "request" for pre-call input validation, "response" for post-call output validation
             logging_obj: Optional logging object
-
+            
         Returns:
-            GenericGuardrailAPIInputs - unchanged or modified if allowed through
-
+            GenericGuardrailAPIInputs - modified if content changes are applied
+            
         Raises:
-            HTTPException: If content is blocked
+            HTTPException: If content is blocked by PointGuardAI
         """
-        try:
-            # Extract messages from structured_messages or request_data
-            messages: Optional[List[AllMessageValues]] = inputs.get("structured_messages")
-            if not messages:
-                messages = request_data.get("messages")
-
-            # For response (post_call), get output text
-            output: Optional[str] = None
-            texts = inputs.get("texts", [])
-
-            if input_type == "response":
-                # Extract output text from response
-                output = texts[-1] if texts else None
-
-            # Transform messages if available
-            new_messages = []
-            if messages:
-                new_messages = self.transform_messages(messages=messages)
-
-            # Make request to PointGuard AI API
-            modified_content = await self.make_pointguard_api_request(
+        texts = inputs.get("texts", [])
+        structured_messages = inputs.get("structured_messages", [])
+        
+        verbose_proxy_logger.debug(
+            "PointGuardAI: apply_guardrail called with input_type=%s, texts=%d, structured_messages=%d",
+            input_type,
+            len(texts),
+            len(structured_messages),
+        )
+        
+        if input_type == "request":
+            # Pre-call: validate input messages
+            return await self._apply_guardrail_on_request(
+                inputs=inputs,
+                texts=texts,
+                structured_messages=structured_messages,
                 request_data=request_data,
-                new_messages=new_messages,
-                response_string=output,
             )
-
-            # If no modifications, return inputs as-is
-            if modified_content is None:
-                verbose_proxy_logger.debug(
-                    "PointGuardAI: No modifications made to content"
-                )
-                return inputs
-
-            # Apply modifications based on input_type
-            if isinstance(modified_content, list) and len(modified_content) > 0:
-                if input_type == "request":
-                    # Modify request messages
-                    verbose_proxy_logger.info(
-                        "PointGuardAI applying %d modifications to input messages",
-                        len(modified_content)
-                    )
-
-                    if messages:
-                        modifications_applied = 0
-                        for i, message in enumerate(messages):
-                            content = message.get("content")
-                            if content and isinstance(content, str):
-                                # Find matching modification
-                                for mod in modified_content:
-                                    if mod.get("originalContent") == content:
-                                        # Handle null modifiedContent as content removal
-                                        if mod.get("modifiedContent") is None:
-                                            messages[i]["content"] = ""
-                                            verbose_proxy_logger.info(
-                                                "PointGuardAI removed content from message %d", i
-                                            )
-                                        else:
-                                            messages[i]["content"] = mod.get(
-                                                "modifiedContent", content
-                                            )
-                                            verbose_proxy_logger.info(
-                                                "PointGuardAI modified message %d", i
-                                            )
-                                        modifications_applied += 1
-                                        break
-
-                        if modifications_applied > 0:
+        else:  # response
+            # Post-call: validate output
+            return await self._apply_guardrail_on_response(
+                inputs=inputs,
+                texts=texts,
+                request_data=request_data,
+            )
+    
+    async def _apply_guardrail_on_request(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        texts: List[str],
+        structured_messages: list,
+        request_data: dict,
+    ) -> GenericGuardrailAPIInputs:
+        """Handle request-side (pre-call) guardrail checks for input messages."""
+        # Use structured_messages if available, otherwise create from texts
+        messages = structured_messages if structured_messages else [
+            {"role": "user", "content": text} for text in texts
+        ]
+        
+        if not messages:
+            return inputs
+        
+        # Transform to PointGuardAI format
+        new_messages = self.transform_messages(messages=messages)
+        
+        # Make PointGuardAI API request (input only - no output)
+        modified_content = await self.make_pointguard_api_request(
+            request_data=request_data,
+            new_messages=new_messages,
+            response_string=None,
+        )
+        
+        # Apply modifications if present
+        if modified_content and isinstance(modified_content, list):
+            verbose_proxy_logger.info(
+                "PointGuardAI: Applying %d modifications to input",
+                len(modified_content)
+            )
+            
+            modifications_applied = False
+            
+            # Modify the structured_messages or texts with string replacement
+            for mod_item in modified_content:
+                if not isinstance(mod_item, dict):
+                    continue
+                
+                original = mod_item.get("originalContent")
+                modified = mod_item.get("modifiedContent")
+                
+                if not original:
+                    continue
+                
+                # Update structured messages if available
+                if structured_messages:
+                    for msg in structured_messages:
+                        content = msg.get("content", "")
+                        if original in content:
+                            if modified is None:
+                                msg["content"] = content.replace(original, "")
+                            else:
+                                msg["content"] = content.replace(original, modified)
+                            modifications_applied = True
                             verbose_proxy_logger.info(
-                                "PointGuardAI successfully applied %d/%d modifications",
-                                modifications_applied, len(modified_content)
+                                "PointGuardAI: Modified input message content"
                             )
-
-                        # Return modified inputs
-                        return GenericGuardrailAPIInputs(
-                            texts=texts,
-                            structured_messages=messages
-                        )
-
-                elif input_type == "response":
-                    # Modify response text
-                    verbose_proxy_logger.info(
-                        "PointGuardAI applying %d modifications to response content",
-                        len(modified_content)
-                    )
-
-                    if output:
-                        # Find matching modification for output
-                        for mod in modified_content:
-                            if mod.get("originalContent") == output:
-                                # Handle null modifiedContent as content removal
-                                if mod.get("modifiedContent") is None:
-                                    modified_output = ""
-                                    verbose_proxy_logger.info(
-                                        "PointGuardAI removed response content"
-                                    )
-                                else:
-                                    modified_output = mod.get("modifiedContent", output)
-                                    verbose_proxy_logger.info(
-                                        "PointGuardAI modified response content"
-                                    )
-
-                                # Update texts with modified content
-                                new_texts = texts.copy()
-                                new_texts[-1] = modified_output
-
-                                return GenericGuardrailAPIInputs(
-                                    texts=new_texts
-                                )
-
+                
+                # Also update texts list
+                for i, text in enumerate(texts):
+                    if original in text:
+                        if modified is None:
+                            texts[i] = text.replace(original, "")
+                        else:
+                            texts[i] = text.replace(original, modified)
+                        modifications_applied = True
+            
+            if modifications_applied:
+                return GenericGuardrailAPIInputs(
+                    texts=texts,
+                    structured_messages=structured_messages,
+                )
+        
+        return inputs
+    
+    async def _apply_guardrail_on_response(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        texts: List[str],
+        request_data: dict,
+    ) -> GenericGuardrailAPIInputs:
+        """Handle response-side (post-call) guardrail checks for output."""
+        if not texts:
             return inputs
-
-        except HTTPException:
-            # Re-raise HTTP exceptions (blocks/violations)
-            raise
-        except Exception as e:
-            verbose_proxy_logger.error(
-                "Error in PointGuardAI apply_guardrail: %s", str(e)
+        
+        # Get the output text (last text in the list)
+        output_text = texts[-1] if texts else None
+        if not output_text:
+            return inputs
+        
+        # For /output endpoint, we need both input and output
+        # Since unified system doesn't preserve original messages in post-call,
+        # we hardcode a placeholder input for now
+        # TODO: Find a better way to preserve original messages in unified system
+        placeholder_messages = [
+            {"role": "user", "content": "[Original input not available in post-call]"}
+        ]
+        
+        verbose_proxy_logger.debug(
+            "PointGuardAI: Using placeholder input for output validation (unified system limitation)"
+        )
+        
+        # Make PointGuardAI API request with hardcoded input and actual output
+        modified_content = await self.make_pointguard_api_request(
+            request_data=request_data,
+            new_messages=placeholder_messages,
+            response_string=output_text,
+        )
+        
+        # Apply modifications to output if present
+        if modified_content and isinstance(modified_content, list):
+            verbose_proxy_logger.info(
+                "PointGuardAI: Applying %d modifications to output",
+                len(modified_content)
             )
-            # Return original inputs on unexpected errors to avoid breaking the flow
-            return inputs
+            
+            # Start with the original output text
+            modified_output = output_text
+            
+            for mod_item in modified_content:
+                if not isinstance(mod_item, dict):
+                    continue
+                
+                original = mod_item.get("originalContent")
+                modified = mod_item.get("modifiedContent")
+                
+                if original and original in modified_output:
+                    # Apply string replacement for partial matches
+                    if modified is None:
+                        # Content removal
+                        modified_output = modified_output.replace(original, "")
+                        verbose_proxy_logger.info(
+                            "PointGuardAI: Removed sensitive content from output"
+                        )
+                    else:
+                        # Content modification
+                        modified_output = modified_output.replace(original, modified)
+                        verbose_proxy_logger.info(
+                            "PointGuardAI: Masked sensitive content in output: '%s' -> '%s'",
+                            original[:50], modified[:50]
+                        )
+            
+            # If any modifications were made, return updated texts
+            if modified_output != output_text:
+                new_texts = texts.copy()
+                new_texts[-1] = modified_output
+                
+                return GenericGuardrailAPIInputs(
+                    texts=new_texts,
+                )
+        
+        return inputs
 
     @staticmethod
     def get_config_model() -> Optional[Type["GuardrailConfigModel"]]:
