@@ -48,7 +48,7 @@ class EventDrivenCacheCoordinator:
 
     async def _get_cached(
         self, cache_key: str, cache: AsyncCacheProtocol
-    ) -> Optional[T]:
+    ) -> Optional[Any]:
         """Return value from cache if present, else None."""
         return await cache.async_get_cache(key=cache_key)
 
