@@ -13,15 +13,15 @@ import asyncio
 from claude_agent_sdk import ClaudeSDKClient, ClaudeAgentOptions
 
 
-# Test models from proxy_config.yaml
+# Test models from test_config.yaml
 # Note: bedrock-converse-claude-sonnet-4.5 removed temporarily as the Bedrock Converse API 
 # for Claude Sonnet 4.5 may not be available in all regions/accounts
 # Note: bedrock-nova-premier requires an inference profile for on-demand throughput
 # https://docs.aws.amazon.com/bedrock/latest/userguide/inference-profiles.html
 TEST_MODELS = [
     ("bedrock-claude-sonnet-4.5", "Bedrock Invoke API"),
-    # ("bedrock-converse-claude-sonnet-4.5", "Bedrock Converse API"),  # Disabled: not yet available in CI
-    # ("bedrock-nova-premier", "AWS Nova Premier"),  # Disabled: requires inference profile for on-demand throughput
+    ("bedrock-converse-claude-sonnet-4.5", "Bedrock Converse API"),
+    ("bedrock-nova-premier", "AWS Nova Premier"),
 ]
 
 
