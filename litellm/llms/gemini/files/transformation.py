@@ -238,11 +238,13 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             
             # Map Gemini state to OpenAI status
             gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
-            status: Literal["uploaded", "processed", "error"] = "uploaded" # Default
+            # Explicitly type status as the Literal union
             if gemini_state == "ACTIVE":
-                status = "processed"
+                status: Literal["uploaded", "processed", "error"] = "processed"
             elif gemini_state == "FAILED":
                 status = "error"
+            else:
+                status = "uploaded"
             
             return OpenAIFileObject(
                 id=response_json.get("uri", ""),
