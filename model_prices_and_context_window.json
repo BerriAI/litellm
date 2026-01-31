@@ -13652,7 +13652,9 @@
         "mode": "chat",
         "output_cost_per_token": 2.5e-06,
         "output_cost_per_reasoning_token": 2.5e-06,
+        "rpm": 10,
         "source": "https://ai.google.dev/gemini-api/docs/models#gemini-robotics-er-1-5-preview",
+        "tpm": 4000000,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/completions"
