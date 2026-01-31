@@ -63,15 +63,13 @@ if MCP_AVAILABLE:
             validate_tool_name,
         )
     except ImportError:
-        from typing import Any
+        from pydantic import BaseModel
 
-        def validate_tool_name(name: str) -> Any:
-            from pydantic import BaseModel
+        class ToolNameValidationResult(BaseModel):
+            is_valid: bool = True
+            warnings: list = []
 
-            class ToolNameValidationResult(BaseModel):
-                is_valid: bool = True
-                warnings: list = []
-
+        def validate_tool_name(name: str) -> ToolNameValidationResult:
             return ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
