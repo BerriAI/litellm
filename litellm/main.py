@@ -2385,25 +2385,50 @@ def completion(  # type: ignore # noqa: PLR0915
                 api_base or litellm.api_base or get_secret_str("HOSTED_VLLM_API_BASE")
             )
 
-            response = base_llm_http_handler.completion(
-                model=model,
-                messages=messages,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                model_response=model_response,
-                encoding=_get_encoding(),
-                logging_obj=logging,
-                optional_params=optional_params,
-                timeout=timeout,
-                litellm_params=litellm_params,
-                shared_session=shared_session,
-                acompletion=acompletion,
-                stream=stream,
-                api_key=api_key,
-                headers=headers,
-                client=client,
-                provider_config=provider_config,
-            )
+            # If a custom OpenAI client is passed, use it via openai_chat_completions
+            # This ensures the client is properly used (e.g., for mocking in tests)
+            # Otherwise, use base_llm_http_handler for ssl_verify support
+            if client is not None:
+                response = openai_chat_completions.completion(
+                    model=model,
+                    messages=messages,
+                    headers=headers,
+                    model_response=model_response,
+                    print_verbose=print_verbose,
+                    api_key=api_key,
+                    api_base=api_base,
+                    acompletion=acompletion,
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    litellm_params=litellm_params,
+                    logger_fn=logger_fn,
+                    timeout=timeout,  # type: ignore
+                    custom_prompt_dict=custom_prompt_dict,
+                    client=client,  # pass AsyncOpenAI, OpenAI client
+                    organization=organization,
+                    custom_llm_provider=custom_llm_provider,
+                    shared_session=shared_session,
+                )
+            else:
+                response = base_llm_http_handler.completion(
+                    model=model,
+                    messages=messages,
+                    api_base=api_base,
+                    custom_llm_provider=custom_llm_provider,
+                    model_response=model_response,
+                    encoding=_get_encoding(),
+                    logging_obj=logging,
+                    optional_params=optional_params,
+                    timeout=timeout,
+                    litellm_params=litellm_params,
+                    shared_session=shared_session,
+                    acompletion=acompletion,
+                    stream=stream,
+                    api_key=api_key,
+                    headers=headers,
+                    client=client,
+                    provider_config=provider_config,
+                )
             logging.post_call(
                 input=messages, api_key=api_key, original_response=response
             )
