@@ -255,9 +255,27 @@ def _override_openai_response_model(
     paths stay observable for maintainers/operators without breaking client compatibility.
 
     Errors are reserved for cases where the proxy cannot read/override the response model field.
+
+    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
+    we should preserve the actual model that was used (the fallback model) rather than
+    overriding it with the originally requested model.
     """
     if not requested_model:
         return
+
+    # Check if a fallback occurred - if so, preserve the actual model used
+    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
+    if isinstance(hidden_params, dict):
+        fallback_headers = hidden_params.get("additional_headers", {}) or {}
+        attempted_fallbacks = fallback_headers.get("x-litellm-attempted-fallbacks", None)
+        if attempted_fallbacks is not None and attempted_fallbacks > 0:
+            # A fallback occurred - preserve the actual model that was used
+            verbose_proxy_logger.debug(
+                "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
+                log_context,
+                attempted_fallbacks,
+            )
+            return
 
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
@@ -623,6 +641,16 @@ class ProxyBaseLLMRequestProcessing:
 
         return self.data, logging_obj
 
+    @staticmethod
+    def _get_model_id_from_response(hidden_params: dict, data: dict) -> str:
+        """Extract model_id from hidden_params with fallback to litellm_metadata."""
+        model_id = hidden_params.get("model_id", None) or ""
+        if not model_id:
+            litellm_metadata = data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+        return model_id
+
     async def base_process_llm_request(
         self,
         request: Request,
@@ -757,13 +785,7 @@ class ProxyBaseLLMRequestProcessing:
         response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-
-        # Fallback: extract model_id from litellm_metadata if not in hidden_params
-        if not model_id:
-            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
-            model_info = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", "") or ""
+        model_id = self._get_model_id_from_response(hidden_params, self.data)
 
         cache_key, api_base, response_cost = (
             hidden_params.get("cache_key", None) or "",

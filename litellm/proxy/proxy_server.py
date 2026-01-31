@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import enum
 import inspect
 import io
 import os
@@ -11,8 +12,7 @@ import sys
 import time
 import traceback
 import warnings
-from datetime import datetime, timedelta
-import enum
+from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,41 +29,9 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+
 from pydantic import BaseModel, Json
 
-from litellm.proxy._types import (
-    ProxyException,
-    UserAPIKeyAuth,
-    LiteLLM_UserTable,
-    CommonProxyErrors,
-    LitellmUserRoles,
-    ConfigList,
-    ConfigYAML,
-    ConfigFieldUpdate,
-    ConfigGeneralSettings,
-    ConfigFieldInfo,
-    PassThroughGenericEndpoint,
-    FieldDetail,
-    ConfigFieldDelete,
-    CallbackDelete,
-    InvitationClaim,
-    InvitationModel,
-    InvitationNew,
-    InvitationUpdate,
-    InvitationDelete,
-    CallInfo,
-    Litellm_EntityType,
-    TeamDefaultSettings,
-    RoleBasedPermissions,
-    SupportedDBObjectType,
-    ProxyErrorTypes,
-    EnterpriseLicenseData,
-    LiteLLM_JWTAuth,
-    TokenCountRequest,
-    TransformRequestBody,
-    LiteLLM_TeamTable,
-    SpecialModelNames,
-)
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -84,6 +52,39 @@ from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import (
+    CallbackDelete,
+    CallInfo,
+    CommonProxyErrors,
+    ConfigFieldDelete,
+    ConfigFieldInfo,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigList,
+    ConfigYAML,
+    EnterpriseLicenseData,
+    FieldDetail,
+    InvitationClaim,
+    InvitationDelete,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    PassThroughGenericEndpoint,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    SupportedDBObjectType,
+    TeamDefaultSettings,
+    TokenCountRequest,
+    TransformRequestBody,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -3644,7 +3645,9 @@ class ProxyConfig:
                     )
             else:
                 # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
 
                 retention_interval = general_settings.get(
                     "maximum_spend_logs_retention_interval", "1d"
@@ -10164,9 +10167,13 @@ async def get_image():
     if logo_path.startswith(("http://", "https://")):
         try:
             # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+            from litellm.types.llms.custom_http import httpxSpecialProvider
 
-            async_client = AsyncHTTPHandler(timeout=5.0)
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
             response = await async_client.get(logo_path)
             if response.status_code == 200:
                 # Save the image to a local file

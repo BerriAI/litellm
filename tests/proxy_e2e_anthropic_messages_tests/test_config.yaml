@@ -21,7 +21,7 @@ model_list:
 
   - model_name: bedrock-nova-premier
     litellm_params:
-      model: "bedrock/amazon.nova-premier-v1:0"
+      model: "bedrock/us.amazon.nova-premier-v1:0"
       aws_region_name: "us-east-1"
 
   # Converse API models
