@@ -39,6 +39,4 @@ export const SPACING_LARGE = 12;
 export const SPACING_XLARGE = 16;
 export const SPACING_XXLARGE = 24;
 
-// Messages
-export const MESSAGE_COPY_SUCCESS = "copied to clipboard";
-export const MESSAGE_REQUEST_ID_COPIED = "Request ID copied to clipboard";
+// Messages (kept for backwards compatibility if needed elsewhere)
