@@ -38,8 +38,23 @@ class AlertingHangingRequestCheck:
     ):
         self.slack_alerting_object = slack_alerting_object
         self.hanging_request_cache = InMemoryCache(
-            default_ttl=int(self.slack_alerting_object.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS),
+            default_ttl=self._hanging_request_cache_ttl_seconds(),
         )
+
+    def _hanging_request_cache_ttl_seconds(self) -> int:
+        """TTL for entries tracked by the hanging request checker.
+
+        The background checker runs every `alerting_threshold / 2` seconds.
+        With time-based gating (only alert once `alerting_threshold` has elapsed since
+        registration), the *first* eligible check can occur up to ~1.5x the threshold
+        after a request is registered (e.g. if it is registered just after a check).
+
+        We keep entries long enough to ensure at least one post-threshold check occurs,
+        plus a small buffer to avoid edge-case scheduling jitter.
+        """
+
+        alerting_threshold_seconds = float(self.slack_alerting_object.alerting_threshold)
+        return int(alerting_threshold_seconds + (alerting_threshold_seconds / 2) + HANGING_ALERT_BUFFER_TIME_SECONDS)
 
     async def add_request_to_hanging_request_check(
         self,
@@ -72,7 +87,7 @@ class AlertingHangingRequestCheck:
         await self.hanging_request_cache.async_set_cache(
             key=hanging_request_data.request_id,
             value=hanging_request_data,
-            ttl=int(self.slack_alerting_object.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS),
+            ttl=self._hanging_request_cache_ttl_seconds(),
         )
         return
 
@@ -94,9 +109,7 @@ class AlertingHangingRequestCheck:
             n=MAX_OLDEST_HANGING_REQUESTS_TO_CHECK,
         )
 
-        hanging_request_ttl_seconds = int(
-            self.slack_alerting_object.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS
-        )
+        hanging_request_ttl_seconds = self._hanging_request_cache_ttl_seconds()
         alerting_threshold_seconds = float(self.slack_alerting_object.alerting_threshold)
 
         for request_id in hanging_requests:
