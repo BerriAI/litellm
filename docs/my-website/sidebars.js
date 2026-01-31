@@ -42,6 +42,7 @@ const sidebars = {
       label: "Guardrails",
       items: [
         "proxy/guardrails/quick_start",
+        "proxy/guardrails/guardrail_policies",
         "proxy/guardrails/guardrail_load_balancing",
         {
           type: "category",
@@ -121,18 +122,35 @@ const sidebars = {
           label: "Claude Code",
           items: [
             "tutorials/claude_responses_api",
+            "tutorials/claude_code_max_subscription",
             "tutorials/claude_code_customer_tracking",
             "tutorials/claude_code_websearch",
             "tutorials/claude_mcp",
             "tutorials/claude_non_anthropic_models",
+            "tutorials/claude_code_plugin_marketplace",
           ]
         },
+        "tutorials/opencode_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
         "tutorials/github_copilot_integration",
         "tutorials/litellm_gemini_cli",
         "tutorials/litellm_qwen_code_cli",
         "tutorials/openai_codex"
+      ]
+    },
+    {
+      type: "category",
+      label: "Agent SDKs",
+      link: {
+        type: "generated-index",
+        title: "Agent SDKs",
+        description: "Use LiteLLM with agent frameworks and SDKs",
+        slug: "/agent_sdks"
+      },
+      items: [
+        "tutorials/claude_agent_sdk",
+        "tutorials/google_adk",
       ]
     },
 
@@ -270,11 +288,19 @@ const sidebars = {
             "proxy/custom_sso",
             "proxy/ai_hub",
             "proxy/model_compare_ui",
-            "proxy/public_teams",
-            "proxy/self_serve",
-            "proxy/ui/bulk_edit_users",
             "proxy/ui_credentials",
             "tutorials/scim_litellm",
+            {
+              type: "category",
+              label: "UI User/Team Management",
+              items: [
+            "proxy/access_control",
+                "proxy/public_teams",
+                "proxy/self_serve",
+                "proxy/ui/bulk_edit_users",
+                "proxy/ui/page_visibility",
+              ]
+            },
             {
               type: "category",
               label: "UI Usage Tracking",
@@ -288,6 +314,7 @@ const sidebars = {
               label: "UI Logs",
               items: [
                 "proxy/ui_logs",
+                "proxy/ui_spend_log_settings",
                 "proxy/ui_logs_sessions",
                 "proxy/deleted_keys_teams"
               ]
@@ -360,6 +387,7 @@ const sidebars = {
           label: "Load Balancing, Routing, Fallbacks",
           href: "https://docs.litellm.ai/docs/routing-load-balancing",
         },
+        "traffic_mirroring",
         {
           type: "category",
           label: "Logging, Alerting, Metrics",
@@ -515,7 +543,14 @@ const sidebars = {
             "mcp_troubleshoot",
           ]
         },
-        "anthropic_unified",
+        {
+          type: "category",
+          label: "/v1/messages",
+          items: [
+            "anthropic_unified/index",
+            "anthropic_unified/structured_output",
+          ]
+        },
         "anthropic_count_tokens",
         "moderation",
         "ocr",
@@ -561,6 +596,7 @@ const sidebars = {
             "search/perplexity",
             "search/tavily",
             "search/exa_ai",
+            "search/brave",
             "search/parallel_ai",
             "search/google_pse",
             "search/dataforseo",
@@ -717,6 +753,8 @@ const sidebars = {
         "providers/galadriel",
         "providers/github",
         "providers/github_copilot",
+        "providers/gmi",
+        "providers/chatgpt",
         "providers/gradient_ai",
         "providers/groq",
         "providers/helicone",
@@ -761,6 +799,7 @@ const sidebars = {
         "providers/oci",
         "providers/ollama",
         "providers/openrouter",
+        "providers/sarvam",
         "providers/ovhcloud",
         "providers/perplexity",
         "providers/petals",
@@ -829,6 +868,7 @@ const sidebars = {
         "completion/image_generation_chat",
         "completion/json_mode",
         "completion/knowledgebase",
+        "providers/anthropic_tool_search",
         "guides/code_interpreter",
         "completion/message_trimming",
         "completion/model_alias",
@@ -865,6 +905,7 @@ const sidebars = {
         "scheduler",
         "proxy/auto_routing",
         "proxy/load_balancing",
+        "proxy/keys_teams_router_settings",
         "proxy/provider_budget_routing",
         "proxy/reliability",
         "proxy/fallback_management",
@@ -905,7 +946,6 @@ const sidebars = {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",
@@ -1003,6 +1043,7 @@ const sidebars = {
       items: [
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
+        "troubleshoot/spend_queue_warnings",
       ],
     },
   ],

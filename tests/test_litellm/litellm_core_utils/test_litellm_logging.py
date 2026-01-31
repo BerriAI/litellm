@@ -787,11 +787,13 @@ def test_get_masked_values():
         "presidio_ad_hoc_recognizers": None,
         "aws_bedrock_runtime_endpoint": None,
         "presidio_anonymizer_api_base": None,
+        "vertex_credentials": "{sensitive_api_key}",
     }
     masked_values = _get_masked_values(
         sensitive_object, unmasked_length=4, number_of_asterisks=4
     )
     assert masked_values["presidio_anonymizer_api_base"] is None
+    assert masked_values["vertex_credentials"] == "{s****y}"
 
 
 @pytest.mark.asyncio
