@@ -314,6 +314,7 @@ const sidebars = {
               label: "UI Logs",
               items: [
                 "proxy/ui_logs",
+                "proxy/ui_spend_log_settings",
                 "proxy/ui_logs_sessions",
                 "proxy/deleted_keys_teams"
               ]
