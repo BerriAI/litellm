@@ -128,7 +128,7 @@ async def common_checks(
                 message=f"Team not allowed to access model. Team={team_object.team_id}, Model={_model}. Allowed team models = {team_object.models}",
                 type=ProxyErrorTypes.team_model_access_denied,
                 param="model",
-                code=status.HTTP_401_UNAUTHORIZED,
+                code=status.HTTP_400_BAD_REQUEST,
             )
 
     ## 2.1 If user can call model (if personal key)
@@ -1983,7 +1983,7 @@ def _can_object_call_model(
             object_type=object_type
         ),
         param="model",
-        code=status.HTTP_401_UNAUTHORIZED,
+        code=status.HTTP_400_BAD_REQUEST,
     )
 
 
@@ -2084,7 +2084,7 @@ async def can_user_call_model(
             message=f"User not allowed to access model. No default model access, only team models allowed. Tried to access {model}",
             type=ProxyErrorTypes.key_model_access_denied,
             param="model",
-            code=status.HTTP_401_UNAUTHORIZED,
+            code=status.HTTP_400_BAD_REQUEST,
         )
 
     return _can_object_call_model(
@@ -2666,7 +2666,7 @@ def _can_object_call_vector_stores(
                     object_type
                 ),
                 param="vector_store",
-                code=status.HTTP_401_UNAUTHORIZED,
+                code=status.HTTP_400_BAD_REQUEST,
             )
 
     return True
