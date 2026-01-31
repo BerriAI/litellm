@@ -230,6 +230,7 @@ def test_increment_token_metrics(prometheus_logger):
         team_alias="test_team_alias",
         requested_model=None,
         model="gpt-3.5-turbo",
+        model_id="model-123",
     )
     prometheus_logger.litellm_tokens_metric.labels().inc.assert_called_once_with(100)
 
@@ -243,6 +244,7 @@ def test_increment_token_metrics(prometheus_logger):
         team_alias="test_team_alias",
         requested_model=None,
         model="gpt-3.5-turbo",
+        model_id="model-123",
     )
     prometheus_logger.litellm_input_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -258,6 +260,7 @@ def test_increment_token_metrics(prometheus_logger):
         team_alias="test_team_alias",
         requested_model=None,
         model="gpt-3.5-turbo",
+        model_id="model-123",
     )
     prometheus_logger.litellm_output_tokens_metric.labels().inc.assert_called_once_with(
         50
@@ -435,6 +438,7 @@ def test_set_latency_metrics(prometheus_logger):
         team_alias="test_team_alias",
         requested_model="openai-gpt",
         model="gpt-3.5-turbo",
+        model_id="model-123",
     )
     prometheus_logger.litellm_llm_api_latency_metric.labels().observe.assert_called_once_with(
         1.5
@@ -592,6 +596,9 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         team_alias="test_team_alias",
         model="gpt-3.5-turbo",
         user_email=None,
+        client_ip="127.0.0.1",
+        user_agent=None,
+        model_id="model-123",
     )
     prometheus_logger.litellm_requests_metric.labels().inc.assert_called_once()
 
@@ -605,6 +612,9 @@ def test_increment_top_level_request_and_spend_metrics(prometheus_logger):
         team_alias="test_team_alias",
         model="gpt-3.5-turbo",
         user_email=None,
+        client_ip="127.0.0.1",
+        user_agent=None,
+        model_id="model-123",
     )
     prometheus_logger.litellm_spend_metric.labels().inc.assert_called_once_with(0.1)
 
@@ -647,6 +657,7 @@ async def test_async_log_failure_event(prometheus_logger):
     user_api_team,
     user_api_team_alias,
     user_id,
+    model_id,
     """
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels.assert_called_once_with(
         None,
@@ -656,6 +667,7 @@ async def test_async_log_failure_event(prometheus_logger):
         "test_team",
         "test_team_alias",
         "test_user",
+        "model-123",
     )
     prometheus_logger.litellm_llm_api_failed_requests_metric.labels().inc.assert_called_once()
 
@@ -680,6 +692,8 @@ async def test_async_log_failure_event(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        client_ip="127.0.0.1",
+        user_agent=None,
     )
     prometheus_logger.litellm_deployment_failure_responses.labels().inc.assert_called_once()
 
@@ -694,6 +708,8 @@ async def test_async_log_failure_event(prometheus_logger):
         api_key_alias="test_alias",
         team="test_team",
         team_alias="test_team_alias",
+        client_ip="127.0.0.1",
+        user_agent=None,
     )
     prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
 
@@ -746,6 +762,8 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         exception_status="429",
         exception_class="Openai.RateLimitError",
         route=user_api_key_dict.request_route,
+        client_ip=None,
+        user_agent=None,
         model_id=None,
     )
     prometheus_logger.litellm_proxy_failed_requests_metric.labels().inc.assert_called_once()
@@ -762,6 +780,8 @@ async def test_async_post_call_failure_hook(prometheus_logger):
         status_code="429",
         user_email=None,
         route=user_api_key_dict.request_route,
+        client_ip=None,
+        user_agent=None,
         model_id=None,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
@@ -809,6 +829,8 @@ async def test_async_post_call_success_hook(prometheus_logger):
         status_code="200",
         user_email=None,
         route=user_api_key_dict.request_route,
+        client_ip=None,
+        user_agent=None,
         model_id=None,
     )
     prometheus_logger.litellm_proxy_total_requests_metric.labels().inc.assert_called_once()
@@ -875,6 +897,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         litellm_model_name="gpt-3.5-turbo",  # actual model used - litellm model name
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
+        model_id="model-123",
     )
 
     prometheus_logger.litellm_remaining_requests_metric.labels().set.assert_called_once_with(
@@ -889,6 +912,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         litellm_model_name="gpt-3.5-turbo",
         model_group="my_custom_model_group",
+        model_id="model-123",
     )
 
     prometheus_logger.litellm_remaining_tokens_metric.labels().set.assert_called_once_with(
@@ -914,6 +938,8 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        client_ip="127.0.0.1",
+        user_agent=None,
     )
     prometheus_logger.litellm_deployment_success_responses.labels().inc.assert_called_once()
 
@@ -928,6 +954,8 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         api_key_alias=standard_logging_payload["metadata"]["user_api_key_alias"],
         team=standard_logging_payload["metadata"]["user_api_key_team_id"],
         team_alias=standard_logging_payload["metadata"]["user_api_key_team_alias"],
+        client_ip="127.0.0.1",
+        user_agent=None,
     )
     prometheus_logger.litellm_deployment_total_requests.labels().inc.assert_called_once()
 
@@ -949,6 +977,7 @@ def test_set_llm_deployment_success_metrics(prometheus_logger):
         hashed_api_key=standard_logging_payload["metadata"]["user_api_key_hash"],
         litellm_model_name="gpt-3.5-turbo",
         model_group="my_custom_model_group",
+        model_id="model-123",
     )
 
     # Calculate expected latency per token (1 second / 10 tokens = 0.1 seconds per token)
@@ -991,6 +1020,7 @@ async def test_log_success_fallback_event(prometheus_logger):
         team_alias="test_team_alias",
         exception_status="429",
         exception_class="Openai.RateLimitError",
+        model_id=None,
     )
     prometheus_logger.litellm_deployment_successful_fallbacks.labels().inc.assert_called_once()
 
@@ -1028,6 +1058,7 @@ async def test_log_failure_fallback_event(prometheus_logger):
         team_alias="test_team_alias",
         exception_status="429",
         exception_class="Openai.RateLimitError",
+        model_id=None,
     )
     prometheus_logger.litellm_deployment_failed_fallbacks.labels().inc.assert_called_once()
 
