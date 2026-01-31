@@ -73,7 +73,13 @@ class TestAlertingHangingRequestCheck:
         checker = AlertingHangingRequestCheck(slack_alerting_object=mock_slack_alerting)
 
         # The cache should be created with TTL = alerting_threshold + buffer time
-        expected_ttl = mock_slack_alerting.alerting_threshold + HANGING_ALERT_BUFFER_TIME_SECONDS
+        # NOTE: checker runs every alerting_threshold/2, so we keep entries long enough
+        # to guarantee at least one post-threshold check can occur.
+        expected_ttl = (
+            mock_slack_alerting.alerting_threshold
+            + (mock_slack_alerting.alerting_threshold / 2)
+            + HANGING_ALERT_BUFFER_TIME_SECONDS
+        )
         assert checker.hanging_request_cache.default_ttl == expected_ttl
 
     @pytest.mark.asyncio
