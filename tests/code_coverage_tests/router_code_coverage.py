@@ -74,6 +74,7 @@ def get_functions_from_router(file_path):
 
 
 ignored_function_names = [
+    "_acancel_batch",
     "__init__",
 ]
 
