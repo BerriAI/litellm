@@ -27,6 +27,7 @@ import {
   SPACING_XLARGE,
   MESSAGE_REQUEST_ID_COPIED,
 } from "./constants";
+import { ToolsSection } from "../ToolsSection";
 
 const { Text } = Typography;
 
