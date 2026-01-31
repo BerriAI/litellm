@@ -50,7 +50,7 @@ async def test_router_avector_store_search_passes_correct_args():
         }
 
         # Call router's avector_store_search
-        result = await router.avector_store_search(
+        await router.avector_store_search(
             vector_store_id="test_store_id",
             query="test query",
             custom_llm_provider="bedrock",
@@ -496,7 +496,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
             return_value=mock_provider_config,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                result = is_allowed_to_call_vector_store_endpoint(
+                is_allowed_to_call_vector_store_endpoint(
                     provider=LlmProviders.OPENAI,
                     index_name="my-index",
                     request=mock_request,
@@ -626,7 +626,7 @@ class TestIsAllowedToCallVectorStoreEndpoint:
             return_value=mock_provider_config,
         ):
             with pytest.raises(HTTPException) as exc_info:
-                result = is_allowed_to_call_vector_store_endpoint(
+                is_allowed_to_call_vector_store_endpoint(
                     provider=LlmProviders.OPENAI,
                     index_name="my-index",
                     request=mock_request,
@@ -636,7 +636,6 @@ class TestIsAllowedToCallVectorStoreEndpoint:
         assert exc_info.value.status_code == 403
 
     def test_azure_ai_permission_allowed(self):
-        from datetime import datetime, timezone
         from unittest.mock import MagicMock
 
         from fastapi import HTTPException
@@ -820,12 +819,10 @@ async def test_vector_store_synchronization_across_instances():
     3. Instance 1 deletes the vector store (removes from DB, updates its own cache)
     4. Instance 2 should not show it in the list (database is source of truth)
     """
-    from datetime import datetime, timezone
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.types.vector_stores import (
         LiteLLM_ManagedVectorStore,
-        VectorStoreDeleteRequest,
     )
     from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
@@ -1065,7 +1062,6 @@ async def test_vector_store_update_and_list_synchronization():
     This is a regression test to prevent the bug where Instance 2 would show
     stale cached data instead of the updated database version.
     """
-    from datetime import datetime, timezone
     from unittest.mock import AsyncMock, MagicMock
 
     from litellm.types.vector_stores import LiteLLM_ManagedVectorStore

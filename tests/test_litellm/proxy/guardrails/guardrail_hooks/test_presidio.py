@@ -126,7 +126,6 @@ async def test_multimodal_message_format_completion_call_type(
     assert "test@example.com" not in content_item["text"]
     assert "555-123-4567" not in content_item["text"]
 
-    print("✓ Multimodal message format test for completion call type passed")
 
 
 @pytest.mark.asyncio
@@ -195,7 +194,6 @@ async def test_multimodal_message_format_anthropic_messages_call_type(
     assert "test@example.com" not in content_item["text"]
     assert "555-123-4567" not in content_item["text"]
 
-    print("✓ Multimodal message format test for anthropic_messages call type passed")
 
 
 @pytest.mark.asyncio
@@ -251,7 +249,6 @@ async def test_multimodal_message_multiple_content_items(
     assert "[CREDIT_CARD]" in content_items[0]["text"]
     assert "[EMAIL]" in content_items[1]["text"]
 
-    print("✓ Multiple content items test passed")
 
 
 @pytest.mark.asyncio
@@ -318,7 +315,6 @@ async def test_mixed_string_and_list_content(
     assert isinstance(messages[2]["content"], list)
     assert "[EMAIL]" in messages[2]["content"][0]["text"]
 
-    print("✓ Mixed string and list content test passed")
 
 
 @pytest.mark.asyncio
@@ -377,7 +373,6 @@ async def test_content_list_without_text_field(
     assert content_items[1]["type"] == "text"
     assert "[EMAIL]" in content_items[1]["text"]
 
-    print("✓ Content list without text field test passed")
 
 
 @pytest.mark.asyncio
@@ -400,7 +395,6 @@ async def test_empty_messages(presidio_guardrail, mock_user_api_key, mock_cache)
 
     # Should return data unchanged
     assert result == test_data
-    print("✓ Empty messages test passed")
 
 
 @pytest.mark.asyncio
@@ -423,7 +417,6 @@ async def test_no_messages_field(presidio_guardrail, mock_user_api_key, mock_cac
 
     # Should return data unchanged
     assert result == test_data
-    print("✓ No messages field test passed")
 
 
 @pytest.mark.asyncio
@@ -478,7 +471,6 @@ async def test_logging_hook_multimodal_message_format(presidio_guardrail):
     assert "4111-1111-1111-1111" not in content_item["text"]
     assert "test@example.com" not in content_item["text"]
 
-    print("✓ Logging hook multimodal message format test passed")
 
 
 @pytest.mark.asyncio
@@ -531,7 +523,6 @@ async def test_logging_hook_multiple_content_items(presidio_guardrail):
     assert "[CREDIT_CARD]" in content_items[0]["text"]
     assert "[EMAIL]" in content_items[1]["text"]
 
-    print("✓ Logging hook multiple content items test passed")
 
 
 @pytest.mark.asyncio
@@ -591,7 +582,6 @@ async def test_presidio_sets_guardrail_information_in_request_data():
     assert guardrail_info["masked_entity_count"]["EMAIL_ADDRESS"] == 1
     assert guardrail_info["masked_entity_count"]["PERSON"] == 1
 
-    print("✓ Presidio sets guardrail_information in request_data")
 
 
 @pytest.mark.asyncio
@@ -633,7 +623,6 @@ async def test_request_data_flows_to_apply_guardrail():
         assert "metadata" in request_data
         assert request_data["metadata"].get("test_flag") == "passed_correctly"
 
-    print("✓ request_data correctly passed to apply_guardrail")
 
 
 @pytest.mark.asyncio
@@ -803,7 +792,6 @@ async def test_empty_content_handling(
     # Verify messages are preserved
     assert len(result["messages"]) == 3
 
-    print("✓ Empty content handling test passed")
 
 
 @pytest.mark.asyncio
@@ -840,7 +828,6 @@ async def test_whitespace_only_content(
     assert result is not None
     assert len(result["messages"]) == 3
 
-    print("✓ Whitespace-only content test passed")
 
 
 @pytest.mark.asyncio
@@ -872,7 +859,6 @@ async def test_analyze_text_with_empty_string():
     )
     assert result == [], "Whitespace-only text should return empty list"
 
-    print("✓ analyze_text empty string test passed")
 
 
 @pytest.mark.asyncio
@@ -919,7 +905,6 @@ async def test_analyze_text_error_dict_handling():
         # Should return empty list when error dict is received
         assert result == [], "Error dict should be handled gracefully"
 
-    print("✓ analyze_text error dict handling test passed")
 
 
 @pytest.mark.asyncio
@@ -980,7 +965,6 @@ async def test_tool_calling_complete_scenario(
     # Verify other messages preserved
     assert len(result["messages"]) == 4
 
-    print("✓ Tool calling complete scenario test passed")
 
 
 def test_filter_drops_low_score_detection():
@@ -1231,4 +1215,3 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     # so it won't be closed after the context manager exits.
     # This is the expected behavior - sessions are cached per-loop for efficiency.
 
-    print("✓ Session iterator thread safety test passed")

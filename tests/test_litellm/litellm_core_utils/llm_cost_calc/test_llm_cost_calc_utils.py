@@ -1,21 +1,11 @@
-import json
 import os
 import sys
 
-import pytest
-from fastapi.testclient import TestClient
 
 import litellm
-from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
-    StandardBuiltInToolCostTracking,
-)
-from litellm.types.llms.openai import FileSearchTool, WebSearchOptions
 from litellm.types.utils import (
     CompletionTokensDetailsWrapper,
-    ModelInfo,
-    ModelResponse,
     PromptTokensDetailsWrapper,
-    StandardBuiltInToolsParams,
 )
 
 sys.path.insert(
@@ -31,7 +21,6 @@ from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 def test_reasoning_tokens_no_price_set():
     model = "o1-mini"
-    custom_llm_provider = "openai"
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
     model_cost_map = litellm.model_cost[model]
@@ -59,11 +48,9 @@ def test_reasoning_tokens_no_price_set():
         model_cost_map["input_cost_per_token"] * usage.prompt_tokens,
         10,
     )
-    print(f"completion_cost: {completion_cost}")
     expected_completion_cost = (
         model_cost_map["output_cost_per_token"] * usage.completion_tokens
     )
-    print(f"expected_completion_cost: {expected_completion_cost}")
     assert round(completion_cost, 10) == round(
         expected_completion_cost,
         10,
@@ -265,7 +252,6 @@ def test_generic_cost_per_token_anthropic_prompt_caching():
         custom_llm_provider=custom_llm_provider,
     )
 
-    print(f"prompt_cost: {prompt_cost}")
     assert prompt_cost < 0.085
 
 
@@ -294,7 +280,6 @@ def test_generic_cost_per_token_anthropic_prompt_caching_with_cache_creation():
         custom_llm_provider=custom_llm_provider,
     )
 
-    print(f"prompt_cost: {prompt_cost}")
     assert round(prompt_cost, 3) == 0.023
 
 
@@ -656,7 +641,7 @@ def test_service_tier_default_pricing():
     # gpt-5-nano standard: input=5e-08, output=4e-07
     expected_standard_prompt = 1000 * 5e-08  # 0.00005
     expected_standard_completion = 500 * 4e-07  # 0.0002
-    expected_standard_total = expected_standard_prompt + expected_standard_completion
+    expected_standard_prompt + expected_standard_completion
     
     assert abs(default_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {default_cost[0]} vs {expected_standard_prompt}"
     assert abs(default_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {default_cost[1]} vs {expected_standard_completion}"
@@ -719,7 +704,7 @@ def test_service_tier_fallback_pricing():
     # gpt-4 standard: input=3e-05, output=6e-05
     expected_standard_prompt = 1000 * 3e-05  # 0.03
     expected_standard_completion = 500 * 6e-05  # 0.03
-    expected_standard_total = expected_standard_prompt + expected_standard_completion
+    expected_standard_prompt + expected_standard_completion
     
     assert abs(std_cost[0] - expected_standard_prompt) < 1e-10, f"Standard prompt cost mismatch: {std_cost[0]} vs {expected_standard_prompt}"
     assert abs(std_cost[1] - expected_standard_completion) < 1e-10, f"Standard completion cost mismatch: {std_cost[1]} vs {expected_standard_completion}"

@@ -1,4 +1,3 @@
-import io
 import os
 import sys
 
@@ -10,13 +9,10 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, call, patch
 
 import pytest
-from prometheus_client import REGISTRY, CollectorRegistry
+from prometheus_client import REGISTRY
 
 import litellm
-from litellm import completion
 from litellm._logging import verbose_logger
-from litellm._uuid import uuid
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -37,7 +33,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 verbose_logger.setLevel(logging.DEBUG)
 
 litellm.set_verbose = True
-import time
 
 
 @pytest.fixture
@@ -1127,7 +1122,7 @@ def test_prometheus_factory(monkeypatch, enable_end_user_cost_tracking_prometheu
     if enable_end_user_cost_tracking_prometheus_only is True:
         assert returned_dict["end_user"] == "test_end_user"
     else:
-        assert returned_dict["end_user"] == None
+        assert returned_dict["end_user"] is None
 
 
 def test_get_custom_labels_from_metadata(monkeypatch):
@@ -1472,7 +1467,7 @@ async def test_initialize_remaining_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and get_paginated_teams function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+    with patch("litellm.proxy.proxy_server.prisma_client"), patch(
         "litellm.proxy.management_endpoints.team_endpoints.get_paginated_teams"
     ) as mock_get_teams:
 
@@ -1639,7 +1634,7 @@ async def test_initialize_api_key_budget_metrics(prometheus_logger):
     """
     litellm.prometheus_initialize_budget_metrics = True
     # Mock the prisma client and _list_key_helper function
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma, patch(
+    with patch("litellm.proxy.proxy_server.prisma_client"), patch(
         "litellm.proxy.management_endpoints.key_management_endpoints._list_key_helper"
     ) as mock_list_keys:
 
@@ -1897,7 +1892,6 @@ def test_prometheus_label_factory_with_custom_tags(monkeypatch):
     Test that prometheus_label_factory correctly handles custom tags
     """
     from litellm.integrations.prometheus import (
-        get_custom_labels_from_tags,
         prometheus_label_factory,
     )
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
@@ -1935,7 +1929,6 @@ def test_prometheus_label_factory_with_no_custom_tags(monkeypatch):
     Test that prometheus_label_factory works when no custom tags are configured
     """
     from litellm.integrations.prometheus import (
-        get_custom_labels_from_tags,
         prometheus_label_factory,
     )
     from litellm.types.integrations.prometheus import UserAPIKeyLabelValues
@@ -2160,9 +2153,7 @@ async def test_prometheus_token_metrics_with_prometheus_config():
 
     All three metrics should be properly incremented when making a successful completion request.
     """
-    from prometheus_client import CollectorRegistry, Counter
 
-    import litellm
     from litellm.types.integrations.prometheus import PrometheusMetricsConfig
 
     # Clear registry before test
@@ -2229,7 +2220,6 @@ async def test_prometheus_token_metrics_with_prometheus_config():
 
         await asyncio.sleep(2)
 
-        print("final registry values", REGISTRY._collector_to_names)
 
         # Get metric collectors directly from registry
         metric_collectors = {}
@@ -2237,7 +2227,6 @@ async def test_prometheus_token_metrics_with_prometheus_config():
             metric_name = names[0]  # First name is the base metric name
             metric_collectors[metric_name] = collector
 
-        print("=== Final Metric Values (Direct Access) ===")
 
         # Expected values
         expected_values = {
@@ -2274,10 +2263,6 @@ async def test_prometheus_token_metrics_with_prometheus_config():
                     actual_value = total_sample.value
                     actual_labels = total_sample.labels
 
-                    print(
-                        f"✓ {metric_name}: expected={expected_value}, actual={actual_value}"
-                    )
-                    print(f"  Labels: {actual_labels}")
 
                     # Validate the value
                     assert (
@@ -2294,12 +2279,10 @@ async def test_prometheus_token_metrics_with_prometheus_config():
                             actual_label_value == expected_label_value
                         ), f"Expected label {label_key}={expected_label_value}, got {actual_label_value}"
 
-                    print(f"  ✓ {metric_name} VALIDATED")
                 else:
                     raise AssertionError(f"No _total sample found for {metric_name}")
             else:
                 raise AssertionError(f"Metric {metric_name} not found in registry")
 
-        print("✓ All token metrics validated successfully!")
 
         # check final value of metrics in registry

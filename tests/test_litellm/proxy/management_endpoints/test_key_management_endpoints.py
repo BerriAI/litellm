@@ -3,7 +3,6 @@ import os
 import sys
 
 import pytest
-import yaml
 from fastapi.testclient import TestClient
 
 sys.path.insert(
@@ -22,7 +21,6 @@ from litellm.proxy._types import (
     LiteLLM_VerificationToken,
     LitellmUserRoles,
     Member,
-    ProxyException,
     UpdateKeyRequest,
 )
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth
@@ -70,14 +68,13 @@ async def test_list_keys():
         "admin_team_ids": ["28bd3181-02c5-48f2-b408-ce790fb3d5ba"],
     }
     try:
-        result = await _list_key_helper(**args)
-    except Exception as e:
-        print(f"error: {e}")
+        await _list_key_helper(**args)
+    except Exception:
+        pass
 
     mock_find_many.assert_called_once()
 
     where_condition = mock_find_many.call_args.kwargs["where"]
-    print(f"where_condition: {where_condition}")
     assert json.dumps({"team_id": {"not": "litellm-dashboard"}}) in json.dumps(
         where_condition
     )
@@ -117,15 +114,14 @@ async def test_list_keys_include_created_by_keys():
     }
 
     try:
-        result = await _list_key_helper(**args)
-    except Exception as e:
-        print(f"error: {e}")
+        await _list_key_helper(**args)
+    except Exception:
+        pass
 
     mock_find_many.assert_called_once()
     mock_count.assert_called_once()
 
     where_condition = mock_find_many.call_args.kwargs["where"]
-    print(f"where_condition with include_created_by_keys=True: {where_condition}")
 
     # Verify the structure contains AND with OR conditions
     assert "AND" in where_condition
@@ -170,14 +166,11 @@ async def test_list_keys_include_created_by_keys():
     args["include_created_by_keys"] = False
 
     try:
-        result = await _list_key_helper(**args)
-    except Exception as e:
-        print(f"error: {e}")
+        await _list_key_helper(**args)
+    except Exception:
+        pass
 
     where_condition_no_created_by = mock_find_many.call_args.kwargs["where"]
-    print(
-        f"where_condition with include_created_by_keys=False: {where_condition_no_created_by}"
-    )
 
     # Should not have OR conditions when include_created_by_keys=False and no admin_team_ids
     # The user condition should be merged directly into the where clause
@@ -197,12 +190,11 @@ async def test_list_keys_include_created_by_keys():
     )
 
     try:
-        result = await _list_key_helper(**args)
-    except Exception as e:
-        print(f"error: {e}")
+        await _list_key_helper(**args)
+    except Exception:
+        pass
 
     where_condition_with_exclude = mock_find_many.call_args.kwargs["where"]
-    print(f"where_condition with exclude_team_id: {where_condition_with_exclude}")
 
     or_conditions_with_exclude = where_condition_with_exclude["AND"][1]["OR"]
 
@@ -264,7 +256,6 @@ async def test_key_token_handling(monkeypatch):
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         generate_key_fn,
     )
-    from litellm.proxy.proxy_server import prisma_client
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -312,12 +303,7 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
 
     from datetime import datetime, timedelta, timezone
 
-    import pytest
 
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        generate_key_helper_fn,
-    )
-    from litellm.proxy.proxy_server import prisma_client
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -331,7 +317,6 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
         user_id="test_user",
     )
 
-    print(f"response: {response}\n")
     # Get the current date
     now = datetime.now(timezone.utc)
 
@@ -394,9 +379,6 @@ async def test_key_expiration_exact_duration_hours(monkeypatch):
 
     from datetime import datetime, timedelta, timezone
 
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        generate_key_helper_fn,
-    )
 
     # Use monkeypatch to set the prisma_client
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -424,8 +406,6 @@ async def test_key_expiration_exact_duration_hours(monkeypatch):
 
     # Verify it's NOT aligned to hour boundaries (e.g., not exactly at :00 minutes)
     # If created at 2:30 PM, it should expire at 2:30 AM, not midnight
-    expires_minute = expires.minute
-    expires_second = expires.second
     # If the expiration is exactly at :00:00, it might be aligned (though could be coincidence)
     # More importantly, verify the duration is correct
     time_diff = expires - now
@@ -602,7 +582,6 @@ async def test_key_update_object_permissions_existing_permission(monkeypatch):
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    import pytest
 
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionBase,
@@ -678,7 +657,6 @@ async def test_key_update_object_permissions_no_existing_permission(monkeypatch)
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    import pytest
 
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionBase,
@@ -741,7 +719,6 @@ async def test_key_update_object_permissions_missing_permission_record(monkeypat
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    import pytest
 
     from litellm.proxy._types import (
         LiteLLM_ObjectPermissionBase,
@@ -1189,7 +1166,7 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
     )
 
     assert result == mock_key_record
-    assert mock_key_object.blocked == False  # Should be updated to unblocked
+    assert not mock_key_object.blocked  # Should be updated to unblocked
 
     # Reset mocks for second test
     mock_prisma_client.db.litellm_verificationtoken.update.reset_mock()
@@ -1211,7 +1188,7 @@ async def test_unblock_key_supports_both_sk_and_hashed_tokens(monkeypatch):
     )
 
     assert result == mock_key_record
-    assert mock_key_object.blocked == False  # Should be updated to unblocked
+    assert not mock_key_object.blocked  # Should be updated to unblocked
 
 
 @pytest.mark.asyncio
@@ -1334,7 +1311,7 @@ def test_key_rotation_fields_helper():
         )
 
     # Verify rotation fields are added
-    assert key_data["auto_rotate"] == True
+    assert key_data["auto_rotate"]
     assert key_data["rotation_interval"] == "30d"
     assert key_data["models"] == ["gpt-3.5-turbo"]  # Original fields preserved
 
@@ -2164,7 +2141,7 @@ async def test_generate_key_with_object_permission():
         "admin",
     ):
         # Execute
-        result = await _common_key_generation_helper(
+        await _common_key_generation_helper(
             data=key_request,
             user_api_key_dict=mock_admin_auth,
             litellm_changed_by=None,
@@ -2737,7 +2714,6 @@ def test_check_org_key_model_specific_limits_org_model_tpm_overallocation():
 
 
 def test_transform_verification_tokens_to_deleted_records():
-    from datetime import datetime, timezone
 
     user_api_key_dict = UserAPIKeyAuth(
         user_id="user-123",
@@ -3031,7 +3007,6 @@ async def test_delete_key_fn_persists_deleted_keys(monkeypatch):
     from litellm.proxy._types import KeyRequest
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         delete_key_fn,
-        delete_verification_tokens,
     )
 
     mock_prisma_client = AsyncMock()
@@ -4010,7 +3985,6 @@ async def test_list_keys_with_invalid_status():
     mock_prisma_client = AsyncMock()
     
     # Mock the endpoint function directly to test validation
-    from litellm.proxy.management_endpoints.key_management_endpoints import list_keys
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
     from litellm.proxy.utils import ProxyException
     
@@ -4441,12 +4415,6 @@ async def test_bulk_update_keys_success(monkeypatch):
     )
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         bulk_update_keys,
-    )
-    from litellm.proxy.proxy_server import (
-        llm_router,
-        prisma_client,
-        proxy_logging_obj,
-        user_api_key_cache,
     )
     
     # Setup mocks

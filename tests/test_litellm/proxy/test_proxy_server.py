@@ -1,17 +1,12 @@
 import asyncio
-import importlib
 import json
 import os
-import socket
-import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
-import click
-import httpx
 import pytest
 import yaml
 from fastapi import FastAPI
@@ -599,11 +594,8 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
     with open(config_path, "w") as f:
         yaml.dump(test_config, f)
 
-    print(f"SET ENV VARIABLE - CONFIG_FILE_PATH, str(config_path): {str(config_path)}")
     # Second setting of CONFIG_FILE_PATH to a different value
     monkeypatch.setenv("CONFIG_FILE_PATH", str(config_path))
-    print(f"config_path: {config_path}")
-    print(f"os.getenv('CONFIG_FILE_PATH'): {os.getenv('CONFIG_FILE_PATH')}")
     async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
@@ -618,7 +610,6 @@ async def test_aaaproxy_startup_master_key(mock_prisma, monkeypatch, tmp_path):
         yaml.dump(empty_config, f)
 
     monkeypatch.setenv("LITELLM_MASTER_KEY", test_env_master_key)
-    print("test_env_master_key: {}".format(test_env_master_key))
     async with proxy_startup_event(app):
         from litellm.proxy.proxy_server import master_key
 
@@ -663,7 +654,6 @@ def test_team_info_masking():
             all_teams_config=[team1_info],
         )
 
-    print("Got exception: {}".format(exc_info.value))
     assert "secret-test-key" not in str(exc_info.value)
     assert "public-test-key" not in str(exc_info.value)
 
@@ -699,7 +689,6 @@ def test_embedding_input_array_of_tokens(mock_aembedding, client_no_auth):
 
         assert response.status_code == 200
         result = response.json()
-        print(len(result["data"][0]["embedding"]))
         assert len(result["data"][0]["embedding"]) > 10  # this usually has len==1536 so
     except Exception as e:
         pytest.fail(f"LiteLLM Proxy test failed. Exception - {str(e)}")
@@ -712,7 +701,6 @@ async def test_get_all_team_models():
     """
     from unittest.mock import AsyncMock, MagicMock
 
-    from litellm.proxy._types import LiteLLM_TeamTable
     from litellm.proxy.proxy_server import get_all_team_models
 
     # Mock team data
@@ -868,7 +856,6 @@ async def test_get_all_team_models():
 
         # Should handle None return gracefully
         assert isinstance(result, dict)
-        print("result: ", result)
         assert result == {"gpt-4-model-1": ["team1"], "gpt-4-model-2": ["team1"]}
 
 
@@ -1356,7 +1343,7 @@ async def test_write_config_to_file(monkeypatch):
     """
     Do not write config to file if store_model_in_db is True
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import AsyncMock, patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -1410,7 +1397,7 @@ async def test_write_config_to_file_when_store_model_in_db_false(monkeypatch):
     """
     Test that config IS written to file when store_model_in_db is False
     """
-    from unittest.mock import AsyncMock, MagicMock, mock_open, patch
+    from unittest.mock import patch
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -1515,7 +1502,7 @@ async def test_async_data_generator_midstream_error():
                 mock_response, mock_user_api_key_dict, mock_request_data
             ):
                 yielded_data.append(data)
-        except Exception as e:
+        except Exception:
             # If there's an exception, that's also part of what we want to test
             pass
 
@@ -1594,7 +1581,6 @@ async def test_chat_completion_result_no_nested_none_values():
     from unittest.mock import AsyncMock, MagicMock, patch
 
     from fastapi import Request, Response
-    from pydantic import BaseModel
 
     import litellm
     from litellm.proxy._types import UserAPIKeyAuth
@@ -1893,7 +1879,7 @@ class TestPriceDataReloadAPI:
 
                     assert response.status_code == 200
                     data = response.json()
-                    assert data["scheduled"] == True
+                    assert data["scheduled"]
                     assert data["interval_hours"] == 6
                     assert data["last_run"] == "2024-01-01T06:00:00"
                     assert data["next_run"] == "2024-01-01T12:00:00"
@@ -1921,10 +1907,10 @@ class TestPriceDataReloadAPI:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["scheduled"] == False
-            assert data["interval_hours"] == None
-            assert data["last_run"] == None
-            assert data["next_run"] == None
+            assert not data["scheduled"]
+            assert data["interval_hours"] is None
+            assert data["last_run"] is None
+            assert data["next_run"] is None
 
     def test_get_model_cost_map_reload_status_no_interval(self, client_with_auth):
         """Test that status returns not scheduled when no interval is configured"""
@@ -1940,10 +1926,10 @@ class TestPriceDataReloadAPI:
 
             assert response.status_code == 200
             data = response.json()
-            assert data["scheduled"] == False
-            assert data["interval_hours"] == None
-            assert data["last_run"] == None
-            assert data["next_run"] == None
+            assert not data["scheduled"]
+            assert data["interval_hours"] is None
+            assert data["last_run"] is None
+            assert data["next_run"] is None
 
 
 class TestPriceDataReloadIntegration:
@@ -2049,7 +2035,7 @@ class TestPriceDataReloadIntegration:
             # The param_value is now a JSON string, so we need to parse it
             param_value_json = call_args[1]["data"]["update"]["param_value"]
             param_value_dict = json.loads(param_value_json)
-            assert param_value_dict["force_reload"] == False
+            assert not param_value_dict["force_reload"]
 
     def test_config_file_parsing(self):
         """Test parsing of config file with reload settings"""
@@ -2108,7 +2094,7 @@ model_list:
         call_args = mock_prisma.db.litellm_config.upsert.call_args
         assert call_args[1]["where"]["param_name"] == "model_cost_map_reload_config"
         assert call_args[1]["data"]["create"]["param_value"]["interval_hours"] == 6
-        assert call_args[1]["data"]["create"]["param_value"]["force_reload"] == False
+        assert not call_args[1]["data"]["create"]["param_value"]["force_reload"]
 
     def test_manual_reload_force_flag(self):
         """Test that manual reload sets force flag correctly"""
@@ -2135,7 +2121,7 @@ model_list:
         # Verify force_reload flag was set
         mock_prisma.db.litellm_config.upsert.assert_called_once()
         call_args = mock_prisma.db.litellm_config.upsert.call_args
-        assert call_args[1]["data"]["update"]["param_value"]["force_reload"] == True
+        assert call_args[1]["data"]["update"]["param_value"]["force_reload"]
 
 
 @pytest.mark.asyncio
@@ -2146,7 +2132,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
     This tests how router settings from config file and database are combined,
     including scenarios where nested dictionaries should be properly merged.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -2210,7 +2196,7 @@ async def test_add_router_settings_from_db_config_merge_logic():
 
     # Config-only values should be preserved
     assert combined_settings["model_group_alias"] == {"gpt-4": "openai-gpt-4"}
-    assert combined_settings["enable_pre_call_checks"] == True
+    assert combined_settings["enable_pre_call_checks"]
     assert combined_settings["timeout"] == 30
 
     # DB-only values should be added
@@ -2619,7 +2605,6 @@ async def test_tag_cache_update_called():
     Test that update_cache updates tag cache when tags are provided.
     """
     from litellm.caching.caching import DualCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = DualCache()
 
@@ -2666,7 +2651,6 @@ async def test_tag_cache_update_multiple_tags():
     Test that multiple tags are updated in cache.
     """
     from litellm.caching.caching import DualCache
-    from litellm.proxy.proxy_server import user_api_key_cache
 
     cache = DualCache()
 
@@ -2809,7 +2793,7 @@ async def test_init_sso_settings_in_db_error_handling():
     """
     Test that _init_sso_settings_in_db handles database errors gracefully.
     """
-    from unittest.mock import AsyncMock, MagicMock, patch
+    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.proxy.proxy_server import ProxyConfig
 
@@ -3011,9 +2995,9 @@ async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
         return True
 
     # Mock os.path operations
-    with patch("litellm.proxy.proxy_server.os.makedirs", side_effect=makedirs_side_effect) as mock_makedirs, \
+    with patch("litellm.proxy.proxy_server.os.makedirs", side_effect=makedirs_side_effect), \
          patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
-         patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
+         patch("litellm.proxy.proxy_server.FileResponse"):
 
         # Call the function
         await get_image()
@@ -4782,7 +4766,7 @@ async def test_model_list_scope_parameter_validation(monkeypatch):
 @pytest.mark.asyncio
 async def test_model_list_scope_expand_proxy_admin(monkeypatch):
     """Test that proxy admin with scope=expand returns all proxy models"""
-    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles, LiteLLM_UserTable
+    from litellm.proxy._types import UserAPIKeyAuth, LitellmUserRoles
     from litellm.proxy.proxy_server import model_list
 
     # Mock user API key dict for proxy admin
@@ -4970,7 +4954,7 @@ async def test_model_list_scope_expand_team_admin(monkeypatch):
         ],
     }
     # Create team object from the dict (validator will convert members_with_roles to Member objects)
-    mock_team_obj = LiteLLM_TeamTable(**mock_team.model_dump())
+    LiteLLM_TeamTable(**mock_team.model_dump())
 
     # Mock user object with team membership
     mock_user_obj = LiteLLM_UserTable(
