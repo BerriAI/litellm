@@ -631,9 +631,14 @@ class ProxyBaseLLMRequestProcessing:
                 # Get model_list from current router
                 model_list = llm_router.get_model_list()
                 if model_list is not None:
-                    # Create user_config with model_list and router_settings
+                    # Create user_config with model_list, search_tools, and router_settings
                     # This creates a per-request router with the hierarchical settings
                     user_config = {"model_list": model_list, **router_settings}
+
+                    # Include search_tools from main router so per-request router has them
+                    if hasattr(llm_router, "search_tools") and llm_router.search_tools:
+                        user_config["search_tools"] = llm_router.search_tools
+
                     self.data["user_config"] = user_config
 
         if "messages" in self.data and self.data["messages"]:
