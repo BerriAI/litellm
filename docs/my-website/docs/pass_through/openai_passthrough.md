@@ -1,6 +1,6 @@
 # OpenAI Passthrough
 
-Pass-through endpoints for direct OpenAI API access
+Pass-through endpoints for `/openai`
 
 ## Overview
 
@@ -10,27 +10,12 @@ Pass-through endpoints for direct OpenAI API access
 | Logging | ✅ | Works across all integrations |
 | Streaming | ✅ | Fully supported |
 
-## Available Endpoints
-
-### `/openai_passthrough` - Recommended
-Dedicated passthrough endpoint that guarantees direct routing to OpenAI without conflicts.
-
-**Use this for:**
-- OpenAI Responses API (`/v1/responses`)
-- Any endpoint where you need guaranteed passthrough
-- When `/openai` routes are conflicting with LiteLLM's native implementations
-
-### `/openai` - Legacy
-Standard passthrough endpoint that may conflict with LiteLLM's native implementations.
-
-**Note:** Some endpoints like `/openai/v1/responses` will be routed to LiteLLM's native implementation instead of OpenAI.
-
-## When to use this?
+### When to use this?
 
 - For 90% of your use cases, you should use the [native LiteLLM OpenAI Integration](https://docs.litellm.ai/docs/providers/openai) (`/chat/completions`, `/embeddings`, `/completions`, `/images`, `/batches`, etc.)
-- Use `/openai_passthrough` to call less popular or newer OpenAI endpoints that LiteLLM doesn't fully support yet, such as `/assistants`, `/threads`, `/vector_stores`, `/responses`
+- Use this passthrough to call less popular or newer OpenAI endpoints that LiteLLM doesn't fully support yet, such as `/assistants`, `/threads`, `/vector_stores`
 
-Simply replace `https://api.openai.com` with `LITELLM_PROXY_BASE_URL/openai_passthrough`
+Simply replace `https://api.openai.com` with `LITELLM_PROXY_BASE_URL/openai`
 
 ## Usage Examples
 
@@ -49,7 +34,7 @@ Make sure you do the following:
 import openai
 
 client = openai.OpenAI(
-    base_url="http://0.0.0.0:4000/openai_passthrough",  # <your-proxy-url>/openai_passthrough
+    base_url="http://0.0.0.0:4000/openai",  # <your-proxy-url>/openai
     api_key="sk-anything"  # <your-proxy-api-key>
 )
 ```

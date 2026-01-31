@@ -5,7 +5,6 @@ import CodeInterpreterOutput from "./CodeInterpreterOutput";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
-  getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
 global.fetch = vi.fn();

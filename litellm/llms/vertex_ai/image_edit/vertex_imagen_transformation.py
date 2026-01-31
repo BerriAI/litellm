@@ -144,7 +144,7 @@ class VertexAIImagenImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         prompt: Optional[str],
-        image: Optional[FileTypes],
+        image: FileTypes,
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,

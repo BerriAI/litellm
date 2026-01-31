@@ -46,7 +46,7 @@ os.environ["OPENAI_API_KEY"] = "sk-.."
 
 async def test_async_speech(): 
     speech_file_path = Path(__file__).parent / "speech.mp3"
-    response = await aspeech(
+    response = await litellm.aspeech(
             model="openai/tts-1",
             voice="alloy",
             input="the quick brown fox jumped over the lazy dogs",

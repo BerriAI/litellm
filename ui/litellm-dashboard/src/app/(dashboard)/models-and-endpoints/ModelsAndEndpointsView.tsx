@@ -94,8 +94,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
   }, [modelDataResponse?.data]);
 
   const allModelsOnProxy = useMemo<string[]>(() => {
-    if (!modelDataResponse?.data) return [];
-    return modelDataResponse.data.map((model: any) => model.model_name);
+    return modelDataResponse?.data?.map((model: any) => model.model_name);
   }, [modelDataResponse?.data]);
 
   const getProviderFromModel = (model: string) => {
@@ -318,6 +317,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               onClose={() => {
                 setSelectedModelId(null);
               }}
+              modelData={processedModelData.data.find((model: any) => model.model_info.id === selectedModelId)}
               accessToken={accessToken}
               userID={userID}
               userRole={userRole}

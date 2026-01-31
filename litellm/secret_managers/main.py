@@ -17,22 +17,6 @@ from litellm.secret_managers.secret_manager_handler import get_secret_from_manag
 oidc_cache = DualCache()
 
 
-def _get_oidc_http_handler(timeout: Optional[httpx.Timeout] = None) -> HTTPHandler:
-    """
-    Factory function to create HTTPHandler for OIDC requests.
-    This function can be mocked in tests.
-    
-    Args:
-        timeout: Optional timeout for HTTP requests. Defaults to 600.0 seconds with 5.0 connect timeout.
-    
-    Returns:
-        HTTPHandler instance configured for OIDC requests.
-    """
-    if timeout is None:
-        timeout = httpx.Timeout(timeout=600.0, connect=5.0)
-    return HTTPHandler(timeout=timeout)
-
-
 ######### Secret Manager ############################
 # checks if user has passed in a secret manager client
 # if passed in then checks the secret there
@@ -119,7 +103,7 @@ def get_secret(  # noqa: PLR0915
             if oidc_token is not None:
                 return oidc_token
 
-            oidc_client = _get_oidc_http_handler()
+            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
             # https://cloud.google.com/compute/docs/instances/verifying-instance-identity#request_signature
             response = oidc_client.get(
                 "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity",
@@ -157,7 +141,7 @@ def get_secret(  # noqa: PLR0915
             if oidc_token is not None:
                 return oidc_token
 
-            oidc_client = _get_oidc_http_handler()
+            oidc_client = HTTPHandler(timeout=httpx.Timeout(timeout=600.0, connect=5.0))
             response = oidc_client.get(
                 actions_id_token_request_url,
                 params={"audience": oidc_aud},

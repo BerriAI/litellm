@@ -71,7 +71,7 @@ from openai.types.responses.response_create_params import (
     ToolParam,
 )
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
-from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Discriminator, PrivateAttr
 from typing_extensions import Annotated, Dict, Required, TypedDict, override
 
 from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
@@ -654,8 +654,6 @@ class ChatCompletionFileObjectFile(TypedDict, total=False):
     file_id: str
     filename: str
     format: str
-    detail: str  # For video/image resolution control (low, medium, high, ultra_high)
-    video_metadata: Dict[str, Any]  # For video-specific metadata (fps, start_offset, end_offset)
 
 
 class ChatCompletionFileObject(TypedDict):
@@ -1114,7 +1112,7 @@ class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
-    reasoning_tokens: int = 0
+    reasoning_tokens: Optional[int] = None
 
     text_tokens: Optional[int] = None
 
@@ -1123,7 +1121,7 @@ class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
 
 class InputTokensDetails(BaseLiteLLMOpenAIResponseObject):
     audio_tokens: Optional[int] = None
-    cached_tokens: int = 0
+    cached_tokens: Optional[int] = None
     text_tokens: Optional[int] = None
 
     model_config = {"extra": "allow"}
@@ -1199,16 +1197,6 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
-    @field_validator("usage", mode="before")
-    @classmethod
-    def validate_usage(cls, value):
-        """Convert usage dict to ResponseAPIUsage object if needed"""
-        if value is None:
-            return value
-        if isinstance(value, dict):
-            return ResponseAPIUsage(**value)
-        return value
-
     @property
     def output_text(self) -> str:
         """
@@ -1260,8 +1248,6 @@ class ResponsesAPIStreamEvents(str, Enum):
     # Reasoning summary events
     RESPONSE_PART_ADDED = "response.reasoning_summary_part.added"
     REASONING_SUMMARY_TEXT_DELTA = "response.reasoning_summary_text.delta"
-    REASONING_SUMMARY_TEXT_DONE = "response.reasoning_summary_text.done"
-    REASONING_SUMMARY_PART_DONE = "response.reasoning_summary_part.done"
 
     # Output item events
     OUTPUT_ITEM_ADDED = "response.output_item.added"
@@ -1349,24 +1335,6 @@ class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     delta: str
-
-
-class ReasoningSummaryTextDoneEvent(BaseLiteLLMOpenAIResponseObject):
-    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DONE]
-    item_id: str
-    output_index: int
-    sequence_number: int
-    summary_index: int
-    text: str
-
-
-class ReasoningSummaryPartDoneEvent(BaseLiteLLMOpenAIResponseObject):
-    type: Literal[ResponsesAPIStreamEvents.REASONING_SUMMARY_PART_DONE]
-    item_id: str
-    output_index: int
-    sequence_number: int
-    summary_index: int
-    part: BaseLiteLLMOpenAIResponseObject
 
 
 class OutputItemAddedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -1623,8 +1591,6 @@ ResponsesAPIStreamingResponse = Annotated[
         ResponseIncompleteEvent,
         ResponsePartAddedEvent,
         ReasoningSummaryTextDeltaEvent,
-        ReasoningSummaryTextDoneEvent,
-        ReasoningSummaryPartDoneEvent,
         OutputItemAddedEvent,
         OutputItemDoneEvent,
         ContentPartAddedEvent,
@@ -2012,7 +1978,7 @@ class OpenAIBatchResult(TypedDict, total=False):
 
 
 OpenAIChatCompletionFinishReason = Literal[
-    "stop", "content_filter", "function_call", "tool_calls", "length", "guardrail_intervened", "eos", "finish_reason_unspecified", "malformed_function_call" # last 2 are vertex ai specific, guardrail_intervened is bedrock specific
+    "stop", "content_filter", "function_call", "tool_calls", "length"
 ]
 
 

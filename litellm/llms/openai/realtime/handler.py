@@ -56,9 +56,7 @@ class OpenAIRealtime(OpenAIChatCompletion):
         url = self._construct_url(api_base, query_params)
 
         try:
-            # Only use SSL context for secure websocket connections (wss://)
-            # websockets library doesn't accept ssl argument for ws:// URIs
-            ssl_context = None if url.startswith("ws://") else get_shared_realtime_ssl_context()
+            ssl_context = get_shared_realtime_ssl_context()
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(
                 input=None,

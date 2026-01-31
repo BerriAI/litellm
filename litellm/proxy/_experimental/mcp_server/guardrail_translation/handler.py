@@ -46,13 +46,8 @@ class MCPGuardrailTranslationHandler(BaseTranslation):
             )
             return data
 
-        inputs = GenericGuardrailAPIInputs(texts=[content])
-        # Include model information if available
-        model = data.get("model")
-        if model:
-            inputs["model"] = model
         guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-            inputs=inputs,
+            inputs=GenericGuardrailAPIInputs(texts=[content]),
             request_data=data,
             input_type="request",
             logging_obj=litellm_logging_obj,

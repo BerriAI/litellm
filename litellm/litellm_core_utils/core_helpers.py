@@ -79,11 +79,9 @@ def map_finish_reason(
     elif finish_reason == "eos_token" or finish_reason == "stop_sequence":
         return "stop"
     elif (
-        finish_reason == "FINISH_REASON_UNSPECIFIED"
+        finish_reason == "FINISH_REASON_UNSPECIFIED" or finish_reason == "STOP"
     ):  # vertex ai - got from running `print(dir(response_obj.candidates[0].finish_reason))`: ['FINISH_REASON_UNSPECIFIED', 'MAX_TOKENS', 'OTHER', 'RECITATION', 'SAFETY', 'STOP',]
-        return "finish_reason_unspecified"
-    elif finish_reason == "MALFORMED_FUNCTION_CALL":
-        return "malformed_function_call"
+        return "stop"
     elif finish_reason == "SAFETY" or finish_reason == "RECITATION":  # vertex ai
         return "content_filter"
     elif finish_reason == "STOP":  # vertex ai
@@ -351,9 +349,9 @@ def filter_exceptions_from_params(data: Any, max_depth: int = 20) -> Any:
     # Skip callable objects (functions, methods, lambdas) but not classes (type objects)
     if callable(data) and not isinstance(data, type):
         return None
-    # Skip known non-serializable object types (Logging, Router, etc.)
+    # Skip known non-serializable object types (Logging, etc.)
     obj_type_name = type(data).__name__
-    if obj_type_name in ["Logging", "LiteLLMLoggingObj", "Router"]:
+    if obj_type_name in ["Logging", "LiteLLMLoggingObj"]:
         return None
 
     if isinstance(data, dict):

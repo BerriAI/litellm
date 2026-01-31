@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -53,13 +52,8 @@ class OpenAIImageGenerationHandler(BaseTranslation):
 
         # Apply guardrail to the prompt
         if isinstance(prompt, str):
-            inputs = GenericGuardrailAPIInputs(texts=[prompt])
-            # Include model information if available
-            model = data.get("model")
-            if model:
-                inputs["model"] = model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                inputs=inputs,
+                inputs={"texts": [prompt]},
                 request_data=data,
                 input_type="request",
                 logging_obj=litellm_logging_obj,

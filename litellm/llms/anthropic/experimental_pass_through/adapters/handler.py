@@ -45,7 +45,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         tools: Optional[List[Dict]] = None,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
-        output_format: Optional[Dict] = None,
         extra_kwargs: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Prepare kwargs for litellm.completion/acompletion"""
@@ -77,8 +76,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             request_data["top_k"] = top_k
         if top_p is not None:
             request_data["top_p"] = top_p
-        if output_format:
-            request_data["output_format"] = output_format
 
         openai_request = ANTHROPIC_ADAPTER.translate_completion_input_params(
             request_data
@@ -133,7 +130,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         tools: Optional[List[Dict]] = None,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
-        output_format: Optional[Dict] = None,
         **kwargs,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         """Handle non-Anthropic models asynchronously using the adapter"""
@@ -152,7 +148,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tools=tools,
                 top_k=top_k,
                 top_p=top_p,
-                output_format=output_format,
                 extra_kwargs=kwargs,
             )
         )
@@ -194,7 +189,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         tools: Optional[List[Dict]] = None,
         top_k: Optional[int] = None,
         top_p: Optional[float] = None,
-        output_format: Optional[Dict] = None,
         _is_async: bool = False,
         **kwargs,
     ) -> Union[
@@ -218,7 +212,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tools=tools,
                 top_k=top_k,
                 top_p=top_p,
-                output_format=output_format,
                 **kwargs,
             )
 
@@ -237,7 +230,6 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 tools=tools,
                 top_k=top_k,
                 top_p=top_p,
-                output_format=output_format,
                 extra_kwargs=kwargs,
             )
         )

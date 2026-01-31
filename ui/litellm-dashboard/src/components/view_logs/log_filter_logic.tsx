@@ -18,7 +18,6 @@ export const FILTER_KEYS = {
   STATUS: "Status",
   KEY_ALIAS: "Key Alias",
   ERROR_CODE: "Error Code",
-  ERROR_MESSAGE: "Error Message",
 } as const;
 
 export type FilterKey = keyof typeof FILTER_KEYS;
@@ -56,7 +55,6 @@ export function useLogFilterLogic({
       [FILTER_KEYS.STATUS]: "",
       [FILTER_KEYS.KEY_ALIAS]: "",
       [FILTER_KEYS.ERROR_CODE]: "",
-      [FILTER_KEYS.ERROR_MESSAGE]: "",
     }),
     [],
   );
@@ -99,7 +97,6 @@ export function useLogFilterLogic({
           filters[FILTER_KEYS.MODEL] || undefined,
           filters[FILTER_KEYS.KEY_ALIAS] || undefined,
           filters[FILTER_KEYS.ERROR_CODE] || undefined,
-          filters[FILTER_KEYS.ERROR_MESSAGE] || undefined,
         );
 
         if (currentTimestamp === lastSearchTimestamp.current && response.data) {
@@ -140,8 +137,7 @@ export function useLogFilterLogic({
         filters[FILTER_KEYS.REQUEST_ID] ||
         filters[FILTER_KEYS.USER_ID] ||
         filters[FILTER_KEYS.END_USER] ||
-        filters[FILTER_KEYS.ERROR_CODE] ||
-        filters[FILTER_KEYS.ERROR_MESSAGE]
+        filters[FILTER_KEYS.ERROR_CODE]
       ),
     [filters],
   );

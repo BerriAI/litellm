@@ -173,14 +173,6 @@ Stability AI returns images in base64 format. The response is OpenAI-compatible:
 
 Stability AI supports various image editing operations including inpainting, upscaling, outpainting, background removal, and more.
 
-:::info Optional Parameters
-**Important:** Different Stability models have different parameter requirements:
-- Some models don't require a `prompt` (e.g., upscaling, background removal)
-- The `style-transfer` model uses `init_image` and `style_image` instead of `image`
-- The `outpaint` model requires numeric parameters (`left`, `right`, `up`, `down`)
-LiteLLM automatically handles these differences for you.
-:::
-
 ### Usage - LiteLLM Python SDK
 
 #### Inpainting (Edit with Mask)
@@ -225,11 +217,11 @@ response = image_edit(
     creativity=0.3,  # 0-0.35, higher = more creative
 )
 
-# Fast upscaling - quick upscaling (no prompt needed)
+# Fast upscaling - quick upscaling
 response = image_edit(
     model="stability/stable-fast-upscale-v1:0",
     image=open("low_res_image.png", "rb"),
-    # No prompt required for fast upscale
+    prompt="Quickly upscale this image",
 )
 print(response)
 ```
@@ -267,7 +259,7 @@ os.environ['STABILITY_API_KEY'] = "your-api-key"
 response = image_edit(
     model="stability/stable-image-remove-background-v1:0",
     image=open("portrait.png", "rb"),
-    # No prompt required for fast upscale
+    prompt="Remove the background",
 )
 print(response)
 ```
@@ -337,29 +329,10 @@ response = image_edit(
     model="stability/stable-image-erase-object-v1:0",
     image=open("scene.png", "rb"),
     mask=open("object_mask.png", "rb"),  # Mask the object to erase
-    # No prompt needed
+    prompt="Remove the object",
 )
 print(response)
 ```
-#### Style Transfer
-
-```python showLineNumbers
-from litellm import image_edit
-import os
-
-os.environ['STABILITY_API_KEY'] = "your-api-key"
-
-# Transfer style from one image to another
-# Note: Uses init_image (via image param) and style_image
-response = image_edit(
-    model="stability/stable-style-transfer-v1:0",
-    image=open("content_image.png", "rb"),  # Maps to init_image
-    style_image=open("style_reference.png", "rb"),  # Style to apply
-    fidelity=0.5,  # 0-1, balance between content and style
-    # No prompt needed
-)
-
-print(response)
 
 ### Supported Image Edit Models
 
@@ -446,23 +419,6 @@ response = image_edit(
 )
 print(response)
 ```
-# Fast upscale without prompt
-response = image_edit(
-    model="bedrock/stability.stable-fast-upscale-v1:0",
-    image=open("low_res_image.png", "rb"),
-)
-
-# Outpaint with numeric parameters
-response = image_edit(
-    model="bedrock/stability.stable-outpaint-v1:0",
-    image=open("original_image.png", "rb"),
-    left=100,   # Automatically converted to int
-    right=100,
-    up=50,
-    down=50,
-)
-
-print(response)
 
 ### Supported Bedrock Stability Models
 

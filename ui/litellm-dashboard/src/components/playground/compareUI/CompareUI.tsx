@@ -619,7 +619,6 @@ export default function CompareUI({ accessToken, disabledPersonalKeyCreation }: 
             guardrails,
             undefined,
             undefined,
-            undefined,
             (searchResults) => updateSearchResultsForComparison(prepared.id, searchResults),
             useAdvancedParams ? prepared.temperature : undefined,
             useAdvancedParams ? prepared.maxTokens : undefined,

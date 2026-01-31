@@ -101,16 +101,12 @@ const keyListCall = async (
   }
 };
 
-export const useKeys = (
-  page: number,
-  pageSize: number,
-  options: KeyListCallOptions = {},
-): UseQueryResult<KeysResponse> => {
+export const useKeys = (page: number, pageSize: number): UseQueryResult<KeysResponse> => {
   const { accessToken } = useAuthorized();
 
   return useQuery<KeysResponse>({
-    queryKey: keyKeys.list({ page, limit: pageSize, ...options }),
-    queryFn: async () => await keyListCall(accessToken!, page, pageSize, options),
+    queryKey: keyKeys.list({ page, limit: pageSize }),
+    queryFn: async () => await keyListCall(accessToken!, page, pageSize),
     enabled: Boolean(accessToken),
     staleTime: 30000, // 30 seconds
     placeholderData: keepPreviousData,

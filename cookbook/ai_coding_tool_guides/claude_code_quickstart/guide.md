@@ -97,74 +97,16 @@ export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 
 ## Step 5: Use Claude Code
 
-### Choosing Your Model
-
-You have two options for specifying which model Claude Code uses:
-
-#### Option 1: Command Line / Session Model Selection
-
-Specify the model directly when starting Claude Code or during a session:
+Start Claude Code and it will automatically use your configured models:
 
 ```bash
-# Specify model at startup
-claude --model claude-3-5-sonnet-20241022
-
-# Or change model during a session
-/model claude-3-5-haiku-20241022
-```
-
-This method uses the exact model you specify.
-
-#### Option 2: Environment Variables
-
-Configure default models using environment variables:
-
-```bash
-# Tell Claude Code which models to use by default
-export ANTHROPIC_DEFAULT_SONNET_MODEL=claude-3-5-sonnet-20241022
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-3-5-haiku-20241022
-export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-3-5-20240229
-
-claude  # Will use the models specified above
-```
-
-**Note:** Claude Code may cache the model from a previous session. If environment variables don't take effect, use Option 1 to explicitly set the model.
-
-**Important:** The `model_name` in your LiteLLM config must match what Claude Code requests (either from env vars or command line).
-
-### Using 1M Context Window
-
-Claude Code supports extended context (1 million tokens) using the `[1m]` suffix with Claude 4+ models:
-
-```bash
-# Use Sonnet 4.5 with 1M context (requires quotes for shell)
-claude --model 'claude-sonnet-4-5-20250929[1m]'
-
-# Inside a Claude Code session (no quotes needed)
-/model claude-sonnet-4-5-20250929[1m]
-```
-
-**Important:** When using `--model` with `[1m]` in the shell, you must use quotes to prevent the shell from interpreting the brackets.
-
-Alternatively, set as default with environment variables:
-
-```bash
-export ANTHROPIC_DEFAULT_SONNET_MODEL='claude-sonnet-4-5-20250929[1m]'
+# Claude Code will use the models configured in your LiteLLM proxy
 claude
+
+# Or specify a model if you have multiple configured
+claude --model claude-3-5-sonnet-20241022
+claude --model claude-3-5-haiku-20241022
 ```
-
-**How it works:**
-- Claude Code strips the `[1m]` suffix before sending to LiteLLM
-- Claude Code automatically adds the header `anthropic-beta: context-1m-2025-08-07`
-- Your LiteLLM config should **NOT** include `[1m]` in model names
-
-**Verify 1M context is active:**
-```bash
-/context
-# Should show: 21k/1000k tokens (2%)
-```
-
-**Pricing:** Models using 1M context have different pricing. Input tokens above 200k are charged at a higher rate.
 
 ## Troubleshooting
 
@@ -181,25 +123,18 @@ Common issues and solutions:
 - Ensure the `ANTHROPIC_AUTH_TOKEN` matches your LiteLLM master key
 
 **Model not found:**
-- Check what model Claude Code is requesting in LiteLLM logs
-- Ensure your `config.yaml` has a matching `model_name` entry
-- If using environment variables, verify they're set: `echo $ANTHROPIC_DEFAULT_SONNET_MODEL`
-
-**1M context not working (showing 200k instead of 1000k):**
-- Verify you're using the `[1m]` suffix: `/model your-model-name[1m]`
-- Check LiteLLM logs for the header `context-1m-2025-08-07` in the request
-- Ensure your model supports 1M context (only certain Claude models do)
-- Your LiteLLM config should **NOT** include `[1m]` in the `model_name`
+- Ensure the model name in Claude Code matches exactly with your `config.yaml`
+- Check LiteLLM logs for detailed error messages
 
 ## Using Multiple Models and Providers
 
-You can configure LiteLLM to route to any supported provider. Here's an example with multiple providers:
+Expand your configuration to support multiple providers and models:
 
 ```yaml
 model_list:
   # OpenAI models
   - model_name: codex-mini
-    litellm_params:
+    litellm_params:  
       model: openai/codex-mini
       api_key: os.environ/OPENAI_API_KEY
       api_base: https://api.openai.com/v1
@@ -221,7 +156,7 @@ model_list:
     litellm_params:
       model: anthropic/claude-3-5-sonnet-20241022
       api_key: os.environ/ANTHROPIC_API_KEY
-
+  
   - model_name: claude-3-5-haiku-20241022
     litellm_params:
       model: anthropic/claude-3-5-haiku-20241022
@@ -239,53 +174,18 @@ litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 ```
 
-**Note:** The `model_name` can be anything you choose. Claude Code will request whatever model you specify (via env vars or command line), and LiteLLM will route to the `model` configured in `litellm_params`.
-
 Switch between models seamlessly:
 
 ```bash
-# Use environment variables to set defaults
-export ANTHROPIC_DEFAULT_SONNET_MODEL=claude-3-5-sonnet-20241022
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-3-5-haiku-20241022
+# Use Claude for complex reasoning
+claude --model claude-3-5-sonnet-20241022
 
-# Or specify directly
-claude --model claude-3-5-sonnet-20241022  # Complex reasoning
-claude --model claude-3-5-haiku-20241022    # Fast responses
-claude --model claude-bedrock                # Bedrock deployment
+# Use Haiku for fast responses
+claude --model claude-3-5-haiku-20241022
+
+# Use Bedrock deployment
+claude --model claude-bedrock
 ```
-
-## Default Models Used by Claude Code
-
-If you **don't** set environment variables, Claude Code uses these default model names:
-
-| Purpose | Default Model Name (v2.1.14) |
-|---------|------------------------------|
-| Main model | `claude-sonnet-4-5-20250929` |
-| Light tasks (subagents, summaries) | `claude-haiku-4-5-20251001` |
-| Planning mode | `claude-opus-4-5-20251101` |
-
-Your LiteLLM config should include these model names if you want Claude Code to work without setting environment variables:
-
-```yaml
-model_list:
-  - model_name: claude-sonnet-4-5-20250929
-    litellm_params:
-      # Can be any provider - Anthropic, Bedrock, Vertex AI, etc.
-      model: anthropic/claude-sonnet-4-5-20250929
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: claude-haiku-4-5-20251001
-    litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: claude-opus-4-5-20251101
-    litellm_params:
-      model: anthropic/claude-opus-4-5-20251101
-      api_key: os.environ/ANTHROPIC_API_KEY
-```
-
-**Warning:** These default model names may change with new Claude Code versions. Check LiteLLM proxy logs for "model not found" errors to identify what Claude Code is requesting.
 
 ## Additional Resources
 

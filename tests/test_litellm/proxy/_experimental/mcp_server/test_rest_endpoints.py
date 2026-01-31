@@ -101,59 +101,6 @@ class TestExecuteWithMcpClient:
         assert result["status"] == "error"
         assert "stack_trace" not in result
 
-    @pytest.mark.asyncio
-    async def test_forwards_static_headers(self, monkeypatch):
-        """Ensure static_headers are forwarded to the MCP client during test calls.
-
-        This is required for `/mcp-rest/test/tools/list` (Issue #19341), where the UI
-        sends `static_headers` but the backend must forward them during
-        `session.initialize()` and tool discovery.
-        """
-        captured: dict = {}
-
-        def fake_build_stdio_env(server, raw_headers):
-            return None
-
-        def fake_create_client(*args, **kwargs):
-            captured["extra_headers"] = kwargs.get("extra_headers")
-            return object()
-
-        monkeypatch.setattr(
-            rest_endpoints.global_mcp_server_manager,
-            "_build_stdio_env",
-            fake_build_stdio_env,
-            raising=False,
-        )
-        monkeypatch.setattr(
-            rest_endpoints.global_mcp_server_manager,
-            "_create_mcp_client",
-            fake_create_client,
-            raising=False,
-        )
-
-        async def ok_operation(client):
-            return {"status": "ok"}
-
-        payload = NewMCPServerRequest(
-            server_name="example",
-            url="https://example.com",
-            auth_type=MCPAuth.none,
-            static_headers={"Authorization": "STATIC token"},
-        )
-
-        result = await rest_endpoints._execute_with_mcp_client(
-            payload,
-            ok_operation,
-            oauth2_headers={"X-OAuth": "1"},
-            raw_headers={"x-test": "y"},
-        )
-
-        assert result["status"] == "ok"
-        assert captured["extra_headers"] == {
-            "X-OAuth": "1",
-            "Authorization": "STATIC token",
-        }
-
 
 class TestTestConnection:
     def test_requires_auth_dependency(self):

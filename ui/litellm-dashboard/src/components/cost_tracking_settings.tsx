@@ -15,7 +15,7 @@ import {
   Col,
   Subtitle,
 } from "@tremor/react";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "./molecules/notifications_manager";
 
 interface CostTrackingSettingsProps {
@@ -56,7 +56,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       const response = await fetch(url, {
         method: "GET",
         headers: {
-          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
       });
@@ -86,7 +86,7 @@ const CostTrackingSettings: React.FC<CostTrackingSettingsProps> = ({
       const response = await fetch(url, {
         method: "PATCH",
         headers: {
-          [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify(discountConfig),

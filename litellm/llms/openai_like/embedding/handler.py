@@ -105,8 +105,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             custom_endpoint=custom_endpoint,
         )
         model = model
-        filtered_optional_params = {k: v for k, v in optional_params.items() if v not in (None, '')}
-        data = {"model": model, "input": input, **filtered_optional_params}
+        data = {"model": model, "input": input, **optional_params}
 
         ## LOGGING
         logging_obj.pre_call(

@@ -35,18 +35,11 @@ class OCITextContentPart(OCIContentPart):
     text: str
 
 
-class OCIImageUrl(BaseModel):
-    """ImageUrl object for OCI API. See: https://docs.oracle.com/en-us/iaas/tools/python/latest/api/generative_ai_inference/models/oci.generative_ai_inference.models.ImageUrl.html"""
-
-    url: str
-    detail: Optional[Literal["AUTO", "HIGH", "LOW"]] = None
-
-
 class OCIImageContentPart(OCIContentPart):
     """Image content part for the OCI API."""
 
     type: Literal["IMAGE"] = "IMAGE"
-    imageUrl: OCIImageUrl
+    imageUrl: str
 
 
 OCIContentPartUnion = Union[OCITextContentPart, OCIImageContentPart]

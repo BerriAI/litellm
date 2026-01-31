@@ -151,7 +151,7 @@ export function useFilterLogic({
     }
   }, [organizations]);
 
-  const handleFilterChange = (newFilters: Record<string, string>, skipDebounce: boolean = false) => {
+  const handleFilterChange = (newFilters: Record<string, string>) => {
     // Update filters state
     setFilters({
       "Team ID": newFilters["Team ID"] || "",
@@ -162,16 +162,12 @@ export function useFilterLogic({
       "Sort Order": newFilters["Sort Order"] || "desc",
     });
 
-    // Only trigger debouncedSearch if skipDebounce is false
-    // This allows sorting to be handled by the parent component's useKeys hook
-    if (!skipDebounce) {
-      // Fetch keys based on new filters
-      const updatedFilters = {
-        ...filters,
-        ...newFilters,
-      };
-      debouncedSearch(updatedFilters);
-    }
+    // Fetch keys based on new filters
+    const updatedFilters = {
+      ...filters,
+      ...newFilters,
+    };
+    debouncedSearch(updatedFilters);
   };
 
   const handleFilterReset = () => {

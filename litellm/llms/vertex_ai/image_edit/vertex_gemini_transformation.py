@@ -152,24 +152,22 @@ class VertexAIGeminiImageEditConfig(BaseImageEditConfig, VertexLLM):
         self,
         model: str,
         prompt: Optional[str],
-        image: Optional[FileTypes],
+        image: FileTypes,
         image_edit_optional_request_params: Dict[str, Any],
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> Tuple[Dict[str, Any], Optional[RequestFiles]]:
-        inline_parts = self._prepare_inline_image_parts(image) if image else []
+        inline_parts = self._prepare_inline_image_parts(image)
         if not inline_parts:
             raise ValueError("Vertex AI Gemini image edit requires at least one image.")
 
-        # Build parts list with image and prompt (if provided)
-        parts = inline_parts.copy()
-        if prompt is not None and prompt != "":
-            parts.append({"text": prompt})
+        if prompt is None:
+            raise ValueError("Vertex AI Gemini image edit requires a prompt.")
 
         # Correct format for Vertex AI Gemini image editing
         contents = {
             "role": "USER",
-            "parts": parts
+            "parts": inline_parts + [{"text": prompt}]
         }
 
         request_body: Dict[str, Any] = {"contents": contents}

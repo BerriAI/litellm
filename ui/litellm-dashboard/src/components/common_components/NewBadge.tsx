@@ -1,13 +1,7 @@
 import { Badge } from "antd";
 import { useDisableShowNewBadge } from "@/app/(dashboard)/hooks/useDisableShowNewBadge";
 
-export default function NewBadge({
-  children,
-  dot = false
-}: {
-  children?: React.ReactNode;
-  dot?: boolean;
-}) {
+export default function NewBadge({ children }: { children?: React.ReactNode }) {
   const disableShowNewBadge = useDisableShowNewBadge();
 
   if (disableShowNewBadge) {
@@ -15,10 +9,10 @@ export default function NewBadge({
   }
 
   return children ? (
-    <Badge color="blue" count={dot ? undefined : "New"} dot={dot}>
+    <Badge color="blue" count="New">
       {children}
     </Badge>
   ) : (
-    <Badge color="blue" count={dot ? undefined : "New"} dot={dot} />
+    <Badge color="blue" count="New" />
   );
 }

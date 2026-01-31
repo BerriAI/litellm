@@ -178,7 +178,6 @@ router_settings:
 | turn_off_message_logging | boolean | If true, prevents messages and responses from being logged to callbacks, but request metadata will still be logged. Useful for privacy/compliance when handling sensitive data [Proxy Logging](logging) |
 | modify_params | boolean | If true, allows modifying the parameters of the request before it is sent to the LLM provider |
 | enable_preview_features | boolean | If true, enables preview features - e.g. Azure O1 Models with streaming support.|
-| LITELLM_DISABLE_STOP_SEQUENCE_LIMIT | Disable validation for stop sequence limit (default: 4) |  
 | redact_user_api_key_info | boolean | If true, redacts information about the user api key from logs [Proxy Logging](logging#redacting-userapikeyinfo) |
 | mcp_aliases | object | Maps friendly aliases to MCP server names for easier tool access. Only the first alias for each server is used. [MCP Aliases](../mcp#mcp-aliases) |
 | langfuse_default_tags | array of strings | Default tags for Langfuse Logging. Use this if you want to control which LiteLLM-specific fields are logged as tags by the LiteLLM proxy. By default LiteLLM Proxy logs no LiteLLM-specific fields as tags. [Further docs](./logging#litellm-specific-tags-on-langfuse---cache_hit-cache_key) |
@@ -398,7 +397,6 @@ router_settings:
 | AUDIO_SPEECH_CHUNK_SIZE | Chunk size for audio speech processing. Default is 1024
 | ANTHROPIC_API_KEY | API key for Anthropic service
 | ANTHROPIC_API_BASE | Base URL for Anthropic API. Default is https://api.anthropic.com
-| ANTHROPIC_TOKEN_COUNTING_BETA_VERSION | Beta version header for Anthropic token counting API. Default is `token-counting-2024-11-01`
 | AWS_ACCESS_KEY_ID | Access Key ID for AWS services
 | AWS_BATCH_ROLE_ARN | ARN of the AWS IAM role for batch operations
 | AWS_DEFAULT_REGION | Default AWS region for service interactions when AWS_REGION is not set
@@ -414,8 +412,6 @@ router_settings:
 | AWS_WEB_IDENTITY_TOKEN | Web identity token for AWS
 | AWS_WEB_IDENTITY_TOKEN_FILE | Path to file containing web identity token for AWS
 | AZURE_API_VERSION | Version of the Azure API being used
-| AZURE_AI_API_BASE | Base URL for Azure AI services (e.g., Azure AI Anthropic)
-| AZURE_AI_API_KEY | API key for Azure AI services (e.g., Azure AI Anthropic)
 | AZURE_AUTHORITY_HOST | Azure authority host URL
 | AZURE_CERTIFICATE_PASSWORD | Password for Azure OpenAI certificate
 | AZURE_CLIENT_ID | Client ID for Azure services
@@ -452,19 +448,9 @@ router_settings:
 | BERRISPEND_ACCOUNT_ID | Account ID for BerriSpend service
 | BRAINTRUST_API_KEY | API key for Braintrust integration
 | BRAINTRUST_API_BASE | Base URL for Braintrust API. Default is https://api.braintrustdata.com/v1
-| BRAINTRUST_MOCK | Enable mock mode for Braintrust integration testing. When set to true, intercepts Braintrust API calls and returns mock responses without making actual network calls. Default is false
-| BRAINTRUST_MOCK_LATENCY_MS | Mock latency in milliseconds for Braintrust API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
 | CACHED_STREAMING_CHUNK_DELAY | Delay in seconds for cached streaming chunks. Default is 0.02
-| CHATGPT_API_BASE | Base URL for ChatGPT API. Default is https://chatgpt.com/backend-api/codex
-| CHATGPT_AUTH_FILE | Filename for ChatGPT authentication data. Default is "auth.json"
-| CHATGPT_DEFAULT_INSTRUCTIONS | Default system instructions for ChatGPT provider
-| CHATGPT_ORIGINATOR | Originator identifier for ChatGPT API requests. Default is "codex_cli_rs"
-| CHATGPT_TOKEN_DIR | Directory to store ChatGPT authentication tokens. Default is "~/.config/litellm/chatgpt"
-| CHATGPT_USER_AGENT | Custom user agent string for ChatGPT API requests
-| CHATGPT_USER_AGENT_SUFFIX | Suffix to append to the ChatGPT user agent string
 | CIRCLE_OIDC_TOKEN | OpenID Connect token for CircleCI
 | CIRCLE_OIDC_TOKEN_V2 | Version 2 of the OpenID Connect token for CircleCI
-| CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours. Can also be set via LITELLM_CLI_JWT_EXPIRATION_HOURS
 | CLOUDZERO_API_KEY | CloudZero API key for authentication
 | CLOUDZERO_CONNECTION_ID | CloudZero connection ID for data submission
 | CLOUDZERO_EXPORT_INTERVAL_MINUTES | Interval in minutes for CloudZero data export operations
@@ -507,15 +493,12 @@ router_settings:
 | DD_AGENT_HOST | Hostname or IP of DataDog agent (e.g., "localhost"). When set, logs are sent to agent instead of direct API
 | DD_AGENT_PORT | Port of DataDog agent for log intake. Default is 10518
 | DD_API_KEY | API key for Datadog integration
-| DD_APP_KEY | Application key for Datadog Cost Management integration. Required along with DD_API_KEY for cost metrics
 | DD_SITE | Site URL for Datadog (e.g., datadoghq.com)
 | DD_SOURCE | Source identifier for Datadog logs
 | DD_TRACER_STREAMING_CHUNK_YIELD_RESOURCE | Resource name for Datadog tracing of streaming chunk yields. Default is "streaming.chunk.yield"
 | DD_ENV | Environment identifier for Datadog logs. Only supported for `datadog_llm_observability` callback
 | DD_SERVICE | Service identifier for Datadog logs. Defaults to "litellm-server"
 | DD_VERSION | Version identifier for Datadog logs. Defaults to "unknown"
-| DATADOG_MOCK | Enable mock mode for Datadog integration testing. When set to true, intercepts Datadog API calls and returns mock responses without making actual network calls. Default is false
-| DATADOG_MOCK_LATENCY_MS | Mock latency in milliseconds for Datadog API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
 | DEBUG_OTEL | Enable debug mode for OpenTelemetry
 | DEFAULT_ALLOWED_FAILS | Maximum failures allowed before cooling down a model. Default is 3
 | DEFAULT_A2A_AGENT_TIMEOUT | Default timeout in seconds for A2A (Agent-to-Agent) protocol requests. Default is 6000
@@ -617,12 +600,9 @@ router_settings:
 | GALILEO_USERNAME | Username for Galileo authentication
 | GOOGLE_SECRET_MANAGER_PROJECT_ID | Project ID for Google Secret Manager
 | GCS_BUCKET_NAME | Name of the Google Cloud Storage bucket
-| GCS_MOCK | Enable mock mode for GCS integration testing. When set to true, intercepts GCS API calls and returns mock responses without making actual network calls. Default is false
-| GCS_MOCK_LATENCY_MS | Mock latency in milliseconds for GCS API calls when mock mode is enabled. Simulates network round-trip time. Default is 150ms
 | GCS_PATH_SERVICE_ACCOUNT | Path to the Google Cloud service account JSON file
 | GCS_FLUSH_INTERVAL | Flush interval for GCS logging (in seconds). Specify how often you want a log to be sent to GCS. **Default is 20 seconds**
 | GCS_BATCH_SIZE | Batch size for GCS logging. Specify after how many logs you want to flush to GCS. If `BATCH_SIZE` is set to 10, logs are flushed every 10 logs. **Default is 2048**
-| GCS_USE_BATCHED_LOGGING | Enable batched logging for GCS. When enabled (default), multiple log payloads are combined into single GCS object uploads (NDJSON format), dramatically reducing API calls. When disabled, sends each log individually as separate GCS objects (legacy behavior). **Default is true**
 | GCS_PUBSUB_TOPIC_ID | PubSub Topic ID to send LiteLLM SpendLogs to.
 | GCS_PUBSUB_PROJECT_ID | PubSub Project ID to send LiteLLM SpendLogs to.
 | GENERIC_AUTHORIZATION_ENDPOINT | Authorization endpoint for generic OAuth providers
@@ -644,10 +624,6 @@ router_settings:
 | GENERIC_USERINFO_ENDPOINT | Endpoint to fetch user information in generic OAuth
 | GENERIC_LOGGER_ENDPOINT | Endpoint URL for the Generic Logger callback to send logs to
 | GENERIC_LOGGER_HEADERS | JSON string of headers to include in Generic Logger callback requests
-| GENERIC_ROLE_MAPPINGS_DEFAULT_ROLE | Default LiteLLM role to assign when no role mapping matches in generic SSO. Used with GENERIC_ROLE_MAPPINGS_ROLES
-| GENERIC_ROLE_MAPPINGS_GROUP_CLAIM | The claim/attribute name in the SSO token that contains the user's groups. Used for role mapping
-| GENERIC_ROLE_MAPPINGS_ROLES | Python dict string mapping LiteLLM roles to SSO group names. Example: `{"proxy_admin": ["admin-group"], "internal_user": ["users"]}`
-| GENERIC_USER_ROLE_MAPPINGS | Alternative to GENERIC_ROLE_MAPPINGS_ROLES for configuring user role mappings from SSO
 | GEMINI_API_BASE | Base URL for Gemini API. Default is https://generativelanguage.googleapis.com
 | GALILEO_BASE_URL | Base URL for Galileo platform
 | GALILEO_PASSWORD | Password for Galileo authentication
@@ -684,8 +660,6 @@ router_settings:
 | HCP_VAULT_CERT_ROLE | Role for [Hashicorp Vault Secret Manager Auth](../secret.md#hashicorp-vault)
 | HELICONE_API_KEY | API key for Helicone service
 | HELICONE_API_BASE | Base URL for Helicone service, defaults to `https://api.helicone.ai`
-| HELICONE_MOCK | Enable mock mode for Helicone integration testing. When set to true, intercepts Helicone API calls and returns mock responses without making actual network calls. Default is false
-| HELICONE_MOCK_LATENCY_MS | Mock latency in milliseconds for Helicone API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
 | HOSTNAME | Hostname for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog)
 | HOURS_IN_A_DAY | Hours in a day for calculation purposes. Default is 24
 | HIDDENLAYER_API_BASE | Base URL for HiddenLayer API. Defaults to `https://api.hiddenlayer.ai`
@@ -711,8 +685,6 @@ router_settings:
 | LANGFUSE_FLUSH_INTERVAL | Interval for flushing Langfuse logs
 | LANGFUSE_TRACING_ENVIRONMENT | Environment for Langfuse tracing
 | LANGFUSE_HOST | Host URL for Langfuse service
-| LANGFUSE_MOCK | Enable mock mode for Langfuse integration testing. When set to true, intercepts Langfuse API calls and returns mock responses without making actual network calls. Default is false
-| LANGFUSE_MOCK_LATENCY_MS | Mock latency in milliseconds for Langfuse API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
 | LANGFUSE_PUBLIC_KEY | Public key for Langfuse authentication
 | LANGFUSE_RELEASE | Release version of Langfuse integration
 | LANGFUSE_SECRET_KEY | Secret key for Langfuse authentication
@@ -724,8 +696,6 @@ router_settings:
 | LANGSMITH_PROJECT | Project name for Langsmith integration
 | LANGSMITH_SAMPLING_RATE | Sampling rate for Langsmith logging
 | LANGSMITH_TENANT_ID | Tenant ID for Langsmith multi-tenant deployments
-| LANGSMITH_MOCK | Enable mock mode for Langsmith integration testing. When set to true, intercepts Langsmith API calls and returns mock responses without making actual network calls. Default is false
-| LANGSMITH_MOCK_LATENCY_MS | Mock latency in milliseconds for Langsmith API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
 | LANGTRACE_API_KEY | API key for Langtrace service
 | LASSO_API_BASE | Base URL for Lasso API
 | LASSO_API_KEY | API key for Lasso service
@@ -737,10 +707,8 @@ router_settings:
 | LITERAL_API_URL | API URL for Literal service
 | LITERAL_BATCH_SIZE | Batch size for Literal operations
 | LITELLM_ANTHROPIC_DISABLE_URL_SUFFIX | Disable automatic URL suffix appending for Anthropic API base URLs. When set to `true`, prevents LiteLLM from automatically adding `/v1/messages` or `/v1/complete` to custom Anthropic API endpoints
-| LITELLM_CLI_JWT_EXPIRATION_HOURS | Expiration time in hours for CLI-generated JWT tokens. Default is 24 hours
 | LITELLM_DD_AGENT_HOST | Hostname or IP of DataDog agent for LiteLLM-specific logging. When set, logs are sent to agent instead of direct API
 | LITELLM_DD_AGENT_PORT | Port of DataDog agent for LiteLLM-specific log intake. Default is 10518
-| LITELLM_DD_LLM_OBS_PORT | Port for Datadog LLM Observability agent. Default is 8126
 | LITELLM_DONT_SHOW_FEEDBACK_BOX | Flag to hide feedback box in LiteLLM UI
 | LITELLM_DROP_PARAMS | Parameters to drop in LiteLLM requests
 | LITELLM_MODIFY_PARAMS | Parameters to modify in LiteLLM requests
@@ -825,7 +793,6 @@ router_settings:
 | OPENAI_BASE_URL | Base URL for OpenAI API
 | OPENAI_API_BASE | Base URL for OpenAI API. Default is https://api.openai.com/
 | OPENAI_API_KEY | API key for OpenAI services
-| OPENAI_CHATGPT_API_BASE | Alternative to CHATGPT_API_BASE. Base URL for ChatGPT API
 | OPENAI_FILE_SEARCH_COST_PER_1K_CALLS | Cost per 1000 calls for OpenAI file search. Default is 0.0025
 | OPENAI_ORGANIZATION | Organization identifier for OpenAI
 | OPENID_BASE_URL | Base URL for OpenID Connect services
@@ -836,7 +803,6 @@ router_settings:
 | OPENMETER_EVENT_TYPE | Type of events sent to OpenMeter
 | ONYX_API_BASE | Base URL for Onyx Security AI Guard service (defaults to https://ai-guard.onyx.security)
 | ONYX_API_KEY | API key for Onyx Security AI Guard service
-| ONYX_TIMEOUT | Timeout in seconds for Onyx Guard server requests. Default is 10
 | OTEL_ENDPOINT | OpenTelemetry endpoint for traces
 | OTEL_EXPORTER_OTLP_ENDPOINT | OpenTelemetry endpoint for traces
 | OTEL_ENVIRONMENT_NAME | Environment name for OpenTelemetry
@@ -860,8 +826,6 @@ router_settings:
 | POD_NAME | Pod name for the server, this will be [emitted to `datadog` logs](https://docs.litellm.ai/docs/proxy/logging#datadog) as `POD_NAME` 
 | POSTHOG_API_KEY | API key for PostHog analytics integration
 | POSTHOG_API_URL | Base URL for PostHog API (defaults to https://us.i.posthog.com)
-| POSTHOG_MOCK | Enable mock mode for PostHog integration testing. When set to true, intercepts PostHog API calls and returns mock responses without making actual network calls. Default is false
-| POSTHOG_MOCK_LATENCY_MS | Mock latency in milliseconds for PostHog API calls when mock mode is enabled. Simulates network round-trip time. Default is 100ms
 | PREDIBASE_API_BASE | Base URL for Predibase API
 | PRESIDIO_ANALYZER_API_BASE | Base URL for Presidio Analyzer service
 | PRESIDIO_ANONYMIZER_API_BASE | Base URL for Presidio Anonymizer service
@@ -899,8 +863,6 @@ router_settings:
 | ROUTER_MAX_FALLBACKS | Maximum number of fallbacks for router. Default is 5
 | RUNWAYML_DEFAULT_API_VERSION | Default API version for RunwayML service. Default is "2024-11-06"
 | RUNWAYML_POLLING_TIMEOUT | Timeout in seconds for RunwayML image generation polling. Default is 600 (10 minutes)
-| S3_VECTORS_DEFAULT_DIMENSION | Default vector dimension for S3 Vectors RAG ingestion. Default is 1024
-| S3_VECTORS_DEFAULT_DISTANCE_METRIC | Default distance metric for S3 Vectors RAG ingestion. Options: "cosine", "euclidean". Default is "cosine"
 | SECRET_MANAGER_REFRESH_INTERVAL | Refresh interval in seconds for secret manager. Default is 86400 (24 hours)
 | SEPARATE_HEALTH_APP | If set to '1', runs health endpoints on a separate ASGI app and port. Default: '0'.
 | SEPARATE_HEALTH_PORT | Port for the separate health endpoints app. Only used if SEPARATE_HEALTH_APP=1. Default: 4001.

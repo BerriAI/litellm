@@ -312,43 +312,6 @@ async def test_test_model_connection_loads_config_from_router():
         assert "result" in result
 
 
-@pytest.mark.asyncio
-async def test_health_services_endpoint_datadog_llm_observability():
-    """
-    Verify that 'datadog_llm_observability' is accepted as a valid service
-    by the /health/services endpoint and does not raise a 400 error.
-
-    Regression test for: https://github.com/BerriAI/litellm/issues/XXXX
-    The service was missing from the allowed services validation list.
-    """
-    from litellm.proxy.health_endpoints._health_endpoints import (
-        health_services_endpoint,
-    )
-
-    # Mock datadog_llm_observability to be in success_callback so the generic branch handles it
-    with patch("litellm.success_callback", ["datadog_llm_observability"]):
-        result = await health_services_endpoint(
-            service="datadog_llm_observability"
-        )
-
-    # Should not raise HTTPException(400) and should return success
-    assert result["status"] == "success"
-    assert "datadog_llm_observability" in result["message"]
-
-
-@pytest.mark.asyncio
-async def test_health_services_endpoint_rejects_unknown_service():
-    """
-    Verify that an unknown service name is rejected with a 400 error.
-    """
-    from litellm.proxy._types import ProxyException
-
-    with pytest.raises(ProxyException):
-        await health_services_endpoint(
-            service="totally_unknown_service_xyz"
-        )
-
-
 @pytest.fixture(scope="function")
 def proxy_client(monkeypatch):
     """

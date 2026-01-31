@@ -84,7 +84,7 @@ def test_arize_set_attributes():
     ArizeLogger.set_arize_attributes(span, kwargs, response_obj)
 
     # Validate that the expected number of attributes were set
-    assert span.set_attribute.call_count == 26
+    assert span.set_attribute.call_count == 28
 
     # Metadata attached to the span
     span.set_attribute.assert_any_call(
@@ -108,8 +108,7 @@ def test_arize_set_attributes():
     # Response metadata
     span.set_attribute.assert_any_call("llm.response.id", "chatcmpl-ID")
     span.set_attribute.assert_any_call("llm.response.model", "gpt-4o")
-    # Span kind is set to TOOL when tools are present
-    span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "TOOL")
+    span.set_attribute.assert_any_call(SpanAttributes.OPENINFERENCE_SPAN_KIND, "LLM")
 
     # Request message content and metadata
     span.set_attribute.assert_any_call(
@@ -126,14 +125,14 @@ def test_arize_set_attributes():
 
     # Tool call definitions and function names
     span.set_attribute.assert_any_call(
-        f"{SpanAttributes.LLM_TOOLS}.0.name", "get_weather"
+        f"{SpanAttributes.LLM_TOOLS}.0.{SpanAttributes.TOOL_NAME}", "get_weather"
     )
     span.set_attribute.assert_any_call(
-        f"{SpanAttributes.LLM_TOOLS}.0.description",
+        f"{SpanAttributes.LLM_TOOLS}.0.{SpanAttributes.TOOL_DESCRIPTION}",
         "Fetches weather details.",
     )
     span.set_attribute.assert_any_call(
-        f"{SpanAttributes.LLM_TOOLS}.0.parameters",
+        f"{SpanAttributes.LLM_TOOLS}.0.{SpanAttributes.TOOL_PARAMETERS}",
         json.dumps(
             {
                 "type": "object",
@@ -143,6 +142,16 @@ def test_arize_set_attributes():
                 "required": ["location"],
             }
         ),
+    )
+
+    # Tool calls captured from optional_params
+    span.set_attribute.assert_any_call(
+        f"{MessageAttributes.MESSAGE_TOOL_CALLS}.0.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
+        "get_weather",
+    )
+    span.set_attribute.assert_any_call(
+        f"{MessageAttributes.MESSAGE_TOOL_CALLS}.1.{ToolCallAttributes.TOOL_CALL_FUNCTION_NAME}",
+        "get_stock_price",
     )
 
     # Invocation parameters

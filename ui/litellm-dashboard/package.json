@@ -8,7 +8,6 @@
     "start": "next start",
     "lint": "next lint",
     "test": "vitest",
-    "test:dot": "vitest --reporter=dot",
     "test:watch": "vitest -w",
     "test:coverage": "vitest run --coverage",
     "format": "prettier --write .",
@@ -86,9 +85,7 @@
     "mermaid": ">=11.10.0",
     "js-yaml": ">=4.1.1",
     "glob": ">=11.1.0",
-    "node-forge": ">=1.3.2",
-    "lodash-es": ">=4.17.23",
-    "lodash": ">=4.17.23"
+    "node-forge": ">=1.3.2"
   },
   "engines": {
     "node": ">=18.17.0",

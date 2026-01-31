@@ -58,13 +58,11 @@ from litellm.litellm_core_utils.core_helpers import (
     _get_parent_otel_span_from_kwargs,
     get_metadata_variable_name_from_kwargs,
 )
-from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.dd_tracing import tracer
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_strategy.least_busy import LeastBusyLoggingHandler
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
@@ -643,17 +641,6 @@ class Router:
         self.initialize_assistants_endpoint()
         self.initialize_router_endpoints()
         self.apply_default_settings()
-
-    @staticmethod
-    def get_valid_args() -> List[str]:
-        """
-        Returns a list of valid arguments for the Router.__init__ method.
-        """
-        arg_spec = inspect.getfullargspec(Router.__init__)
-        valid_args = arg_spec.args + arg_spec.kwonlyargs
-        if "self" in valid_args:
-            valid_args.remove("self")
-        return valid_args
 
     def apply_default_settings(self):
         """
@@ -1251,25 +1238,10 @@ class Router:
                 specific_deployment=kwargs.pop("specific_deployment", None),
                 request_kwargs=kwargs,
             )
-            # Check for silent model experiment
-            # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params = deployment["litellm_params"].copy()
-            silent_model = litellm_params.pop("silent_model", None)
-
-            if silent_model is not None:
-                # Mirroring traffic to a secondary model
-                # Use shared thread pool for background calls
-                executor.submit(
-                    self._silent_experiment_completion,
-                    silent_model,
-                    messages,
-                    **kwargs,
-                )
-
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
+
             # No copy needed - data is only read and spread into new dict below
-            data = litellm_params.copy()  # Use the local copy of litellm_params
+            data = deployment["litellm_params"]
             model_name = data["model"]
             potential_model_client = self._get_client(
                 deployment=deployment, kwargs=kwargs
@@ -1290,14 +1262,15 @@ class Router:
             if not self.has_model_id(model):
                 self.routing_strategy_pre_call_checks(deployment=deployment)
 
-            input_kwargs = {
-                **data,
-                "messages": messages,
-                "caching": self.cache_responses,
-                "client": model_client,
-                **kwargs,
-            }
-            response = litellm.completion(**input_kwargs)
+            response = litellm.completion(
+                **{
+                    **data,
+                    "messages": messages,
+                    "caching": self.cache_responses,
+                    "client": model_client,
+                    **kwargs,
+                }
+            )
             verbose_router_logger.info(
                 f"litellm.completion(model={model_name})\033[32m 200 OK\033[0m"
             )
@@ -1323,56 +1296,6 @@ class Router:
             if deployment is not None:
                 self._set_deployment_num_retries_on_exception(e, deployment)
             raise e
-
-    def _get_silent_experiment_kwargs(self, **kwargs) -> dict:
-        """
-        Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
-        """
-        # Copy kwargs to ensure isolation
-        silent_kwargs = copy.deepcopy(kwargs)
-        if "metadata" not in silent_kwargs:
-            silent_kwargs["metadata"] = {}
-
-        silent_kwargs["metadata"]["is_silent_experiment"] = True
-
-        # Pop logging objects and call IDs to ensure a fresh logging context
-        # This prevents collisions in the Proxy's database (spend_logs)
-        silent_kwargs.pop("litellm_call_id", None)
-        silent_kwargs.pop("litellm_logging_obj", None)
-        silent_kwargs.pop("standard_logging_object", None)
-        silent_kwargs.pop("proxy_server_request", None)
-
-        return silent_kwargs
-
-    def _silent_experiment_completion(
-        self, silent_model: str, messages: List[Any], **kwargs
-    ):
-        """
-        Run a silent experiment in the background (thread).
-        """
-        try:
-            # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
-                return
-
-            messages = copy.deepcopy(messages)
-
-            verbose_router_logger.info(
-                f"Starting silent experiment for model {silent_model}"
-            )
-
-            silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
-
-            # Trigger the silent request
-            self.completion(
-                model=silent_model,
-                messages=cast(List[Dict[str, str]], messages),
-                **silent_kwargs,
-            )
-        except Exception as e:
-            verbose_router_logger.error(
-                f"Silent experiment failed for model {silent_model}: {str(e)}"
-            )
 
     # fmt: off
 
@@ -1582,36 +1505,6 @@ class Router:
 
         return FallbackStreamWrapper(stream_with_fallbacks())
 
-    async def _silent_experiment_acompletion(
-        self, silent_model: str, messages: List[Any], **kwargs
-    ):
-        """
-        Run a silent experiment in the background.
-        """
-        try:
-            # Prevent infinite recursion if silent model also has a silent model
-            if kwargs.get("metadata", {}).get("is_silent_experiment", False):
-                return
-
-            messages = copy.deepcopy(messages)
-
-            verbose_router_logger.info(
-                f"Starting silent experiment for model {silent_model}"
-            )
-
-            silent_kwargs = self._get_silent_experiment_kwargs(**kwargs)
-
-            # Trigger the silent request
-            await self.acompletion(
-                model=silent_model,
-                messages=cast(List[AllMessageValues], messages),
-                **silent_kwargs,
-            )
-        except Exception as e:
-            verbose_router_logger.error(
-                f"Silent experiment failed for model {silent_model}: {str(e)}"
-            )
-
     async def _acompletion(  # noqa: PLR0915
         self, model: str, messages: List[Dict[str, str]], **kwargs
     ) -> Union[ModelResponse, CustomStreamWrapper,]:
@@ -1658,27 +1551,9 @@ class Router:
             self._track_deployment_metrics(
                 deployment=deployment, parent_otel_span=parent_otel_span
             )
-
-            # Check for silent model experiment
-            # Make a local copy of litellm_params to avoid mutating the Router's state
-            litellm_params = deployment["litellm_params"].copy()
-            silent_model = litellm_params.pop("silent_model", None)
-
-            if silent_model is not None:
-                # Mirroring traffic to a secondary model
-                # This is a silent experiment, so we don't want to block the primary request
-                asyncio.create_task(
-                    self._silent_experiment_acompletion(
-                        silent_model=silent_model,
-                        messages=messages,  # Use messages instead of *args
-                        **kwargs,
-                    )
-                )
-
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
-            kwargs.pop("silent_model", None)  # Ensure it's not in kwargs either
             # No copy needed - data is only read and spread into new dict below
-            data = litellm_params.copy()  # Use the local copy of litellm_params
+            data = deployment["litellm_params"]
 
             model_name = data["model"]
 
@@ -1695,7 +1570,6 @@ class Router:
                 "client": model_client,
                 **kwargs,
             }
-            input_kwargs.pop("silent_model", None)
 
             _response = litellm.acompletion(**input_kwargs)
 
@@ -1821,11 +1695,8 @@ class Router:
 
         litellm_params = deployment.get("litellm_params", {})
         dep_num_retries = litellm_params.get("num_retries")
-        if dep_num_retries is not None:
-            try:
-                exception.num_retries = int(dep_num_retries)  # type: ignore  # Handle both int and str
-            except (ValueError, TypeError):
-                pass  # Skip if value can't be converted to int
+        if dep_num_retries is not None and isinstance(dep_num_retries, int):
+            exception.num_retries = dep_num_retries  # type: ignore
 
     def _update_kwargs_with_default_litellm_params(
         self, kwargs: dict, metadata_variable_name: Optional[str] = "metadata"
@@ -4810,38 +4681,26 @@ class Router:
                 parent_otel_span=parent_otel_span,
             )
 
-            # Check retry policy FIRST, before should_retry_this_error
-            # This allows retry policies to override the healthy deployments check
-            _retry_policy_applies = False
+            # raises an exception if this error should not be retries
+            self.should_retry_this_error(
+                error=e,
+                healthy_deployments=_healthy_deployments,
+                all_deployments=_all_deployments,
+                context_window_fallbacks=context_window_fallbacks,
+                regular_fallbacks=fallbacks,
+                content_policy_fallbacks=content_policy_fallbacks,
+            )
+
             if (
                 self.retry_policy is not None
                 or self.model_group_retry_policy is not None
             ):
                 # get num_retries from retry policy
-                # Use the model_group captured at the start of the function, or get it from metadata
-                # kwargs.get("model") at this point is the deployment model, not the model_group
-                _model_group_for_retry_policy = (
-                    model_group or _metadata.get("model_group") or kwargs.get("model")
-                )
                 _retry_policy_retries = self.get_num_retries_from_retry_policy(
-                    exception=original_exception,
-                    model_group=_model_group_for_retry_policy,
+                    exception=original_exception, model_group=kwargs.get("model")
                 )
                 if _retry_policy_retries is not None:
                     num_retries = _retry_policy_retries
-                    _retry_policy_applies = True
-
-            # raises an exception if this error should not be retries
-            # Skip this check if retry policy applies (retry policy takes precedence)
-            if not _retry_policy_applies:
-                self.should_retry_this_error(
-                    error=e,
-                    healthy_deployments=_healthy_deployments,
-                    all_deployments=_all_deployments,
-                    context_window_fallbacks=context_window_fallbacks,
-                    regular_fallbacks=fallbacks,
-                    content_policy_fallbacks=content_policy_fallbacks,
-                )
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
@@ -5005,12 +4864,6 @@ class Router:
             and content_policy_fallbacks is not None
         ):
             raise error
-
-        status_code = getattr(error, "status_code", None)
-        if status_code is not None and not litellm._should_retry(status_code):
-            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403):
-                raise error
 
         if isinstance(error, litellm.NotFoundError):
             raise error
@@ -6009,11 +5862,7 @@ class Router:
                 ),
             )
             # done reading model["litellm_params"]
-            # Check if provider is supported: either in enum or JSON-configured
-            if (
-                custom_llm_provider not in litellm.provider_list
-                and not JSONProviderRegistry.exists(custom_llm_provider)
-            ):
+            if custom_llm_provider not in litellm.provider_list:
                 raise Exception(f"Unsupported provider - {custom_llm_provider}")
 
         #### DEPLOYMENT NAMES INIT ########
@@ -6489,20 +6338,19 @@ class Router:
         elif custom_llm_provider != "azure":
             model = _model
 
-            if "*" in model:  # only call pattern_router for wildcard models
-                potential_models = self.pattern_router.route(received_model_name)
-                if potential_models is not None:
-                    for potential_model in potential_models:
-                        try:
-                            if potential_model.get("model_info", {}).get(
-                                "id"
-                            ) == deployment.get("model_info", {}).get("id"):
-                                model = potential_model.get("litellm_params", {}).get(
-                                    "model"
-                                )
-                                break
-                        except Exception:
-                            pass
+            potential_models = self.pattern_router.route(received_model_name)
+            if "*" in model and potential_models is not None:  # if wildcard route
+                for potential_model in potential_models:
+                    try:
+                        if potential_model.get("model_info", {}).get(
+                            "id"
+                        ) == deployment.get("model_info", {}).get("id"):
+                            model = potential_model.get("litellm_params", {}).get(
+                                "model"
+                            )
+                            break
+                    except Exception:
+                        pass
 
         ## GET LITELLM MODEL INFO - raises exception, if model is not mapped
         if model is None:
@@ -8730,6 +8578,11 @@ class Router:
             return None
 
         if (
+            isinstance(exception, litellm.BadRequestError)
+            and allowed_fails_policy.BadRequestErrorAllowedFails is not None
+        ):
+            return allowed_fails_policy.BadRequestErrorAllowedFails
+        if (
             isinstance(exception, litellm.AuthenticationError)
             and allowed_fails_policy.AuthenticationErrorAllowedFails is not None
         ):
@@ -8749,11 +8602,6 @@ class Router:
             and allowed_fails_policy.ContentPolicyViolationErrorAllowedFails is not None
         ):
             return allowed_fails_policy.ContentPolicyViolationErrorAllowedFails
-        if (
-            isinstance(exception, litellm.BadRequestError)
-            and allowed_fails_policy.BadRequestErrorAllowedFails is not None
-        ):
-            return allowed_fails_policy.BadRequestErrorAllowedFails
 
     def _initialize_alerting(self):
         from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting

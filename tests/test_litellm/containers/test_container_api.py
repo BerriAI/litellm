@@ -166,55 +166,30 @@ class TestContainerAPI:
             assert isinstance(response, ContainerListResponse)
             assert len(response.data) == 1
 
-    @pytest.mark.parametrize(
-        "container_id,container_name,status,provider",
-        [
-            ("cntr_retrieve_test", "Retrieved Container", "running", "openai"),
-            ("cntr_different_id", "Another Container", "stopped", "openai"),
-        ],
-    )
-    def test_retrieve_container_basic(self, container_id, container_name, status, provider):
-        """Test basic container retrieval functionality.
-        
-        This test verifies that:
-        1. retrieve_container correctly calls the handler with the container_id
-        2. The response is properly deserialized into a ContainerObject
-        3. All fields are correctly mapped from the handler response
-        4. The function works with different container states and IDs
-        """
-        # Arrange: Create mock response with test parameters
+    def test_retrieve_container_basic(self):
+        """Test basic container retrieval functionality."""
+        container_id = "cntr_retrieve_test"
         mock_response = ContainerObject(
             id=container_id,
             object="container",
             created_at=1747857508,
-            status=status,
+            status="running",
             expires_after={"anchor": "last_active_at", "minutes": 20},
             last_active_at=1747857508,
-            name=container_name
+            name="Retrieved Container"
         )
         
         with patch('litellm.containers.main.base_llm_http_handler') as mock_handler:
             mock_handler.container_retrieve_handler.return_value = mock_response
             
-            # Act: Call retrieve_container
             response = retrieve_container(
                 container_id=container_id,
-                custom_llm_provider=provider
+                custom_llm_provider="openai"
             )
             
-            # Assert: Verify the handler was called correctly
-            mock_handler.container_retrieve_handler.assert_called_once()
-            call_kwargs = mock_handler.container_retrieve_handler.call_args.kwargs
-            assert call_kwargs["container_id"] == container_id
-            
-            # Assert: Verify response structure and content
             assert isinstance(response, ContainerObject)
             assert response.id == container_id
-            assert response.name == container_name
-            assert response.status == status
-            assert response.object == "container"
-            assert response.expires_after.minutes == 20
-            assert response.expires_after.anchor == "last_active_at"
+            assert response.name == "Retrieved Container"
 
     @pytest.mark.asyncio
     async def test_aretrieve_container_basic(self):

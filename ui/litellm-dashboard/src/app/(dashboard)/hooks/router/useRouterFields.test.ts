@@ -7,7 +7,6 @@ import { RouterFieldsResponse, useRouterFields } from "./useRouterFields";
 // Mock the networking module
 vi.mock("@/components/networking", () => ({
   proxyBaseUrl: null,
-  getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
 // Mock useAuthorized hook

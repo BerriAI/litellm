@@ -74,20 +74,40 @@ class BaseAWSLLM:
             "aws_external_id",
         ]
 
-    def _get_ssl_verify(self, ssl_verify: Optional[Union[bool, str]] = None):
+    def _get_ssl_verify(self):
         """
         Get SSL verification setting for boto3 clients.
-
+        
         This ensures that custom CA certificates are properly used for all AWS API calls,
         including STS and Bedrock services.
-
+        
         Returns:
             Union[bool, str]: SSL verification setting - False to disable, True to enable,
                             or a string path to a CA bundle file
         """
-        from litellm.llms.custom_httpx.http_handler import get_ssl_verify
+        import litellm
+        from litellm.secret_managers.main import str_to_bool
 
-        return get_ssl_verify(ssl_verify=ssl_verify)
+        # Check environment variable first (highest priority)
+        ssl_verify = os.getenv("SSL_VERIFY", litellm.ssl_verify)
+        
+        # Convert string "False"/"True" to boolean
+        if isinstance(ssl_verify, str):
+            # Check if it's a file path
+            if os.path.exists(ssl_verify):
+                return ssl_verify
+            # Otherwise try to convert to boolean
+            ssl_verify_bool = str_to_bool(ssl_verify)
+            if ssl_verify_bool is not None:
+                ssl_verify = ssl_verify_bool
+        
+        # Check SSL_CERT_FILE environment variable for custom CA bundle
+        if ssl_verify is True or ssl_verify == "True":
+            ssl_cert_file = os.getenv("SSL_CERT_FILE")
+            if ssl_cert_file and os.path.exists(ssl_cert_file):
+                return ssl_cert_file
+        
+        return ssl_verify
 
     def get_cache_key(self, credential_args: Dict[str, Optional[str]]) -> str:
         """
@@ -110,7 +130,6 @@ class BaseAWSLLM:
         aws_web_identity_token: Optional[str] = None,
         aws_sts_endpoint: Optional[str] = None,
         aws_external_id: Optional[str] = None,
-        ssl_verify: Optional[Union[bool, str]] = None,
     ):
         """
         Return a boto3.Credentials object
@@ -179,11 +198,7 @@ class BaseAWSLLM:
         )
 
         # create cache key for non-expiring auth flows
-        args = {
-            k: v
-            for k, v in locals().items()
-            if k.startswith("aws_") or k == "ssl_verify"
-        }
+        args = {k: v for k, v in locals().items() if k.startswith("aws_")}
 
         cache_key = self.get_cache_key(args)
         _cached_credentials = self.iam_cache.get_cache(cache_key)
@@ -247,7 +262,6 @@ class BaseAWSLLM:
                     aws_role_name=aws_role_name,
                     aws_session_name=aws_session_name,
                     aws_external_id=aws_external_id,
-                    ssl_verify=ssl_verify,
                 )
 
         elif aws_profile_name is not None:  ### CHECK SESSION ###
@@ -562,7 +576,6 @@ class BaseAWSLLM:
         aws_region_name: Optional[str],
         aws_sts_endpoint: Optional[str],
         aws_external_id: Optional[str] = None,
-        ssl_verify: Optional[Union[bool, str]] = None,
     ) -> Tuple[Credentials, Optional[int]]:
         """
         Authenticate with AWS Web Identity Token
@@ -591,7 +604,7 @@ class BaseAWSLLM:
                 "sts",
                 region_name=aws_region_name,
                 endpoint_url=sts_endpoint,
-                verify=self._get_ssl_verify(ssl_verify),
+                verify=self._get_ssl_verify(),
             )
 
         # https://docs.aws.amazon.com/STS/latest/APIReference/API_AssumeRoleWithWebIdentity.html
@@ -636,7 +649,6 @@ class BaseAWSLLM:
         region: str,
         web_identity_token_file: str,
         aws_external_id: Optional[str] = None,
-        ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
         """Handle cross-account role assumption for IRSA."""
         import boto3
@@ -649,9 +661,7 @@ class BaseAWSLLM:
 
         # Create an STS client without credentials
         with tracer.trace("boto3.client(sts) for manual IRSA"):
-            sts_client = boto3.client(
-                "sts", region_name=region, verify=self._get_ssl_verify(ssl_verify)
-            )
+            sts_client = boto3.client("sts", region_name=region, verify=self._get_ssl_verify())
 
         # Manually assume the IRSA role with the session name
         verbose_logger.debug(
@@ -674,7 +684,7 @@ class BaseAWSLLM:
                 aws_access_key_id=irsa_creds["AccessKeyId"],
                 aws_secret_access_key=irsa_creds["SecretAccessKey"],
                 aws_session_token=irsa_creds["SessionToken"],
-                verify=self._get_ssl_verify(ssl_verify),
+                verify=self._get_ssl_verify(),
             )
 
         # Get current caller identity for debugging
@@ -707,16 +717,13 @@ class BaseAWSLLM:
         aws_session_name: str,
         region: str,
         aws_external_id: Optional[str] = None,
-        ssl_verify: Optional[Union[bool, str]] = None,
     ) -> dict:
         """Handle same-account role assumption for IRSA."""
         import boto3
 
         verbose_logger.debug("Same account role assumption, using automatic IRSA")
         with tracer.trace("boto3.client(sts) with automatic IRSA"):
-            sts_client = boto3.client(
-                "sts", region_name=region, verify=self._get_ssl_verify(ssl_verify)
-            )
+            sts_client = boto3.client("sts", region_name=region, verify=self._get_ssl_verify())
 
         # Get current caller identity for debugging
         try:
@@ -771,7 +778,6 @@ class BaseAWSLLM:
         aws_role_name: str,
         aws_session_name: str,
         aws_external_id: Optional[str] = None,
-        ssl_verify: Optional[Union[bool, str]] = None,
     ) -> Tuple[Credentials, Optional[int]]:
         """
         Authenticate with AWS Role
@@ -814,15 +820,10 @@ class BaseAWSLLM:
                         region,
                         web_identity_token_file,
                         aws_external_id,
-                        ssl_verify=ssl_verify,
                     )
                 else:
                     sts_response = self._handle_irsa_same_account(
-                        aws_role_name,
-                        aws_session_name,
-                        region,
-                        aws_external_id,
-                        ssl_verify=ssl_verify,
+                        aws_role_name, aws_session_name, region, aws_external_id
                     )
 
                 return self._extract_credentials_and_ttl(sts_response)
@@ -845,9 +846,7 @@ class BaseAWSLLM:
         # This allows the web identity token to work automatically
         if aws_access_key_id is None and aws_secret_access_key is None:
             with tracer.trace("boto3.client(sts)"):
-                sts_client = boto3.client(
-                    "sts", verify=self._get_ssl_verify(ssl_verify)
-                )
+                sts_client = boto3.client("sts", verify=self._get_ssl_verify())
         else:
             with tracer.trace("boto3.client(sts)"):
                 sts_client = boto3.client(
@@ -855,7 +854,7 @@ class BaseAWSLLM:
                     aws_access_key_id=aws_access_key_id,
                     aws_secret_access_key=aws_secret_access_key,
                     aws_session_token=aws_session_token,
-                    verify=self._get_ssl_verify(ssl_verify),
+                    verify=self._get_ssl_verify(),
                 )
 
         assume_role_params = {
@@ -1163,7 +1162,7 @@ class BaseAWSLLM:
 
     def _sign_request(
         self,
-        service_name: Literal["bedrock", "sagemaker", "bedrock-agentcore", "s3vectors"],
+        service_name: Literal["bedrock", "sagemaker", "bedrock-agentcore"],
         headers: dict,
         optional_params: dict,
         request_data: dict,

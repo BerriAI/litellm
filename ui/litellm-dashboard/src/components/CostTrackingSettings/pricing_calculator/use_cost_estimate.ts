@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
-import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { getProxyBaseUrl } from "@/components/networking";
 import NotificationsManager from "../../molecules/notifications_manager";
 import { CostEstimateRequest, CostEstimateResponse } from "../types";
 import { PricingFormValues } from "./types";
@@ -36,7 +36,7 @@ export function useCostEstimate(accessToken: string | null) {
         const response = await fetch(url, {
           method: "POST",
           headers: {
-            [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
+            Authorization: `Bearer ${accessToken}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify(requestBody),

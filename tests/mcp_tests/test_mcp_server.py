@@ -1001,39 +1001,34 @@ async def test_mcp_server_manager_access_groups_from_config():
         MCPRequestHandler,
     )
 
-    # Patch global_mcp_server_manager for this test and restore afterwards to
-    # avoid leaking state into other tests (e.g. the proxy MCP e2e suite).
+    # Patch global_mcp_server_manager for this test
     import litellm.proxy._experimental.mcp_server.mcp_server_manager as mcp_server_manager_mod
 
-    original_manager = mcp_server_manager_mod.global_mcp_server_manager
     mcp_server_manager_mod.global_mcp_server_manager = test_manager
-    try:
-        # Should find config_server for group-a, both for group-b, other_server for group-c
-        import asyncio
+    # Should find config_server for group-a, both for group-b, other_server for group-c
+    import asyncio
 
-        server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-            "group-a"
-        ])
-        server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-            "group-b"
-        ])
-        server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
-            "group-c"
-        ])
-        assert any(config_server.server_id == sid for sid in server_ids_a)
-        assert set(server_ids_b) == set(
-            [
-                s.server_id
-                for s in test_manager.config_mcp_servers.values()
-                if "group-b" in s.access_groups
-            ]
-        )
-        assert any(
-            s.name == "other_server" and s.server_id in server_ids_c
+    server_ids_a = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-a"
+    ])
+    server_ids_b = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-b"
+    ])
+    server_ids_c = await MCPRequestHandler._get_mcp_servers_from_access_groups([
+        "group-c"
+    ])
+    assert any(config_server.server_id == sid for sid in server_ids_a)
+    assert set(server_ids_b) == set(
+        [
+            s.server_id
             for s in test_manager.config_mcp_servers.values()
-        )
-    finally:
-        mcp_server_manager_mod.global_mcp_server_manager = original_manager
+            if "group-b" in s.access_groups
+        ]
+    )
+    assert any(
+        s.name == "other_server" and s.server_id in server_ids_c
+        for s in test_manager.config_mcp_servers.values()
+    )
 
 
 async def test_mcp_server_manager_config_integration_with_database():
@@ -1105,26 +1100,9 @@ async def test_mcp_server_manager_config_integration_with_database():
 
     test_manager.get_allowed_mcp_servers = mock_get_allowed_servers
 
-    # Mock health_check_server to avoid real network calls that timeout
-    async def mock_health_check(server_id: str, mcp_auth_header=None):
-        server = test_manager.get_mcp_server_by_id(server_id)
-        if not server:
-            return None
-        return LiteLLM_MCPServerTable(
-            server_id=server_id,
-            server_name=server.name,
-            url=server.url,
-            transport=server.transport,
-            description=server.mcp_info.get("description") if server.mcp_info else None,
-            mcp_access_groups=server.access_groups,
-            status="healthy",
-            last_health_check=datetime.datetime.now(),
-            mcp_info=server.mcp_info,
-        )
-
-    test_manager.health_check_server = mock_health_check
-
     # Test the method (this tests our second fix)
+    import asyncio
+
     servers_list = await test_manager.get_all_mcp_servers_with_health_and_teams(
         user_api_key_auth=mock_user_auth
     )

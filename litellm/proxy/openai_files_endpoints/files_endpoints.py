@@ -29,10 +29,7 @@ from litellm.llms.base_llm.files.transformation import BaseFileEndpoints
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.common_utils.http_parsing_utils import (
-    _read_request_body,
-    extract_nested_form_metadata,
-)
+from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
@@ -149,8 +146,8 @@ async def route_create_file(
     Priority:
     1. If target_storage is specified and not "default" -> use storage backend
     2. If model parameter provided -> use model credentials and encode ID
-    3. If target_model_names_list -> managed files (requires DB, supports loadbalancing)
-    4. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
+    3. If enable_loadbalancing_on_batch_endpoints -> deprecated loadbalancing
+    4. If target_model_names_list -> managed files (requires DB)
     5. Else -> use custom_llm_provider with files_settings
     """
     
@@ -205,9 +202,18 @@ async def route_create_file(
         
         return response
     
-    # Handle managed files (supports loadbalancing via llm_router.acreate_file)
-    # Priority: Check for managed files BEFORE deprecated loadbalancing
-    if target_model_names_list:
+    # EXISTING: Deprecated loadbalancing approach
+    if (
+        litellm.enable_loadbalancing_on_batch_endpoints is True
+        and is_router_model
+        and router_model is not None
+    ):
+        response = await _deprecated_loadbalanced_create_file(
+            llm_router=llm_router,
+            router_model=router_model,
+            _create_file_request=_create_file_request,
+        )
+    elif target_model_names_list:
         managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
         if managed_files_obj is None:
             raise ProxyException(
@@ -230,24 +236,12 @@ async def route_create_file(
                 param="None",
                 code=500,
             )
-        # Managed files internally calls llm_router.acreate_file() which includes loadbalancing
         response = await managed_files_obj.acreate_file(
             llm_router=llm_router,
             create_file_request=_create_file_request,
             target_model_names_list=target_model_names_list,
             litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
             user_api_key_dict=user_api_key_dict,
-        )
-    # EXISTING: Deprecated loadbalancing approach (for backwards compatibility when not using managed files)
-    elif (
-        litellm.enable_loadbalancing_on_batch_endpoints is True
-        and is_router_model
-        and router_model is not None
-    ):
-        response = await _deprecated_loadbalanced_create_file(
-            llm_router=llm_router,
-            router_model=router_model,
-            _create_file_request=_create_file_request,
         )
     else:
         # get configs for custom_llm_provider
@@ -357,20 +351,16 @@ async def create_file(  # noqa: PLR0915
 
         data = {}
         
-        # Parse expires_after if provided
-        expires_after = None
-        form_data = await request.form()
-        litellm_metadata = extract_nested_form_metadata(
-            form_data=form_data,
-            prefix="litellm_metadata["
-        )
-        expires_after_anchor = form_data.get("expires_after[anchor]")
-        expires_after_seconds_str = form_data.get("expires_after[seconds]")
-        
         # Add litellm_metadata to data if provided (from form field)
         if litellm_metadata is not None:
             data["litellm_metadata"] = litellm_metadata
 
+        # Parse expires_after if provided
+        expires_after = None
+        form_data = await request.form()
+        expires_after_anchor = form_data.get("expires_after[anchor]")
+        expires_after_seconds_str = form_data.get("expires_after[seconds]")
+        
         if expires_after_anchor is not None or expires_after_seconds_str is not None:
             if expires_after_anchor is None or expires_after_seconds_str is None:
                 raise HTTPException(
@@ -819,7 +809,7 @@ async def get_file(
         version,
     )
 
-    data: Dict = {"file_id": file_id}
+    data: Dict = {}
     try:
 
         custom_llm_provider = (
@@ -999,7 +989,7 @@ async def delete_file(
         version,
     )
 
-    data: Dict = {"file_id": file_id}
+    data: Dict = {}
     try:
         custom_llm_provider = (
             provider
@@ -1008,22 +998,6 @@ async def delete_file(
             or await get_custom_llm_provider_from_request_body(request=request)
             or "openai"
         )
-        
-        # Call common_processing_pre_call_logic to trigger permission checks
-        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
-        (
-            data,
-            litellm_logging_obj,
-        ) = await base_llm_response_processor.common_processing_pre_call_logic(
-            request=request,
-            general_settings=general_settings,
-            user_api_key_dict=user_api_key_dict,
-            version=version,
-            proxy_logging_obj=proxy_logging_obj,
-            proxy_config=proxy_config,
-            route_type="afile_delete",
-        )
-        
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
             data=data,
@@ -1083,13 +1057,11 @@ async def delete_file(
                     code=500,
                 )
 
-            # Remove file_id from data to avoid duplicate keyword argument
-            data_without_file_id = {k: v for k, v in data.items() if k != "file_id"}
             response = await managed_files_obj.afile_delete(
                 file_id=file_id,
                 litellm_parent_otel_span=user_api_key_dict.parent_otel_span,
                 llm_router=llm_router,
-                **data_without_file_id,
+                **data,
             )
         else:
             response = await litellm.afile_delete(

@@ -37,22 +37,18 @@ Create a secure configuration using environment variables:
 
 ```yaml
 model_list:
-  # Configure the models you want to use
-  - model_name: claude-sonnet-4-5-20250929
+  # Claude models
+  - model_name: claude-3-5-sonnet-20241022    
     litellm_params:
-      model: anthropic/claude-sonnet-4-5-20250929
+      model: anthropic/claude-3-5-sonnet-20241022
+      api_key: os.environ/ANTHROPIC_API_KEY
+  
+  - model_name: claude-3-5-haiku-20241022
+    litellm_params:
+      model: anthropic/claude-3-5-haiku-20241022
       api_key: os.environ/ANTHROPIC_API_KEY
 
-  - model_name: claude-haiku-4-5-20251001
-    litellm_params:
-      model: anthropic/claude-haiku-4-5-20251001
-      api_key: os.environ/ANTHROPIC_API_KEY
-
-  - model_name: claude-opus-4-5-20251101
-    litellm_params:
-      model: anthropic/claude-opus-4-5-20251101
-      api_key: os.environ/ANTHROPIC_API_KEY
-
+  
 litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
 ```
@@ -63,10 +59,6 @@ Set your environment variables:
 export ANTHROPIC_API_KEY="your-anthropic-api-key"
 export LITELLM_MASTER_KEY="sk-1234567890"  # Generate a secure key
 ```
-
-:::tip
-Alternatively, you can store `ANTHROPIC_API_KEY` in a `.env` file in your proxy directory. LiteLLM will automatically load it when starting.
-:::
 
 ### 2. Start proxy
 
@@ -119,55 +111,15 @@ export ANTHROPIC_AUTH_TOKEN="$LITELLM_MASTER_KEY"
 
 ### 5. Use Claude Code
 
-Start Claude Code with the model you want to use:
+Start Claude Code and it will automatically use your configured models:
 
 ```bash
-# Specify model at startup
-claude --model claude-sonnet-4-5-20250929
-
-# Or specify a different model
-claude --model claude-haiku-4-5-20251001
-claude --model claude-opus-4-5-20251101
-
-# Or change model during a session
+# Claude Code will use the models configured in your LiteLLM proxy
 claude
-/model claude-sonnet-4-5-20250929
-```
 
-Alternatively, set default models with environment variables:
-
-```bash
-export ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-4-5-20250929
-export ANTHROPIC_DEFAULT_HAIKU_MODEL=claude-haiku-4-5-20251001
-export ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-4-5-20251101
-claude
-```
-
-### Using 1M Context Window
-
-Claude Code supports extended context (1 million tokens) using the `[1m]` suffix:
-
-```bash
-# Use Sonnet with 1M context (requires quotes in shell)
-claude --model 'claude-sonnet-4-5-20250929[1m]'
-
-# Inside a Claude Code session (no quotes needed)
-/model claude-sonnet-4-5-20250929[1m]
-```
-
-:::warning
-**Important:** When using `--model` with `[1m]` in the shell, you must use quotes to prevent the shell from interpreting the brackets.
-:::
-
-**How it works:**
-- Claude Code strips the `[1m]` suffix before sending to LiteLLM
-- Claude Code automatically adds the header `anthropic-beta: context-1m-2025-08-07`
-- Your LiteLLM config should **NOT** include `[1m]` in model names
-
-**Verify 1M context is active:**
-```bash
-/context
-# Should show: 21k/1000k tokens (2%)
+# Or specify a model if you have multiple configured
+claude --model claude-3-5-sonnet-20241022
+claude --model claude-3-5-haiku-20241022
 ```
 
 Example conversation:
@@ -188,7 +140,6 @@ Common issues and solutions:
 
 **Model not found:**
 - Ensure the model name in Claude Code matches exactly with your `config.yaml`
-- Use `--model` flag or environment variables to specify the model
 - Check LiteLLM logs for detailed error messages
 
 ## Using Bedrock/Vertex AI/Azure Foundry Models

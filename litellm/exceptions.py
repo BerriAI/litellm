@@ -16,21 +16,6 @@ import openai
 
 from litellm.types.utils import LiteLLMCommonStrings
 
-_MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
-
-
-def _get_minimal_error_response() -> httpx.Response:
-    """Get a cached minimal httpx.Response object for error cases."""
-    global _MINIMAL_ERROR_RESPONSE
-    if _MINIMAL_ERROR_RESPONSE is None:
-        _MINIMAL_ERROR_RESPONSE = httpx.Response(
-            status_code=400,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),
-        )
-    return _MINIMAL_ERROR_RESPONSE
-
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
     def __init__(
@@ -142,17 +127,16 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
-        # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
-        # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
-        if (
-            response is not None
-            and isinstance(response, httpx.Response)
-            and hasattr(response, "_request")
-            and getattr(response, "_request", None) is not None
-        ):
-            self.response = response
-        else:
-            self.response = _get_minimal_error_response()
+        _response_headers = (
+            getattr(response, "headers", None) if response is not None else None
+        )
+        self.response = httpx.Response(
+            status_code=self.status_code,
+            headers=_response_headers,
+            request=httpx.Request(
+                method="GET", url="https://litellm.ai"
+            ),  # mock request object
+        )
         super().__init__(
             self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
@@ -469,7 +453,6 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
         provider_specific_fields: Optional[dict] = None,
-        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.ContentPolicyViolationError: {}".format(message)
@@ -483,7 +466,6 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
             response=response,
             litellm_debug_info=self.litellm_debug_info,
-            body=body,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):

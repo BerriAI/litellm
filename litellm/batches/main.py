@@ -31,6 +31,7 @@ from litellm.llms.openai.openai import OpenAIBatchesAPI
 from litellm.llms.vertex_ai.batches.handler import VertexAIBatchPrediction
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import (
+    Batch,
     CancelBatchRequest,
     CreateBatchRequest,
     RetrieveBatchRequest,
@@ -403,7 +404,6 @@ def _handle_retrieve_batch_providers_without_provider_config(
     _retrieve_batch_request: RetrieveBatchRequest,
     _is_async: bool,
     custom_llm_provider: Literal["openai", "azure", "vertex_ai", "bedrock", "hosted_vllm", "anthropic"] = "openai",
-    logging_obj: Optional[Any] = None,
 ):
     api_base: Optional[str] = None
     if custom_llm_provider in OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS:
@@ -499,7 +499,6 @@ def _handle_retrieve_batch_providers_without_provider_config(
             vertex_credentials=vertex_credentials,
             timeout=timeout,
             max_retries=optional_params.max_retries,
-            logging_obj=logging_obj,
         )
     elif custom_llm_provider == "anthropic":
         api_base = (
@@ -663,7 +662,6 @@ def retrieve_batch(
             _retrieve_batch_request=_retrieve_batch_request,
             _is_async=_is_async,
             timeout=timeout,
-            logging_obj=litellm_logging_obj,
         )
 
     except Exception as e:
@@ -867,7 +865,7 @@ async def acancel_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> LiteLLMBatch:
+) -> Batch:
     """
     Async: Cancels a batch.
 
@@ -911,7 +909,7 @@ def cancel_batch(
     extra_headers: Optional[Dict[str, str]] = None,
     extra_body: Optional[Dict[str, str]] = None,
     **kwargs,
-) -> Union[LiteLLMBatch, Coroutine[Any, Any, LiteLLMBatch]]:
+) -> Union[Batch, Coroutine[Any, Any, Batch]]:
     """
     Cancels a batch.
 
