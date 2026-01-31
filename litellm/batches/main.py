@@ -876,14 +876,22 @@ async def acancel_batch(
     try:
         loop = asyncio.get_event_loop()
         kwargs["acancel_batch"] = True
-        model = kwargs.pop("model", None)
+        # Use model parameter if provided, otherwise check kwargs (don't overwrite with None)
+        model = model or kwargs.pop("model", None)
+
+        # If model is provided and custom_llm_provider is the default, let cancel_batch infer
+        # the provider from the model (e.g., "azure/..." -> azure provider)
+        _custom_llm_provider: Optional[str] = custom_llm_provider
+        if model is not None and custom_llm_provider == "openai":
+            # Pass None so cancel_batch can infer from model prefix
+            _custom_llm_provider = None
 
         # Use a partial function to pass your keyword arguments
         func = partial(
             cancel_batch,
             batch_id,
             model,
-            custom_llm_provider,
+            _custom_llm_provider,
             metadata,
             extra_headers,
             extra_body,
