@@ -68,7 +68,8 @@ def cost_per_token(
     
     For Azure AI Foundry Model Router:
     - Adds a flat cost of $0.14 per million input tokens (from model_prices_and_context_window.json)
-    - Plus the cost of the actual model used (handled by generic_cost_per_token)
+    - The Model Router itself is just a routing layer, so no additional model cost is added
+      unless the actual model is also specified
     
     Args:
         model: str, the model name without provider prefix
@@ -78,16 +79,35 @@ def cost_per_token(
     Returns:
         Tuple[float, float] - prompt_cost_in_usd, completion_cost_in_usd
     """
-    # Calculate base cost using generic cost calculator
-    prompt_cost, completion_cost = generic_cost_per_token(
-        model=model,
-        usage=usage,
-        custom_llm_provider="azure_ai",
-    )
+    prompt_cost = 0.0
+    completion_cost = 0.0
+    
+    # Check if this is a Model Router deployment
+    is_model_router = _is_azure_model_router(model)
+    
+    # Try to calculate base cost using generic cost calculator
+    # For Model Router deployments, this may fail if the deployment name isn't mapped
+    try:
+        prompt_cost, completion_cost = generic_cost_per_token(
+            model=model,
+            usage=usage,
+            custom_llm_provider="azure_ai",
+        )
+    except Exception as e:
+        # If model isn't mapped and this is a Model Router deployment, that's expected
+        # Model Router is just a routing layer - the actual model cost would be separate
+        if is_model_router:
+            verbose_logger.debug(
+                f"Model Router deployment '{model}' not found in model cost map. "
+                f"Only flat routing cost will be calculated. Error: {str(e)}"
+            )
+        else:
+            # Re-raise if it's not a model router - the model should be mapped
+            raise
     
     # Add flat cost for Azure Model Router
-    # The flat cost is defined in model_prices_and_context_window.json for azure_ai/azure-model-router
-    if _is_azure_model_router(model):
+    # The flat cost is defined in model_prices_and_context_window.json for azure_ai/model_router
+    if is_model_router:
         router_flat_cost = calculate_azure_model_router_flat_cost(model, usage.prompt_tokens)
         
         if router_flat_cost > 0:
