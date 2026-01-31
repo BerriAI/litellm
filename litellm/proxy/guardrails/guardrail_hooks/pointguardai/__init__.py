@@ -15,8 +15,6 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         raise ValueError("PointGuardAI: api_key is required")
     if not litellm_params.api_base:
         raise ValueError("PointGuardAI: api_base is required")
-    if not litellm_params.api_email:
-        raise ValueError("PointGuardAI: api_email is required")
     if not litellm_params.org_code:
         raise ValueError("PointGuardAI: org_code is required")
     if not litellm_params.policy_config_name:
@@ -32,11 +30,9 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
             **litellm_params.model_dump(exclude_none=True),
             "api_key": litellm_params.api_key,
             "api_base": litellm_params.api_base,
-            "api_email": litellm_params.api_email,
             "org_code": litellm_params.org_code,
             "policy_config_name": litellm_params.policy_config_name,
-            "model_provider_name": getattr(litellm_params, "model_provider_name", None),
-            "model_name": getattr(litellm_params, "model_name", None),
+            "correlation_key": getattr(litellm_params, "correlation_key", None),
             "default_on": litellm_params.default_on,
             "event_hook": litellm_params.mode,
         },

@@ -20,6 +20,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
 from litellm.types.proxy.guardrails.guardrail_hooks.qualifire import (
     QualifireGuardrailConfigModel,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.pointguardai import (
+    PointGuardAIGuardrailConfigModel,
+)
 from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter import (
     ContentFilterCategoryConfig,
 )
@@ -494,32 +497,6 @@ class JavelinGuardrailConfigModel(BaseModel):
         default=None, description="Additional configuration for the guardrail"
     ) 
 
-
-class PointGuardAIGuardrailConfigModel(BaseModel):
-    """Configuration parameters for the PointGuardAI guardrail"""
-
-    org_code: Optional[str] = Field(
-        default=None, description="Organization ID for PointGuardAI"
-    )
-    api_base: Optional[str] = Field(
-        default=None, description="Base API for the PointGuardAI service"
-    )
-    api_email: Optional[str] = Field(
-        default=None, description="API email for the PointGuardAI service"
-    )
-    api_key: Optional[str] = Field(
-        default=None, description="API KEY for the PointGuardAI service"
-    )
-    policy_config_name: Optional[str] = Field(
-        default=None, description="Policy configuration name for PointGuardAI"
-    )
-    model_provider_name: Optional[str] = Field(
-        default=None, description="Model provider identifier"
-    )
-    model_name: Optional[str] = Field(
-        default=None, description="Model name"
-    )
-      
 
 class ContentFilterAction(str, Enum):
     """Action to take when content filter detects a match"""
