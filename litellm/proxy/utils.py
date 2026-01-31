@@ -2284,10 +2284,9 @@ class PrismaClient:
             sql_query: SQL query string to execute
 
         Returns:
-            Query result or None
-
-        Raises:
-            Original exception if not a cached plan error
+            Query result or None. Returns None on any DB error other than
+            the cached-plan error (which is retried once) to preserve
+            previous behavior where token lookup failures did not raise.
         """
         try:
             return await self.db.query_first(query=sql_query)
@@ -2307,7 +2306,12 @@ class PrismaClient:
                 )
                 return await self.db.query_first(query=sql_query_retry)
             else:
-                raise
+                # Preserve previous behavior: do not raise on other DB errors;
+                # return None so caller treats as "no token found" (e.g. 401).
+                verbose_proxy_logger.debug(
+                    "Token lookup query failed: %s", error_str
+                )
+                return None
 
     @backoff.on_exception(
         backoff.expo,
