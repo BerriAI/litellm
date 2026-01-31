@@ -3,7 +3,7 @@
 import json
 import traceback
 from collections import deque
-from typing import TYPE_CHECKING, Any, AsyncIterator, Iterator, Literal, Optional
+from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, Iterator, Literal, Optional
 
 from litellm import verbose_logger
 from litellm._uuid import uuid
@@ -44,9 +44,16 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
     pending_new_content_block: bool = False
     chunk_queue: deque = deque()  # Queue for buffering multiple chunks
 
-    def __init__(self, completion_stream: Any, model: str):
+    def __init__(
+        self,
+        completion_stream: Any,
+        model: str,
+        tool_name_mapping: Optional[Dict[str, str]] = None,
+    ):
         super().__init__(completion_stream)
         self.model = model
+        # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
+        self.tool_name_mapping = tool_name_mapping or {}
 
     def _create_initial_usage_delta(self) -> UsageDelta:
         """
@@ -400,6 +407,12 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
             choices=chunk.choices  # type: ignore
         )
+
+        # Restore original tool name if it was truncated for OpenAI's 64-char limit
+        if block_type == "tool_use" and content_block_start.get("name"):
+            truncated_name = content_block_start.get("name", "")
+            original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
+            content_block_start["name"] = original_name
 
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
