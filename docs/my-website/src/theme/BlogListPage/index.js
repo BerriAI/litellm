@@ -10,13 +10,26 @@ const TAG_COLORS = {
   llms: {bg: '#c8e6c9', text: '#1b5e20', darkBg: '#1b3d1f', darkText: '#81c784'},
 };
 
+function hashHue(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return Math.abs(hash) % 360;
+}
+
 function getTagColor(label) {
   const key = label.toLowerCase();
   for (const [k, v] of Object.entries(TAG_COLORS)) {
     if (key === k) return v;
   }
-  return {bg: 'var(--ifm-color-emphasis-200)', text: 'var(--ifm-color-emphasis-800)',
-    darkBg: 'var(--ifm-color-emphasis-200)', darkText: 'var(--ifm-color-emphasis-800)'};
+  const hue = hashHue(key);
+  return {
+    bg: `hsl(${hue}, 40%, 90%)`,
+    text: `hsl(${hue}, 60%, 25%)`,
+    darkBg: `hsl(${hue}, 40%, 20%)`,
+    darkText: `hsl(${hue}, 50%, 75%)`,
+  };
 }
 
 function formatDate(dateStr) {
