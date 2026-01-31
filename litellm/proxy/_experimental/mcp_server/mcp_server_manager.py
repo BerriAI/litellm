@@ -11,7 +11,19 @@ import datetime
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast, Callable
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -64,12 +76,24 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPServer,
 )
 
+
+class _ToolNameValidationResult(Protocol):
+    """Protocol for MCP tool name validation result (SEP-986)."""
+
+    is_valid: bool
+    warnings: list
+
+
 try:
-    from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name  # type: ignore
+    from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name as _validate_tool_name  # type: ignore
+
+    validate_tool_name: Callable[[str], _ToolNameValidationResult] = cast(
+        Callable[[str], _ToolNameValidationResult], _validate_tool_name
+    )
 except ImportError:
     SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
 
-    def validate_tool_name(name: str):
+    def validate_tool_name(name: str) -> _ToolNameValidationResult:
         from pydantic import BaseModel
 
         class MockResult(BaseModel):
@@ -1927,7 +1951,9 @@ class MCPServerManager:
         )
 
         async def _call_tool_via_client(client, params):
-            return await client.call_tool(params, host_progress_callback=host_progress_callback)
+            return await client.call_tool(
+                params, host_progress_callback=host_progress_callback
+            )
 
         tasks.append(
             asyncio.create_task(_call_tool_via_client(client, call_tool_params))
@@ -1965,7 +1991,6 @@ class MCPServerManager:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         host_progress_callback: Optional[Callable] = None,
-
     ) -> CallToolResult:
         """
         Call a tool with the given name and arguments
