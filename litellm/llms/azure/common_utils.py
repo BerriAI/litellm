@@ -304,6 +304,7 @@ def get_azure_ad_token(
     client_secret = litellm_params.get("client_secret") or os.getenv("AZURE_CLIENT_SECRET")
     azure_username = litellm_params.get("azure_username") or os.getenv("AZURE_USERNAME")
     azure_password = litellm_params.get("azure_password") or os.getenv("AZURE_PASSWORD")
+    azure_default_credential_options = litellm_params.get("azure_default_credential_options")
     scope = litellm_params.get("azure_scope") or os.getenv(
         "AZURE_SCOPE", "https://cognitiveservices.azure.com/.default"
     )
@@ -352,31 +353,34 @@ def get_azure_ad_token(
             scope=scope,
         )
     # Try to get token provider from service principal or DefaultAzureCredential
-    elif (
-        azure_ad_token_provider is None
-        and litellm.enable_azure_ad_token_refresh is True
-    ):
-        verbose_logger.debug(
-            "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
-        )
-        try:
-            azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
-        except ValueError:
-            verbose_logger.debug("Azure AD Token Provider could not be used.")
-        except Exception as e:
-            verbose_logger.error(
-                f"Error calling Azure AD token provider: {str(e)}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+    elif azure_ad_token_provider is None:
+        if litellm.enable_azure_ad_token_refresh is True:
+            # If explicitly enabled, try the configured credential type first
+            verbose_logger.debug(
+                "Using Azure AD token provider based on Service Principal with Secret workflow or DefaultAzureCredential for Azure Auth"
             )
-            raise e
+            try:
+                azure_ad_token_provider = get_azure_ad_token_provider(azure_scope=scope)
+            except ValueError:
+                verbose_logger.debug("Azure AD Token Provider could not be used.")
+            except Exception as e:
+                verbose_logger.error(
+                    f"Error calling Azure AD token provider: {str(e)}. Follow docs - https://docs.litellm.ai/docs/providers/azure/#azure-ad-token-refresh---defaultazurecredential"
+                )
+                raise e
 
         #########################################################
-        # If litellm.enable_azure_ad_token_refresh is True and no other token provider is available,
-        # try to get DefaultAzureCredential provider
+        # Auto-fallback to DefaultAzureCredential when no other auth is available
+        # This enables secure, keyless authentication using managed identity, az login, etc.
         #########################################################
         if azure_ad_token_provider is None and azure_ad_token is None:
+            verbose_logger.debug(
+                "No explicit credentials - attempting DefaultAzureCredential for Azure Auth"
+            )
             azure_ad_token_provider = (
                 BaseAzureLLM._try_get_default_azure_credential_provider(
                     scope=scope,
+                    azure_default_credential_options=azure_default_credential_options,
                 )
             )
 
@@ -405,12 +409,14 @@ class BaseAzureLLM(BaseOpenAILLM):
     @staticmethod
     def _try_get_default_azure_credential_provider(
         scope: str,
+        azure_default_credential_options: Optional[dict] = None,
     ) -> Optional[Callable[[], str]]:
         """
         Try to get DefaultAzureCredential provider
 
         Args:
             scope: Azure scope for the token
+            azure_default_credential_options: Options to pass to DefaultAzureCredential
 
         Returns:
             Token provider callable if DefaultAzureCredential is enabled and available, None otherwise
@@ -425,9 +431,11 @@ class BaseAzureLLM(BaseOpenAILLM):
             azure_ad_token_provider = get_azure_ad_token_provider(
                 azure_scope=scope,
                 azure_credential=AzureCredentialType.DefaultAzureCredential,
+                azure_default_credential_options=azure_default_credential_options,
             )
-            verbose_logger.debug(
-                "Successfully obtained Azure AD token provider using DefaultAzureCredential"
+            verbose_logger.info(
+                "Using DefaultAzureCredential for Azure authentication. "
+                "Set api_key to skip credential discovery."
             )
             return azure_ad_token_provider
         except Exception as e:
@@ -530,6 +538,7 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_username = self._resolve_env_var(litellm_params, "azure_username", "AZURE_USERNAME")
         azure_password = self._resolve_env_var(litellm_params, "azure_password", "AZURE_PASSWORD")
         scope = self._resolve_env_var(litellm_params, "azure_scope", "AZURE_SCOPE")
+        azure_default_credential_options = litellm_params.get("azure_default_credential_options")
         if scope is None:
             scope = "https://cognitiveservices.azure.com/.default"
 
@@ -573,20 +582,32 @@ class BaseAzureLLM(BaseOpenAILLM):
                 azure_tenant_id=tenant_id,
                 scope=scope,
             )
-        elif (
-            not api_key
-            and azure_ad_token_provider is None
-            and litellm.enable_azure_ad_token_refresh is True
-        ):
-            verbose_logger.debug(
-                "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
-            )
-            try:
-                azure_ad_token_provider = get_azure_ad_token_provider(
-                    azure_scope=scope,
+        elif not api_key and azure_ad_token_provider is None:
+            # No API key and no explicit token provider - try auto-detection
+            if litellm.enable_azure_ad_token_refresh is True:
+                # If explicitly enabled, try the configured credential type first
+                verbose_logger.debug(
+                    "Using Azure AD token provider based on Service Principal with Secret workflow for Azure Auth"
                 )
-            except ValueError:
-                verbose_logger.debug("Azure AD Token Provider could not be used.")
+                try:
+                    azure_ad_token_provider = get_azure_ad_token_provider(
+                        azure_scope=scope,
+                    )
+                except ValueError:
+                    verbose_logger.debug("Azure AD Token Provider could not be used.")
+
+            # Auto-fallback to DefaultAzureCredential when no other auth method is available
+            # This enables secure, keyless authentication using managed identity, az login, etc.
+            if azure_ad_token_provider is None and azure_ad_token is None:
+                verbose_logger.debug(
+                    "No API key or explicit token provider - attempting DefaultAzureCredential for Azure Auth"
+                )
+                azure_ad_token_provider = (
+                    BaseAzureLLM._try_get_default_azure_credential_provider(
+                        scope=scope,
+                        azure_default_credential_options=azure_default_credential_options,
+                    )
+                )
         if api_version is None:
             api_version = os.getenv(
                 "AZURE_API_VERSION", litellm.AZURE_DEFAULT_API_VERSION

@@ -1448,8 +1448,8 @@ def test_get_azure_ad_token_provider_with_default_azure_credential():
             azure_credential=AzureCredentialType.DefaultAzureCredential
         )
         
-        # Verify DefaultAzureCredential was instantiated
-        mock_default_cred.assert_called_once_with()
+        # Verify DefaultAzureCredential was instantiated with default timeout
+        mock_default_cred.assert_called_once_with(process_timeout=10)
         
         # Verify get_bearer_token_provider was called with the right parameters
         mock_token_provider.assert_called_once_with(
@@ -1498,9 +1498,10 @@ def test_get_azure_ad_token_fallback_to_default_azure_credential(setup_mocks, mo
     # Call the function
     token = get_azure_ad_token(litellm_params)
 
-    # Verify the success debug message was logged
-    setup_mocks["logger"].debug.assert_any_call(
-        "Successfully obtained Azure AD token provider using DefaultAzureCredential"
+    # Verify the success info message was logged
+    setup_mocks["logger"].info.assert_any_call(
+        "Using DefaultAzureCredential for Azure authentication. "
+        "Set api_key to skip credential discovery."
     )
 
     # Verify get_azure_ad_token_provider was called twice:
@@ -1659,3 +1660,176 @@ def test_azure_traditional_api_uses_azure_openai_client():
 
         # Should be AsyncAzureOpenAI client
         assert isinstance(async_client, AsyncAzureOpenAI), f"Expected AsyncAzureOpenAI client for api_version={api_version}"
+
+
+def test_auto_fallback_to_default_azure_credential_without_flag(setup_mocks, monkeypatch):
+    """
+    Test that the SDK automatically falls back to DefaultAzureCredential when:
+    1. No API key is provided
+    2. No explicit token/token_provider is provided
+    3. No tenant/client credentials are provided
+    4. enable_azure_ad_token_refresh is NOT set (False - the default)
+    
+    This tests the "secure by default" behavior where Azure authentication 
+    automatically uses Entra ID (DefaultAzureCredential) when no API key is provided,
+    similar to how Vertex AI and Bedrock auto-use their native SDK credentials.
+    
+    Related Issues: #4417, #7665
+    """
+    # Clear all Azure environment variables to simulate clean environment
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    # Reset mocks to ensure clean state
+    setup_mocks["token_provider"].reset_mock()
+
+    # IMPORTANT: enable_azure_ad_token_refresh is FALSE (default behavior)
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = False
+
+    # Configure get_azure_ad_token_provider to return a working provider
+    # when called with DefaultAzureCredential
+    def mock_token_provider_side_effect(*args, **kwargs):
+        if kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential:
+            return lambda: "mock-auto-default-azure-credential-token"
+        return None
+
+    setup_mocks["token_provider"].side_effect = mock_token_provider_side_effect
+
+    # Test initialize_azure_sdk_client - the core SDK initialization
+    result = BaseAzureLLM().initialize_azure_sdk_client(
+        litellm_params={},
+        api_key=None,  # NO API key
+        api_base="https://test.openai.azure.com",
+        model_name="gpt-4",
+        api_version="2023-06-01",
+        is_async=False,
+    )
+
+    # Verify that DefaultAzureCredential was used as automatic fallback
+    setup_mocks["logger"].debug.assert_any_call(
+        "No API key or explicit token provider - attempting DefaultAzureCredential for Azure Auth"
+    )
+
+    # Verify get_azure_ad_token_provider was called with DefaultAzureCredential
+    setup_mocks["token_provider"].assert_called_once_with(
+        azure_scope="https://cognitiveservices.azure.com/.default",
+        azure_credential=AzureCredentialType.DefaultAzureCredential,
+        azure_default_credential_options=None,
+    )
+
+    # Verify the token provider was added to the result
+    assert result["azure_ad_token_provider"] is not None
+    assert result["azure_ad_token_provider"]() == "mock-auto-default-azure-credential-token"
+
+
+def test_auto_fallback_get_azure_ad_token_without_flag(setup_mocks, monkeypatch):
+    """
+    Test that get_azure_ad_token also auto-falls back to DefaultAzureCredential
+    when no credentials are provided and enable_azure_ad_token_refresh is False.
+    
+    This function is used for HTTP-based operations (not SDK client initialization).
+    """
+    # Clear all Azure environment variables
+    monkeypatch.delenv("AZURE_USERNAME", raising=False)
+    monkeypatch.delenv("AZURE_PASSWORD", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    monkeypatch.delenv("AZURE_AD_TOKEN", raising=False)
+    monkeypatch.delenv("AZURE_SCOPE", raising=False)
+
+    # Reset mocks
+    setup_mocks["token_provider"].reset_mock()
+
+    # IMPORTANT: enable_azure_ad_token_refresh is FALSE (default)
+    setup_mocks["litellm"].enable_azure_ad_token_refresh = False
+
+    # Configure mock to return working provider for DefaultAzureCredential
+    def mock_token_provider_side_effect(*args, **kwargs):
+        if kwargs.get("azure_credential") == AzureCredentialType.DefaultAzureCredential:
+            return lambda: "mock-auto-token"
+        return None
+
+    setup_mocks["token_provider"].side_effect = mock_token_provider_side_effect
+
+    # Create test parameters with no credentials
+    litellm_params = GenericLiteLLMParams()
+
+    # Call the function
+    token = get_azure_ad_token(litellm_params)
+
+    # Verify the auto-fallback debug message was logged
+    setup_mocks["logger"].debug.assert_any_call(
+        "No explicit credentials - attempting DefaultAzureCredential for Azure Auth"
+    )
+
+    # Verify the token is from DefaultAzureCredential
+    assert token == "mock-auto-token"
+
+
+def test_default_azure_credential_with_options(monkeypatch):
+    """
+    Test that DefaultAzureCredential is configured with azure_default_credential_options
+    passed via litellm_params.
+    """
+    # Clear Azure env vars that might interfere
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    
+    with patch("azure.identity.DefaultAzureCredential") as mock_dac, \
+         patch("azure.identity.get_bearer_token_provider") as mock_gbtp:
+        
+        mock_credential = MagicMock()
+        mock_dac.return_value = mock_credential
+        mock_gbtp.return_value = lambda: "test-token"
+        
+        # Pass options via azure_default_credential_options (from litellm_params)
+        options = {
+            "managed_identity_client_id": "test-user-assigned-mi-client-id",
+            "exclude_cli_credential": True,
+            "exclude_powershell_credential": True,
+        }
+        
+        from litellm.secret_managers.get_azure_ad_token_provider import get_azure_ad_token_provider
+        result = get_azure_ad_token_provider(
+            azure_credential=AzureCredentialType.DefaultAzureCredential,
+            azure_default_credential_options=options,
+        )
+        
+        # Verify DefaultAzureCredential was called with the options + default timeout
+        expected_options = {**options, "process_timeout": 10}
+        mock_dac.assert_called_once_with(**expected_options)
+        assert callable(result)
+
+
+def test_default_azure_credential_without_options(monkeypatch):
+    """
+    Test that DefaultAzureCredential works without any options (uses defaults).
+    """
+    # Clear Azure env vars that might trigger other credential types
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    
+    with patch("azure.identity.DefaultAzureCredential") as mock_dac, \
+         patch("azure.identity.get_bearer_token_provider") as mock_gbtp:
+        
+        mock_credential = MagicMock()
+        mock_dac.return_value = mock_credential
+        mock_gbtp.return_value = lambda: "test-token"
+        
+        from litellm.secret_managers.get_azure_ad_token_provider import get_azure_ad_token_provider
+        result = get_azure_ad_token_provider(
+            azure_credential=AzureCredentialType.DefaultAzureCredential
+        )
+        
+        # Verify DefaultAzureCredential was called with default timeout only
+        mock_dac.assert_called_once_with(process_timeout=10)
+        assert callable(result)
+
