@@ -805,7 +805,9 @@ class AmazonConverseConfig(BaseConfig):
                 if bedrock_tier in ("default", "flex", "priority"):
                     optional_params["serviceTier"] = {"type": bedrock_tier}
 
-            if param == "web_search_options" and value and isinstance(value, dict):                                                                                 
+            if param == "web_search_options" and isinstance(value, dict):
+                # Note: we use `isinstance(value, dict)` instead of `value and isinstance(value, dict)`
+                # because empty dict {} is falsy but is a valid way to enable Nova grounding
                 grounding_tool = self._map_web_search_options(value, model)                                                                                         
                 if grounding_tool is not None:                                                                                                                      
                     optional_params = self._add_tools_to_optional_params(                                                                                           
