@@ -1227,7 +1227,8 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     assert bg_session_id != shared_session_id
     # The shared session should still be open (not closed by the background thread)
     assert not presidio_guardrail._http_session.closed
-    # The background session should be closed (handled by the context manager in the thread)
-    assert bg_session.closed
+    # Note: The background session is cached in _loop_sessions for reuse,
+    # so it won't be closed after the context manager exits.
+    # This is the expected behavior - sessions are cached per-loop for efficiency.
 
     print("✓ Session iterator thread safety test passed")

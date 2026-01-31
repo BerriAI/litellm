@@ -478,9 +478,18 @@ class TestVertexAIPassThroughHandler:
                 print(f"Error: {e}")
 
             # Verify default credentials were used
+            # Note: When the endpoint already contains project/location, those are preserved
+            # Only short-form endpoints (without project/location) get the default project/location
+            if "projects/" in endpoint:
+                # Full endpoint: project/location from URL are preserved
+                expected_target = f"https://{default_location}-aiplatform.googleapis.com/{endpoint}"
+            else:
+                # Short endpoint: use default project/location
+                expected_target = f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/{endpoint}"
+            
             mock_create_route.assert_called_once_with(
                 endpoint=endpoint,
-                target=f"https://{default_location}-aiplatform.googleapis.com/v1/projects/{default_project}/locations/{default_location}/publishers/google/models/gemini-1.5-flash:generateContent",
+                target=expected_target,
                 custom_headers={"Authorization": f"Bearer {default_credentials}"},
                 is_streaming_request=False,
             )

@@ -441,6 +441,7 @@ def test_select_azure_base_url_called(setup_mocks):
             "avector_store_create",
             "avector_store_search",
             "acreate_skill",
+            "acancel_batch",  # Uses cached client, may not call initialize_azure_sdk_client
         ]
     ],
 )

@@ -339,9 +339,14 @@ def test_string_cost_values():
         )
 
     # Calculate expected costs manually
-    # Prompt cost = text_tokens * input_cost + audio_tokens * audio_cost + cached_tokens * cache_read_cost + cache_creation_tokens * cache_creation_cost
+    # Note: The cost calculation has double-counting detection logic.
+    # When text_tokens + cached_tokens + audio_tokens + cache_creation_tokens > prompt_tokens,
+    # it recalculates text_tokens as: prompt_tokens - cache_hit - audio - cache_creation - image
+    # In this test: 700 + 200 + 100 + 150 = 1150 > 1000 (prompt_tokens)
+    # So text_tokens is recalculated as: 1000 - 200 - 100 - 150 - 0 = 550
+    adjusted_text_tokens = 1000 - 200 - 100 - 150  # = 550
     expected_prompt_cost = (
-        700 * 3e-7  # text tokens
+        adjusted_text_tokens * 3e-7  # text tokens (adjusted for double-counting)
         + 100 * 1e-6  # audio tokens
         + 200 * 1.5e-8  # cached tokens
         + 150 * 2.5e-8  # cache creation tokens

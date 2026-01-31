@@ -1316,6 +1316,8 @@ async def test_new_vector_store_auto_resolves_embedding_config():
     # Mock user API key
     mock_user_api_key = MagicMock(spec=UserAPIKeyAuth)
     mock_user_api_key.user_role = None
+    mock_user_api_key.team_id = "test-team-id"
+    mock_user_api_key.user_id = "test-user-id"
     
     # Mock database operations
     mock_prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(

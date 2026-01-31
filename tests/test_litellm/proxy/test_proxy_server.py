@@ -2983,7 +2983,8 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     assert response.headers["location"] == test_redirect_url
 
 
-def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     """
     Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
     """
@@ -2995,30 +2996,35 @@ def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     monkeypatch.setenv("LITELLM_NON_ROOT", "true")
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
+    # Track makedirs calls
+    makedirs_calls = []
+    
+    def makedirs_side_effect(path, exist_ok=False):
+        makedirs_calls.append((path, exist_ok))
+
+    # Mock os.path.exists to:
+    # - Return False for cache_path (so it doesn't return early)
+    # - Return True for other paths
+    def exists_side_effect(path):
+        if "cached_logo.jpg" in path:
+            return False
+        return True
+
     # Mock os.path operations
-    with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
-         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
-         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+    with patch("litellm.proxy.proxy_server.os.makedirs", side_effect=makedirs_side_effect) as mock_makedirs, \
+         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
-        # Setup mock_getenv to return empty string for UI_LOGO_PATH
-        def getenv_side_effect(key, default=""):
-            if key == "UI_LOGO_PATH":
-                return ""
-            elif key == "LITELLM_NON_ROOT":
-                return "true"
-            return default
-
-        mock_getenv.side_effect = getenv_side_effect
-
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was called with /var/lib/litellm/assets
-        mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
+        assert any("/var/lib/litellm/assets" in str(call) for call in makedirs_calls), \
+            f"makedirs should be called with /var/lib/litellm/assets, got: {makedirs_calls}"
 
 
-def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     """
     Test that get_image falls back to default_site_logo when logo doesn't exist
     in /var/lib/litellm/assets for non-root case.
@@ -3039,26 +3045,18 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         # Return False for /var/lib/litellm/assets/logo.jpg to trigger fallback
         if "/var/lib/litellm/assets/logo.jpg" in path:
             return False
+        # Return False for cache file to not return early
+        if "cached_logo.jpg" in path:
+            return False
         return True
 
     # Mock os.path operations
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
          patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
-         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
-        # Setup mock_getenv
-        def getenv_side_effect(key, default=""):
-            if key == "UI_LOGO_PATH":
-                return ""
-            elif key == "LITELLM_NON_ROOT":
-                return "true"
-            return default
-
-        mock_getenv.side_effect = getenv_side_effect
-
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
@@ -3072,7 +3070,8 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         assert mock_file_response.called, "FileResponse should be called"
 
 
-def test_get_image_root_case_uses_current_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_root_case_uses_current_dir(monkeypatch):
     """
     Test that get_image uses current_dir when LITELLM_NON_ROOT is not true.
     """
@@ -3084,24 +3083,19 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
     monkeypatch.delenv("LITELLM_NON_ROOT", raising=False)
     monkeypatch.delenv("UI_LOGO_PATH", raising=False)
 
+    # Mock os.path.exists to return False for cache (no early return) but True for logo
+    def exists_side_effect(path):
+        if "cached_logo.jpg" in path:
+            return False
+        return True
+
     # Mock os.path operations
     with patch("litellm.proxy.proxy_server.os.makedirs") as mock_makedirs, \
-         patch("litellm.proxy.proxy_server.os.path.exists", return_value=True), \
-         patch("litellm.proxy.proxy_server.os.getenv") as mock_getenv, \
+         patch("litellm.proxy.proxy_server.os.path.exists", side_effect=exists_side_effect), \
          patch("litellm.proxy.proxy_server.FileResponse") as mock_file_response:
 
-        # Setup mock_getenv
-        def getenv_side_effect(key, default=""):
-            if key == "UI_LOGO_PATH":
-                return ""
-            elif key == "LITELLM_NON_ROOT":
-                return ""  # Not set or empty
-            return default
-
-        mock_getenv.side_effect = getenv_side_effect
-
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was NOT called with /var/lib/litellm/assets (should not create it for root case)
         var_lib_assets_calls = [

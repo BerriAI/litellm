@@ -360,9 +360,9 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     expires = response.get("expires")
     assert expires is not None, "expires not found in response"
     # expires should be approximately 1 month from now (same day next month, same time)
-    # Allow for some variance due to test execution time
-    expected_expires_min = now + timedelta(days=28)
-    expected_expires_max = now + timedelta(days=32)
+    # Allow for some variance due to test execution time (including a small buffer for execution delay)
+    expected_expires_min = now + timedelta(days=28) - timedelta(seconds=5)
+    expected_expires_max = now + timedelta(days=32) + timedelta(seconds=5)
     assert (
         expected_expires_min <= expires <= expected_expires_max
     ), f"Expected expires to be approximately 1 month from now, got {expires}"
