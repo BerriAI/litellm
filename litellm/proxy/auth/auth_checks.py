@@ -2295,7 +2295,13 @@ async def _check_team_member_budget(
             and team_membership.litellm_budget_table.max_budget is not None
         ):
             team_member_budget = team_membership.litellm_budget_table.max_budget
-            team_member_spend = team_membership.spend or 0.0
+            # Prefer valid_token.team_member_spend (from token cache) over team_membership.spend
+            # The token cache is updated synchronously after each request, while the team membership
+            # cache may have stale data since DB updates are batched
+            if valid_token.team_member_spend is not None:
+                team_member_spend = valid_token.team_member_spend
+            else:
+                team_member_spend = team_membership.spend or 0.0
 
             if team_member_spend >= team_member_budget:
                 raise litellm.BudgetExceededError(
