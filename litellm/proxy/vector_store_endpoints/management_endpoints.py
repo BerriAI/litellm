@@ -486,6 +486,12 @@ async def new_vector_store(
     dependencies=[Depends(user_api_key_auth)],
     response_model=LiteLLM_ManagedVectorStoreListResponse,
 )
+@router.get(
+    "/v1/vector_store/list",
+    tags=["vector store management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=LiteLLM_ManagedVectorStoreListResponse,
+)
 async def list_vector_stores(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     page: int = 1,
