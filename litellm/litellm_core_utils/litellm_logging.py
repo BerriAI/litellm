@@ -2514,11 +2514,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 if isinstance(callback, CustomLogger):  # custom logger class
                     model_call_details: Dict = self.model_call_details
                     ##################################
-                    # call redaction hook for custom logger
-                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
-                        model_call_details=model_call_details,
-                        global_redaction_applied=global_redaction_applied,
-                    )
+                    # call redaction hook for custom logger (backward compat: subclasses may only accept model_call_details)
+                    try:
+                        model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=model_call_details,
+                            global_redaction_applied=global_redaction_applied,
+                        )
+                    except TypeError:
+                        model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=model_call_details,
+                        )
                     ##################################
                     if self.stream is True:
                         if "async_complete_streaming_response" in model_call_details:
