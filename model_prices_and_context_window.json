@@ -34756,5 +34756,29 @@
         "mode": "chat",
         "output_cost_per_token": 0,
         "supports_reasoning": true
+    },
+    "qwen-2.5-1m": {
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "openai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://help.aliyun.com/zh/model-studio/getting-started/pricing"
+    },
+    "openai/qwen-2.5-1m": {
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 3e-07,
+        "litellm_provider": "openai",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 8192,
+        "max_tokens": 8192,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "source": "https://help.aliyun.com/zh/model-studio/getting-started/pricing"
     }
 }
