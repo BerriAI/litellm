@@ -1,5 +1,5 @@
-import { Button, Tag, Tooltip, Typography } from "antd";
-import { CloseOutlined, CopyOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
+import { Button, Space, Tag, Tooltip, Typography } from "antd";
+import { CloseOutlined, UpOutlined, DownOutlined } from "@ant-design/icons";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { getProviderLogoAndName } from "../../provider_info_helpers";
@@ -20,7 +20,6 @@ const { Text } = Typography;
 interface DrawerHeaderProps {
   log: LogEntry;
   onClose: () => void;
-  onCopyRequestId: () => void;
   onPrevious: () => void;
   onNext: () => void;
   statusLabel: string;
@@ -35,7 +34,6 @@ interface DrawerHeaderProps {
 export function DrawerHeader({
   log,
   onClose,
-  onCopyRequestId,
   onPrevious,
   onNext,
   statusLabel,
@@ -61,7 +59,7 @@ export function DrawerHeader({
 
       {/* Row 1: Request ID + Actions */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: SPACING_MEDIUM }}>
-        <RequestIdSection requestId={log.request_id} onCopy={onCopyRequestId} />
+        <RequestIdSection requestId={log.request_id} />
         <NavigationSection onPrevious={onPrevious} onNext={onNext} onClose={onClose} />
       </div>
 
@@ -84,7 +82,7 @@ function ModelProviderSection({
   providerName?: string;
 }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: SPACING_MEDIUM, marginBottom: SPACING_MEDIUM }}>
+    <Space size={SPACING_MEDIUM} style={{ marginBottom: SPACING_MEDIUM }}>
       {providerLogo && (
         <img
           src={providerLogo}
@@ -96,42 +94,41 @@ function ModelProviderSection({
           }}
         />
       )}
-      <div>
+      <Space size={SPACING_MEDIUM} direction="horizontal">
         <Text strong style={{ fontSize: 14 }}>
           {model}
         </Text>
         {providerName && (
-          <Text type="secondary" style={{ fontSize: 12, marginLeft: SPACING_MEDIUM }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
             {providerName}
           </Text>
         )}
-      </div>
-    </div>
+      </Space>
+    </Space>
   );
 }
 
 /**
- * Request ID display with copy button
+ * Request ID display with copy functionality
  */
-function RequestIdSection({ requestId, onCopy }: { requestId: string; onCopy: () => void }) {
+function RequestIdSection({ requestId }: { requestId: string }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: SPACING_MEDIUM, flex: 1, minWidth: 0 }}>
+    <div style={{ flex: 1, minWidth: 0 }}>
       <Tooltip title={requestId}>
         <Text
           strong
+          copyable={{ text: requestId, tooltips: ["Copy Request ID", "Copied!"] }}
           style={{
             fontSize: FONT_SIZE_HEADER,
             fontFamily: FONT_FAMILY_MONO,
             overflow: "hidden",
             textOverflow: "ellipsis",
             whiteSpace: "nowrap",
+            display: "block",
           }}
         >
           {requestId}
         </Text>
-      </Tooltip>
-      <Tooltip title="Copy Request ID">
-        <Button type="text" size="small" icon={<CopyOutlined />} onClick={onCopy} />
       </Tooltip>
     </div>
   );
@@ -161,7 +158,7 @@ function NavigationSection({
   };
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: SPACING_SMALL }}>
+    <Space size={SPACING_SMALL} split={<div style={{ width: 1, height: 20, background: COLOR_BORDER }} />}>
       <Button type="text" size="small" onClick={onPrevious}>
         <UpOutlined />
         <span style={keyboardShortcutStyle}>K</span>
@@ -170,13 +167,10 @@ function NavigationSection({
         <DownOutlined />
         <span style={keyboardShortcutStyle}>J</span>
       </Button>
-
-      <div style={{ width: 1, height: 20, background: COLOR_BORDER, margin: `0 ${SPACING_MEDIUM}px` }} />
-
       <Tooltip title="ESC to close">
         <Button type="text" icon={<CloseOutlined />} onClick={onClose} />
       </Tooltip>
-    </div>
+    </Space>
   );
 }
 
@@ -195,13 +189,17 @@ function StatusBar({
   environment: string;
 }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: SPACING_LARGE }}>
+    <Space size={SPACING_LARGE}>
       <Tag color={statusColor}>{statusLabel}</Tag>
       <Tag>Env: {environment}</Tag>
-      <Text type="secondary" style={{ fontSize: FONT_SIZE_MEDIUM }}>
-        {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
-        <span style={{ marginLeft: SPACING_MEDIUM }}>({moment(log.startTime).fromNow()})</span>
-      </Text>
-    </div>
+      <Space size={SPACING_MEDIUM}>
+        <Text type="secondary" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+          {moment(log.startTime).format("MMM D, YYYY h:mm:ss A")}
+        </Text>
+        <Text type="secondary" style={{ fontSize: FONT_SIZE_MEDIUM }}>
+          ({moment(log.startTime).fromNow()})
+        </Text>
+      </Space>
+    </Space>
   );
 }
