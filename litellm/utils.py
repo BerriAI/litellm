@@ -7914,9 +7914,8 @@ class ProviderConfigManager:
     @staticmethod
     def _get_azure_ai_config(model: str) -> BaseConfig:
         """Get Azure AI config based on model type."""
-        if "claude" in model.lower():
-            return litellm.AzureAnthropicConfig()
-        return litellm.AzureAIStudioConfig()
+        from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+        return AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
 
     @staticmethod
     def _get_vertex_ai_config(model: str) -> BaseConfig:
