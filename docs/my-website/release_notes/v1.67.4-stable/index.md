@@ -50,7 +50,7 @@ pip install litellm==1.67.4.post1
 
 ## Improved User Management
 
-<Image img={require('../../img/release_notes/ui_search_users.png')}/>
+<Image img={require('@site/img/release_notes/ui_search_users.png')}/>
 <br/>
 
 This release makes it easier to manage users and keys on LiteLLM. You can now search and filter across users, keys, teams, and models, and control user settings more easily.
@@ -65,7 +65,7 @@ These changes help you spend less time on user setup and management on LiteLLM.
 
 ## Responses API Load Balancing
 
-<Image img={require('../../img/release_notes/ui_responses_lb.png')}/>
+<Image img={require('@site/img/release_notes/ui_responses_lb.png')}/>
 <br/>
 
 This release introduces load balancing for the Responses API, allowing you to route requests across provider regions and ensure session continuity. It works as follows:
@@ -77,7 +77,7 @@ This release introduces load balancing for the Responses API, allowing you to ro
 
 ## UI Session Logs
 
-<Image img={require('../../img/ui_session_logs.png')}/>
+<Image img={require('@site/img/ui_session_logs.png')}/>
 <br/>
 
 This release allow you to group requests to LiteLLM proxy into a session. If you specify a litellm_session_id in your request LiteLLM will automatically group all logs in the same session. This allows you to easily track usage and request content per session. 
@@ -124,7 +124,7 @@ This release allow you to group requests to LiteLLM proxy into a session. If you
 
   <br/>
 
-  <Image img={require('../../img/release_notes/user_filters.png')}/>
+  <Image img={require('@site/img/release_notes/user_filters.png')}/>
 
 - **User Info Panel**: Added a new user information pane [PR](https://github.com/BerriAI/litellm/pull/10213)
   - View teams, keys, models associated with User 
@@ -139,7 +139,7 @@ This release allow you to group requests to LiteLLM proxy into a session. If you
 
   <br/>
 
-  <Image img={require('../../img/release_notes/team_filters.png')}/>
+  <Image img={require('@site/img/release_notes/team_filters.png')}/>
 
 
 

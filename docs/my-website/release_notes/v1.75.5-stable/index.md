@@ -63,7 +63,7 @@ Users of our Docker image, are **not** affected by this change.
 ## Redis Latency Improvements
 
 <Image 
-  img={require('../../img/release_notes/faster_caching_calls.png')}
+  img={require('@site/img/release_notes/faster_caching_calls.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -76,7 +76,7 @@ This release adds in-memory caching for Redis requests, enabling faster response
 ## Responses API Session Management w/ Images
 
 <Image 
-  img={require('../../img/release_notes/responses_api_session_mgt_images.jpg')}
+  img={require('@site/img/release_notes/responses_api_session_mgt_images.jpg')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

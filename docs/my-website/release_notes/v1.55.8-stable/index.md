@@ -23,7 +23,7 @@ A new LiteLLM Stable release [just went out](https://github.com/BerriAI/litellm/
 
 `langfuse`, `fallbacks`, `new models`, `azure_storage`
 
-<Image img={require('../../img/langfuse_prmpt_mgmt.png')} />
+<Image img={require('@site/img/langfuse_prmpt_mgmt.png')} />
 
 ## Langfuse Prompt Management
 

@@ -66,7 +66,7 @@ pip install litellm==1.72.6.post2
 
 ### MCP Permissions Management
 
-<Image img={require('../../img/release_notes/mcp_permissions.png')}/>
+<Image img={require('@site/img/release_notes/mcp_permissions.png')}/>
 
 This release brings support for managing permissions for MCP Servers by Keys, Teams, Organizations (entities) on LiteLLM. When a MCP client attempts to list tools, LiteLLM will only return the tools the entity has permissions to access.
 
@@ -79,7 +79,7 @@ For Proxy Admins, this enables centralized management of all MCP Servers with ac
 
 ### Codex-mini on Claude Code
 
-<Image img={require('../../img/release_notes/codex_on_claude_code.jpg')} />
+<Image img={require('@site/img/release_notes/codex_on_claude_code.jpg')} />
 
 This release brings support for calling `codex-mini` (OpenAI’s code assistant model) via Claude Code.
 

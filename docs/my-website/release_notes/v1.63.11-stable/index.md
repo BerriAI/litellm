@@ -64,7 +64,7 @@ Here's a Demo Instance to test changes:
 
 ## LLM Translation
 
-<Image img={require('../../img/release_notes/responses_api.png')} />
+<Image img={require('@site/img/release_notes/responses_api.png')} />
 
 1. **New Endpoints**
 - [Beta] POST `/responses` API. [Getting Started](https://docs.litellm.ai/docs/response_api)
@@ -105,14 +105,14 @@ Here's a Demo Instance to test changes:
 
 You can now onboard LLM provider credentials on LiteLLM UI. Once these credentials are added you can re-use them when adding new models [Getting Started](https://docs.litellm.ai/docs/proxy/ui_credentials)
 
-<Image img={require('../../img/release_notes/credentials.jpg')} />
+<Image img={require('@site/img/release_notes/credentials.jpg')} />
 
 
 ### Test Connections before adding models
 
 Before adding a model you can test the connection to the LLM provider to verify you have setup your API Base + API Key correctly
 
-<Image img={require('../../img/release_notes/litellm_test_connection.gif')} />
+<Image img={require('@site/img/release_notes/litellm_test_connection.gif')} />
 
 ### General UI Improvements
 1. Add Models Page
@@ -164,7 +164,7 @@ Before adding a model you can test the connection to the LLM provider to verify 
 - Guide on getting started with LiteLLM x OpenWebUI. [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui)
 - Display `thinking` tokens on OpenWebUI (Bedrock, Anthropic, Deepseek) [Getting Started](https://docs.litellm.ai/docs/tutorials/openweb_ui#render-thinking-content-on-openweb-ui)
 
-<Image img={require('../../img/litellm_thinking_openweb.gif')} />
+<Image img={require('@site/img/litellm_thinking_openweb.gif')} />
 
 
 ## Complete Git Diff

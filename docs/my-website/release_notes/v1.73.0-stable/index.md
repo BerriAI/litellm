@@ -77,7 +77,7 @@ pip install litellm==1.73.0.post1
 
 ### Set Default Team for New Users
 
-<Image img={require('../../img/default_teams_product_ss.jpg')}/>
+<Image img={require('@site/img/default_teams_product_ss.jpg')}/>
 
 <br/>
 
@@ -96,7 +96,7 @@ What this means for **Developers**:
 
 ### Passthrough Endpoints v2
 
-<Image img={require('../../img/release_notes/v2_pt.png')}/>
+<Image img={require('@site/img/release_notes/v2_pt.png')}/>
 
 
 <br/>
@@ -112,7 +112,7 @@ This means you as Proxy Admin can onboard third-party endpoints like Bria API an
 
 ### v2 Health Checks 
 
-<Image img={require('../../img/release_notes/v2_health.png')}/>
+<Image img={require('@site/img/release_notes/v2_health.png')}/>
 
 <br/>
 

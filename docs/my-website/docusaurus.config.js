@@ -195,6 +195,11 @@ const config = {
           { to: '/release_notes', label: 'Release Notes', position: 'left' },
           { to: '/blog', label: 'Blog', position: 'left' },
           {
+            type: 'docsVersionDropdown',
+            position: 'right',
+            dropdownActiveClassDisabled: true,
+          },
+          {
             href: 'https://models.litellm.ai/',
             label: '💸 LLM Model Cost Map',
             position: 'right',

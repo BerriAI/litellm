@@ -55,7 +55,7 @@ pip install litellm==1.74.15.post2
 ## User Agent Activity Tracking
 
 <Image 
-  img={require('../../img/agent_1.png')}
+  img={require('@site/img/agent_1.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

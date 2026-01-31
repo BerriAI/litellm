@@ -53,7 +53,7 @@ LiteLLM v1.69.0-stable brings the following key improvements:
 ## Batch API Load Balancing
 
 <Image 
-img={require('../../img/release_notes/lb_batch.png')}
+img={require('@site/img/release_notes/lb_batch.png')}
   style={{width: '100%', display: 'block', margin: '0 0 2rem 0'}}
 />
 
@@ -71,7 +71,7 @@ Over time, we expect LiteLLM Managed Files to be the way most teams use Files ac
 ## Email Invites
 
 <Image 
-  img={require('../../img/email_2_0.png')}
+  img={require('@site/img/email_2_0.png')}
   style={{width: '100%', display: 'block', margin: '0 0 2rem 0'}}
 />
 

@@ -52,7 +52,7 @@ LiteLLM v1.68.0-stable will be live soon. Here are the key highlights of this re
 
 ## Bedrock Knowledge Base (Vector Store)
 
-<Image img={require('../../img/release_notes/bedrock_kb.png')}/>
+<Image img={require('@site/img/release_notes/bedrock_kb.png')}/>
 <br/>
 
 This release adds support for Bedrock vector stores (knowledge bases) in LiteLLM. With this update, you can:
@@ -68,7 +68,7 @@ For the next release we plan on allowing you to set key, user, team, org permiss
 
 ## Rate Limiting
 
-<Image img={require('../../img/multi_instance_rate_limiting.png')}/>
+<Image img={require('@site/img/multi_instance_rate_limiting.png')}/>
 <br/>
 
 

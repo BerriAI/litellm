@@ -56,7 +56,7 @@ pip install litellm==1.74.3.post1
 ## MCP Gateway: Model Access Groups
 
 <Image 
-  img={require('../../img/release_notes/mcp_access_groups.png')}
+  img={require('@site/img/release_notes/mcp_access_groups.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -73,7 +73,7 @@ Read more [here](https://docs.litellm.ai/docs/mcp#grouping-mcps-access-groups)
 ## MCP Gateway: Tool Cost Tracking
 
 <Image 
-  img={require('../../img/release_notes/mcp_tool_cost_tracking.png')}
+  img={require('@site/img/release_notes/mcp_tool_cost_tracking.png')}
   style={{width: '80%', display: 'block', margin: '0'}}
 />
 
@@ -93,7 +93,7 @@ You can set:
 ## Model Hub v2
 
 <Image 
-  img={require('../../img/release_notes/model_hub_v2.png')}
+  img={require('@site/img/release_notes/model_hub_v2.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -167,7 +167,7 @@ This improves on the previous model hub by enabling:
 ## [MCP Gateway](../../docs/mcp)
 
 <Image 
-  img={require('../../img/release_notes/mcp_tool_cost_tracking.png')}
+  img={require('@site/img/release_notes/mcp_tool_cost_tracking.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -198,7 +198,7 @@ This improves on the previous model hub by enabling:
 
 
 <Image 
-  img={require('../../img/release_notes/model_hub_v2.png')}
+  img={require('@site/img/release_notes/model_hub_v2.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

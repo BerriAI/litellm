@@ -59,7 +59,7 @@ pip install litellm==1.80.10
 ### Agent Gateway - 4 New Agent Providers
 
 <Image
-img={require('../../img/a2a_gateway2.png')}
+img={require('@site/img/a2a_gateway2.png')}
 style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 
@@ -78,7 +78,7 @@ For all agent requests running through the AI Gateway, LiteLLM automatically tra
 ### Agent (A2A) Usage UI
 
 <Image
-img={require('../../img/agent_usage.png')}
+img={require('@site/img/agent_usage.png')}
 style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

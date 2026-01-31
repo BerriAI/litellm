@@ -31,4 +31,4 @@ This means that only proxy admins or team admins can create team models.
 These changes enable team admins to add and manage models for their team on the LiteLLM UI + API.
 
 
-<Image img={require('../../img/release_notes/team_model_add.png')} />
+<Image img={require('@site/img/release_notes/team_model_add.png')} />

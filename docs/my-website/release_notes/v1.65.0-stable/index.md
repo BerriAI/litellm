@@ -27,7 +27,7 @@ This release introduces support for centrally adding MCP servers on LiteLLM. Thi
 Read more about MCP [here](https://docs.litellm.ai/docs/mcp).
 
 <Image 
-  img={require('../../img/release_notes/mcp_ui.png')}
+  img={require('@site/img/release_notes/mcp_ui.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 <p style={{textAlign: 'left', color: '#666'}}>
@@ -40,7 +40,7 @@ This release brings the ability to view total usage analytics even after exceedi
 
 
 <Image 
-  img={require('../../img/release_notes/ui_usage.png')}
+  img={require('@site/img/release_notes/ui_usage.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 <p style={{textAlign: 'left', color: '#666'}}>

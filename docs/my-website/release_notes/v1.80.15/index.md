@@ -116,7 +116,7 @@ Status Codes:
 ### UI Usage - Endpoint Activity
 
 <Image
-img={require('../../img/ui_endpoint_activity.png')}
+img={require('@site/img/ui_endpoint_activity.png')}
 style={{width: '100%', display: 'block', margin: '2rem auto'}}
 />
 

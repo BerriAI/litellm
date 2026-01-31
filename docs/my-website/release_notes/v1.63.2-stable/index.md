@@ -31,7 +31,7 @@ This release will be live on 03/09/2025
 
 ::: 
 
-<Image img={require('../../img/release_notes/v1632_release.jpg')} />
+<Image img={require('@site/img/release_notes/v1632_release.jpg')} />
 
 
 ## Demo Instance
@@ -51,7 +51,7 @@ Here's a Demo Instance to test changes:
 
 ## LLM Translation
 
-<Image img={require('../../img/release_notes/anthropic_thinking.jpg')}/>
+<Image img={require('@site/img/release_notes/anthropic_thinking.jpg')}/>
 
 1. Support `/openai/` passthrough for Assistant endpoints. [Get Started](https://docs.litellm.ai/docs/pass_through/openai_passthrough)
 2. Bedrock Claude - fix tool calling transformation on invoke route. [Get Started](../../docs/providers/bedrock#usage---function-calling--tool-calling)
@@ -76,7 +76,7 @@ Here's a Demo Instance to test changes:
 
 ## Management Endpoints / UI
 
-<Image img={require('../../img/release_notes/error_logs.jpg')} />
+<Image img={require('@site/img/release_notes/error_logs.jpg')} />
 
 1. Virtual Keys Page
     - Allow team/org filters to be searchable on the Create Key Page

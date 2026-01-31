@@ -55,7 +55,7 @@ This release adds support for priority quota reservation. This allows Proxy Admi
  
 This is great for use cases where you want to ensure your realtime use cases must always get priority responses and background development jobs can take longer. 
 
-<Image img={require('../../img/release_notes/quota.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/release_notes/quota.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 
@@ -65,7 +65,7 @@ Get started [here](../../docs/proxy/dynamic_rate_limit#priority-quota-reservatio
 
 ## +550 RPS Performance Improvements
 
-<Image img={require('../../img/release_notes/perf_imp.png')}  style={{ width: '800px', height: 'auto' }} />
+<Image img={require('@site/img/release_notes/perf_imp.png')}  style={{ width: '800px', height: 'auto' }} />
 
 <br/>
 
