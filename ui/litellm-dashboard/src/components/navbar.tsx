@@ -24,7 +24,7 @@ import {
   UserOutlined,
 } from "@ant-design/icons";
 import type { MenuProps } from "antd";
-import { Button, Dropdown, Switch, Tooltip } from "antd";
+import { Button, Dropdown, Switch, Tag, Tooltip } from "antd";
 import Link from "next/link";
 import React, { useEffect, useState } from "react";
 
@@ -210,28 +210,38 @@ const Navbar: React.FC<NavbarProps> = ({
               </button>
             )}
 
-            <div className="flex items-center">
+            <div className="flex items-center gap-2">
               <Link href={baseUrl ? baseUrl : "/"} className="flex items-center">
                 <div className="relative">
-                  <img src={imageUrl} alt="LiteLLM Brand" className="h-10 w-auto" />
-                  <span
-                    className="absolute -top-1 -right-2 text-lg animate-bounce"
-                    style={{ animationDuration: "2s" }}
-                    title="Happy Holidays!"
-                  >
-                    ❄️
-                  </span>
+                  <div className="h-10 max-w-48 flex items-center justify-center overflow-hidden">
+                    <img
+                      src={imageUrl}
+                      alt="LiteLLM Brand"
+                      className="max-w-full max-h-full w-auto h-auto object-contain"
+                    />
+                  </div>
                 </div>
               </Link>
               {version && (
-                <a
-                  href="https://docs.litellm.ai/release_notes"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-gray-500 border border-gray-200 rounded-lg px-2 py-0.5 bg-gray-50 font-medium -ml-2 hover:bg-gray-100 transition-colors cursor-pointer z-10"
-                >
-                  v{version}
-                </a>
+                <div className="relative">
+                  <span
+                    className="absolute -top-1 -left-2 text-lg animate-bounce"
+                    style={{ animationDuration: "2s" }}
+                    title="Thanks for using LiteLLM!"
+                  >
+                    ❄️
+                  </span>
+                  <Tag className="relative text-xs font-medium cursor-pointer z-10">
+                    <a
+                      href="https://docs.litellm.ai/release_notes"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-shrink-0"
+                    >
+                      v{version}
+                    </a>
+                  </Tag>
+                </div>
               )}
             </div>
           </div>
