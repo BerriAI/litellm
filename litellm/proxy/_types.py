@@ -511,6 +511,8 @@ class LiteLLMRoutes(enum.Enum):
         "/user/delete",
         "/user/info",
         "/user/list",
+        "/user/daily/activity",
+        "/user/daily/activity/aggregated",
         # team
         "/team/new",
         "/team/update",
@@ -523,6 +525,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/available",
         "/team/permissions_list",
         "/team/permissions_update",
+        "/team/daily/activity",
         # model
         "/model/new",
         "/model/update",
