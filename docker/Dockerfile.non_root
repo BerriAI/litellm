@@ -15,6 +15,7 @@ USER root
 RUN for i in 1 2 3; do \
     apk add --no-cache \
     python3 \
+    python3-dev \
     py3-pip \
     clang \
     llvm \
@@ -169,11 +170,13 @@ RUN sed -i 's/\r$//' docker/entrypoint.sh && \
     [ -n "$LITELLM_PROXY_EXTRAS_PATH" ] && chmod -R g+w $LITELLM_PROXY_EXTRAS_PATH || true && \
     chmod -R g+rX $PRISMA_PATH && \
     chmod -R g+rX /app/.cache && \
-    mkdir -p /tmp/.npm /nonexistent /.npm && \
-    prisma generate
+    mkdir -p /tmp/.npm /nonexistent /.npm
 
 # Switch to non-root user for runtime
 USER nobody
+
+# Generate Prisma client as nobody user to ensure correct file ownership
+RUN prisma generate
 
 # Prisma runtime knobs for offline containers
 ENV PRISMA_SKIP_POSTINSTALL_GENERATE=1 \

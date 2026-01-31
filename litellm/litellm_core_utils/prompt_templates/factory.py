@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union, cast, overload
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -1462,7 +1462,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def convert_to_gemini_tool_call_result(
+def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
 ) -> Union[VertexPartType, List[VertexPartType]]:
@@ -1528,6 +1528,33 @@ def convert_to_gemini_tool_call_result(
                         except Exception as e:
                             verbose_logger.warning(
                                 f"Failed to process image in tool response: {e}"
+                            )
+                elif content_type in ("file", "input_file"):
+                    # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
+                    file_data = content.get("file_data", "")
+                    if not file_data:
+                        file_content = content.get("file", {})
+                        file_data = (
+                            file_content.get("file_data", "")
+                            if isinstance(file_content, dict)
+                            else file_content
+                            if isinstance(file_content, str)
+                            else ""
+                        )
+
+                    if file_data:
+                        # Convert file to base64 blob format for Gemini
+                        try:
+                            file_obj = convert_to_anthropic_image_obj(
+                                file_data, format=None
+                            )
+                            inline_data = BlobType(
+                                data=file_obj["data"],
+                                mime_type=file_obj["media_type"],
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process file in tool response: {e}"
                             )
     name: Optional[str] = message.get("name", "")  # type: ignore
 
@@ -1605,6 +1632,7 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
 
 def convert_to_anthropic_tool_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
+    force_base64: bool = False,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1650,13 +1678,16 @@ def convert_to_anthropic_tool_result(
         ] = []
         for content in content_list:
             if content["type"] == "text":
-                anthropic_content_list.append(
-                    AnthropicMessagesToolResultContent(
-                        type="text",
-                        text=content["text"],
-                        cache_control=content.get("cache_control", None),
-                    )
-                )
+                # Only include cache_control if explicitly set and not None
+                # to avoid sending "cache_control": null which breaks some API channels
+                text_content: AnthropicMessagesToolResultContent = {
+                    "type": "text",
+                    "text": content["text"],
+                }
+                cache_control_value = content.get("cache_control")
+                if cache_control_value is not None:
+                    text_content["cache_control"] = cache_control_value
+                anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
                 format = (
                     content["image_url"].get("format")
@@ -1664,7 +1695,7 @@ def convert_to_anthropic_tool_result(
                     else None
                 )
                 _anthropic_image_param = create_anthropic_image_param(
-                    content["image_url"], format=format
+                    content["image_url"], format=format, is_bedrock_invoke=force_base64
                 )
                 _anthropic_image_param = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_image_param,
@@ -2026,6 +2057,12 @@ def anthropic_messages_pt(  # noqa: PLR0915
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
 
+    # Bedrock invoke models have format: invoke/...
+    # Vertex AI Anthropic also doesn't support URL sources for images
+    is_bedrock_invoke = model.lower().startswith("invoke/")
+    is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
+    force_base64 = is_bedrock_invoke or is_vertex_ai
+
     msg_i = 0
     while msg_i < len(messages):
         user_content: List[AnthropicMessagesUserMessageValues] = []
@@ -2135,13 +2172,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ):
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block)
+                    convert_to_anthropic_tool_result(
+                        user_message_types_block, force_base64=force_base64
+                    )
                 )
 
             msg_i += 1
 
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
+
+        # Track unique tool IDs in this merge block to avoid duplication
+        unique_tool_ids: Set[str] = set()
 
         assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
@@ -2236,13 +2278,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                 )
-                # AnthropicMessagesAssistantMessageValues includes AnthropicMessagesToolUseParam
-                assistant_content.extend(
-                    cast(
-                        List[AnthropicMessagesAssistantMessageValues],
-                        tool_invoke_results,
+
+                # Prevent "tool_use ids must be unique" errors by filtering duplicates
+                # This can happen when merging history that already contains the tool calls
+                for item in tool_invoke_results:
+                    # tool_use items are typically dicts, but handle objects just in case
+                    item_id = (
+                        item.get("id")
+                        if isinstance(item, dict)
+                        else getattr(item, "id", None)
                     )
-                )
+
+                    if item_id:
+                        if item_id in unique_tool_ids:
+                            continue
+                        unique_tool_ids.add(item_id)
+
+                    assistant_content.append(
+                        cast(AnthropicMessagesAssistantMessageValues, item)
+                    )
 
             assistant_function_call = assistant_content_block.get("function_call")
 
@@ -4366,7 +4420,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     ]
     """
     """
-    Bedrock toolConfig looks like: 
+    Bedrock toolConfig looks like:
     "tools": [
         {
             "toolSpec": {
@@ -4394,6 +4448,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
+        # Handle regular function tools
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )
@@ -4410,9 +4465,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
-        # flatten the defs
-        for _, value in defs_copy.items():
-            unpack_defs(value, defs_copy)
+        # Expand $ref references in parameters using the definitions
+        # Note: We don't pre-flatten defs as that causes exponential memory growth
+        # with circular references (see issue #19098). unpack_defs handles nested
+        # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(
