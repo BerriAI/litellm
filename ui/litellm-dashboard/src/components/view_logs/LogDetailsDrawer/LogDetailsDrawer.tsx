@@ -208,6 +208,7 @@ export function LogDetailsDrawer({
           onCopy={(data, label) => copyToClipboard(JSON.stringify(data, null, 2), label)}
           getRawRequest={getRawRequest}
           getFormattedResponse={getFormattedResponse}
+          logEntry={logEntry}
         />
 
         {/* Guardrail Data - Show only if present */}
@@ -341,6 +342,7 @@ interface RequestResponseSectionProps {
   onCopy: (data: any, label: string) => void;
   getRawRequest: () => any;
   getFormattedResponse: () => any;
+  logEntry: LogEntry;
 }
 
 function RequestResponseSection({
@@ -348,6 +350,7 @@ function RequestResponseSection({
   onCopy,
   getRawRequest,
   getFormattedResponse,
+  logEntry,
 }: RequestResponseSectionProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
   const [viewMode, setViewMode] = useState<'pretty' | 'json'>('pretty');
@@ -357,6 +360,17 @@ function RequestResponseSection({
     const label = activeTab === TAB_REQUEST ? "Request" : "Response";
     onCopy(data, label);
   };
+
+  // Calculate input and output costs
+  // Assume average cost if not explicitly provided
+  const totalSpend = logEntry.spend || 0;
+  const promptTokens = logEntry.prompt_tokens || 0;
+  const completionTokens = logEntry.completion_tokens || 0;
+  const totalTokens = promptTokens + completionTokens;
+  
+  // Estimate input/output costs proportionally if not available
+  const inputCost = totalTokens > 0 ? (totalSpend * promptTokens) / totalTokens : 0;
+  const outputCost = totalTokens > 0 ? (totalSpend * completionTokens) / totalTokens : 0;
 
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
@@ -385,6 +399,12 @@ function RequestResponseSection({
                   <PrettyMessagesView
                     request={getRawRequest()}
                     response={getFormattedResponse()}
+                    metrics={{
+                      prompt_tokens: promptTokens,
+                      completion_tokens: completionTokens,
+                      input_cost: inputCost,
+                      output_cost: outputCost,
+                    }}
                   />
                 ) : (
                   <Tabs
