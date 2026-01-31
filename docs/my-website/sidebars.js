@@ -130,6 +130,7 @@ const sidebars = {
             "tutorials/claude_code_plugin_marketplace",
           ]
         },
+        "tutorials/openclaw",
         "tutorials/opencode_integration",
         "tutorials/cost_tracking_coding",
         "tutorials/cursor_integration",
