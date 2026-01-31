@@ -301,7 +301,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
         url = f"{api_base}/v1beta/{file_name}"
         
         # Add API key as header (Google AI Studio uses x-goog-api-key header)
-        params = {}
+        params: dict = {}
         
         return url, params
 

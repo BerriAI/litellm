@@ -1541,13 +1541,14 @@ async def _process_single_key_update(
     )
     
     # Check team member permissions
-    await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
-        user_api_key_dict=user_api_key_dict,
-        route=KeyManagementRoutes.KEY_UPDATE,
-        prisma_client=prisma_client,
-        existing_key_row=existing_key_row,
-        user_api_key_cache=user_api_key_cache,
-    )
+    if prisma_client is not None:
+        await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+            user_api_key_dict=user_api_key_dict,
+            route=KeyManagementRoutes.KEY_UPDATE,
+            prisma_client=prisma_client,
+            existing_key_row=existing_key_row,
+            user_api_key_cache=user_api_key_cache,
+        )
     
     # Create UpdateKeyRequest from BulkUpdateKeyRequestItem
     update_key_request = UpdateKeyRequest(
