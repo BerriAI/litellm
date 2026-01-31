@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import enum
 import inspect
 import io
 import os
@@ -12,7 +13,6 @@ import time
 import traceback
 import warnings
 from datetime import datetime, timedelta, timezone
-import enum
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,41 +29,9 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+
 from pydantic import BaseModel, Json
 
-from litellm.proxy._types import (
-    ProxyException,
-    UserAPIKeyAuth,
-    LiteLLM_UserTable,
-    CommonProxyErrors,
-    LitellmUserRoles,
-    ConfigList,
-    ConfigYAML,
-    ConfigFieldUpdate,
-    ConfigGeneralSettings,
-    ConfigFieldInfo,
-    PassThroughGenericEndpoint,
-    FieldDetail,
-    ConfigFieldDelete,
-    CallbackDelete,
-    InvitationClaim,
-    InvitationModel,
-    InvitationNew,
-    InvitationUpdate,
-    InvitationDelete,
-    CallInfo,
-    Litellm_EntityType,
-    TeamDefaultSettings,
-    RoleBasedPermissions,
-    SupportedDBObjectType,
-    ProxyErrorTypes,
-    EnterpriseLicenseData,
-    LiteLLM_JWTAuth,
-    TokenCountRequest,
-    TransformRequestBody,
-    LiteLLM_TeamTable,
-    SpecialModelNames,
-)
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -84,6 +52,39 @@ from litellm.litellm_core_utils.litellm_logging import (
     _init_custom_logger_compatible_class,
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import (
+    CallbackDelete,
+    CallInfo,
+    CommonProxyErrors,
+    ConfigFieldDelete,
+    ConfigFieldInfo,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigList,
+    ConfigYAML,
+    EnterpriseLicenseData,
+    FieldDetail,
+    InvitationClaim,
+    InvitationDelete,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    PassThroughGenericEndpoint,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    SupportedDBObjectType,
+    TeamDefaultSettings,
+    TokenCountRequest,
+    TransformRequestBody,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -1703,11 +1704,12 @@ async def update_cache(  # noqa: PLR0915
     if tags is not None:
         await _update_tag_cache()
 
-    # Await cache update to ensure budget checks see updated spend values
-    await user_api_key_cache.async_set_cache_pipeline(
-        cache_list=values_to_update_in_cache,
-        ttl=60,
-        litellm_parent_otel_span=parent_otel_span,
+    asyncio.create_task(
+        user_api_key_cache.async_set_cache_pipeline(
+            cache_list=values_to_update_in_cache,
+            ttl=60,
+            litellm_parent_otel_span=parent_otel_span,
+        )
     )
 
 
@@ -3643,7 +3645,9 @@ class ProxyConfig:
                     )
             else:
                 # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
 
                 retention_interval = general_settings.get(
                     "maximum_spend_logs_retention_interval", "1d"
