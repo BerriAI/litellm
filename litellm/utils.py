@@ -193,6 +193,9 @@ from litellm.types.utils import (
     all_litellm_params,
 )
 
+_CALL_TYPE_VALUES: frozenset = frozenset(ct.value for ct in CallTypes)
+_CALL_TYPE_ENUM_MAP: dict = {ct.value: ct for ct in CallTypes}
+
 # +-----------------------------------------------+
 # |                                               |
 # |           Give Feedback / Get Help            |
@@ -1686,6 +1689,7 @@ def client(original_function):  # noqa: PLR0915
         print_args_passed_to_litellm(original_function, args, kwargs)
         start_time = datetime.datetime.now()
         result = None
+        _update_response_metadata = getattr(sys.modules[__name__], "update_response_metadata")
         logging_obj: Optional[LiteLLMLoggingObject] = kwargs.get(
             "litellm_logging_obj", None
         )
@@ -1726,9 +1730,10 @@ def client(original_function):  # noqa: PLR0915
                     )
 
             # [OPTIONAL] CHECK CACHE
-            print_verbose(
-                f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
-            )
+            if _is_debugging_on():
+                print_verbose(
+                    f"ASYNC kwargs[caching]: {kwargs.get('caching', False)}; litellm.cache: {litellm.cache}; kwargs.get('cache'): {kwargs.get('cache', None)}"
+                )
             _caching_handler_response: "Optional[CachingHandlerResponse]" = (
                 await _llm_caching_handler._async_get_cache(
                     model=model or "",
@@ -1804,8 +1809,7 @@ def client(original_function):  # noqa: PLR0915
                         chunks, messages=kwargs.get("messages", None)
                     )
                 else:
-                    update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
-                    update_response_metadata(
+                    _update_response_metadata(
                         result=result,
                         logging_obj=logging_obj,
                         model=model,
@@ -1825,11 +1829,12 @@ def client(original_function):  # noqa: PLR0915
                 rules_obj=rules_obj,
             )
             # Only run if call_type is a valid value in CallTypes
-            if call_type in [ct.value for ct in CallTypes]:
+            _call_type_enum = _CALL_TYPE_ENUM_MAP.get(call_type)
+            if _call_type_enum is not None:
                 result = await async_post_call_success_deployment_hook(
                     request_data=kwargs,
                     response=result,
-                    call_type=CallTypes(call_type),
+                    call_type=_call_type_enum,
                 )
 
             ## Add response to cache
@@ -1869,8 +1874,7 @@ def client(original_function):  # noqa: PLR0915
                     end_time=end_time,
                 )
 
-            update_response_metadata = getattr(sys.modules[__name__], 'update_response_metadata')
-            update_response_metadata(
+            _update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
                 model=model,
