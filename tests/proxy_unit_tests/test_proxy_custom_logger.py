@@ -192,23 +192,23 @@ def test_chat_completion(client):
         assert "authorization" not in proxy_server_request_object["headers"]
         # Remove arrival_time from comparison as it's dynamic
         proxy_server_request_copy = {k: v for k, v in proxy_server_request_object.items() if k != "arrival_time"}
-        assert proxy_server_request_copy == {
-            "url": "http://testserver/chat/completions",
-            "method": "POST",
-            "headers": {
-                "host": "testserver",
-                "accept": "*/*",
-                "accept-encoding": "gzip, deflate, zstd",
-                "connection": "keep-alive",
-                "user-agent": "testclient",
-                "content-length": "115",
-                "content-type": "application/json",
-            },
-            "body": {
-                "model": "Azure OpenAI GPT-4 Canada",
-                "messages": [{"role": "user", "content": "write a litellm poem"}],
-                "max_tokens": 10,
-            },
+        # Body now includes metadata added during proxy processing - strip it for comparison
+        body_copy = {k: v for k, v in proxy_server_request_copy.get("body", {}).items() if k != "metadata"}
+        assert proxy_server_request_copy["url"] == "http://testserver/chat/completions"
+        assert proxy_server_request_copy["method"] == "POST"
+        assert proxy_server_request_copy["headers"] == {
+            "host": "testserver",
+            "accept": "*/*",
+            "accept-encoding": "gzip, deflate, zstd",
+            "connection": "keep-alive",
+            "user-agent": "testclient",
+            "content-length": "115",
+            "content-type": "application/json",
+        }
+        assert body_copy == {
+            "model": "Azure OpenAI GPT-4 Canada",
+            "messages": [{"role": "user", "content": "write a litellm poem"}],
+            "max_tokens": 10,
         }
         result = response.json()
         print(f"Received response: {result}")
