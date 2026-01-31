@@ -231,6 +231,7 @@ const GuardrailViewer = ({ data }: GuardrailViewerProps) => {
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Collapse
+        defaultActiveKey={["1"]}
         expandIconPosition="start"
         items={[
           {
