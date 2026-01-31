@@ -60,7 +60,6 @@ except ImportError as e:
 if MCP_AVAILABLE:
     try:
         from mcp.shared.tool_name_validation import (  # type: ignore
-            ToolNameValidationResult,
             validate_tool_name,
         )
     except ImportError:
