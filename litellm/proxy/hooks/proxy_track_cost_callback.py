@@ -181,17 +181,15 @@ class _ProxyDBLogger(CustomLogger):
                         org_id=org_id,
                     )
 
-                    # update cache
-                    asyncio.create_task(
-                        update_cache(
-                            token=user_api_key,
-                            user_id=user_id,
-                            end_user_id=end_user_id,
-                            response_cost=response_cost,
-                            team_id=team_id,
-                            parent_otel_span=parent_otel_span,
-                            tags=tags,
-                        )
+                    # update cache - await to ensure budget checks see updated spend
+                    await update_cache(
+                        token=user_api_key,
+                        user_id=user_id,
+                        end_user_id=end_user_id,
+                        response_cost=response_cost,
+                        team_id=team_id,
+                        parent_otel_span=parent_otel_span,
+                        tags=tags,
                     )
 
                     await proxy_logging_obj.slack_alerting_instance.customer_spend_alert(
