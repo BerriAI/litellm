@@ -16,7 +16,17 @@ Endpoints here:
 import importlib
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Dict, Iterable, List, Literal, Optional
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    List,
+    Literal,
+    Optional,
+    Protocol,
+    cast,
+)
 
 from fastapi import (
     APIRouter,
@@ -55,12 +65,24 @@ except ImportError as e:
     verbose_logger.debug(f"MCP module not found: {e}")
     MCP_AVAILABLE = False
 
+
+class _ToolNameValidationResult(Protocol):
+    """Protocol for MCP tool name validation result (SEP-986)."""
+
+    is_valid: bool
+    warnings: list
+
+
 if MCP_AVAILABLE:
     try:
-        from mcp.shared.tool_name_validation import validate_tool_name  # type: ignore
+        from mcp.shared.tool_name_validation import validate_tool_name as _validate_tool_name  # type: ignore
+
+        validate_tool_name: Callable[[str], _ToolNameValidationResult] = cast(
+            Callable[[str], _ToolNameValidationResult], _validate_tool_name
+        )
     except ImportError:
 
-        def validate_tool_name(name: str):
+        def validate_tool_name(name: str) -> _ToolNameValidationResult:
             from pydantic import BaseModel
 
             class MockResult(BaseModel):
