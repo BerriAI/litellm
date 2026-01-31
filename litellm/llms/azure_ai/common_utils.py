@@ -21,12 +21,19 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         
         Supported routes:
         - agents: azure_ai/agents/<agent_id>
-        - model_router: azure_ai/model_router/<actual-model-name>
+        - model_router: azure_ai/model_router/<actual-model-name> or models with "model-router"/"model_router" in name
         - default: standard models
         """
         if "agents/" in model:
             return "agents"
-        if "model_router/" in model or "model-router/" in model:
+        # Detect model router by prefix (model_router/<name>) or by name containing "model-router"/"model_router"
+        model_lower = model.lower()
+        if (
+            "model_router/" in model_lower 
+            or "model-router/" in model_lower
+            or "model-router" in model_lower
+            or "model_router" in model_lower
+        ):
             return "model_router"
         return "default"
 
