@@ -3,6 +3,7 @@
  * Datadog-style: header with icon/metrics, content below
  */
 
+import { useState } from 'react';
 import { message } from 'antd';
 import { ParsedMessage } from './prettyMessagesTypes';
 import { SectionHeader } from './SectionHeader';
@@ -17,6 +18,8 @@ interface InputCardProps {
 }
 
 export function InputCard({ messages, promptTokens, inputCost }: InputCardProps) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
   if (messages.length === 0) {
     return null;
   }
@@ -48,30 +51,41 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
         tokens={promptTokens}
         cost={inputCost}
         onCopy={handleCopy}
+        isCollapsed={isCollapsed}
+        onToggleCollapse={() => setIsCollapsed(!isCollapsed)}
       />
 
       {/* Content */}
-      <div style={{ padding: '12px 16px' }}>
-        {/* System Message - Collapsible with arrow */}
-        {systemMessage && (
-          <CollapsibleMessage
-            label="SYSTEM"
-            content={systemMessage.content}
-            defaultExpanded={!!(systemMessage.content && systemMessage.content.length < 200)}
-          />
-        )}
+      <div
+        style={{
+          maxHeight: isCollapsed ? '0px' : '10000px',
+          overflow: 'hidden',
+          transition: 'max-height 0.3s ease-out, opacity 0.3s ease-out',
+          opacity: isCollapsed ? 0 : 1,
+        }}
+      >
+        <div style={{ padding: '12px 16px' }}>
+          {/* System Message - Collapsible with arrow */}
+          {systemMessage && (
+            <CollapsibleMessage
+              label="SYSTEM"
+              content={systemMessage.content}
+              defaultExpanded={!!(systemMessage.content && systemMessage.content.length < 200)}
+            />
+          )}
 
-        {/* History - Tree style, collapsed by default */}
-        {historyMessages.length > 0 && <HistoryTree messages={historyMessages} />}
+          {/* History - Tree style, collapsed by default */}
+          {historyMessages.length > 0 && <HistoryTree messages={historyMessages} />}
 
-        {/* Last User Message - Always visible */}
-        {lastMessage && (
-          <SimpleMessageBlock
-            label={lastMessage.role.toUpperCase()}
-            content={lastMessage.content}
-            toolCalls={lastMessage.toolCalls}
-          />
-        )}
+          {/* Last User Message - Always visible */}
+          {lastMessage && (
+            <SimpleMessageBlock
+              label={lastMessage.role.toUpperCase()}
+              content={lastMessage.content}
+              toolCalls={lastMessage.toolCalls}
+            />
+          )}
+        </div>
       </div>
     </div>
   );

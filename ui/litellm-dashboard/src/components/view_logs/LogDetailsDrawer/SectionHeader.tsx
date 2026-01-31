@@ -5,7 +5,9 @@
 import { Typography, Button, Tooltip } from 'antd';
 import { 
   MessageOutlined, 
-  CopyOutlined 
+  CopyOutlined,
+  DownOutlined,
+  UpOutlined
 } from '@ant-design/icons';
 
 const { Text } = Typography;
@@ -15,21 +17,45 @@ interface SectionHeaderProps {
   tokens?: number;
   cost?: number;
   onCopy: () => void;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
 }
 
-export function SectionHeader({ type, tokens, cost, onCopy }: SectionHeaderProps) {
+export function SectionHeader({ type, tokens, cost, onCopy, isCollapsed, onToggleCollapse }: SectionHeaderProps) {
   return (
     <div
+      onClick={onToggleCollapse}
       style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
         padding: '10px 16px',
-        borderBottom: '1px solid #f0f0f0',
+        borderBottom: isCollapsed ? 'none' : '1px solid #f0f0f0',
         background: '#fafafa',
+        cursor: onToggleCollapse ? 'pointer' : 'default',
+        transition: 'background 0.15s ease',
+      }}
+      onMouseEnter={(e) => {
+        if (onToggleCollapse) {
+          e.currentTarget.style.background = '#f5f5f5';
+        }
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.background = '#fafafa';
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+        {/* Collapse Arrow */}
+        {onToggleCollapse && (
+          <div style={{ display: 'flex', alignItems: 'center' }}>
+            {isCollapsed ? (
+              <DownOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+            ) : (
+              <UpOutlined style={{ fontSize: 10, color: '#8c8c8c' }} />
+            )}
+          </div>
+        )}
+
         {/* Icon + Label */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {type === 'input' ? (
@@ -59,7 +85,15 @@ export function SectionHeader({ type, tokens, cost, onCopy }: SectionHeaderProps
 
       {/* Copy Button */}
       <Tooltip title="Copy">
-        <Button type="text" size="small" icon={<CopyOutlined />} onClick={onCopy} />
+        <Button 
+          type="text" 
+          size="small" 
+          icon={<CopyOutlined />} 
+          onClick={(e) => {
+            e.stopPropagation(); // Prevent triggering collapse
+            onCopy();
+          }} 
+        />
       </Tooltip>
     </div>
   );
