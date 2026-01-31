@@ -639,6 +639,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "rpd": {"type": "number"},
                 "rpm": {"type": "number"},
                 "source": {"type": "string"},
+                "comment": {"type": "string"},
                 "supports_assistant_prefill": {"type": "boolean"},
                 "supports_audio_input": {"type": "boolean"},
                 "supports_audio_output": {"type": "boolean"},
@@ -841,6 +842,7 @@ def test_get_model_info_gemini():
             and not "learnlm" in model
             and not "imagen" in model
             and not "veo" in model
+            and not "robotics" in model
         ):
             assert info.get("tpm") is not None, f"{model} does not have tpm"
             assert info.get("rpm") is not None, f"{model} does not have rpm"
