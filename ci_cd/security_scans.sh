@@ -81,10 +81,10 @@ run_trivy_scans() {
     echo "Running Trivy scans..."
     
     echo "Scanning LiteLLM Docs..."
-    trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
+    trivy fs --ignorefile .trivyignore --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
     
     echo "Scanning LiteLLM UI..."
-    trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
+    trivy fs --ignorefile .trivyignore --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
     
     echo "Trivy scans completed successfully"
 }
