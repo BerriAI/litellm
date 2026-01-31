@@ -37,6 +37,8 @@ from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
+)
+from litellm.proxy._experimental.mcp_server.utils import (
     validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
 
@@ -57,17 +59,21 @@ except ImportError as e:
 
 if MCP_AVAILABLE:
     try:
-        from mcp.shared.tool_name_validation import validate_tool_name  # type: ignore
+        from mcp.shared.tool_name_validation import (  # type: ignore
+            ToolNameValidationResult,
+            validate_tool_name,
+        )
     except ImportError:
+        from typing import Any
 
-        def validate_tool_name(name: str):
+        def validate_tool_name(name: str) -> Any:
             from pydantic import BaseModel
 
-            class MockResult(BaseModel):
+            class ToolNameValidationResult(BaseModel):
                 is_valid: bool = True
                 warnings: list = []
 
-            return MockResult()
+            return ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
@@ -77,9 +83,9 @@ if MCP_AVAILABLE:
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        get_request_base_url,
         authorize_with_server,
         exchange_token_with_server,
+        get_request_base_url,
         register_client_with_server,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
