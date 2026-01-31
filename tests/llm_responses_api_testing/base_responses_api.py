@@ -97,6 +97,27 @@ def validate_responses_api_response(response, final_chunk: bool = False):
             len(response["output"]) > 0
         ), "Response 'output' field should have at least one item"
 
+    # Validate output_tokens_details for OpenAI SDK compatibility
+    # The OpenAI SDK (especially Ruby) requires output_tokens_details to be an object, not null
+    # This ensures non-OpenAI models (like Anthropic/Bedrock) are compatible
+    if final_chunk is True and "usage" in response and response["usage"] is not None:
+        usage = response["usage"]
+        assert hasattr(usage, "output_tokens_details") or "output_tokens_details" in usage, (
+            "usage should have output_tokens_details field for OpenAI SDK compatibility"
+        )
+        output_tokens_details = getattr(usage, "output_tokens_details", None) or usage.get("output_tokens_details")
+        assert output_tokens_details is not None, (
+            "output_tokens_details should not be None - OpenAI SDK requires it to be an object. "
+            "This breaks the Ruby OpenAI SDK which expects {reasoning_tokens: Integer}"
+        )
+        # Check reasoning_tokens is present
+        reasoning_tokens = getattr(output_tokens_details, "reasoning_tokens", None)
+        if reasoning_tokens is None and isinstance(output_tokens_details, dict):
+            reasoning_tokens = output_tokens_details.get("reasoning_tokens")
+        assert reasoning_tokens is not None, (
+            "output_tokens_details.reasoning_tokens should be set (at least to 0) for OpenAI SDK compatibility"
+        )
+
     return True  # Return True if validation passes
 
 
@@ -222,7 +243,25 @@ class BaseResponsesAPITest(ABC):
             assert hasattr(response_completed_event.response.usage, "cost"), "Cost should be included in streaming responses API usage object"
             assert response_completed_event.response.usage.cost > 0, "Cost should be greater than 0"
             print(f"Cost found in streaming response: {response_completed_event.response.usage.cost}")
-        
+
+            # Validate output_tokens_details for OpenAI SDK compatibility
+            # The OpenAI SDK (especially Ruby) requires output_tokens_details to be an object, not null
+            usage = response_completed_event.response.usage
+            assert hasattr(usage, "output_tokens_details"), (
+                "usage should have output_tokens_details field for OpenAI SDK compatibility"
+            )
+            assert usage.output_tokens_details is not None, (
+                "output_tokens_details should not be None - OpenAI SDK requires it to be an object. "
+                "This breaks the Ruby OpenAI SDK which expects {reasoning_tokens: Integer}"
+            )
+            assert hasattr(usage.output_tokens_details, "reasoning_tokens"), (
+                "output_tokens_details should have reasoning_tokens field"
+            )
+            assert usage.output_tokens_details.reasoning_tokens is not None, (
+                "output_tokens_details.reasoning_tokens should be set (at least to 0) for OpenAI SDK compatibility"
+            )
+            print(f"output_tokens_details validated: reasoning_tokens={usage.output_tokens_details.reasoning_tokens}")
+
         # Reset the setting
         litellm.include_cost_in_streaming_usage = False
 
