@@ -12,6 +12,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../../.."))
 
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.presidio import (
@@ -19,7 +20,6 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 )
 from litellm.types.guardrails import LitellmParams, PiiAction, PiiEntityType
 from litellm.types.utils import Choices, Message, ModelResponse
-import litellm
 
 
 @pytest.fixture
@@ -706,8 +706,8 @@ async def test_presidio_filter_scope_initializer(monkeypatch):
 
     mgr = DummyManager()
     monkeypatch.setattr(litellm, "logging_callback_manager", mgr, raising=False)
-    import litellm.proxy.guardrails.guardrail_initializers as gi
     import litellm.proxy.guardrails.guardrail_hooks.presidio as presidio_mod
+    import litellm.proxy.guardrails.guardrail_initializers as gi
 
     monkeypatch.setattr(
         presidio_mod, "_OPTIONAL_PresidioPIIMasking", DummyGuardrail, raising=False
@@ -1182,9 +1182,10 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     """
     Test that _get_session_iterator yields:
     1. The shared session when in the main thread.
-    2. A new session when in a background thread.
+    2. A loop-bound cached session when in a background thread (reused per loop for efficiency).
     """
     import threading
+
     import aiohttp
 
     # 1. Main Thread Case
@@ -1227,7 +1228,8 @@ async def test_get_session_iterator_thread_safety(presidio_guardrail):
     assert bg_session_id != shared_session_id
     # The shared session should still be open (not closed by the background thread)
     assert not presidio_guardrail._http_session.closed
-    # The background session should be closed (handled by the context manager in the thread)
-    assert bg_session.closed
+    # The background session should be cached in _loop_sessions and remain open for reuse
+    # (Changed behavior: no longer closes immediately, cached per loop for efficiency)
+    assert not bg_session.closed, "Background session should remain open for reuse"
 
     print("✓ Session iterator thread safety test passed")
