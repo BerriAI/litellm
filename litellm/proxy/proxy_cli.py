@@ -540,7 +540,6 @@ def run_server(  # noqa: PLR0915
     keepalive_timeout,
     max_requests_before_restart,
 ):
-    args = locals()
     if local:
         from proxy_server import (
             KeyManagementSettings,
