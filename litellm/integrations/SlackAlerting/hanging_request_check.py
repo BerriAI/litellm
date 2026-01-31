@@ -8,6 +8,7 @@ Notes:
 """
 
 import asyncio
+import math
 import time
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -54,7 +55,9 @@ class AlertingHangingRequestCheck:
         """
 
         alerting_threshold_seconds = float(self.slack_alerting_object.alerting_threshold)
-        return int(alerting_threshold_seconds + (alerting_threshold_seconds / 2) + HANGING_ALERT_BUFFER_TIME_SECONDS)
+        return int(
+            math.ceil(alerting_threshold_seconds + (alerting_threshold_seconds / 2) + HANGING_ALERT_BUFFER_TIME_SECONDS)
+        )
 
     async def add_request_to_hanging_request_check(
         self,
@@ -67,6 +70,9 @@ class AlertingHangingRequestCheck:
             return
 
         request_metadata = get_litellm_metadata_from_kwargs(kwargs=request_data)
+        request_id = request_data.get("litellm_call_id")
+        if not request_id:
+            return
         model = request_data.get("model", "")
         api_base: Optional[str] = None
 
@@ -77,7 +83,7 @@ class AlertingHangingRequestCheck:
             )
 
         hanging_request_data = HangingRequestData(
-            request_id=request_data.get("litellm_call_id", ""),
+            request_id=request_id,
             model=model,
             api_base=api_base,
             key_alias=request_metadata.get("user_api_key_alias", ""),
@@ -85,7 +91,7 @@ class AlertingHangingRequestCheck:
         )
 
         await self.hanging_request_cache.async_set_cache(
-            key=hanging_request_data.request_id,
+            key=request_id,
             value=hanging_request_data,
             ttl=self._hanging_request_cache_ttl_seconds(),
         )
@@ -99,7 +105,7 @@ class AlertingHangingRequestCheck:
 
         #########################################################
         # Find all requests that have been hanging for more than the alerting threshold
-        # Get the last 50 oldest items in the cache and check if they have completed
+        # Get the last N oldest items in the cache and check if they have completed
         #########################################################
         # check if request_id is in internal usage cache
         if proxy_logging_obj.internal_usage_cache is None:
@@ -144,6 +150,19 @@ class AlertingHangingRequestCheck:
 
             # Avoid repeated alerts for the same request.
             if hanging_request_data.alert_sent:
+                continue
+
+            # Reduce completion-race false positives: request may complete between the
+            # first status check above and the Slack send below.
+            request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
+                key="request_status:{}".format(hanging_request_data.request_id),
+                litellm_parent_otel_span=None,
+                local_only=True,
+            )
+            if request_status is not None:
+                self.hanging_request_cache._remove_key(
+                    key=request_id,
+                )
                 continue
 
             ################
