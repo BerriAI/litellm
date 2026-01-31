@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Drawer, Typography, Space, Descriptions, Card, Tag, Tabs, Alert, Collapse } from "antd";
+import { Drawer, Typography, Descriptions, Card, Tag, Tabs, Alert, Collapse, Radio, Space } from "antd";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -34,6 +34,7 @@ import {
   SPACING_MEDIUM,
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
+import { PrettyMessagesView } from "./PrettyMessagesView";
 
 const { Text } = Typography;
 
@@ -207,6 +208,7 @@ export function LogDetailsDrawer({
           hasResponse={hasResponse}
           getRawRequest={getRawRequest}
           getFormattedResponse={getFormattedResponse}
+          logEntry={logEntry}
         />
 
         {/* Guardrail Data - Show only if present */}
@@ -339,19 +341,33 @@ interface RequestResponseSectionProps {
   hasResponse: boolean;
   getRawRequest: () => any;
   getFormattedResponse: () => any;
+  logEntry: LogEntry;
 }
 
 function RequestResponseSection({
   hasResponse,
   getRawRequest,
   getFormattedResponse,
+  logEntry,
 }: RequestResponseSectionProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
+  const [viewMode, setViewMode] = useState<'pretty' | 'json'>('pretty');
 
   const getCopyText = () => {
     const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
     return JSON.stringify(data, null, 2);
   };
+
+  // Calculate input and output costs
+  // Assume average cost if not explicitly provided
+  const totalSpend = logEntry.spend || 0;
+  const promptTokens = logEntry.prompt_tokens || 0;
+  const completionTokens = logEntry.completion_tokens || 0;
+  const totalTokens = promptTokens + completionTokens;
+  
+  // Estimate input/output costs proportionally if not available
+  const inputCost = totalTokens > 0 ? (totalSpend * promptTokens) / totalTokens : 0;
+  const outputCost = totalTokens > 0 ? (totalSpend * completionTokens) / totalTokens : 0;
 
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
@@ -361,48 +377,83 @@ function RequestResponseSection({
         items={[
           {
             key: "1",
-            label: <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>,
-            children: (
-              <div style={{ padding: "0 24px" }}>
-                <Tabs
-                  activeKey={activeTab}
-                  onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
-                  tabBarExtraContent={
-                    <Text 
-                      copyable={{ 
-                        text: getCopyText(),
-                        tooltips: ["Copy JSON", "Copied!"]
-                      }}
-                      disabled={activeTab === TAB_RESPONSE && !hasResponse}
-                    />
+            label: (
+              <div 
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}
+                onClick={(e) => {
+                  // Only prevent if clicking on the Radio.Group area
+                  const target = e.target as HTMLElement;
+                  if (target.closest('.ant-radio-group')) {
+                    e.stopPropagation();
                   }
-                  items={[
-                    {
-                      key: TAB_REQUEST,
-                      label: "Request",
-                      children: (
-                        <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                          <JsonViewer data={getRawRequest()} mode="formatted" />
-                        </div>
-                      ),
-                    },
-                    {
-                      key: TAB_RESPONSE,
-                      label: "Response",
-                      children: (
-                        <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
-                          {hasResponse ? (
-                            <JsonViewer data={getFormattedResponse()} mode="formatted" />
-                          ) : (
-                            <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
-                              Response data not available
-                            </div>
-                          )}
-                        </div>
-                      ),
-                    },
-                  ]}
-                />
+                }}
+              >
+                <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>Request & Response</h3>
+                {/* View Mode Toggle - In the header */}
+                <Radio.Group
+                  size="small"
+                  value={viewMode}
+                  onChange={(e) => setViewMode(e.target.value)}
+                >
+                  <Radio.Button value="pretty">Pretty</Radio.Button>
+                  <Radio.Button value="json">JSON</Radio.Button>
+                </Radio.Group>
+              </div>
+            ),
+            children: (
+              <div>
+                {viewMode === 'pretty' ? (
+                  <PrettyMessagesView
+                    request={getRawRequest()}
+                    response={getFormattedResponse()}
+                    metrics={{
+                      prompt_tokens: promptTokens,
+                      completion_tokens: completionTokens,
+                      input_cost: inputCost,
+                      output_cost: outputCost,
+                    }}
+                  />
+                ) : (
+                  <Tabs
+                    activeKey={activeTab}
+                    onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
+                    tabBarExtraContent={
+                      <Text 
+                        copyable={{ 
+                          text: getCopyText(),
+                          tooltips: ["Copy JSON", "Copied!"]
+                        }}
+                        disabled={activeTab === TAB_RESPONSE && !hasResponse}
+                      />
+                    }
+                    items={[
+                      {
+                        key: TAB_REQUEST,
+                        label: "Request",
+                        children: (
+                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                            <JsonViewer data={getRawRequest()} mode="formatted" />
+                          </div>
+                        ),
+                      },
+                      {
+                        key: TAB_RESPONSE,
+                        label: "Response",
+                        children: (
+                          <div style={{ paddingTop: SPACING_XLARGE, paddingBottom: SPACING_XLARGE }}>
+                            {hasResponse ? (
+                              <JsonViewer data={getFormattedResponse()} mode="formatted" />
+                            ) : (
+                              <div style={{ textAlign: "center", padding: 20, color: "#999", fontStyle: "italic" }}>
+                                Response data not available
+                              </div>
+                            )}
+                          </div>
+                        ),
+                      },
+                    ]}
+                  />
+                )}
               </div>
             ),
           },
