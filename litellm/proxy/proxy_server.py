@@ -1704,12 +1704,11 @@ async def update_cache(  # noqa: PLR0915
     if tags is not None:
         await _update_tag_cache()
 
-    asyncio.create_task(
-        user_api_key_cache.async_set_cache_pipeline(
-            cache_list=values_to_update_in_cache,
-            ttl=60,
-            litellm_parent_otel_span=parent_otel_span,
-        )
+    # Await cache update to ensure budget checks see updated spend values
+    await user_api_key_cache.async_set_cache_pipeline(
+        cache_list=values_to_update_in_cache,
+        ttl=60,
+        litellm_parent_otel_span=parent_otel_span,
     )
 
 
