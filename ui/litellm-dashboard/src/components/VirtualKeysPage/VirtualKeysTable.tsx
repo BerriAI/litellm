@@ -215,13 +215,12 @@ export function VirtualKeysTable({ teams, organizations, onSortChange, currentSo
     },
     {
       id: "user_email",
-      accessorKey: "user",
+      accessorKey: "user_email",
       header: "User Email",
       size: 160,
       enableSorting: false,
       cell: (info) => {
-        const user = info.getValue() as any;
-        const value = user?.user_email;
+        const value = info.getValue() as string;
         const width = info.cell.column.getSize();
         return (
           <Tooltip title={value}>

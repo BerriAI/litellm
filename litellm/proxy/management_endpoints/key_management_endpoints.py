@@ -3609,6 +3609,7 @@ async def list_keys(
             sort_order=sort_order,
             expand=expand,
             status=status,
+            user_role=user_api_key_dict.user_role,
         )
 
         verbose_proxy_logger.debug("Successfully prepared response")
@@ -3817,6 +3818,7 @@ async def _list_key_helper(
     sort_order: str = "desc",
     expand: Optional[List[str]] = None,
     status: Optional[str] = None,
+    user_role: Optional[LitellmUserRoles] = None,
 ) -> KeyListResponseObject:
     """
     Helper function to list keys
@@ -3912,9 +3914,14 @@ async def _list_key_helper(
     # Calculate total pages
     total_pages = -(-total_count // size)  # Ceiling division
 
-    # Fetch user information if expand includes "user"
+    # Fetch user information if expand includes "user" or return_full_object is True (to populate user_email)
+    # Only allow fetching user info if user is an admin
     user_map = {}
-    if expand and "user" in expand:
+    is_admin = user_role in [
+        LitellmUserRoles.PROXY_ADMIN.value,
+        LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    ]
+    if ((expand and "user" in expand) or return_full_object) and is_admin:
         user_ids = [key.user_id for key in keys if key.user_id]
         if user_ids:
             users = await prisma_client.db.litellm_usertable.find_many(
@@ -3935,8 +3942,17 @@ async def _list_key_helper(
         if not use_deleted_table:
             key_dict = await attach_object_permission_to_dict(key_dict, prisma_client)
 
+        # Populate user_email if available in user_map
+        if key.user_id and key.user_id in user_map and is_admin:
+            user_obj = user_map[key.user_id]
+            # Handle both object and dict access for user_obj
+            user_email = getattr(user_obj, "user_email", None)
+            if user_email is None and isinstance(user_obj, dict):
+                user_email = user_obj.get("user_email")
+            key_dict["user_email"] = user_email
+
         # Include user information if expand includes "user"
-        if expand and "user" in expand and key.user_id and key.user_id in user_map:
+        if expand and "user" in expand and key.user_id and key.user_id in user_map and is_admin:
             try:
                 key_dict["user"] = user_map[key.user_id].model_dump()
             except Exception:

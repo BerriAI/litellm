@@ -4690,3 +4690,59 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
                         assert response.successful_updates[0].key == "test-key-1"
                         assert response.failed_updates[0].key == "non-existent-key"
                         assert "Key not found" in response.failed_updates[0].failed_reason
+async def test_list_keys_with_user_email():
+    """
+    Test that user_email is correctly populated in list_keys response
+    when return_full_object=True, even without expand=user.
+    """
+    mock_prisma_client = AsyncMock()
+    
+    # Mock key return
+    mock_key = MagicMock()
+    mock_key.user_id = "user-123"
+    mock_key.token = "sk-123"
+    # Pydantic model dump mock
+    mock_key.model_dump.return_value = {
+        "token": "sk-123",
+        "user_id": "user-123",
+        "key_alias": "test-key"
+    }
+    # Fallback for dict() if needed
+    mock_key.dict.return_value = {
+        "token": "sk-123",
+        "user_id": "user-123",
+        "key_alias": "test-key"
+    }
+    
+    # Mock user return
+    mock_user = MagicMock()
+    mock_user.user_id = "user-123"
+    mock_user.user_email = "test@example.com"
+    
+    mock_prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[mock_key])
+    mock_prisma_client.db.litellm_verificationtoken.count = AsyncMock(return_value=1)
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(return_value=[mock_user])
+
+    args = {
+        "prisma_client": mock_prisma_client,
+        "page": 1,
+        "size": 10,
+        "user_id": "user-123",
+        "team_id": None,
+        "organization_id": None,
+        "key_alias": None,
+        "key_hash": None,
+        "return_full_object": True, # This should trigger fetching user email
+        "admin_team_ids": None,
+        "user_role": LitellmUserRoles.PROXY_ADMIN.value,
+    }
+
+    result = await _list_key_helper(**args)
+    
+    # Verify we fetched the user to get the email
+    mock_prisma_client.db.litellm_usertable.find_many.assert_called_once()
+    
+    # Verify the email is in the response
+    assert len(result["keys"]) == 1
+    key_obj = result["keys"][0]
+    assert key_obj.user_email == "test@example.com"
