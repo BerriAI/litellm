@@ -417,7 +417,6 @@ function RequestResponseSection({
                     }}
                   />
                 ) : (
-                  <div style={{ padding: "0 24px" }}>
                   <Tabs
                     activeKey={activeTab}
                     onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
@@ -459,7 +458,6 @@ function RequestResponseSection({
                       },
                     ]}
                   />
-                  </div>
                 )}
               </div>
             ),
