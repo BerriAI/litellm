@@ -397,6 +397,7 @@ from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
 )
 from litellm.proxy.management_helpers.audit_logs import create_audit_log_for_update
+from litellm.proxy.middleware.auth_middleware import AuthMiddleware
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.ocr_endpoints.endpoints import router as ocr_router
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
@@ -952,8 +953,60 @@ def get_openapi_schema():
     if server_root_path:
         openapi_schema["servers"] = [{"url": "/" + server_root_path.strip("/")}]
 
+    # Add security scheme since auth headers are now extracted in middleware
+    # instead of via FastAPI Security() dependencies
+    _add_openapi_security_scheme(openapi_schema)
+
     app.openapi_schema = openapi_schema
     return app.openapi_schema
+
+
+def _get_authenticated_routes() -> set:
+    """Return the set of route paths that have user_api_key_auth as a dependency."""
+    from starlette.routing import BaseRoute
+
+    authenticated: set = set()
+    for route in app.routes:
+        if not isinstance(route, BaseRoute) or not hasattr(route, "dependant"):
+            continue
+        deps = getattr(route, "dependencies", []) or []
+        dependant = getattr(route, "dependant", None)
+        # Check route-level dependencies=[Depends(user_api_key_auth)]
+        all_deps = list(deps)
+        # Check endpoint parameter-level Depends(user_api_key_auth)
+        if dependant and hasattr(dependant, "dependencies"):
+            all_deps.extend(dependant.dependencies)
+        for dep in all_deps:
+            call = getattr(dep, "call", None) if hasattr(dep, "call") else None
+            if call is None:
+                # starlette Depends stores it differently
+                call = getattr(dep, "dependency", None)
+            if call is user_api_key_auth:
+                path = getattr(route, "path", None)
+                if path:
+                    authenticated.add(path)
+                break
+    return authenticated
+
+
+def _add_openapi_security_scheme(openapi_schema: dict) -> None:
+    """Add API key security scheme to operations that use user_api_key_auth."""
+    if "components" not in openapi_schema:
+        openapi_schema["components"] = {}
+    openapi_schema["components"]["securitySchemes"] = {
+        "APIKeyHeader": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "Authorization",
+        }
+    }
+    authenticated_routes = _get_authenticated_routes()
+    for path, path_data in openapi_schema.get("paths", {}).items():
+        if path not in authenticated_routes:
+            continue
+        for operation in path_data.values():
+            if isinstance(operation, dict):
+                operation["security"] = [{"APIKeyHeader": []}]
 
 
 def custom_openapi():
@@ -1197,6 +1250,7 @@ app.add_middleware(
 )
 
 app.add_middleware(PrometheusAuthMiddleware)
+app.add_middleware(AuthMiddleware)
 
 
 def mount_swagger_ui():

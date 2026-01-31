@@ -1225,22 +1225,32 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
 @tracer.wrap()
 async def user_api_key_auth(
     request: Request,
-    api_key: str = fastapi.Security(api_key_header),
-    azure_api_key_header: str = fastapi.Security(azure_api_key_header),
-    anthropic_api_key_header: Optional[str] = fastapi.Security(
-        anthropic_api_key_header
-    ),
-    google_ai_studio_api_key_header: Optional[str] = fastapi.Security(
-        google_ai_studio_api_key_header
-    ),
-    azure_apim_header: Optional[str] = fastapi.Security(azure_apim_header),
-    custom_litellm_key_header: Optional[str] = fastapi.Security(
-        custom_litellm_key_header
-    ),
 ) -> UserAPIKeyAuth:
     """
     Parent function to authenticate user api key / jwt token.
     """
+
+    # If AuthMiddleware already ran, return cached result
+    if hasattr(request.state, "user_api_key_dict"):
+        return request.state.user_api_key_dict
+
+    # Fallback: extract headers and run auth directly
+    api_key = request.headers.get(SpecialHeaders.openai_authorization.value) or ""
+    azure_api_key_header = request.headers.get(
+        SpecialHeaders.azure_authorization.value
+    )
+    anthropic_api_key_header = request.headers.get(
+        SpecialHeaders.anthropic_authorization.value
+    )
+    google_ai_studio_api_key_header = request.headers.get(
+        SpecialHeaders.google_ai_studio_authorization.value
+    )
+    azure_apim_header = request.headers.get(
+        SpecialHeaders.azure_apim_authorization.value
+    )
+    custom_litellm_key_header = request.headers.get(
+        SpecialHeaders.custom_litellm_api_key.value
+    )
 
     request_data = await _read_request_body(request=request)
     request_data = populate_request_with_path_params(

@@ -14,6 +14,64 @@ from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
 from litellm.proxy.proxy_server import app
 
 
+class TestSwaggerSecuritySchemes:
+    """Test suite for validating security scheme annotations in the OpenAPI schema."""
+
+    @pytest.fixture
+    def client(self):
+        return TestClient(app)
+
+    def test_security_schemes_present(self, client):
+        """Verify securitySchemes component exists with correct APIKeyHeader format."""
+        app.openapi_schema = None
+        response = client.get("/openapi.json")
+        assert response.status_code == 200
+
+        schema = response.json()
+        assert "securitySchemes" in schema.get("components", {})
+        api_key_scheme = schema["components"]["securitySchemes"]["APIKeyHeader"]
+        assert api_key_scheme == {
+            "type": "apiKey",
+            "in": "header",
+            "name": "Authorization",
+        }
+
+    def test_authenticated_routes_have_security(self, client):
+        """Verify that routes with Depends(user_api_key_auth) have security annotation."""
+        app.openapi_schema = None
+        response = client.get("/openapi.json")
+        schema = response.json()
+
+        authenticated_paths = ["/chat/completions", "/v1/chat/completions"]
+        for path in authenticated_paths:
+            if path not in schema["paths"]:
+                continue
+            for method, operation in schema["paths"][path].items():
+                if not isinstance(operation, dict):
+                    continue
+                assert "security" in operation, (
+                    f"{method.upper()} {path} should have security annotation"
+                )
+                assert operation["security"] == [{"APIKeyHeader": []}]
+
+    def test_unauthenticated_routes_no_security(self, client):
+        """Verify that public routes without auth do NOT have security annotation."""
+        app.openapi_schema = None
+        response = client.get("/openapi.json")
+        schema = response.json()
+
+        unauthenticated_paths = ["/health/liveliness", "/health/liveness"]
+        for path in unauthenticated_paths:
+            if path not in schema["paths"]:
+                continue
+            for method, operation in schema["paths"][path].items():
+                if not isinstance(operation, dict):
+                    continue
+                assert "security" not in operation, (
+                    f"{method.upper()} {path} should NOT have security annotation"
+                )
+
+
 class TestSwaggerChatCompletions:
     """Test suite for validating /chat/completions schema in Swagger documentation."""
 

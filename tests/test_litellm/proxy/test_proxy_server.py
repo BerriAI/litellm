@@ -5391,3 +5391,187 @@ async def test_update_general_settings_maximum_spend_logs_retention_period(monke
         )
         assert mock_gs.get("maximum_spend_logs_retention_period") is None
         mock_reschedule.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auth_middleware_result_matches_depends():
+    """
+    Verify that user_api_key_auth returns the same object
+    whether it runs through AuthMiddleware (request.state) or the fallback path.
+    """
+    from starlette.requests import Request as StarletteRequest
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    expected = UserAPIKeyAuth(
+        api_key="sk-test",
+        user_id="test-user",
+        team_id="test-team",
+    )
+
+    # Middleware path: request.state is pre-populated by AuthMiddleware
+    scope = {"type": "http", "headers": [], "method": "POST", "path": "/chat/completions"}
+    request = StarletteRequest(scope=scope)
+    request.state.user_api_key_dict = expected
+    result = await user_api_key_auth(request=request)
+    assert result is expected
+    assert result.user_id == "test-user"
+    assert result.team_id == "test-team"
+
+    # Fallback path: no middleware, user_api_key_auth extracts headers and runs auth directly
+    scope2 = {"type": "http", "headers": [(b"authorization", b"Bearer sk-fallback")], "method": "POST", "path": "/chat/completions"}
+    request2 = StarletteRequest(scope=scope2)
+
+    expected_fallback = UserAPIKeyAuth(
+        api_key="sk-fallback",
+        user_id="fallback-user",
+    )
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth._user_api_key_auth_builder",
+        new_callable=AsyncMock,
+        return_value=expected_fallback,
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth._read_request_body",
+        new_callable=AsyncMock,
+        return_value={},
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth.RouteChecks.should_call_route",
+    ), patch(
+        "litellm.proxy.auth.user_api_key_auth.get_end_user_id_from_request_body",
+        return_value=None,
+    ):
+        result2 = await user_api_key_auth(request=request2)
+    assert result2.user_id == "fallback-user"
+
+
+def test_openapi_security_scheme():
+    """Verify OpenAPI schema applies security only to authenticated routes."""
+    from litellm.proxy.proxy_server import _add_openapi_security_scheme
+
+    schema = {
+        "paths": {
+            "/chat/completions": {
+                "post": {"summary": "Chat"},
+            },
+            "/health/liveliness": {
+                "get": {"summary": "Liveliness"},
+            },
+        },
+        "components": {},
+    }
+    # Mock _get_authenticated_routes to return only /chat/completions
+    with patch(
+        "litellm.proxy.proxy_server._get_authenticated_routes",
+        return_value={"/chat/completions"},
+    ):
+        _add_openapi_security_scheme(schema)
+
+    assert schema["components"]["securitySchemes"] == {
+        "APIKeyHeader": {"type": "apiKey", "in": "header", "name": "Authorization"}
+    }
+    # Authenticated route gets security
+    assert schema["paths"]["/chat/completions"]["post"]["security"] == [
+        {"APIKeyHeader": []}
+    ]
+    # Unauthenticated route does NOT get security
+    assert "security" not in schema["paths"]["/health/liveliness"]["get"]
+
+
+@pytest.mark.asyncio
+async def test_auth_middleware_skips_on_failure():
+    """Verify that when middleware auth fails, request.state is NOT set,
+    so the fallback path in user_api_key_auth() runs."""
+    from fastapi import HTTPException
+    from starlette.requests import Request as StarletteRequest
+
+    from litellm.proxy.middleware.auth_middleware import AuthMiddleware
+
+    middleware = AuthMiddleware(app=None)
+
+    # Simulate a request with no auth headers — middleware should fail silently
+    scope = {
+        "type": "http",
+        "headers": [],
+        "method": "POST",
+        "path": "/chat/completions",
+    }
+    request = StarletteRequest(scope=scope)
+
+    call_next_called = False
+
+    async def mock_call_next(req):
+        nonlocal call_next_called
+        call_next_called = True
+        # Verify request.state was NOT set (auth failed)
+        assert not hasattr(req.state, "user_api_key_dict")
+
+        class MockResponse:
+            status_code = 200
+
+        return MockResponse()
+
+    with patch(
+        "litellm.proxy.middleware.auth_middleware._read_request_body",
+        new_callable=AsyncMock,
+        return_value={},
+    ), patch(
+        "litellm.proxy.middleware.auth_middleware._user_api_key_auth_builder",
+        new_callable=AsyncMock,
+        side_effect=HTTPException(status_code=401, detail="Unauthorized"),
+    ):
+        await middleware.dispatch(request, mock_call_next)
+
+    assert call_next_called, "call_next should still be called after auth failure"
+
+
+@pytest.mark.asyncio
+async def test_auth_middleware_sets_state_on_success():
+    """Verify that when middleware auth succeeds, request.state is set."""
+    from starlette.requests import Request as StarletteRequest
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.middleware.auth_middleware import AuthMiddleware
+
+    middleware = AuthMiddleware(app=None)
+    expected = UserAPIKeyAuth(api_key="sk-test", user_id="test-user")
+
+    scope = {
+        "type": "http",
+        "headers": [(b"authorization", b"Bearer sk-test")],
+        "method": "POST",
+        "path": "/chat/completions",
+    }
+    request = StarletteRequest(scope=scope)
+
+    async def mock_call_next(req):
+        assert hasattr(req.state, "user_api_key_dict")
+        assert req.state.user_api_key_dict.user_id == "test-user"
+
+        class MockResponse:
+            status_code = 200
+
+        return MockResponse()
+
+    with patch(
+        "litellm.proxy.middleware.auth_middleware._read_request_body",
+        new_callable=AsyncMock,
+        return_value={},
+    ), patch(
+        "litellm.proxy.middleware.auth_middleware._user_api_key_auth_builder",
+        new_callable=AsyncMock,
+        return_value=expected,
+    ), patch(
+        "litellm.proxy.middleware.auth_middleware.RouteChecks.should_call_route",
+    ), patch(
+        "litellm.proxy.middleware.auth_middleware.get_end_user_id_from_request_body",
+        return_value=None,
+    ), patch(
+        "litellm.proxy.middleware.auth_middleware.get_request_route",
+        return_value="/chat/completions",
+    ), patch(
+        "litellm.proxy.middleware.auth_middleware.normalize_request_route",
+        return_value="/chat/completions",
+    ):
+        await middleware.dispatch(request, mock_call_next)
