@@ -1,3 +1,4 @@
+from functools import lru_cache
 from typing import Optional, Tuple
 
 import httpx
@@ -98,7 +99,7 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
-def get_llm_provider(  # noqa: PLR0915
+def _get_llm_provider_impl(  # noqa: PLR0915
     model: str,
     custom_llm_provider: Optional[str] = None,
     api_base: Optional[str] = None,
@@ -106,13 +107,8 @@ def get_llm_provider(  # noqa: PLR0915
     litellm_params: Optional[LiteLLM_Params] = None,
 ) -> Tuple[str, str, Optional[str], Optional[str]]:
     """
-    Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
-
-    For router -> Can also give the whole litellm param dict -> this function will extract the relevant details
-
-    Raises Error - if unable to map model to a provider
-
-    Return model, custom_llm_provider, dynamic_api_key, api_base
+    Implementation of get_llm_provider. Use get_llm_provider() which adds LRU caching
+    when called with only (model, custom_llm_provider).
     """
     try:
         if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
@@ -488,6 +484,47 @@ def get_llm_provider(  # noqa: PLR0915
                 ),
                 llm_provider="",
             )
+
+
+@lru_cache(maxsize=1024)
+def _get_llm_provider_cached(
+    model: str, custom_llm_provider: Optional[str]
+) -> Tuple[str, str, Optional[str], Optional[str]]:
+    """Cached path for get_llm_provider when api_base, api_key, litellm_params are None."""
+    return _get_llm_provider_impl(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=None,
+        api_key=None,
+        litellm_params=None,
+    )
+
+
+def get_llm_provider(  # noqa: PLR0915
+    model: str,
+    custom_llm_provider: Optional[str] = None,
+    api_base: Optional[str] = None,
+    api_key: Optional[str] = None,
+    litellm_params: Optional[LiteLLM_Params] = None,
+) -> Tuple[str, str, Optional[str], Optional[str]]:
+    """
+    Returns the provider for a given model name - e.g. 'azure/chatgpt-v-2' -> 'azure'
+
+    For router -> Can also give the whole litellm param dict -> this function will extract the relevant details
+
+    Raises Error - if unable to map model to a provider
+
+    Return model, custom_llm_provider, dynamic_api_key, api_base
+    """
+    if api_base is None and api_key is None and litellm_params is None:
+        return _get_llm_provider_cached(model, custom_llm_provider)
+    return _get_llm_provider_impl(
+        model=model,
+        custom_llm_provider=custom_llm_provider,
+        api_base=api_base,
+        api_key=api_key,
+        litellm_params=litellm_params,
+    )
 
 
 def _get_openai_compatible_provider_info(  # noqa: PLR0915

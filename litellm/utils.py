@@ -968,11 +968,22 @@ def function_setup(  # noqa: PLR0915
             # signatures to ensure compatibility.
             if isinstance(messages, list) and len(messages) > 0:
                 try:
+                    from litellm.litellm_core_utils.get_llm_provider_logic import (
+                        get_llm_provider,
+                    )
                     from litellm.litellm_core_utils.prompt_templates.factory import (
                         THOUGHT_SIGNATURE_SEPARATOR,
                     )
 
                     custom_llm_provider = kwargs.get("custom_llm_provider")
+                    if not custom_llm_provider and model:
+                        try:
+                            _, custom_llm_provider, _, _ = get_llm_provider(
+                                model=model,
+                                custom_llm_provider=custom_llm_provider,
+                            )
+                        except Exception:
+                            pass
 
                     if not _is_gemini_model(model, custom_llm_provider):
                         verbose_logger.debug(
@@ -1858,7 +1869,10 @@ def client(original_function):  # noqa: PLR0915
                     end_time=end_time,
                 )
 
-            _update_response_metadata(
+            update_response_metadata = getattr(
+                sys.modules[__name__], "update_response_metadata"
+            )
+            update_response_metadata(
                 result=result,
                 logging_obj=logging_obj,
                 model=model,
@@ -5682,16 +5696,7 @@ def get_model_info(model: str, custom_llm_provider: Optional[str] = None) -> Mod
         custom_llm_provider=custom_llm_provider,
     )
 
-    provider_info = get_provider_info(
-        model=model, custom_llm_provider=custom_llm_provider
-    )
-    if provider_info:
-        for key, value in provider_info.items():
-            if value is not None:
-                _model_info[key] = value  # type: ignore
-
-    if verbose_logger.isEnabledFor(logging.DEBUG):
-        verbose_logger.debug(f"model_info: {_model_info}")
+    verbose_logger.debug(f"model_info: {_model_info}")
 
     returned_model_info = ModelInfo(
         **_model_info, supported_openai_params=supported_openai_params
