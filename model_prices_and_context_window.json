@@ -5429,7 +5429,8 @@
         "max_query_tokens": 4096,
         "max_tokens": 32768,
         "mode": "rerank",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-cohere-rerank-4-0-in-microsoft-foundry/4477076"
     },
     "azure_ai/cohere-rerank-v4.0-fast": {
         "input_cost_per_query": 0.002,
@@ -5440,7 +5441,8 @@
         "max_query_tokens": 4096,
         "max_tokens": 32768,
         "mode": "rerank",
-        "output_cost_per_token": 0.0
+        "output_cost_per_token": 0.0,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-cohere-rerank-4-0-in-microsoft-foundry/4477076"
     },
     "azure_ai/deepseek-v3.2": {
         "input_cost_per_token": 5.8e-07,
@@ -5450,6 +5452,7 @@
         "max_tokens": 163840,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-deepseek-v3-2-and-deepseek-v3-2-speciale-in-microsoft-foundry/4477549",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
@@ -5464,6 +5467,7 @@
         "max_tokens": 163840,
         "mode": "chat",
         "output_cost_per_token": 1.68e-06,
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/introducing-deepseek-v3-2-and-deepseek-v3-2-speciale-in-microsoft-foundry/4477549",
         "supports_assistant_prefill": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
