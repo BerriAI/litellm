@@ -32,6 +32,21 @@ from litellm.types.containers.main import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clear_client_cache():
+    """
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    # Clear again after test to avoid polluting other tests
+    if cache is not None:
+        cache.flush_cache()
+
+
 class TestContainerAPI:
     """Test suite for container API functionality."""
 
