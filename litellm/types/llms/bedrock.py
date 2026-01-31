@@ -8,6 +8,7 @@ from .openai import ChatCompletionToolCallChunk
 
 class CachePointBlock(TypedDict, total=False):
     type: Literal["default"]
+    ttl: Optional[str]
 
 
 class SystemContentBlock(TypedDict, total=False):
@@ -959,6 +960,7 @@ class BedrockGetBatchResponse(TypedDict, total=False):
     outputDataConfig: BedrockOutputDataConfig
     timeoutDurationInHours: Optional[int]
     clientRequestToken: Optional[str]
+
 
 class BedrockToolBlock(TypedDict, total=False):
     toolSpec: Optional[ToolSpecBlock]

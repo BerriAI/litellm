@@ -306,9 +306,7 @@ class AmazonConverseConfig(BaseConfig):
         return "nova-2-lite" in model_without_region
 
     def _map_web_search_options(
-        self,
-        web_search_options: dict,
-        model: str
+        self, web_search_options: dict, model: str
     ) -> Optional[BedrockToolBlock]:
         """
         Map web_search_options to Nova grounding systemTool.
@@ -805,12 +803,12 @@ class AmazonConverseConfig(BaseConfig):
                 if bedrock_tier in ("default", "flex", "priority"):
                     optional_params["serviceTier"] = {"type": bedrock_tier}
 
-            if param == "web_search_options" and value and isinstance(value, dict):                                                                                 
-                grounding_tool = self._map_web_search_options(value, model)                                                                                         
-                if grounding_tool is not None:                                                                                                                      
-                    optional_params = self._add_tools_to_optional_params(                                                                                           
-                        optional_params=optional_params, tools=[grounding_tool]                                                                                     
-                    )  
+            if param == "web_search_options" and value and isinstance(value, dict):
+                grounding_tool = self._map_web_search_options(value, model)
+                if grounding_tool is not None:
+                    optional_params = self._add_tools_to_optional_params(
+                        optional_params=optional_params, tools=[grounding_tool]
+                    )
 
         # Only update thinking tokens for non-GPT-OSS models and non-Nova-Lite-2 models
         # Nova Lite 2 handles token budgeting differently through reasoningConfig
@@ -950,12 +948,20 @@ class AmazonConverseConfig(BaseConfig):
         ],
         block_type: Literal["system", "content_block"],
     ) -> Optional[Union[SystemContentBlock, ContentBlock]]:
-        if message_block.get("cache_control", None) is None:
+        cache_control = message_block.get("cache_control", None)
+        if cache_control is None:
             return None
+
+        cache_point = CachePointBlock(type="default")
+        if isinstance(cache_control, dict) and "ttl" in cache_control:
+            ttl_value = cache_control.get("ttl")
+            if ttl_value in ["5m", "1h"]:
+                cache_point["ttl"] = ttl_value
+
         if block_type == "system":
-            return SystemContentBlock(cachePoint=CachePointBlock(type="default"))
+            return SystemContentBlock(cachePoint=cache_point)
         else:
-            return ContentBlock(cachePoint=CachePointBlock(type="default"))
+            return ContentBlock(cachePoint=cache_point)
 
     def _transform_system_message(
         self, messages: List[AllMessageValues]
@@ -1185,9 +1191,11 @@ class AmazonConverseConfig(BaseConfig):
                 )
 
         # Prepare and separate parameters
-        inference_params, additional_request_params, request_metadata = self._prepare_request_params(
-            optional_params, model
-        )
+        (
+            inference_params,
+            additional_request_params,
+            request_metadata,
+        ) = self._prepare_request_params(optional_params, model)
 
         original_tools = inference_params.pop("tools", [])
 
@@ -1473,7 +1481,9 @@ class AmazonConverseConfig(BaseConfig):
 
         return message, returned_finish_reason
 
-    def _translate_message_content(self, content_blocks: List[ContentBlock]) -> Tuple[
+    def _translate_message_content(
+        self, content_blocks: List[ContentBlock]
+    ) -> Tuple[
         str,
         List[ChatCompletionToolCallChunk],
         Optional[List[BedrockConverseReasoningContentBlock]],
@@ -1490,9 +1500,9 @@ class AmazonConverseConfig(BaseConfig):
         """
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
         for idx, content in enumerate(content_blocks):
             """
@@ -1546,7 +1556,7 @@ class AmazonConverseConfig(BaseConfig):
 
         return content_str, tools, reasoningContentBlocks, citationsContentBlocks
 
-    def _transform_response( # noqa: PLR0915
+    def _transform_response(  # noqa: PLR0915
         self,
         model: str,
         response: httpx.Response,
@@ -1619,9 +1629,9 @@ class AmazonConverseConfig(BaseConfig):
         chat_completion_message: ChatCompletionResponseMessage = {"role": "assistant"}
         content_str = ""
         tools: List[ChatCompletionToolCallChunk] = []
-        reasoningContentBlocks: Optional[List[BedrockConverseReasoningContentBlock]] = (
-            None
-        )
+        reasoningContentBlocks: Optional[
+            List[BedrockConverseReasoningContentBlock]
+        ] = None
         citationsContentBlocks: Optional[List[CitationsContentBlock]] = None
 
         if message is not None:
@@ -1640,15 +1650,17 @@ class AmazonConverseConfig(BaseConfig):
             provider_specific_fields["citationsContent"] = citationsContentBlocks
 
         if provider_specific_fields:
-            chat_completion_message["provider_specific_fields"] = provider_specific_fields
+            chat_completion_message[
+                "provider_specific_fields"
+            ] = provider_specific_fields
 
         if reasoningContentBlocks is not None:
-            chat_completion_message["reasoning_content"] = (
-                self._transform_reasoning_content(reasoningContentBlocks)
-            )
-            chat_completion_message["thinking_blocks"] = (
-                self._transform_thinking_blocks(reasoningContentBlocks)
-            )
+            chat_completion_message[
+                "reasoning_content"
+            ] = self._transform_reasoning_content(reasoningContentBlocks)
+            chat_completion_message[
+                "thinking_blocks"
+            ] = self._transform_thinking_blocks(reasoningContentBlocks)
         chat_completion_message["content"] = content_str
         if (
             json_mode is True
