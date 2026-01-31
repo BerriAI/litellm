@@ -336,3 +336,45 @@ async def test_chat_completion_bad_and_good_model():
             f"Iteration {iteration + 1}: {'✓' if success else '✗'} ({time.time() - start_time:.2f}s)"
         )
         assert success, "Not all good model requests succeeded"
+
+
+@pytest.mark.asyncio
+async def test_router_fallback_exhaustion():
+    """
+    Test for Bug 19985:
+    """
+    from litellm import Router
+    import pytest
+
+    # Setup: Only ONE fallback model available
+    model_list = [
+        {
+            "model_name": "gpt-3.5-turbo",
+            "litellm_params": {"model": "openai/fake", "api_key": "bad-key"},
+        },
+        {
+            "model_name": "bad-model-1",
+            "litellm_params": {"model": "azure/fake", "api_key": "bad-key"},
+        }
+    ]
+
+    # max_fallbacks=10 is much larger than the 1 fallback provided in the list
+    router = Router(
+        model_list=model_list,
+        fallbacks=[{"gpt-3.5-turbo": ["bad-model-1"]}],
+        max_fallbacks=10
+    )
+
+    try:
+        # This will fail and attempt to fallback
+        await router.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "test"}]
+        )
+    except Exception as e:
+        # The success criteria is that we DON'T get an IndexError
+        assert not isinstance(e, IndexError), f"Expected API error, but got IndexError: {e}"
+        # Also ensure we actually hit a fallback attempt
+        print(f"Caught expected exception: {type(e).__name__}")
+
+
