@@ -10164,9 +10164,13 @@ async def get_image():
     if logo_path.startswith(("http://", "https://")):
         try:
             # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+            from litellm.types.llms.custom_http import httpxSpecialProvider
 
-            async_client = AsyncHTTPHandler(timeout=5.0)
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
             response = await async_client.get(logo_path)
             if response.status_code == 200:
                 # Save the image to a local file
