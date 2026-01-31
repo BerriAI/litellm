@@ -1,3 +1,5 @@
+import Image from '@theme/IdealImage';
+
 # UI Spend Log Settings
 
 Configure spend log behavior directly from the Admin UI—no config file edits or proxy restart required. This is especially useful for cloud deployments where updating the config is difficult or requires a long release process.
