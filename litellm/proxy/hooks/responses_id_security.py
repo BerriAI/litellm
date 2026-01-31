@@ -5,16 +5,7 @@ This hook uses the DBSpendUpdateWriter to batch-write response IDs to the databa
 instead of writing immediately on each request.
 """
 
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    AsyncGenerator,
-    Literal,
-    Optional,
-    Tuple,
-    Union,
-    cast,
-)
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional, Tuple, Union, cast
 
 from fastapi import HTTPException
 
@@ -29,7 +20,7 @@ from litellm.types.llms.openai import (
     BaseLiteLLMOpenAIResponseObject,
     ResponsesAPIResponse,
 )
-from litellm.types.utils import LLMResponseTypes, SpecialEnums
+from litellm.types.utils import CallTypesLiteral, LLMResponseTypes, SpecialEnums
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
@@ -45,18 +36,7 @@ class ResponsesIDSecurity(CustomLogger):
         user_api_key_dict: "UserAPIKeyAuth",
         cache: "DualCache",
         data: dict,
-        call_type: Literal[
-            "completion",
-            "text_completion",
-            "embeddings",
-            "image_generation",
-            "moderation",
-            "audio_transcription",
-            "pass_through_endpoint",
-            "rerank",
-            "mcp_call",
-            "anthropic_messages",
-        ],
+        call_type: CallTypesLiteral,
     ) -> Optional[Union[Exception, str, dict]]:
         # MAP all the responses api response ids to the encrypted response ids
         responses_api_call_types = {
@@ -136,7 +116,7 @@ class ResponsesIDSecurity(CustomLogger):
         split_result = response_id.split("resp_")
         if len(split_result) < 2:
             return False
-        
+
         remaining_string = split_result[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True
@@ -161,7 +141,7 @@ class ResponsesIDSecurity(CustomLogger):
         split_result = response_id.split("resp_")
         if len(split_result) < 2:
             return response_id, None, None
-        
+
         remaining_string = split_result[1]
         decrypted_value = decrypt_value_helper(
             value=remaining_string, key="response_id", return_original_value=True
@@ -193,6 +173,17 @@ class ResponsesIDSecurity(CustomLogger):
                 return response_id, None, None
         return response_id, None, None
 
+    def _get_signing_key(self) -> Optional[str]:
+        """Get the signing key for encryption/decryption."""
+        import os
+
+        from litellm.proxy.proxy_server import master_key
+
+        salt_key = os.getenv("LITELLM_SALT_KEY", None)
+        if salt_key is None:
+            salt_key = master_key
+        return salt_key
+
     def _encrypt_response_id(
         self,
         response: BaseLiteLLMOpenAIResponseObject,
@@ -200,6 +191,18 @@ class ResponsesIDSecurity(CustomLogger):
     ) -> BaseLiteLLMOpenAIResponseObject:
         # encrypt the response id using the symmetric key
         # encrypt the response id, and encode the user id and response id in base64
+
+        # Check if signing key is available
+        signing_key = self._get_signing_key()
+        if signing_key is None:
+            verbose_proxy_logger.debug(
+                "Response ID encryption is enabled but no signing key is configured. "
+                "Please set LITELLM_SALT_KEY environment variable or configure a master_key. "
+                "Skipping response ID encryption. "
+                "See: https://docs.litellm.ai/docs/proxy/prod#5-set-litellm-salt-key"
+            )
+            return response
+
         response_id = getattr(response, "id", None)
         response_obj = getattr(response, "response", None)
 

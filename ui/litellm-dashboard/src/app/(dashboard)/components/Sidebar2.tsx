@@ -19,6 +19,7 @@ import {
   ExperimentOutlined,
   ToolOutlined,
   TagsOutlined,
+  AuditOutlined,
 } from "@ant-design/icons";
 // import {
 //   all_admin_roles,
@@ -102,6 +103,8 @@ const routeFor = (slug: string): string => {
       return "logs";
     case "guardrails":
       return "guardrails";
+    case "policies":
+      return "policies";
 
     // tools
     case "mcp-servers":
@@ -120,6 +123,8 @@ const routeFor = (slug: string): string => {
       return "experimental/api-playground";
     case "tag-management":
       return "experimental/tag-management";
+    case "claude-code-plugins":
+      return "experimental/claude-code-plugins";
     case "usage": // "Old Usage"
       return "experimental/old-usage";
 
@@ -201,6 +206,13 @@ const menuItems: MenuItemCfg[] = [
       roles: all_admin_roles,
     },
     {
+      key: "28",
+      page: "policies",
+      label: "Policies",
+      icon: <AuditOutlined style={{ fontSize: 18 }} />,
+      roles: all_admin_roles,
+    },
+    {
       key: "26",
       page: "tools",
       label: "Tools",
@@ -255,6 +267,13 @@ const menuItems: MenuItemCfg[] = [
           page: "tag-management",
           label: "Tag Management",
           icon: <TagsOutlined style={{ fontSize: 18 }} />,
+          roles: all_admin_roles,
+        },
+        {
+          key: "27",
+          page: "claude-code-plugins",
+          label: "Claude Code Plugins",
+          icon: <ToolOutlined style={{ fontSize: 18 }} />,
           roles: all_admin_roles,
         },
         { key: "4", page: "usage", label: "Old Usage", icon: <BarChartOutlined style={{ fontSize: 18 }} /> },

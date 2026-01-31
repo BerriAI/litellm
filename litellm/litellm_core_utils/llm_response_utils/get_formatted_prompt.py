@@ -4,6 +4,7 @@ from typing import List, Literal
 def get_formatted_prompt(
     data: dict,
     call_type: Literal[
+        "acompletion",
         "completion",
         "embedding",
         "image_generation",
@@ -18,7 +19,7 @@ def get_formatted_prompt(
     Returns a string.
     """
     prompt = ""
-    if call_type == "completion":
+    if call_type == "acompletion" or call_type == "completion":
         for message in data["messages"]:
             if message.get("content", None) is not None:
                 content = message.get("content")

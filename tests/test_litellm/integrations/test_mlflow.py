@@ -1,6 +1,8 @@
 import asyncio
+import json
 import os
 import sys
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 # Adds the grandparent directory to sys.path to allow importing project modules
@@ -125,3 +127,62 @@ def test_mlflow_token_usage_attribute_structure():
             "output_tokens": 7,
             "total_tokens": 12,
         }
+
+
+def _mock_mlflow_modules():
+    mock_tracking = MagicMock()
+    mock_tracking.MlflowClient = MagicMock()
+
+    class DummySpanEvent:
+        def __init__(self, name, attributes):
+            self.name = name
+            self.attributes = attributes
+
+    mock_entities = MagicMock()
+    mock_entities.SpanStatusCode.OK = "OK"
+    mock_entities.SpanEvent = DummySpanEvent
+
+    return {
+        "mlflow": MagicMock(),
+        "mlflow.tracking": mock_tracking,
+        "mlflow.entities": mock_entities,
+        "mlflow.tracing.utils": MagicMock(),
+    }
+
+
+def test_mlflow_stream_handler_uses_async_complete_response():
+    modules = _mock_mlflow_modules()
+    with patch.dict("sys.modules", modules):
+        from litellm.integrations.mlflow import MlflowLogger
+
+        mlflow_logger = MlflowLogger()
+        mlflow_logger._start_span_or_trace = MagicMock(return_value="mock_span")
+        mlflow_logger._end_span_or_trace = MagicMock()
+        mlflow_logger._extract_and_set_chat_attributes = MagicMock()
+
+        class DummyDelta:
+            def model_dump(self, exclude_none=True):
+                return {"content": "chunk"}
+
+        response_obj = MagicMock()
+        response_obj.choices = [MagicMock(delta=DummyDelta())]
+
+        final_response = MagicMock()
+        kwargs = {
+            "litellm_call_id": "abc123",
+            "async_complete_streaming_response": final_response,
+        }
+
+        mlflow_logger._handle_stream_event(
+            kwargs=kwargs,
+            response_obj=response_obj,
+            start_time=datetime.utcnow(),
+            end_time=datetime.utcnow(),
+        )
+
+        mlflow_logger._end_span_or_trace.assert_called_once()
+        assert (
+            mlflow_logger._end_span_or_trace.call_args.kwargs["outputs"]
+            is final_response
+        )
+        assert "abc123" not in mlflow_logger._stream_id_to_span

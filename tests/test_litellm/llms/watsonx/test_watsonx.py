@@ -250,13 +250,52 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
                 "generated_text": "Hello! How can I help you?",
                 "generated_token_count": 10,
                 "input_token_count": 5,
+                "stop_reason": "stop",  # Required field for response transformation
             }
         ],
         "model_id": "openai/gpt-oss-120b",
     }
 
+    # Mock HuggingFace template fetch to make test deterministic and avoid network flakiness.
+    # The test verifies that prompt transformation occurs (not simple concatenation), not the exact
+    # HuggingFace template format. Using a mock template that produces the correct format is sufficient.
+    from unittest.mock import patch
+
+    # Mock template that produces gpt-oss-120b-like format.
+    # Note: This is a simplified version of the actual template. The real template is more complex
+    # (adds metadata, handles tools, thinking messages, etc.), but this captures the key aspects:
+    # - Converts system role to developer (matching real template behavior)
+    # - Uses the same tag structure (<|start|>, <|message|>, <|end|>)
+    # - Preserves message content
+    mock_tokenizer_config = {
+        "status": "success",
+        "tokenizer": {
+            "chat_template": "{% for message in messages %}{% if message['role'] == 'system' %}<|start|>developer<|message|>{% else %}<|start|>{{ message['role'] }}<|message|>{% endif %}{{ message['content'] }}<|end|>{% endfor %}",
+            "bos_token": None,
+            "eos_token": None,
+        },
+    }
+
+    async def mock_aget_tokenizer_config(hf_model_name: str):
+        return mock_tokenizer_config
+
+    async def mock_aget_chat_template_file(hf_model_name: str):
+        # Return failure to use tokenizer_config instead
+        return {"status": "failure"}
+
+    # Clear any cached tokenizer config for this model to ensure fresh fetch
+    hf_model = "openai/gpt-oss-120b"
+    if hf_model in litellm.known_tokenizer_config:
+        del litellm.known_tokenizer_config[hf_model]
+    
     with patch.object(client, "post") as mock_post, patch.object(
         litellm.module_level_client, "post", return_value=mock_token_response
+    ), patch(
+        "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_tokenizer_config",
+        side_effect=mock_aget_tokenizer_config,
+    ), patch(
+        "litellm.litellm_core_utils.prompt_templates.huggingface_template_handler._aget_chat_template_file",
+        side_effect=mock_aget_chat_template_file,
     ):
         # Set the mock to return the completion response
         mock_post.return_value = mock_completion_response
@@ -279,7 +318,11 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     ), f"POST should have been called at least once, got {mock_post.call_count}"
 
     # Get the request body from the first call
-    call_args = mock_post.call_args
+    # Use call_args_list to be more robust - get the first call's arguments
+    assert len(mock_post.call_args_list) > 0, "mock_post should have at least one call"
+    call_args = mock_post.call_args_list[0]
+    assert call_args is not None, "call_args should not be None"
+    assert "data" in call_args.kwargs, "call_args.kwargs should contain 'data'"
     json_data = json.loads(call_args.kwargs["data"])
 
     print(f"\n{'='*80}")
@@ -293,6 +336,12 @@ async def test_watsonx_gpt_oss_prompt_transformation(monkeypatch):
     # Verify the transformed input is in the request
     assert "input" in json_data, "Request should have 'input' field"
     transformed_prompt = json_data["input"]
+
+    # Verify transformation occurred
+    assert transformed_prompt is not None, (
+        "Prompt transformation failed - the template should have been applied to transform "
+        "messages into the correct format for gpt-oss-120b."
+    )
 
     print(f"Transformed prompt: {repr(transformed_prompt)}")
     print(f"Prompt length: {len(transformed_prompt)}")
@@ -414,3 +463,93 @@ def test_watsonx_chat_completion_with_reasoning_effort(monkeypatch):
     assert (
         json_data["reasoning_effort"] == "low"
     ), "The value of 'reasoning_effort' should be 'low'."
+
+
+def test_watsonx_zen_api_key_from_client(monkeypatch, watsonx_chat_completion_call):
+    """
+    Test that zen_api_key can be passed from client code and is used in Authorization header.
+    """
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://test-api.watsonx.ai")
+
+    model = "watsonx/ibm/granite-3-3-8b-instruct"
+    messages = [{"role": "user", "content": "What is your favorite color?"}]
+
+    client = HTTPHandler()
+
+    zen_api_key = "U1ZDLWQo="
+
+    # No need to patch token call since zen_api_key should skip token generation
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model=model,
+                messages=messages,
+                api_key="test_api_key",
+                client=client,
+                zen_api_key=zen_api_key,
+            )
+        except Exception as e:
+            print(f"Caught expected exception: {e}")
+
+    # Verify the request was made
+    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+
+    # Get the headers sent in the POST request
+    request_kwargs = mock_post.call_args.kwargs
+    headers = request_kwargs["headers"]
+
+    print("\nHeaders sent to WatsonX API:")
+    print(json.dumps(dict(headers), indent=2))
+
+    # Verify Authorization header uses ZenApiKey format
+    assert "Authorization" in headers, "Authorization header should be present."
+    assert headers["Authorization"] == f"ZenApiKey {zen_api_key}", (
+        f"Authorization header should use ZenApiKey format. "
+        f"Expected: 'ZenApiKey {zen_api_key}', Got: '{headers['Authorization']}'"
+    )
+
+
+def test_watsonx_zen_api_key_from_env(monkeypatch, watsonx_chat_completion_call):
+    """
+    Test that zen_api_key from environment variable is used in Authorization header.
+    """
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "test-project-id")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://test-api.watsonx.ai")
+
+    zen_api_key = "U1ZDLWxpdG--==="
+    monkeypatch.setenv("WATSONX_ZENAPIKEY", zen_api_key)
+
+    model = "watsonx/ibm/granite-3-3-8b-instruct"
+    messages = [{"role": "user", "content": "What is your favorite color?"}]
+
+    client = HTTPHandler()
+
+    # No need to patch token call since zen_api_key should skip token generation
+    with patch.object(client, "post") as mock_post:
+        try:
+            completion(
+                model=model,
+                messages=messages,
+                api_key="test_api_key",
+                client=client,
+            )
+        except Exception as e:
+            print(f"Caught expected exception: {e}")
+
+    # Verify the request was made
+    assert mock_post.call_count == 1, "The completion endpoint should have been called once."
+
+    # Get the headers sent in the POST request
+    request_kwargs = mock_post.call_args.kwargs
+    headers = request_kwargs["headers"]
+
+    print("\nHeaders sent to WatsonX API:")
+    print(json.dumps(dict(headers), indent=2))
+
+    # Verify Authorization header uses ZenApiKey format
+    assert "Authorization" in headers, "Authorization header should be present."
+    assert headers["Authorization"] == f"ZenApiKey {zen_api_key}", (
+        f"Authorization header should use ZenApiKey format. "
+        f"Expected: 'ZenApiKey {zen_api_key}', Got: '{headers['Authorization']}'"
+    )

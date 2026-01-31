@@ -1,7 +1,7 @@
 import configparser
 import os
 import time
-from typing import Any, Dict, Final, List, Optional
+from typing import Any, Dict, Final, List, Optional, Tuple
 
 CONFIG_FILE_PATH_DEFAULT: Final[str] = "~/.opik.config"
 
@@ -106,7 +106,7 @@ def _remove_nulls(x: Dict[str, Any]) -> Dict[str, Any]:
 
 def get_traces_and_spans_from_payload(
     payload: List[Dict[str, Any]]
-) -> tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
     """
     Separate traces and spans from payload.
 

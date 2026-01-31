@@ -45,6 +45,32 @@ guardrails:
           description: "Score between 0-1 indicating content toxicity level"
         - name: "pii_detection"
           type: "boolean"
+
+# Example Presidio guardrail config with entity actions + confidence score thresholds
+  - guardrail_name: "presidio-pii"
+    litellm_params:
+      guardrail: presidio
+      mode: "pre_call"
+      presidio_language: "en"
+      pii_entities_config:
+        CREDIT_CARD: "MASK"
+        EMAIL_ADDRESS: "MASK"
+        US_SSN: "MASK"
+      presidio_score_thresholds:  # minimum confidence scores for keeping detections
+        CREDIT_CARD: 0.8
+        EMAIL_ADDRESS: 0.6
+
+# Example Pillar Security config via Generic Guardrail API
+  - guardrail_name: "pillar-security"
+    litellm_params:
+      guardrail: generic_guardrail_api
+      mode: [pre_call, post_call]
+      api_base: https://api.pillar.security/api/v1/integrations/litellm
+      api_key: os.environ/PILLAR_API_KEY
+      additional_provider_specific_params:
+        plr_mask: true
+        plr_evidence: true
+        plr_scanners: true
 ```
 
 
@@ -54,6 +80,13 @@ guardrails:
 - `post_call` Run **after** LLM call, on **input & output**
 - `during_call` Run **during** LLM call, on **input** Same as `pre_call` but runs in parallel as LLM call.  Response not returned until guardrail check completes
 - A list of the above values to run multiple modes, e.g. `mode: [pre_call, post_call]`
+
+### Load Balancing Guardrails
+
+Need to distribute guardrail requests across multiple accounts or regions? See [Guardrail Load Balancing](./guardrail_load_balancing.md) for details on:
+- Load balancing across multiple AWS Bedrock accounts (useful for rate limit management)
+- Weighted distribution across guardrail instances
+- Multi-region guardrail deployments
 
 
 ## 2. Start LiteLLM Gateway 
@@ -170,8 +203,12 @@ Your response headers will include `x-litellm-applied-guardrails` with the guard
 x-litellm-applied-guardrails: aporia-pre-guard
 ```
 
+### Guardrail Policies
 
-
+Need more control? Use [Guardrail Policies](./guardrail_policies.md) to:
+- Group guardrails into reusable policies
+- Enable/disable guardrails for specific teams, keys, or models
+- Inherit from existing policies and override specific guardrails
 
 ## **Using Guardrails Client Side**
 
@@ -197,13 +234,7 @@ curl -i http://localhost:4000/v1/chat/completions \
 
 Follow this simple workflow to implement and tune guardrails:
 
-### 1. ✨ View Available Guardrails
-
-:::info
-
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
-
-:::
+### 1. View Available Guardrails
 
 First, check what guardrails are available and their parameters:
 
@@ -374,13 +405,9 @@ curl --location 'http://0.0.0.0:4000/chat/completions' \
 
 ## **Proxy Admin Controls**
 
-### ✨ Monitoring Guardrails
+### Monitoring Guardrails
 
 Monitor which guardrails were executed and whether they passed or failed. e.g. guardrail going rogue and failing requests we don't intend to fail
-
-:::info
-
-✨ This is an Enterprise only feature [Get a free trial](https://www.litellm.ai/enterprise#trial)
 
 :::
 
@@ -547,7 +574,7 @@ guardrails:
 curl -X POST 'http://0.0.0.0:4000/team/update' \
 -H 'Authorization: Bearer sk-1234' \
 -H 'Content-Type: application/json' \
--D '{
+-d '{
     "team_id": "4198d93c-d375-4c83-8d5a-71e7c5473e50",
     "metadata": {"guardrails": {"modify_guardrails": false}}
 }'

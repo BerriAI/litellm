@@ -1,8 +1,21 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
 import CacheFieldGroup from "./CacheFieldGroup";
 
 describe("CacheFieldGroup", () => {
+  vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+    default: () => ({
+      token: "mock-token",
+      accessToken: "mock-access-token",
+      userId: "mock-user-id",
+      userEmail: "test@example.com",
+      userRole: "Admin",
+      premiumUser: false,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    }),
+  }));
+
   beforeEach(() => {
     cleanup();
   });
@@ -40,12 +53,7 @@ describe("CacheFieldGroup", () => {
 
     // Test with cluster type - should show host and redis_startup_nodes
     const { rerender } = render(
-      <CacheFieldGroup
-        title="Cluster Settings"
-        fields={fields}
-        cacheSettings={cacheSettings}
-        redisType="cluster"
-      />
+      <CacheFieldGroup title="Cluster Settings" fields={fields} cacheSettings={cacheSettings} redisType="cluster" />,
     );
 
     expect(screen.getByText("Cluster Settings")).toBeInTheDocument();
@@ -55,12 +63,7 @@ describe("CacheFieldGroup", () => {
 
     // Test with sentinel type - should show host and sentinel_nodes
     rerender(
-      <CacheFieldGroup
-        title="Sentinel Settings"
-        fields={fields}
-        cacheSettings={cacheSettings}
-        redisType="sentinel"
-      />
+      <CacheFieldGroup title="Sentinel Settings" fields={fields} cacheSettings={cacheSettings} redisType="sentinel" />,
     );
 
     expect(screen.getByText("Sentinel Settings")).toBeInTheDocument();
@@ -69,14 +72,7 @@ describe("CacheFieldGroup", () => {
     expect(screen.queryByText("Startup Nodes")).not.toBeInTheDocument();
 
     // Test with node type - should only show host
-    rerender(
-      <CacheFieldGroup
-        title="Node Settings"
-        fields={fields}
-        cacheSettings={cacheSettings}
-        redisType="node"
-      />
-    );
+    rerender(<CacheFieldGroup title="Node Settings" fields={fields} cacheSettings={cacheSettings} redisType="node" />);
 
     expect(screen.getByText("Node Settings")).toBeInTheDocument();
     expect(screen.getAllByText("Host")).toHaveLength(1);
@@ -106,7 +102,7 @@ describe("CacheFieldGroup", () => {
         fields={fields}
         cacheSettings={cacheSettings}
         redisType="node" // No fields match this type
-      />
+      />,
     );
 
     // Component should return null, so container should be empty
@@ -131,12 +127,7 @@ describe("CacheFieldGroup", () => {
     const cacheSettings = {}; // No port value set
 
     render(
-      <CacheFieldGroup
-        title="Connection Settings"
-        fields={fields}
-        cacheSettings={cacheSettings}
-        redisType="node"
-      />
+      <CacheFieldGroup title="Connection Settings" fields={fields} cacheSettings={cacheSettings} redisType="node" />,
     );
 
     const input = screen.getByRole("spinbutton", { name: "" });
@@ -145,4 +136,3 @@ describe("CacheFieldGroup", () => {
     expect(input).toHaveValue(6379);
   });
 });
-

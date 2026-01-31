@@ -257,6 +257,7 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self,
         base_iterator: Any,  # Can be None - will be created internally
         mcp_events: List[ResponsesAPIStreamingResponse],
+        tool_server_map: dict[str, str],
         mcp_tools_with_litellm_proxy: Optional[List[Any]] = None,
         user_api_key_auth: Any = None,
         original_request_params: Optional[Dict[str, Any]] = None,
@@ -272,19 +273,20 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.finished = False
 
         # Event queues and generation flags
-        self.mcp_discovery_events: List[ResponsesAPIStreamingResponse] = (
-            mcp_events  # Pre-generated MCP discovery events
-        )
+        self.mcp_discovery_events: List[
+            ResponsesAPIStreamingResponse
+        ] = mcp_events  # Pre-generated MCP discovery events
         self.tool_execution_events: List[ResponsesAPIStreamingResponse] = []
         self.mcp_discovery_generated = True  # Events are already generated
         self.mcp_events = (
             mcp_events  # Store the initial MCP events for backward compatibility
         )
+        self.tool_server_map = tool_server_map
 
         # Iterator references
-        self.base_iterator: Optional[Union[Any, ResponsesAPIResponse]] = (
-            base_iterator  # Will be created when needed
-        )
+        self.base_iterator: Optional[
+            Union[Any, ResponsesAPIResponse]
+        ] = base_iterator  # Will be created when needed
         self.follow_up_iterator: Optional[Any] = None
 
         # Response collection for tool execution
@@ -296,9 +298,79 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
         self.custom_llm_provider = self.original_request_params.get(
             "custom_llm_provider", None
         )
+        self.litellm_call_id = self.original_request_params.get("litellm_call_id")
+        self.litellm_trace_id = self.original_request_params.get("litellm_trace_id")
+
+        self._extract_mcp_headers_from_params()
 
         # Mark as async iterator
         self.is_async = True
+
+    def _extract_mcp_headers_from_params(self) -> None:
+        """Extract MCP headers from original request params to pass to tool calls"""
+        from typing import Dict, Optional
+        from starlette.datastructures import Headers
+        from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
+            MCPRequestHandler,
+        )
+
+        # Extract headers from secret_fields in original_request_params
+        raw_headers_from_request: Optional[Dict[str, str]] = None
+        secret_fields = self.original_request_params.get("secret_fields")
+        if secret_fields and isinstance(secret_fields, dict):
+            raw_headers_from_request = secret_fields.get("raw_headers")
+
+        # Extract MCP-specific headers
+        self.mcp_auth_header: Optional[str] = None
+        self.mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None
+        self.oauth2_headers: Optional[Dict[str, str]] = None
+        self.raw_headers: Optional[Dict[str, str]] = raw_headers_from_request
+
+        if raw_headers_from_request:
+            headers_obj = Headers(raw_headers_from_request)
+            self.mcp_auth_header = MCPRequestHandler._get_mcp_auth_header_from_headers(
+                headers_obj
+            )
+            self.mcp_server_auth_headers = (
+                MCPRequestHandler._get_mcp_server_auth_headers_from_headers(headers_obj)
+            )
+            self.oauth2_headers = MCPRequestHandler._get_oauth2_headers_from_headers(
+                headers_obj
+            )
+
+        # Also check if headers are provided in tools array (from request body)
+        tools = self.original_request_params.get("tools")
+        if tools:
+            for tool in tools:
+                if isinstance(tool, dict) and tool.get("type") == "mcp":
+                    tool_headers = tool.get("headers", {})
+                    if tool_headers and isinstance(tool_headers, dict):
+                        # Merge tool headers into mcp_server_auth_headers
+                        headers_obj_from_tool = Headers(tool_headers)
+                        tool_mcp_server_auth_headers = (
+                            MCPRequestHandler._get_mcp_server_auth_headers_from_headers(
+                                headers_obj_from_tool
+                            )
+                        )
+
+                        if tool_mcp_server_auth_headers:
+                            if self.mcp_server_auth_headers is None:
+                                self.mcp_server_auth_headers = {}
+                            # Merge the headers from tool into existing headers
+                            for (
+                                server_alias,
+                                headers_dict,
+                            ) in tool_mcp_server_auth_headers.items():
+                                if server_alias not in self.mcp_server_auth_headers:
+                                    self.mcp_server_auth_headers[server_alias] = {}
+                                self.mcp_server_auth_headers[server_alias].update(
+                                    headers_dict
+                                )
+
+                        # Also merge raw headers
+                        if self.raw_headers is None:
+                            self.raw_headers = {}
+                        self.raw_headers.update(tool_headers)
 
     def _should_auto_execute_tools(self) -> bool:
         """Check if tools should be auto-executed"""
@@ -432,9 +504,9 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
             # Use the pre-fetched all_tools from original_request_params (no re-processing needed)
             params_for_llm = {}
             for key, value in params.items():
-                params_for_llm[key] = (
-                    value  # Copy all params as-is since tools are already processed
-                )
+                params_for_llm[
+                    key
+                ] = value  # Copy all params as-is since tools are already processed
 
             tools_count = (
                 len(params_for_llm.get("tools", []))
@@ -488,9 +560,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 return
 
             for tool_call in tool_calls:
-                tool_name, tool_arguments, tool_call_id = (
-                    LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
-                )
+                (
+                    tool_name,
+                    tool_arguments,
+                    tool_call_id,
+                ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                 if tool_name and tool_call_id:
                     # Create MCP call events for this tool execution
                     call_events = create_mcp_call_events(
@@ -506,7 +580,15 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
 
             # Execute the tools
             tool_results = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
-                tool_calls=tool_calls, user_api_key_auth=self.user_api_key_auth
+                tool_server_map=self.tool_server_map,
+                tool_calls=tool_calls,
+                user_api_key_auth=self.user_api_key_auth,
+                mcp_auth_header=self.mcp_auth_header,
+                mcp_server_auth_headers=self.mcp_server_auth_headers,
+                oauth2_headers=self.oauth2_headers,
+                raw_headers=self.raw_headers,
+                litellm_call_id=self.litellm_call_id,
+                litellm_trace_id=self.litellm_trace_id,
             )
 
             # Create completion events and output_item.done events for tool execution
@@ -518,9 +600,11 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 tool_name = "unknown"
                 tool_arguments = "{}"
                 for tool_call in tool_calls:
-                    name, args, call_id = (
-                        LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
-                    )
+                    (
+                        name,
+                        args,
+                        call_id,
+                    ) = LiteLLM_Proxy_MCP_Handler._extract_tool_call_details(tool_call)
                     if call_id == tool_call_id:
                         tool_name = name or "unknown"
                         tool_arguments = args or "{}"
@@ -592,7 +676,6 @@ class MCPEnhancedStreamingIterator(BaseResponsesAPIStreamingIterator):
                 follow_up_params.update(
                     {
                         "input": follow_up_input,
-                        "previous_response_id": self.collected_response.id,  # type: ignore[attr-defined]
                         "stream": True,
                     }
                 )

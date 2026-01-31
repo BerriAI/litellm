@@ -13,6 +13,7 @@ import httpx
 from dotenv import load_dotenv
 
 from litellm.constants import DEFAULT_NUM_WORKERS_LITELLM_PROXY
+from litellm.secret_managers.main import get_secret_bool
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -126,6 +127,7 @@ class ProxyInitializationHelpers:
         Get the arguments for `uvicorn` worker
         """
         import litellm
+        from litellm._logging import _get_uvicorn_json_log_config
 
         uvicorn_args = {
             "app": "litellm.proxy.proxy_server:app",
@@ -136,8 +138,8 @@ class ProxyInitializationHelpers:
             print(f"Using log_config: {log_config}")  # noqa
             uvicorn_args["log_config"] = log_config
         elif litellm.json_logs:
-            print("Using json logs. Setting log_config to None.")  # noqa
-            uvicorn_args["log_config"] = None
+            # Use JSON log config for uvicorn to ensure all logs (including exceptions) are JSON
+            uvicorn_args["log_config"] = _get_uvicorn_json_log_config()
         if keepalive_timeout is not None:
             uvicorn_args["timeout_keep_alive"] = keepalive_timeout
         return uvicorn_args
@@ -615,7 +617,7 @@ def run_server(  # noqa: PLR0915
         general_settings = {}
         ### GET DB TOKEN FOR IAM AUTH ###
 
-        if iam_token_db_auth:
+        if iam_token_db_auth or get_secret_bool("IAM_TOKEN_DB_AUTH"):
             from litellm.proxy.auth.rds_iam_token import generate_iam_auth_token
 
             db_host = os.getenv("DATABASE_HOST")
@@ -693,15 +695,14 @@ def run_server(  # noqa: PLR0915
                 litellm._key_management_settings = KeyManagementSettings(
                     **key_management_settings
                 )
-            
+
             if general_settings:
                 ### LOAD SECRET MANAGER ###
                 key_management_system = general_settings.get(
                     "key_management_system", None
                 )
                 proxy_config.initialize_secret_manager(
-                    key_management_system=key_management_system,
-                    config_file_path=config
+                    key_management_system=key_management_system, config_file_path=config
                 )
             database_url = general_settings.get("database_url", None)
             if database_url is None and os.getenv("DATABASE_URL") is None:

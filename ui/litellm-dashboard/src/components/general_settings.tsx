@@ -22,7 +22,7 @@ import { InputNumber } from "antd";
 import { TrashIcon, CheckCircleIcon } from "@heroicons/react/outline";
 
 import RouterSettings from "./router_settings";
-import Fallbacks from "./fallbacks";
+import Fallbacks from "./Settings/RouterSettings/Fallbacks/Fallbacks";
 interface GeneralSettingsPageProps {
   accessToken: string | null;
   userRole: string | null;

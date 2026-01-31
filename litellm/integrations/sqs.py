@@ -30,6 +30,7 @@ from litellm.llms.custom_httpx.http_handler import (
 from litellm.types.utils import StandardLoggingPayload
 
 from .custom_batch_logger import CustomBatchLogger
+from litellm.types.integrations.base_health_check import IntegrationHealthCheckStatus
 
 _BASE64_INLINE_PATTERN = re.compile(
     r"data:(?:application|image|audio|video)/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=\s]+",
@@ -354,3 +355,19 @@ class SQSLogger(CustomBatchLogger, BaseAWSLLM):
             response.raise_for_status()
         except Exception as e:
             verbose_logger.exception(f"Error sending to SQS: {str(e)}")
+
+    async def async_health_check(self) -> IntegrationHealthCheckStatus:
+        """
+        Health check for SQS by sending a small test message to the configured queue.
+        """
+        try:
+            from litellm.litellm_core_utils.litellm_logging import (
+                create_dummy_standard_logging_payload,
+            )
+            # Create a minimal standard logging payload
+            standard_logging_object: StandardLoggingPayload = create_dummy_standard_logging_payload()
+            # Attempt to send a single message
+            await self.async_send_message(standard_logging_object)
+            return IntegrationHealthCheckStatus(status="healthy", error_message=None)
+        except Exception as e:
+            return IntegrationHealthCheckStatus(status="unhealthy", error_message=str(e))

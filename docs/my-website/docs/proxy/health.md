@@ -106,6 +106,13 @@ model_list:
       mode: image_generation # 👈 ADD THIS
 ```
 
+#### Custom Health Check Prompt
+
+By default, health checks use the prompt `"test from litellm"`. You can customize this prompt globally by setting an environment variable, or per-model via config:
+
+```bash
+DEFAULT_HEALTH_CHECK_PROMPT="this is a test prompt"
+```
 
 ### Text Completion Models 
 

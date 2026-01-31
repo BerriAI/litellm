@@ -3,7 +3,7 @@
  * Use this to avoid sharing master key with others
  */
 import React, { useState, useEffect } from "react";
-import { Typography } from "antd";
+import { Alert, Typography } from "antd";
 import { useRouter } from "next/navigation";
 import { Button as Button2, Modal, Form, Input } from "antd";
 import { Select, SelectItem } from "@tremor/react";
@@ -54,6 +54,8 @@ import {
   deleteAllowedIP,
   getSSOSettings,
 } from "./networking";
+import UISettings from "./Settings/AdminSettings/UISettings/UISettings";
+import SSOSettings from "./Settings/AdminSettings/SSOSettings/SSOSettings";
 
 const AdminPanel: React.FC<AdminPanelProps> = ({
   searchParams,
@@ -100,7 +102,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
 
   // Extract the SSO configuration check logic into a separate function for reuse
   const checkSSOConfiguration = async () => {
-    if (accessToken && premiumUser) {
+    if (accessToken) {
       try {
         const ssoData = await getSSOSettings(accessToken);
         console.log("SSO data:", ssoData);
@@ -495,13 +497,24 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
       <Paragraph>Go to &apos;Internal Users&apos; page to add other admins.</Paragraph>
       <TabGroup>
         <TabList>
+          <Tab>SSO Settings</Tab>
           <Tab>Security Settings</Tab>
           <Tab>SCIM</Tab>
+          <Tab>UI Settings</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
+            <SSOSettings />
+          </TabPanel>
+          <TabPanel>
             <Card>
               <Title level={4}> ✨ Security Settings</Title>
+              <Alert
+                message="SSO Configuration Deprecated"
+                description="Editing SSO Settings on this page is deprecated and will be removed in a future version. Please use the SSO Settings tab for SSO configuration."
+                type="warning"
+                showIcon
+              />
               <div
                 style={{
                   display: "flex",
@@ -512,12 +525,7 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
                 }}
               >
                 <div>
-                  <Button
-                    style={{ width: "150px" }}
-                    onClick={() =>
-                      setIsAddSSOModalVisible(true)
-                    }
-                  >
+                  <Button style={{ width: "150px" }} onClick={() => setIsAddSSOModalVisible(true)}>
                     {ssoConfigured ? "Edit SSO Settings" : "Add SSO"}
                   </Button>
                 </div>
@@ -652,6 +660,9 @@ const AdminPanel: React.FC<AdminPanelProps> = ({
           </TabPanel>
           <TabPanel>
             <SCIMConfig accessToken={accessToken} userID={userID} proxySettings={proxySettings} />
+          </TabPanel>
+          <TabPanel>
+            <UISettings />
           </TabPanel>
         </TabPanels>
       </TabGroup>

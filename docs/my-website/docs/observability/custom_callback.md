@@ -203,7 +203,11 @@ asyncio.run(test_chat_openai())
 
 ## What's Available in kwargs?
 
-The kwargs dictionary contains all the details about your API call:
+The kwargs dictionary contains all the details about your API call.
+
+:::info
+For the complete logging payload specification, see the [Standard Logging Payload Spec](https://docs.litellm.ai/docs/proxy/logging_spec).
+:::
 
 ```python
 def custom_callback(kwargs, completion_response, start_time, end_time):

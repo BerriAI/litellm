@@ -1,5 +1,6 @@
 from typing import List, Literal, Optional, Union
 
+from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from pydantic import PrivateAttr
 from typing_extensions import Any, List, Optional, TypedDict
 
@@ -34,6 +35,15 @@ class OutputFunctionToolCall(BaseLiteLLMOpenAIResponseObject):
     type: Optional[str]  # "function_call"
     id: Optional[str]
     status: Literal["in_progress", "completed", "incomplete"]
+
+
+class OutputImageGenerationCall(BaseLiteLLMOpenAIResponseObject):
+    """An image generation call output"""
+
+    type: Literal["image_generation_call"]
+    id: str
+    status: Literal["in_progress", "completed", "incomplete", "failed"]
+    result: Optional[str]  # Base64 encoded image data (without data:image prefix)
 
 
 class GenericResponseOutputItem(BaseLiteLLMOpenAIResponseObject):

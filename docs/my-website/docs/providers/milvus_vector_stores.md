@@ -291,12 +291,265 @@ Give the key access to the virtual index and the embedding model.
 
 ### Developer Flow
 
+#### MilvusRESTClient
+
+To use the passthrough API, you need a simple REST client. Copy this `milvus_rest_client.py` file to your project:
+
+<details>
+<summary>Click to expand milvus_rest_client.py</summary>
+
+```python
+"""
+Simple Milvus REST API v2 Client
+Based on: https://milvus.io/api-reference/restful/v2.6.x/
+"""
+
+import requests
+from typing import List, Dict, Any, Optional
+
+
+class DataType:
+    """Milvus data types"""
+
+    INT64 = "Int64"
+    FLOAT_VECTOR = "FloatVector"
+    VARCHAR = "VarChar"
+    BOOL = "Bool"
+    FLOAT = "Float"
+
+
+class CollectionSchema:
+    """Collection schema builder"""
+
+    def __init__(self):
+        self.fields = []
+
+    def add_field(
+        self,
+        field_name: str,
+        data_type: str,
+        is_primary: bool = False,
+        dim: Optional[int] = None,
+        description: str = "",
+    ):
+        """Add a field to the schema"""
+        field = {
+            "fieldName": field_name,
+            "dataType": data_type,
+            "isPrimary": is_primary,
+            "description": description,
+        }
+        if data_type == DataType.FLOAT_VECTOR and dim:
+            field["elementTypeParams"] = {"dim": str(dim)}
+        self.fields.append(field)
+        return self
+
+    def to_dict(self):
+        """Convert schema to dict for API"""
+        return {"fields": self.fields}
+
+
+class IndexParams:
+    """Index parameters builder"""
+
+    def __init__(self):
+        self.indexes = []
+
+    def add_index(
+        self, field_name: str, metric_type: str = "L2", index_name: Optional[str] = None
+    ):
+        """Add an index"""
+        index = {
+            "fieldName": field_name,
+            "indexName": index_name or f"{field_name}_index",
+            "metricType": metric_type,
+        }
+        self.indexes.append(index)
+        return self
+
+    def to_list(self):
+        """Convert to list for API"""
+        return self.indexes
+
+
+class MilvusRESTClient:
+    """
+    Simple Milvus REST API v2 Client
+
+    Reference: https://milvus.io/api-reference/restful/v2.6.x/
+    """
+
+    def __init__(self, uri: str, token: str, db_name: str = "default"):
+        """
+        Initialize Milvus REST client
+
+        Args:
+            uri: Milvus server URI (e.g., http://localhost:19530)
+            token: Authentication token
+            db_name: Database name
+        """
+        self.base_url = uri.rstrip("/")
+        self.token = token
+        self.db_name = db_name
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+    def _make_request(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Make a POST request to Milvus API"""
+        url = f"{self.base_url}{endpoint}"
+
+        # Add dbName if not already in data and not default
+        if "dbName" not in data and self.db_name != "default":
+            data["dbName"] = self.db_name
+
+        try:
+            response = requests.post(url, json=data, headers=self.headers)
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            print(f"e.response.text: {e.response.content}")
+            raise e
+
+        result = response.json()
+
+        # Check for API errors
+        if result.get("code") != 0:
+            raise Exception(
+                f"Milvus API Error: {result.get('message', 'Unknown error')}"
+            )
+
+        return result
+
+    def has_collection(self, collection_name: str) -> bool:
+        """
+        Check if a collection exists
+
+        Reference: https://milvus.io/api-reference/restful/v2.6.x/v2/Collection%20(v2)/Has.md
+        """
+        try:
+            result = self._make_request(
+                "/v2/vectordb/collections/has", {"collectionName": collection_name}
+            )
+            return result.get("data", {}).get("has", False)
+        except Exception:
+            return False
+
+    def drop_collection(self, collection_name: str):
+        """
+        Drop a collection
+
+        Reference: https://milvus.io/api-reference/restful/v2.6.x/v2/Collection%20(v2)/Drop.md
+        """
+        return self._make_request(
+            "/v2/vectordb/collections/drop", {"collectionName": collection_name}
+        )
+
+    def create_schema(self) -> CollectionSchema:
+        """Create a new collection schema"""
+        return CollectionSchema()
+
+    def prepare_index_params(self) -> IndexParams:
+        """Create index parameters"""
+        return IndexParams()
+
+    def create_collection(
+        self,
+        collection_name: str,
+        schema: CollectionSchema,
+        index_params: Optional[IndexParams] = None,
+    ):
+        """
+        Create a collection
+
+        Reference: https://milvus.io/api-reference/restful/v2.6.x/v2/Collection%20(v2)/Create.md
+        """
+        data = {"collectionName": collection_name, "schema": schema.to_dict()}
+
+        if index_params:
+            data["indexParams"] = index_params.to_list()
+
+        return self._make_request("/v2/vectordb/collections/create", data)
+
+    def describe_collection(self, collection_name: str) -> Dict[str, Any]:
+        """
+        Describe a collection
+
+        Reference: https://milvus.io/api-reference/restful/v2.6.x/v2/Collection%20(v2)/Describe.md
+        """
+        result = self._make_request(
+            "/v2/vectordb/collections/describe", {"collectionName": collection_name}
+        )
+        return result.get("data", {})
+
+    def insert(
+        self,
+        collection_name: str,
+        data: List[Dict[str, Any]],
+        partition_name: Optional[str] = None,
+    ):
+        """
+        Insert data into a collection
+
+        Reference: https://milvus.io/api-reference/restful/v2.6.x/v2/Vector%20(v2)/Insert.md
+        """
+        payload = {"collectionName": collection_name, "data": data}
+
+        if partition_name:
+            payload["partitionName"] = partition_name
+
+        result = self._make_request("/v2/vectordb/entities/insert", payload)
+        return result.get("data", {})
+
+    def flush(self, collection_name: str):
+        """
+        Flush collection data to storage
+
+        Reference: https://milvus.io/api-reference/restful/v2.6.x/v2/Collection%20(v2)/Flush.md
+        """
+        return self._make_request(
+            "/v2/vectordb/collections/flush", {"collectionName": collection_name}
+        )
+
+    def search(
+        self,
+        collection_name: str,
+        data: List[List[float]],
+        anns_field: str,
+        limit: int = 10,
+        search_params: Optional[Dict[str, Any]] = None,
+        output_fields: Optional[List[str]] = None,
+    ) -> List[List[Dict]]:
+        """
+        Search for vectors
+
+        Reference: https://milvus.io/api-reference/restful/v2.6.x/v2/Vector%20(v2)/Search.md
+        """
+        payload = {
+            "collectionName": collection_name,
+            "data": data,
+            "annsField": anns_field,
+            "limit": limit,
+        }
+
+        if search_params:
+            payload["searchParams"] = search_params
+
+        if output_fields:
+            payload["outputFields"] = output_fields
+
+        result = self._make_request("/v2/vectordb/entities/search", payload)
+        return result.get("data", [])
+```
+
+</details>
+
 #### 1. Create a collection with schema
 
 Note: Use the `/milvus` endpoint for the passthrough api that uses the `milvus` provider in your config.
 
 ```python
-from milvus_rest_client import MilvusRESTClient, DataType
+from milvus_rest_client import MilvusRESTClient, DataType  # Use the client from above
 import random
 import time
 
@@ -404,7 +657,7 @@ for i in range(5):
 Here's a full working example:
 
 ```python
-from milvus_rest_client import MilvusRESTClient, DataType
+from milvus_rest_client import MilvusRESTClient, DataType  # Use the client from above
 import random
 import time
 

@@ -1,55 +1,25 @@
-general_settings:
-  key_management_system: "cyberark"
-  key_management_settings: 
-    store_virtual_keys: true
-    prefix_for_stored_virtual_keys: "litellm/"
-    access_mode: "read_and_write"
-
 model_list:
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
+  - model_name: bedrock-claude-sonnet-3.5
     litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-east-1
-      custom_llm_provider: bedrock
-  - model_name: aws/anthropic/bedrock-claude-3-5-sonnet-v1
-    litellm_params:
-      model: bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0
-      aws_region_name: us-west-2
-      custom_llm_provider: bedrock
-  - model_name: bedrock/*
-    litellm_params:
-      model: bedrock/*
-      custom_llm_provider: bedrock
-      aws_region_name: us-west-2
-    
+      model: "bedrock/us.anthropic.claude-3-5-sonnet-20240620-v1:0"
+      aws_region_name: "us-east-1"
 
-# like MCPs/vector stores
-search_tools:
-  - search_tool_name: litellm-search
+  - model_name: bedrock-claude-sonnet-4
     litellm_params:
-      search_provider: perplexity
-      api_key: os.environ/PERPLEXITYAI_API_KEY
-  - search_tool_name: exa-search
-    litellm_params:
-      search_provider: exa_ai
-      api_key: os.environ/EXA_API_KEY
-  
+      model: "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+      aws_region_name: "us-east-1"
 
-litellm_settings:
-  # Comprehensive logging settings
-  store_audit_logs: true
-  verbose: true
-  log_level: "DEBUG"  # Options: DEBUG, INFO, WARNING, ERROR
-  callbacks: ["s3_v2", "smtp_email"]
-  s3_callback_params:
-    s3_endpoint_url: "https://localhost:443"  # Replace with your Minio server URL and port
-    s3_aws_access_key_id: "minioadmin"
-    s3_aws_secret_access_key: "minioadmin"
-    s3_region_name: "minio"  # This can be any value for Minio
-    s3_bucket_name: "litellm-test"  # Replace with your bucket name
-    s3_use_ssl: False
-    s3_verify: False
-  cache: True
-  cache_params:
-    type: local
-  drop_params: True
+  - model_name: bedrock-claude-sonnet-4.5
+    litellm_params:
+      model: "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-claude-opus-4.5
+    litellm_params:
+      model: "bedrock/converse/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      aws_region_name: "us-east-1"
+
+  - model_name: bedrock-nova-premier
+    litellm_params:
+      model: "bedrock/us.amazon.nova-premier-v1:0"
+      aws_region_name: "us-east-1"   

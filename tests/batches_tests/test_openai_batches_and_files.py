@@ -447,6 +447,18 @@ mock_vertex_batch_response = {
     "completionStats": {"successfulCount": 0, "failedCount": 0, "remainingCount": 100},
 }
 
+mock_vertex_list_response = {
+    "batchPredictionJobs": [
+        mock_vertex_batch_response,
+        {
+            **mock_vertex_batch_response,
+            "name": "projects/123456789/locations/us-central1/batchPredictionJobs/test-batch-id-789",
+            "state": "JOB_STATE_SUCCEEDED",
+        },
+    ],
+    "nextPageToken": "",
+}
+
 
 @pytest.mark.asyncio
 async def test_avertex_batch_prediction(monkeypatch):
@@ -533,3 +545,105 @@ async def test_avertex_batch_prediction(monkeypatch):
             print("retrieved_batch=", retrieved_batch)
 
             assert retrieved_batch.id == "test-batch-id-456"
+
+
+@pytest.mark.asyncio
+async def test_vertex_list_batches(monkeypatch):
+    monkeypatch.setenv("GCS_BUCKET_NAME", "litellm-local")
+    monkeypatch.setenv("VERTEXAI_PROJECT", "litellm-test-project")
+    monkeypatch.setenv("VERTEXAI_LOCATION", "us-central1")
+
+    monkeypatch.setattr(
+        "litellm.llms.vertex_ai.batches.handler.VertexAIBatchPrediction._ensure_access_token",
+        lambda self, credentials, project_id, custom_llm_provider: ("mock-token", "litellm-test-project"),
+    )
+
+    with patch(
+        "litellm.llms.custom_httpx.http_handler.AsyncHTTPHandler.get"
+    ) as mock_get:
+        mock_get_response = MagicMock()
+        mock_get_response.json.return_value = mock_vertex_list_response
+        mock_get_response.status_code = 200
+        mock_get_response.raise_for_status.return_value = None
+        mock_get.return_value = mock_get_response
+
+        list_response = await litellm.alist_batches(
+            custom_llm_provider="vertex_ai",
+            limit=2,
+        )
+
+        assert list_response["object"] == "list"
+        assert list_response["has_more"] is False
+        assert len(list_response["data"]) == 2
+        assert list_response["data"][0].id == "test-batch-id-456"
+        assert list_response["data"][1].id == "test-batch-id-789"
+
+
+@pytest.mark.asyncio
+async def test_delete_batch_output_file():
+    """
+    Test that deleting a batch output file works correctly.
+    
+    This test verifies the fix for:
+    - When a batch is retrieved and has an output_file_id, the file object is properly stored
+    - The output file can be deleted without validation errors
+    - The file_object is fetched and stored with proper metadata instead of None
+    """
+    litellm._turn_on_debug()
+    print("Testing delete batch output file")
+    
+    file_name = "openai_batch_completions.jsonl"
+    _current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(_current_dir, file_name)
+    
+    # Create file for batch
+    file_obj = await litellm.acreate_file(
+        file=open(file_path, "rb"),
+        purpose="batch",
+        custom_llm_provider="openai",
+    )
+    print("Response from creating file=", file_obj)
+    batch_input_file_id = file_obj.id
+    
+    # Create batch
+    create_batch_response = await litellm.acreate_batch(
+        completion_window="24h",
+        endpoint="/v1/chat/completions",
+        input_file_id=batch_input_file_id,
+        custom_llm_provider="openai",
+    )
+    print("Batch created with ID=", create_batch_response.id)
+    
+    # Retrieve batch to get output_file_id
+    retrieved_batch = await litellm.aretrieve_batch(
+        batch_id=create_batch_response.id, 
+        custom_llm_provider="openai"
+    )
+    print("Retrieved batch=", retrieved_batch)
+    
+    # If batch has completed and has output file, test deleting it
+    if retrieved_batch.output_file_id:
+        print(f"Testing deletion of output file: {retrieved_batch.output_file_id}")
+        
+        # This is the key test - deleting the output file should work
+        # without validation errors (file_object should not be None)
+        delete_output_file_response = await litellm.afile_delete(
+            file_id=retrieved_batch.output_file_id, 
+            custom_llm_provider="openai"
+        )
+        
+        print("Delete output file response=", delete_output_file_response)
+        assert delete_output_file_response.id == retrieved_batch.output_file_id
+        assert delete_output_file_response.deleted is True or hasattr(delete_output_file_response, 'id')
+        print("✓ Successfully deleted batch output file")
+    else:
+        print("⚠ Batch has not completed yet or no output file available, skipping output file deletion test")
+    
+    # Clean up - delete the input file
+    delete_input_file_response = await litellm.afile_delete(
+        file_id=batch_input_file_id, 
+        custom_llm_provider="openai"
+    )
+    print("Delete input file response=", delete_input_file_response)
+    assert delete_input_file_response.id == batch_input_file_id
+    print("✓ Successfully deleted batch input file")

@@ -11,6 +11,7 @@ from litellm.types.realtime import RealtimeQueryParams
 
 from ....litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ....litellm_core_utils.realtime_streaming import RealTimeStreaming
+from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..openai import OpenAIChatCompletion
 
 
@@ -55,13 +56,30 @@ class OpenAIRealtime(OpenAIChatCompletion):
         url = self._construct_url(api_base, query_params)
 
         try:
+            # Only use SSL context for secure websocket connections (wss://)
+            # websockets library doesn't accept ssl argument for ws:// URIs
+            ssl_context = None if url.startswith("ws://") else get_shared_realtime_ssl_context()
+            # Log a masked request preview consistent with other endpoints.
+            logging_obj.pre_call(
+                input=None,
+                api_key=api_key,
+                additional_args={
+                    "api_base": url,
+                    "headers": {
+                        "Authorization": f"Bearer {api_key}",
+                        "OpenAI-Beta": "realtime=v1",
+                    },
+                    "complete_input_dict": {"query_params": query_params},
+                },
+            )
             async with websockets.connect(  # type: ignore
                 url,
-                extra_headers={
+                additional_headers={
                     "Authorization": f"Bearer {api_key}",  # type: ignore
                     "OpenAI-Beta": "realtime=v1",
                 },
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
+                ssl=ssl_context,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
                     websocket, cast(ClientConnection, backend_ws), logging_obj

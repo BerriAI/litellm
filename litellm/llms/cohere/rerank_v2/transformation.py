@@ -12,7 +12,12 @@ class CohereRerankV2Config(CohereRerankConfig):
     def __init__(self) -> None:
         pass
 
-    def get_complete_url(self, api_base: Optional[str], model: str) -> str:
+    def get_complete_url(
+        self, 
+        api_base: Optional[str], 
+        model: str,
+        optional_params: Optional[dict] = None,
+    ) -> str:
         if api_base:
             # Remove trailing slashes and ensure clean base URL
             api_base = api_base.rstrip("/")

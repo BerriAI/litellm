@@ -14,6 +14,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.proxy.utils import get_server_root_path
 
 router = APIRouter(
     tags=["mcp"],
@@ -122,6 +124,163 @@ def decode_state_hash(encrypted_state: str) -> dict:
     return state_data
 
 
+async def authorize_with_server(
+    request: Request,
+    mcp_server: MCPServer,
+    client_id: str,
+    redirect_uri: str,
+    state: str = "",
+    code_challenge: Optional[str] = None,
+    code_challenge_method: Optional[str] = None,
+    response_type: Optional[str] = None,
+    scope: Optional[str] = None,
+):
+    if mcp_server.auth_type != "oauth2":
+        raise HTTPException(status_code=400, detail="MCP server is not OAuth2")
+    if mcp_server.authorization_url is None:
+        raise HTTPException(
+            status_code=400, detail="MCP server authorization url is not set"
+        )
+
+    parsed = urlparse(redirect_uri)
+    base_url = urlunparse(parsed._replace(query=""))
+    request_base_url = get_request_base_url(request)
+    encoded_state = encode_state_with_base_url(
+        base_url=base_url,
+        original_state=state,
+        code_challenge=code_challenge,
+        code_challenge_method=code_challenge_method,
+        client_redirect_uri=redirect_uri,
+    )
+
+    params = {
+        "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
+        "redirect_uri": f"{request_base_url}/callback",
+        "state": encoded_state,
+        "response_type": response_type or "code",
+    }
+    if scope:
+        params["scope"] = scope
+    elif mcp_server.scopes:
+        params["scope"] = " ".join(mcp_server.scopes)
+
+    if code_challenge:
+        params["code_challenge"] = code_challenge
+    if code_challenge_method:
+        params["code_challenge_method"] = code_challenge_method
+
+    return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
+
+
+async def exchange_token_with_server(
+    request: Request,
+    mcp_server: MCPServer,
+    grant_type: str,
+    code: Optional[str],
+    redirect_uri: Optional[str],
+    client_id: str,
+    client_secret: Optional[str],
+    code_verifier: Optional[str],
+):
+    if grant_type != "authorization_code":
+        raise HTTPException(status_code=400, detail="Unsupported grant_type")
+
+    if mcp_server.token_url is None:
+        raise HTTPException(status_code=400, detail="MCP server token url is not set")
+
+    proxy_base_url = get_request_base_url(request)
+    token_data = {
+        "grant_type": "authorization_code",
+        "client_id": mcp_server.client_id if mcp_server.client_id else client_id,
+        "client_secret": mcp_server.client_secret
+        if mcp_server.client_secret
+        else client_secret,
+        "code": code,
+        "redirect_uri": f"{proxy_base_url}/callback",
+    }
+
+    if code_verifier:
+        token_data["code_verifier"] = code_verifier
+
+    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
+    response = await async_client.post(
+        mcp_server.token_url,
+        headers={"Accept": "application/json"},
+        data=token_data,
+    )
+
+    response.raise_for_status()
+    token_response = response.json()
+    access_token = token_response["access_token"]
+
+    result = {
+        "access_token": access_token,
+        "token_type": token_response.get("token_type", "Bearer"),
+        "expires_in": token_response.get("expires_in", 3600),
+    }
+
+    if "refresh_token" in token_response and token_response["refresh_token"]:
+        result["refresh_token"] = token_response["refresh_token"]
+    if "scope" in token_response and token_response["scope"]:
+        result["scope"] = token_response["scope"]
+
+    return JSONResponse(result)
+
+
+async def register_client_with_server(
+    request: Request,
+    mcp_server: MCPServer,
+    client_name: str,
+    grant_types: Optional[list],
+    response_types: Optional[list],
+    token_endpoint_auth_method: Optional[str],
+    fallback_client_id: Optional[str] = None,
+):
+    request_base_url = get_request_base_url(request)
+    dummy_return = {
+        "client_id": fallback_client_id or mcp_server.server_name,
+        "client_secret": "dummy",
+        "redirect_uris": [f"{request_base_url}/callback"],
+    }
+
+    if mcp_server.client_id and mcp_server.client_secret:
+        return dummy_return
+
+    if mcp_server.authorization_url is None:
+        raise HTTPException(
+            status_code=400, detail="MCP server authorization url is not set"
+        )
+
+    if mcp_server.registration_url is None:
+        return dummy_return
+
+    register_data = {
+        "client_name": client_name,
+        "redirect_uris": [f"{request_base_url}/callback"],
+        "grant_types": grant_types or [],
+        "response_types": response_types or [],
+        "token_endpoint_auth_method": token_endpoint_auth_method or "",
+    }
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+
+    async_client = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.Oauth2Register
+    )
+    response = await async_client.post(
+        mcp_server.registration_url,
+        headers=headers,
+        json=register_data,
+    )
+    response.raise_for_status()
+
+    token_response = response.json()
+
+    return JSONResponse(token_response)
+
+
 @router.get("/{mcp_server_name}/authorize")
 @router.get("/authorize")
 async def authorize(
@@ -140,53 +299,21 @@ async def authorize(
         global_mcp_server_manager,
     )
 
-    if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
-    else:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
+    lookup_name = mcp_server_name or client_id
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
-    if mcp_server.auth_type != "oauth2":
-        raise HTTPException(status_code=400, detail="MCP server is not OAuth2")
-    if mcp_server.authorization_url is None:
-        raise HTTPException(
-            status_code=400, detail="MCP server authorization url is not set"
-        )
-
-    # Parse it to remove any existing query
-    parsed = urlparse(redirect_uri)
-    base_url = urlunparse(parsed._replace(query=""))
-
-    # Get the correct base URL considering X-Forwarded-* headers
-    request_base_url = get_request_base_url(request)
-
-    # Encode the base_url, original state, PKCE params, and client redirect_uri in encrypted state
-    encoded_state = encode_state_with_base_url(
-        base_url=base_url,
-        original_state=state,
+    return await authorize_with_server(
+        request=request,
+        mcp_server=mcp_server,
+        client_id=client_id,
+        redirect_uri=redirect_uri,
+        state=state,
         code_challenge=code_challenge,
         code_challenge_method=code_challenge_method,
-        client_redirect_uri=redirect_uri,
+        response_type=response_type,
+        scope=scope,
     )
-    # Build params for upstream OAuth provider
-    params = {
-        "client_id": client_id if client_id else mcp_server.client_id,
-        "redirect_uri": f"{request_base_url}/callback",
-        "state": encoded_state,
-        "response_type": response_type or "code",
-    }
-    if scope:
-        params["scope"] = scope
-    elif mcp_server.scopes:
-        params["scope"] = " ".join(mcp_server.scopes)
-
-    # Forward PKCE parameters if present
-    if code_challenge:
-        params["code_challenge"] = code_challenge
-    if code_challenge_method:
-        params["code_challenge_method"] = code_challenge_method
-
-    return RedirectResponse(f"{mcp_server.authorization_url}?{urlencode(params)}")
 
 
 @router.post("/{mcp_server_name}/token")
@@ -214,63 +341,20 @@ async def token_endpoint(
         global_mcp_server_manager,
     )
 
-    if mcp_server_name:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
-    else:
-        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(client_id)
-
+    lookup_name = mcp_server_name or client_id
+    mcp_server = global_mcp_server_manager.get_mcp_server_by_name(lookup_name)
     if mcp_server is None:
         raise HTTPException(status_code=404, detail="MCP server not found")
-
-    if grant_type != "authorization_code":
-        raise HTTPException(status_code=400, detail="Unsupported grant_type")
-
-    if mcp_server.token_url is None:
-        raise HTTPException(status_code=400, detail="MCP server token url is not set")
-
-    # Get the correct base URL considering X-Forwarded-* headers
-    proxy_base_url = get_request_base_url(request)
-
-    # Build token request data
-    token_data = {
-        "grant_type": "authorization_code",
-        "client_id": client_id if client_id else mcp_server.client_id,
-        "client_secret": client_secret if client_secret else mcp_server.client_secret,
-        "code": code,
-        "redirect_uri": f"{proxy_base_url}/callback",
-    }
-
-    # Forward PKCE code_verifier if present
-    if code_verifier:
-        token_data["code_verifier"] = code_verifier
-
-    # Exchange code for real OAuth token
-    async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Oauth2Check)
-    response = await async_client.post(
-        mcp_server.token_url,
-        headers={"Accept": "application/json"},
-        data=token_data,
+    return await exchange_token_with_server(
+        request=request,
+        mcp_server=mcp_server,
+        grant_type=grant_type,
+        code=code,
+        redirect_uri=redirect_uri,
+        client_id=client_id,
+        client_secret=client_secret,
+        code_verifier=code_verifier,
     )
-
-    response.raise_for_status()
-    token_response = response.json()
-    access_token = token_response["access_token"]
-
-    # Return to client in expected OAuth 2 format
-    # Only include fields that have values
-    result = {
-        "access_token": access_token,
-        "token_type": token_response.get("token_type", "Bearer"),
-        "expires_in": token_response.get("expires_in", 3600),
-    }
-
-    # Add optional fields only if they exist
-    if "refresh_token" in token_response and token_response["refresh_token"]:
-        result["refresh_token"] = token_response["refresh_token"]
-    if "scope" in token_response and token_response["scope"]:
-        result["scope"] = token_response["scope"]
-
-    return JSONResponse(result)
 
 
 @router.get("/callback")
@@ -298,13 +382,62 @@ async def callback(code: str, state: str):
 # ------------------------------
 # Optional .well-known endpoints for MCP + OAuth discovery
 # ------------------------------
-@router.get("/.well-known/oauth-protected-resource/{mcp_server_name}/mcp")
-@router.get("/.well-known/oauth-protected-resource")
-async def oauth_protected_resource_mcp(
-    request: Request, mcp_server_name: Optional[str] = None
-):
-    # Get the correct base URL considering X-Forwarded-* headers
+"""
+    Per SEP-985, the client MUST:
+    1. Try resource_metadata from WWW-Authenticate header (if present)
+    2. Fall back to path-based well-known URI: /.well-known/oauth-protected-resource/{path}
+    (
+    If the resource identifier value contains a path or query component, any terminating slash (/)
+    following the host component MUST be removed before inserting /.well-known/ and the well-known
+    URI path suffix between the host component and the path(include root path) and/or query components.
+    https://datatracker.ietf.org/doc/html/rfc9728#section-3.1)
+    3. Fall back to root-based well-known URI: /.well-known/oauth-protected-resource
+
+    Dual Pattern Support:
+    - Standard MCP pattern: /mcp/{server_name} (recommended, used by mcp-inspector, VSCode Copilot)
+    - LiteLLM legacy pattern: /{server_name}/mcp (backward compatibility)
+
+    The resource URL returned matches the pattern used in the discovery request.
+"""
+
+
+def _build_oauth_protected_resource_response(
+    request: Request,
+    mcp_server_name: Optional[str],
+    use_standard_pattern: bool,
+) -> dict:
+    """
+    Build OAuth protected resource response with the appropriate URL pattern.
+
+    Args:
+        request: FastAPI Request object
+        mcp_server_name: Name of the MCP server
+        use_standard_pattern: If True, use /mcp/{server_name} pattern;
+                             if False, use /{server_name}/mcp pattern
+
+    Returns:
+        OAuth protected resource metadata dict
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
     request_base_url = get_request_base_url(request)
+    mcp_server: Optional[MCPServer] = None
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+
+    # Build resource URL based on the pattern
+    if mcp_server_name:
+        if use_standard_pattern:
+            # Standard MCP pattern: /mcp/{server_name}
+            resource_url = f"{request_base_url}/mcp/{mcp_server_name}"
+        else:
+            # LiteLLM legacy pattern: /{server_name}/mcp
+            resource_url = f"{request_base_url}/{mcp_server_name}/mcp"
+    else:
+        resource_url = f"{request_base_url}/mcp"
+
     return {
         "authorization_servers": [
             (
@@ -313,20 +446,83 @@ async def oauth_protected_resource_mcp(
                 else f"{request_base_url}"
             )
         ],
-        "resource": (
-            f"{request_base_url}/{mcp_server_name}/mcp"
-            if mcp_server_name
-            else f"{request_base_url}/mcp"
-        ),  # this is what Claude will call
+        "resource": resource_url,
+        "scopes_supported": mcp_server.scopes if mcp_server else [],
     }
 
 
-@router.get("/.well-known/oauth-authorization-server/{mcp_server_name}")
-@router.get("/.well-known/oauth-authorization-server")
-async def oauth_authorization_server_mcp(
+# Standard MCP pattern: /.well-known/oauth-protected-resource/mcp/{server_name}
+# This is the pattern expected by standard MCP clients (mcp-inspector, VSCode Copilot)
+@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}")
+async def oauth_protected_resource_mcp_standard(
+    request: Request, mcp_server_name: str
+):
+    """
+    OAuth protected resource discovery endpoint using standard MCP URL pattern.
+
+    Standard pattern: /mcp/{server_name}
+    Discovery path: /.well-known/oauth-protected-resource/mcp/{server_name}
+
+    This endpoint is compliant with MCP specification and works with standard
+    MCP clients like mcp-inspector and VSCode Copilot.
+    """
+    return _build_oauth_protected_resource_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+        use_standard_pattern=True,
+    )
+
+
+# LiteLLM legacy pattern: /.well-known/oauth-protected-resource/{server_name}/mcp
+# Kept for backward compatibility with existing deployments
+@router.get(f"/.well-known/oauth-protected-resource{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}/mcp")
+@router.get("/.well-known/oauth-protected-resource")
+async def oauth_protected_resource_mcp(
     request: Request, mcp_server_name: Optional[str] = None
 ):
-    # Get the correct base URL considering X-Forwarded-* headers
+    """
+    OAuth protected resource discovery endpoint using LiteLLM legacy URL pattern.
+
+    Legacy pattern: /{server_name}/mcp
+    Discovery path: /.well-known/oauth-protected-resource/{server_name}/mcp
+
+    This endpoint is kept for backward compatibility. New integrations should
+    use the standard MCP pattern (/mcp/{server_name}) instead.
+    """
+    return _build_oauth_protected_resource_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+        use_standard_pattern=False,
+    )
+
+"""
+    https://datatracker.ietf.org/doc/html/rfc8414#section-3.1
+    RFC 8414: Path-aware OAuth discovery
+    If the issuer identifier value contains a path component, any
+    terminating "/" MUST be removed before inserting "/.well-known/" and
+    the well-known URI suffix between the host component and the path(include root path)
+    component.
+"""
+
+
+def _build_oauth_authorization_server_response(
+    request: Request,
+    mcp_server_name: Optional[str],
+) -> dict:
+    """
+    Build OAuth authorization server metadata response.
+
+    Args:
+        request: FastAPI Request object
+        mcp_server_name: Name of the MCP server
+
+    Returns:
+        OAuth authorization server metadata dict
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
     request_base_url = get_request_base_url(request)
 
     authorization_endpoint = (
@@ -340,17 +536,56 @@ async def oauth_authorization_server_mcp(
         else f"{request_base_url}/token"
     )
 
+    mcp_server: Optional[MCPServer] = None
+    if mcp_server_name:
+        mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
+
     return {
         "issuer": request_base_url,  # point to your proxy
         "authorization_endpoint": authorization_endpoint,
         "token_endpoint": token_endpoint,
         "response_types_supported": ["code"],
-        "grant_types_supported": ["authorization_code"],
+        "scopes_supported": mcp_server.scopes if mcp_server else [],
+        "grant_types_supported": ["authorization_code", "refresh_token"],
         "code_challenge_methods_supported": ["S256"],
         "token_endpoint_auth_methods_supported": ["client_secret_post"],
         # Claude expects a registration endpoint, even if we just fake it
-        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register",
+        "registration_endpoint": f"{request_base_url}/{mcp_server_name}/register" if mcp_server_name else f"{request_base_url}/register",
     }
+
+
+# Standard MCP pattern: /.well-known/oauth-authorization-server/mcp/{server_name}
+@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/mcp/{{mcp_server_name}}")
+async def oauth_authorization_server_mcp_standard(
+    request: Request, mcp_server_name: str
+):
+    """
+    OAuth authorization server discovery endpoint using standard MCP URL pattern.
+
+    Standard pattern: /mcp/{server_name}
+    Discovery path: /.well-known/oauth-authorization-server/mcp/{server_name}
+    """
+    return _build_oauth_authorization_server_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+    )
+
+
+# LiteLLM legacy pattern and root endpoint
+@router.get(f"/.well-known/oauth-authorization-server{'' if get_server_root_path() == '/' else get_server_root_path()}/{{mcp_server_name}}")
+@router.get("/.well-known/oauth-authorization-server")
+async def oauth_authorization_server_mcp(
+    request: Request, mcp_server_name: Optional[str] = None
+):
+    """
+    OAuth authorization server discovery endpoint.
+
+    Supports both legacy pattern (/{server_name}) and root endpoint.
+    """
+    return _build_oauth_authorization_server_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+    )
 
 
 # Alias for standard OpenID discovery
@@ -359,12 +594,18 @@ async def openid_configuration(request: Request):
     return await oauth_authorization_server_mcp(request)
 
 
+# Additional legacy pattern support
 @router.get("/.well-known/oauth-authorization-server/{mcp_server_name}/mcp")
-@router.get("/.well-known/oauth-authorization-server")
-async def oauth_authorization_server_root(
-    request: Request, mcp_server_name: Optional[str] = None
+async def oauth_authorization_server_legacy(
+    request: Request, mcp_server_name: str
 ):
-    return await oauth_authorization_server_mcp(request, mcp_server_name)
+    """
+    OAuth authorization server discovery for legacy /{server_name}/mcp pattern.
+    """
+    return _build_oauth_authorization_server_response(
+        request=request,
+        mcp_server_name=mcp_server_name,
+    )
 
 
 @router.post("/{mcp_server_name}/register")
@@ -391,44 +632,12 @@ async def register_client(request: Request, mcp_server_name: Optional[str] = Non
     mcp_server = global_mcp_server_manager.get_mcp_server_by_name(mcp_server_name)
     if mcp_server is None:
         return dummy_return
-
-    if mcp_server.client_id and mcp_server.client_secret:
-        return {
-            "client_id": mcp_server.client_id,
-            "client_secret": mcp_server.client_secret,
-            "redirect_uris": [f"{request_base_url}/callback"],
-        }
-
-    if mcp_server.authorization_url is None:
-        raise HTTPException(
-            status_code=400, detail="MCP server authorization url is not set"
-        )
-
-    if mcp_server.registration_url is None:
-        return dummy_return
-
-    register_data = {
-        "client_name": data.get("client_name", ""),
-        "redirect_uris": [f"{request_base_url}/callback"],
-        "grant_types": data.get("grant_types", []),
-        "response_types": data.get("response_types", []),
-        "token_endpoint_auth_method": data.get("token_endpoint_auth_method", ""),
-    }
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-    }
-
-    async_client = get_async_httpx_client(
-        llm_provider=httpxSpecialProvider.Oauth2Register
+    return await register_client_with_server(
+        request=request,
+        mcp_server=mcp_server,
+        client_name=data.get("client_name", ""),
+        grant_types=data.get("grant_types", []),
+        response_types=data.get("response_types", []),
+        token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
+        fallback_client_id=mcp_server_name,
     )
-    response = await async_client.post(
-        mcp_server.registration_url,
-        headers=headers,
-        json=register_data,
-    )
-    response.raise_for_status()
-
-    token_response = response.json()
-
-    return JSONResponse(token_response)

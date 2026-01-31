@@ -24,8 +24,9 @@ Before contributing code to LiteLLM, you must sign our [Contributor License Agre
 ### 1. Setup Your Local Development Environment
 
 ```bash
-# Clone the repository
-git clone https://github.com/BerriAI/litellm.git
+# Fork the repository on GitHub (click the Fork button at https://github.com/BerriAI/litellm)
+# Then clone your fork locally
+git clone https://github.com/YOUR_USERNAME/litellm.git
 cd litellm
 
 # Create a new branch for your feature
@@ -258,7 +259,7 @@ docker run \
 If you need help:
 
 - 💬 [Join our Discord](https://discord.gg/wuPM9dRgDw)
-- 💬 [Join our Slack](https://join.slack.com/share/enQtOTE0ODczMzk2Nzk4NC01YjUxNjY2YjBlYTFmNDRiZTM3NDFiYTM3MzVkODFiMDVjOGRjMmNmZTZkZTMzOWQzZGQyZWIwYjQ0MWExYmE3)
+- 💬 [Join our Slack](https://www.litellm.ai/support)
 - 📧 Email us: ishaan@berri.ai / krrish@berri.ai
 - 🐛 [Create an issue](https://github.com/BerriAI/litellm/issues/new)
 

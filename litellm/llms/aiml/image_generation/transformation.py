@@ -97,6 +97,9 @@ class AimlImageGenerationConfig(BaseImageGenerationConfig):
         )
 
         complete_url = complete_url.rstrip("/")
+        # Strip /v1 suffix if present since IMAGE_GENERATION_ENDPOINT already includes v1
+        if complete_url.endswith("/v1"):
+            complete_url = complete_url[:-3]
         complete_url = f"{complete_url}/{self.IMAGE_GENERATION_ENDPOINT}"
         return complete_url
 

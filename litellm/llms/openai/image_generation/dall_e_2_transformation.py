@@ -1,9 +1,16 @@
-from typing import List
+from typing import TYPE_CHECKING, Any, List, Optional
+
+import httpx
 
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
+from litellm.types.utils import ImageResponse
+from litellm.utils import convert_to_model_response_object
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.logging import Logging as LiteLLMLoggingObj
 
 
 class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
@@ -36,3 +43,45 @@ class DallE2ImageGenerationConfig(BaseImageGenerationConfig):
                     )
 
         return optional_params
+
+    def transform_image_generation_response(
+        self,
+        model: str,
+        raw_response: httpx.Response,
+        model_response: ImageResponse,
+        logging_obj: "LiteLLMLoggingObj",
+        request_data: dict,
+        optional_params: dict,
+        litellm_params: dict,
+        encoding: Any,
+        api_key: Optional[str] = None,
+        json_mode: Optional[bool] = None,
+    ) -> ImageResponse:
+        response = raw_response.json()
+
+        stringified_response = response
+        ## LOGGING
+        logging_obj.post_call(
+            input=request_data.get("prompt", ""),
+            api_key=api_key,
+            additional_args={"complete_input_dict": request_data},
+            original_response=stringified_response,
+        )
+        image_response: ImageResponse = convert_to_model_response_object(  # type: ignore
+            response_object=stringified_response,
+            model_response_object=model_response,
+            response_type="image_generation",
+        )
+
+        # set optional params
+        image_response.size = optional_params.get(
+            "size", "1024x1024"
+        )  # default is always 1024x1024
+        image_response.quality = optional_params.get(
+            "quality", "standard"
+        )  # always standard for dall-e-2
+        image_response.output_format = optional_params.get(
+            "output_format", "png"
+        )  # always png for dall-e-2
+
+        return image_response

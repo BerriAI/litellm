@@ -16,6 +16,21 @@ import openai
 
 from litellm.types.utils import LiteLLMCommonStrings
 
+_MINIMAL_ERROR_RESPONSE: Optional[httpx.Response] = None
+
+
+def _get_minimal_error_response() -> httpx.Response:
+    """Get a cached minimal httpx.Response object for error cases."""
+    global _MINIMAL_ERROR_RESPONSE
+    if _MINIMAL_ERROR_RESPONSE is None:
+        _MINIMAL_ERROR_RESPONSE = httpx.Response(
+            status_code=400,
+            request=httpx.Request(
+                method="GET", url="https://litellm.ai"
+            ),
+        )
+    return _MINIMAL_ERROR_RESPONSE
+
 
 class AuthenticationError(openai.AuthenticationError):  # type: ignore
     def __init__(
@@ -125,16 +140,21 @@ class BadRequestError(openai.BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        response = httpx.Response(
-            status_code=self.status_code,
-            request=httpx.Request(
-                method="GET", url="https://litellm.ai"
-            ),  # mock request object
-        )
         self.max_retries = max_retries
         self.num_retries = num_retries
+        # Use response if it's a valid httpx.Response with a request, otherwise use minimal error response
+        # Note: We check _request (not .request property) to avoid RuntimeError when _request is None
+        if (
+            response is not None
+            and isinstance(response, httpx.Response)
+            and hasattr(response, "_request")
+            and getattr(response, "_request", None) is not None
+        ):
+            self.response = response
+        else:
+            self.response = _get_minimal_error_response()
         super().__init__(
-            self.message, response=response, body=body
+            self.message, response=self.response, body=body
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
@@ -368,13 +388,11 @@ class ContextWindowExceededError(BadRequestError):  # type: ignore
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = httpx.Response(status_code=400, request=request)
         super().__init__(
             message=message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=self.response,
+            response=response,
             litellm_debug_info=self.litellm_debug_info,
         )  # Call the base class constructor with the parameters it needs
 
@@ -450,31 +468,34 @@ class ContentPolicyViolationError(BadRequestError):  # type: ignore
         llm_provider,
         response: Optional[httpx.Response] = None,
         litellm_debug_info: Optional[str] = None,
+        provider_specific_fields: Optional[dict] = None,
+        body: Optional[dict] = None,
     ):
         self.status_code = 400
         self.message = "litellm.ContentPolicyViolationError: {}".format(message)
         self.model = model
         self.llm_provider = llm_provider
         self.litellm_debug_info = litellm_debug_info
-        request = httpx.Request(method="POST", url="https://api.openai.com/v1")
-        self.response = httpx.Response(status_code=400, request=request)
+        self.provider_specific_fields = provider_specific_fields
         super().__init__(
             message=self.message,
             model=self.model,  # type: ignore
             llm_provider=self.llm_provider,  # type: ignore
-            response=self.response,
+            response=response,
             litellm_debug_info=self.litellm_debug_info,
+            body=body,
         )  # Call the base class constructor with the parameters it needs
 
     def __str__(self):
-        _message = self.message
-        if self.num_retries:
-            _message += f" LiteLLM Retried: {self.num_retries} times"
-        if self.max_retries:
-            _message += f", LiteLLM Max Retries: {self.max_retries}"
-        return _message
+        return self._transform_error_to_string()
 
     def __repr__(self):
+        return self._transform_error_to_string()
+
+    def _transform_error_to_string(self) -> str:
+        """
+        Transform the error to a string
+        """
         _message = self.message
         if self.num_retries:
             _message += f" LiteLLM Retried: {self.num_retries} times"
@@ -501,8 +522,62 @@ class ServiceUnavailableError(openai.APIStatusError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        _response_headers = (
+            getattr(response, "headers", None) if response is not None else None
+        )
         self.response = httpx.Response(
             status_code=self.status_code,
+            headers=_response_headers,
+            request=httpx.Request(
+                method="POST",
+                url=" https://cloud.google.com/vertex-ai/",
+            ),
+        )
+        super().__init__(
+            self.message, response=self.response, body=None
+        )  # Call the base class constructor with the parameters it needs
+
+    def __str__(self):
+        _message = self.message
+        if self.num_retries:
+            _message += f" LiteLLM Retried: {self.num_retries} times"
+        if self.max_retries:
+            _message += f", LiteLLM Max Retries: {self.max_retries}"
+        return _message
+
+    def __repr__(self):
+        _message = self.message
+        if self.num_retries:
+            _message += f" LiteLLM Retried: {self.num_retries} times"
+        if self.max_retries:
+            _message += f", LiteLLM Max Retries: {self.max_retries}"
+        return _message
+
+
+class BadGatewayError(openai.APIStatusError):  # type: ignore
+    def __init__(
+        self,
+        message,
+        llm_provider,
+        model,
+        response: Optional[httpx.Response] = None,
+        litellm_debug_info: Optional[str] = None,
+        max_retries: Optional[int] = None,
+        num_retries: Optional[int] = None,
+    ):
+        self.status_code = 502
+        self.message = "litellm.BadGatewayError: {}".format(message)
+        self.llm_provider = llm_provider
+        self.model = model
+        self.litellm_debug_info = litellm_debug_info
+        self.max_retries = max_retries
+        self.num_retries = num_retries
+        _response_headers = (
+            getattr(response, "headers", None) if response is not None else None
+        )
+        self.response = httpx.Response(
+            status_code=self.status_code,
+            headers=_response_headers,
             request=httpx.Request(
                 method="POST",
                 url=" https://cloud.google.com/vertex-ai/",
@@ -547,8 +622,12 @@ class InternalServerError(openai.InternalServerError):  # type: ignore
         self.litellm_debug_info = litellm_debug_info
         self.max_retries = max_retries
         self.num_retries = num_retries
+        _response_headers = (
+            getattr(response, "headers", None) if response is not None else None
+        )
         self.response = httpx.Response(
             status_code=self.status_code,
+            headers=_response_headers,
             request=httpx.Request(
                 method="POST",
                 url=" https://cloud.google.com/vertex-ai/",
@@ -754,6 +833,7 @@ LITELLM_EXCEPTION_TYPES = [
     ContentPolicyViolationError,
     InternalServerError,
     ServiceUnavailableError,
+    BadGatewayError,
     APIError,
     APIConnectionError,
     APIResponseValidationError,
@@ -834,9 +914,15 @@ class LiteLLMUnknownProvider(BadRequestError):
 
 
 class GuardrailRaisedException(Exception):
-    def __init__(self, guardrail_name: Optional[str] = None, message: str = ""):
+    def __init__(
+        self,
+        guardrail_name: Optional[str] = None,
+        message: str = "",
+        should_wrap_with_default_message: bool = True,
+    ):
+        default_message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
         self.guardrail_name = guardrail_name
-        self.message = f"Guardrail raised an exception, Guardrail: {guardrail_name}, Message: {message}"
+        self.message = default_message if should_wrap_with_default_message else message
         super().__init__(self.message)
 
 

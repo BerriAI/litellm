@@ -211,4 +211,64 @@ x-litellm-disable-callbacks: LANGFUSE,datadog,PROMETHEUS
 x-litellm-disable-callbacks: langfuse,DATADOG,prometheus
 ```
 
+---
+
+## Disabling Dynamic Callback Management (Enterprise)
+
+Some organizations have compliance requirements where **all requests must be logged under all circumstances**. For these cases, you can disable dynamic callback management entirely to ensure users cannot disable any logging callbacks.
+
+### Use Case
+
+This is designed for enterprise scenarios where:
+- **Compliance requirements** mandate that all API requests must be logged
+- **Audit trails** must be complete with no gaps
+- **Security policies** require all traffic to be monitored
+- **No exceptions** can be made for callback disabling
+
+### How to Disable
+
+Set `allow_dynamic_callback_disabling` to `false` in your config.yaml:
+
+```yaml showLineNumbers title="config.yaml"
+litellm_settings:
+  allow_dynamic_callback_disabling: false
+```
+
+### Effect
+
+When disabled:
+- The `x-litellm-disable-callbacks` header will be **ignored**
+- All configured callbacks will **always execute** for every request
+- Users cannot bypass logging through headers or request metadata
+- All requests are guaranteed to be logged per your proxy configuration
+
+### Example: Compliance Logging Setup
+
+Here's a complete example for an organization requiring guaranteed logging:
+
+```yaml showLineNumbers title="config.yaml"
+# config.yaml
+model_list:
+  - model_name: gpt-4
+    litellm_params:
+      model: openai/gpt-4
+      api_key: os.environ/OPENAI_API_KEY
+
+litellm_settings:
+  callbacks: ["langfuse", "datadog", "s3"]
+  # Disable dynamic callback disabling for compliance
+  allow_dynamic_callback_disabling: false
+```
+
+With this configuration:
+- All requests will be logged to Langfuse, Datadog, and S3
+- Users cannot disable any of these callbacks via headers
+- Complete audit trail is guaranteed for compliance requirements
+
+:::info
+
+**Default Behavior**: Dynamic callback disabling is **enabled by default** (`allow_dynamic_callback_disabling: true`). You must explicitly set it to `false` to enforce guaranteed logging.
+
+:::
+
 

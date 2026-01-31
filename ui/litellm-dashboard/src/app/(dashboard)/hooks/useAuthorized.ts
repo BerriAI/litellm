@@ -1,9 +1,12 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
-import { useRouter } from "next/navigation";
-import { jwtDecode } from "jwt-decode";
+import { getProxyBaseUrl } from "@/components/networking";
 import { clearTokenCookies, getCookie } from "@/utils/cookieUtils";
+import { isJwtExpired } from "@/utils/jwtUtils";
+import { jwtDecode } from "jwt-decode";
+import { useRouter } from "next/navigation";
+import { useEffect, useMemo } from "react";
+import { useUIConfig } from "./uiConfig/useUIConfig";
 
 function formatUserRole(userRole: string) {
   if (!userRole) {
@@ -36,15 +39,28 @@ function formatUserRole(userRole: string) {
 
 const useAuthorized = () => {
   const router = useRouter();
+  const { data: uiConfig, isLoading: isUIConfigLoading } = useUIConfig();
 
   const token = typeof document !== "undefined" ? getCookie("token") : null;
 
-  // Redirect after mount if missing/invalid token
+  // Step 1: Check for missing token or expired JWT - kick out immediately (even if UI Config is loading)
   useEffect(() => {
-    if (!token) {
-      router.replace("/sso/key/generate");
+    if (!token || (token && isJwtExpired(token))) {
+      if (token) {
+        clearTokenCookies();
+      }
+      router.replace(`${getProxyBaseUrl()}/ui/login`);
     }
   }, [token, router]);
+
+  useEffect(() => {
+    if (isUIConfigLoading) {
+      return;
+    }
+    if (uiConfig?.admin_ui_disabled) {
+      router.replace(`${getProxyBaseUrl()}/ui/login`);
+    }
+  }, [router, isUIConfigLoading, uiConfig]);
 
   // Decode safely
   const decoded = useMemo(() => {
@@ -54,7 +70,7 @@ const useAuthorized = () => {
     } catch {
       // Bad token in cookie — clear and bounce
       clearTokenCookies();
-      router.replace("/sso/key/generate");
+      router.replace(`${getProxyBaseUrl()}/ui/login`);
       return null;
     }
   }, [token, router]);
@@ -67,7 +83,7 @@ const useAuthorized = () => {
     userRole: formatUserRole(decoded?.user_role ?? null),
     premiumUser: decoded?.premium_user ?? null,
     disabledPersonalKeyCreation: decoded?.disabled_non_admin_personal_key_creation ?? null,
-    showSSOBanner: decoded?.login_method === "username_password" ?? false,
+    showSSOBanner: decoded?.login_method === "username_password",
   };
 };
 

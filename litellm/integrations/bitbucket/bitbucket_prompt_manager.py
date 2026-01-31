@@ -3,16 +3,22 @@ BitBucket prompt manager that integrates with LiteLLM's prompt management system
 Fetches .prompt files from BitBucket repositories and provides team-based access control.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from jinja2 import DictLoader, Environment, select_autoescape
 
 from litellm.integrations.custom_prompt_management import CustomPromptManagement
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+else:
+    LiteLLMLoggingObj = Any
 from litellm.integrations.prompt_management_base import (
     PromptManagementBase,
     PromptManagementClient,
 )
 from litellm.types.llms.openai import AllMessageValues
+from litellm.types.prompts.init_prompts import PromptSpec
 from litellm.types.utils import StandardCallbackDynamicParams
 
 from .bitbucket_client import BitBucketClient
@@ -414,7 +420,8 @@ class BitBucketPromptManager(CustomPromptManagement):
 
     def should_run_prompt_management(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         dynamic_callback_params: StandardCallbackDynamicParams,
     ) -> bool:
         """
@@ -423,11 +430,12 @@ class BitBucketPromptManager(CustomPromptManagement):
         For BitBucket, we always return True and handle the prompt loading
         in the _compile_prompt_helper method.
         """
-        return True
+        return prompt_id is not None
 
     def _compile_prompt_helper(
         self,
-        prompt_id: str,
+        prompt_id: Optional[str],
+        prompt_spec: Optional[PromptSpec],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
         prompt_label: Optional[str] = None,
@@ -442,6 +450,9 @@ class BitBucketPromptManager(CustomPromptManagement):
         3. Converts the rendered text into chat messages
         4. Extracts model and optional parameters from metadata
         """
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for BitBucket prompt manager")
+
         try:
             # Load the prompt from BitBucket if not already loaded
             if prompt_id not in self.prompt_manager.prompts:
@@ -481,6 +492,31 @@ class BitBucketPromptManager(CustomPromptManagement):
         except Exception as e:
             raise ValueError(f"Error compiling prompt '{prompt_id}': {e}")
 
+    async def async_compile_prompt_helper(
+        self,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+    ) -> PromptManagementClient:
+        """
+        Async version of compile prompt helper. Since BitBucket operations use sync client,
+        this simply delegates to the sync version.
+        """
+        if prompt_id is None:
+            raise ValueError("prompt_id is required for BitBucket prompt manager")
+
+        return self._compile_prompt_helper(
+            prompt_id=prompt_id,
+            prompt_spec=prompt_spec,
+            prompt_variables=prompt_variables,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+        )
+
     def get_chat_completion_prompt(
         self,
         model: str,
@@ -489,8 +525,11 @@ class BitBucketPromptManager(CustomPromptManagement):
         prompt_id: Optional[str],
         prompt_variables: Optional[dict],
         dynamic_callback_params: StandardCallbackDynamicParams,
+        prompt_spec: Optional[PromptSpec] = None,
         prompt_label: Optional[str] = None,
         prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
     ) -> Tuple[str, List[AllMessageValues], dict]:
         """
         Get chat completion prompt from BitBucket and return processed model, messages, and parameters.
@@ -503,6 +542,43 @@ class BitBucketPromptManager(CustomPromptManagement):
             prompt_id,
             prompt_variables,
             dynamic_callback_params,
-            prompt_label,
-            prompt_version,
+            prompt_spec=prompt_spec,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+        )
+
+    async def async_get_chat_completion_prompt(
+        self,
+        model: str,
+        messages: List[AllMessageValues],
+        non_default_params: dict,
+        prompt_id: Optional[str],
+        prompt_variables: Optional[dict],
+        dynamic_callback_params: StandardCallbackDynamicParams,
+        litellm_logging_obj: LiteLLMLoggingObj,
+        prompt_spec: Optional[PromptSpec] = None,
+        tools: Optional[List[Dict]] = None,
+        prompt_label: Optional[str] = None,
+        prompt_version: Optional[int] = None,
+        ignore_prompt_manager_model: Optional[bool] = False,
+        ignore_prompt_manager_optional_params: Optional[bool] = False,
+    ) -> Tuple[str, List[AllMessageValues], dict]:
+        """
+        Async version - delegates to PromptManagementBase async implementation.
+        """
+        return await PromptManagementBase.async_get_chat_completion_prompt(
+            self,
+            model,
+            messages,
+            non_default_params,
+            prompt_id=prompt_id,
+            prompt_variables=prompt_variables,
+            litellm_logging_obj=litellm_logging_obj,
+            dynamic_callback_params=dynamic_callback_params,
+            prompt_spec=prompt_spec,
+            tools=tools,
+            prompt_label=prompt_label,
+            prompt_version=prompt_version,
+            ignore_prompt_manager_model=ignore_prompt_manager_model,
+            ignore_prompt_manager_optional_params=ignore_prompt_manager_optional_params,
         )

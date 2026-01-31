@@ -10,7 +10,7 @@ class VideoObject(BaseModel):
     id: str
     object: Literal["video"]
     status: str
-    created_at: int
+    created_at: Optional[int] = None
     completed_at: Optional[int] = None
     expires_at: Optional[int] = None
     error: Optional[Dict[str, Any]] = None
@@ -87,3 +87,10 @@ class VideoCreateRequestParams(VideoCreateOptionalRequestParams, total=False):
     Params here: https://platform.openai.com/docs/api-reference/videos/create
     """
     prompt: str
+
+class DecodedVideoId(TypedDict, total=False):
+    """Structure representing a decoded video ID"""
+
+    custom_llm_provider: Optional[str]
+    model_id: Optional[str]
+    video_id: str

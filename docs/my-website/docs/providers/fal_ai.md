@@ -31,9 +31,14 @@ Get your API key from [fal.ai](https://fal.ai/).
 
 | Model Name | Description | Documentation |
 |------------|-------------|---------------|
+| `fal_ai/fal-ai/flux-pro/v1.1` | FLUX Pro v1.1 - Balanced speed and quality | [Docs ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1) |
+| `fal_ai/flux/schnell` | Flux Schnell - Low-latency generation with `image_size` support | [Docs ↗](https://fal.ai/models/fal-ai/flux/schnell) |
+| `fal_ai/fal-ai/bytedance/seedream/v3/text-to-image` | ByteDance Seedream v3 - Text-to-image with `image_size` control | [Docs ↗](https://fal.ai/models/fal-ai/bytedance/seedream/v3/text-to-image) |
+| `fal_ai/fal-ai/bytedance/dreamina/v3.1/text-to-image` | ByteDance Dreamina v3.1 - Text-to-image with `image_size` control | [Docs ↗](https://fal.ai/models/fal-ai/bytedance/dreamina/v3.1/text-to-image) |
 | `fal_ai/fal-ai/flux-pro/v1.1-ultra` | FLUX Pro v1.1 Ultra - High-quality image generation | [Docs ↗](https://fal.ai/models/fal-ai/flux-pro/v1.1-ultra) |
 | `fal_ai/fal-ai/imagen4/preview` | Google's Imagen 4 - Highest quality model | [Docs ↗](https://fal.ai/models/fal-ai/imagen4/preview) |
 | `fal_ai/fal-ai/recraft/v3/text-to-image` | Recraft v3 - Multiple style options | [Docs ↗](https://fal.ai/models/fal-ai/recraft/v3/text-to-image) |
+| `fal_ai/fal-ai/ideogram/v3` | Ideogram v3 - Lettering-first creative model (Balanced: $0.06/image) | [Docs ↗](https://fal.ai/models/fal-ai/ideogram/v3) |
 | `fal_ai/fal-ai/stable-diffusion-v35-medium` | Stable Diffusion v3.5 Medium | [Docs ↗](https://fal.ai/models/fal-ai/stable-diffusion-v35-medium) |
 | `fal_ai/bria/text-to-image/3.2` | Bria 3.2 - Commercial-grade generation | [Docs ↗](https://fal.ai/models/bria/text-to-image/3.2) |
 

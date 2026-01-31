@@ -1,8 +1,10 @@
-from unittest.mock import Mock
+import json
+from unittest.mock import Mock, patch
 
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.azure.text_to_speech.transformation import AzureAVATextToSpeechConfig
 
 
@@ -553,4 +555,143 @@ def test_transform_text_to_speech_request_without_lang(azure_tts_config: AzureAV
     # Check that voice element doesn't have xml:lang by ensuring the pattern doesn't exist
     assert "<voice name='en-US-AriaNeural' xml:lang=" not in ssml
     assert "<voice name='en-US-AriaNeural'>" in ssml
+
+
+def test_transform_text_to_speech_request_with_raw_ssml(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test that raw SSML input is auto-detected and passed through without transformation
+    """
+    raw_ssml = """<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>
+    <voice name='en-US-JennyNeural'>
+        <prosody rate='fast' pitch='high'>
+            This is custom SSML with specific settings!
+        </prosody>
+    </voice>
+</speak>"""
+    
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input=raw_ssml,
+        voice="en-US-AriaNeural",
+        optional_params={"voice": "en-US-AriaNeural"},
+        litellm_params={},
+        headers={}
+    )
+    
+    ssml = result["ssml_body"]
+    
+    # The SSML should be passed through as-is
+    assert ssml == raw_ssml
+    assert "en-US-JennyNeural" in ssml
+    assert "fast" in ssml
+    assert "high" in ssml
+    assert "This is custom SSML with specific settings!" in ssml
+    
+    # Should NOT have been wrapped or transformed
+    assert ssml.count("<speak") == 1
+    assert ssml.count("</speak>") == 1
+
+
+def test_transform_text_to_speech_request_with_raw_ssml_header(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test that raw SSML preserves output format headers
+    """
+    raw_ssml = """<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>
+    <voice name='en-US-GuyNeural'>
+        Hello from raw SSML
+    </voice>
+</speak>"""
+    
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input=raw_ssml,
+        voice="en-US-AriaNeural",
+        optional_params={
+            "voice": "en-US-AriaNeural",
+            "output_format": "audio-16khz-32kbitrate-mono-mp3"
+        },
+        litellm_params={},
+        headers={}
+    )
+    
+    # SSML should be passed through
+    assert result["ssml_body"] == raw_ssml
+    
+    # Headers should still be set correctly
+    assert result["headers"]["X-Microsoft-OutputFormat"] == "audio-16khz-32kbitrate-mono-mp3"
+
+
+def test_transform_text_to_speech_request_ssml_with_mstts_namespace(azure_tts_config: AzureAVATextToSpeechConfig):
+    """
+    Test that raw SSML with Azure-specific mstts namespace is passed through
+    """
+    raw_ssml = """<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xmlns:mstts='https://www.w3.org/2001/mstts' xml:lang='en-US'>
+    <voice name='en-US-AriaNeural'>
+        <mstts:express-as style='cheerful' styledegree='2'>
+            <prosody rate='+20%'>
+                This is custom SSML with Azure-specific features!
+            </prosody>
+        </mstts:express-as>
+    </voice>
+</speak>"""
+    
+    result = azure_tts_config.transform_text_to_speech_request(
+        model="azure-tts",
+        input=raw_ssml,
+        voice="en-US-AriaNeural",
+        optional_params={"voice": "en-US-AriaNeural"},
+        litellm_params={},
+        headers={}
+    )
+    
+    ssml = result["ssml_body"]
+    
+    # The SSML should be passed through as-is with all Azure-specific features
+    assert ssml == raw_ssml
+    assert "mstts:express-as" in ssml
+    assert "style='cheerful'" in ssml
+    assert "styledegree='2'" in ssml
+    assert "rate='+20%'" in ssml
+
+
+@patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
+def test_litellm_speech_with_ssml_passthrough(mock_post):
+    """
+    Test that litellm.speech passes SSML through to Azure AVA without transformation
+    """
+    raw_ssml = """<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='en-US'>
+    <voice name='en-US-JennyNeural'>
+        <prosody rate='fast' pitch='high'>
+            Custom SSML content!
+        </prosody>
+    </voice>
+</speak>"""
+    
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.content = b"fake_audio_data"
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "audio/mpeg"}
+    mock_post.return_value = mock_response
+    
+    litellm.speech(
+        model="azure/speech/tts",
+        input=raw_ssml,
+        voice="en-US-AriaNeural",
+        api_key="test-key",
+        api_base="https://eastus.api.cognitive.microsoft.com"
+    )
+    
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args.kwargs
+    
+    # Verify the SSML was sent in the request body
+    assert "data" in call_kwargs
+    assert call_kwargs["data"] == raw_ssml
+    print("REQUEST BODY: ", json.dumps(call_kwargs["data"], indent=4))
+    
+    # Verify the SSML contains the original content
+    assert "en-US-JennyNeural" in call_kwargs["data"]
+    assert "fast" in call_kwargs["data"]
+    assert "high" in call_kwargs["data"]
+    assert "Custom SSML content!" in call_kwargs["data"]
 

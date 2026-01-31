@@ -1,20 +1,22 @@
 #### Video Endpoints #####
 
+from typing import Any, Dict, Optional
+
 import orjson
-from fastapi import APIRouter, Depends, Request, Response, UploadFile, File
+from fastapi import APIRouter, Depends, File, Request, Response, UploadFile
 from fastapi.responses import ORJSONResponse
-from typing import Optional, Dict, Any
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
+from litellm.proxy.image_endpoints.endpoints import batch_to_bytesio
+from litellm.types.videos.utils import decode_video_id_with_provider
 
 router = APIRouter()
 
@@ -237,16 +239,26 @@ async def video_status(
     # Create data with video_id
     data: Dict[str, Any] = {"video_id": video_id}
 
-    # Extract custom_llm_provider from headers, query params, or body
+    decoded = decode_video_id_with_provider(video_id)
+    provider_from_id = decoded.get("custom_llm_provider")
+    model_id_from_decoded = decoded.get("model_id")
+
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
+        or provider_from_id
         or "openai"
-
     )
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
+
+    # Resolve model_name from model_id if available
+    # This allows the router to automatically inject litellm_params from the model config
+    if model_id_from_decoded and llm_router:
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        if resolved_model:
+            data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
@@ -304,7 +316,7 @@ async def video_content(
     
     Example:
     ```bash
-    curl -X GET "http://localhost:4000/v1/videos/video_123/content" \
+    curl -X GET "http://localhost:4000/v1/videos/{video_id}/content" \
         -H "Authorization: Bearer sk-1234" \
         --output video.mp4
     ```
@@ -326,15 +338,25 @@ async def video_content(
     # Create data with video_id
     data: Dict[str, Any] = {"video_id": video_id}
 
-    # Extract custom_llm_provider from headers, query params, or body
+    decoded = decode_video_id_with_provider(video_id)
+    provider_from_id = decoded.get("custom_llm_provider")
+    model_id_from_decoded = decoded.get("model_id")
+    
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or await get_custom_llm_provider_from_request_body(request=request)
+        or provider_from_id
     )
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
+    # Resolve model_name from model_id if available
+    # This allows the router to automatically inject litellm_params from the model config
+    if model_id_from_decoded and llm_router:
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        if resolved_model:
+            data["model"] = resolved_model
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)
     try:
@@ -428,14 +450,25 @@ async def video_remix(
     data = orjson.loads(body)
     data["video_id"] = video_id
 
-    # Extract custom_llm_provider from headers, query params, or body
+    decoded = decode_video_id_with_provider(video_id)
+    provider_from_id = decoded.get("custom_llm_provider")
+    model_id_from_decoded = decoded.get("model_id")
+
     custom_llm_provider = (
         get_custom_llm_provider_from_request_headers(request=request)
         or get_custom_llm_provider_from_request_query(request=request)
         or data.get("custom_llm_provider")
+        or provider_from_id
     )
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
+
+    # Resolve model_name from model_id if available
+    # This allows the router to automatically inject litellm_params from the model config
+    if model_id_from_decoded and llm_router:
+        resolved_model = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+        if resolved_model:
+            data["model"] = resolved_model
 
     # Process request using ProxyBaseLLMRequestProcessing
     processor = ProxyBaseLLMRequestProcessing(data=data)

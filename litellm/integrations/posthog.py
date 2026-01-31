@@ -10,12 +10,17 @@ For batching specific details see CustomBatchLogger class
 """
 
 import asyncio
+import atexit
 import os
 from typing import Any, Dict, Optional, Tuple
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_batch_logger import CustomBatchLogger
+from litellm.integrations.posthog_mock_client import (
+    should_use_posthog_mock,
+    create_mock_posthog_client,
+)
 from litellm.llms.custom_httpx.http_handler import (
     _get_httpx_client,
     get_async_httpx_client,
@@ -39,6 +44,12 @@ class PostHogLogger(CustomBatchLogger):
         """
         try:
             verbose_logger.debug("PostHog: in init posthog logger")
+            
+            self.is_mock_mode = should_use_posthog_mock()
+            if self.is_mock_mode:
+                create_mock_posthog_client()
+                verbose_logger.debug("[POSTHOG MOCK] PostHog logger initialized in mock mode")
+            
             if os.getenv("POSTHOG_API_KEY", None) is None:
                 raise Exception("POSTHOG_API_KEY is not set, set 'POSTHOG_API_KEY=<>'")
 
@@ -55,7 +66,10 @@ class PostHogLogger(CustomBatchLogger):
             self._async_initialized = False
             self.flush_lock = None
             self.log_queue = []
-            
+
+            # Register cleanup handler to flush internal queue on exit
+            atexit.register(self._flush_on_exit)
+
             super().__init__(
                 **kwargs, flush_lock=None, batch_size=POSTHOG_MAX_BATCH_SIZE
             )
@@ -96,7 +110,10 @@ class PostHogLogger(CustomBatchLogger):
                     f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
                 )
 
-            verbose_logger.debug("PostHog: Sync event successfully sent")
+            if self.is_mock_mode:
+                verbose_logger.debug("[POSTHOG MOCK] Sync event successfully mocked")
+            else:
+                verbose_logger.debug("PostHog: Sync event successfully sent")
 
         except Exception as e:
             verbose_logger.exception(f"PostHog Sync Layer Error - {str(e)}")
@@ -316,6 +333,9 @@ class PostHogLogger(CustomBatchLogger):
             verbose_logger.debug(
                 f"PostHog: Sending batch of {len(self.log_queue)} events"
             )
+            
+            if self.is_mock_mode:
+                verbose_logger.debug("[POSTHOG MOCK] Mock mode enabled - API calls will be intercepted")
 
             # Group events by credentials for batch sending
             batches_by_credentials: Dict[tuple[str, str], list] = {}
@@ -346,9 +366,12 @@ class PostHogLogger(CustomBatchLogger):
                         f"Response from PostHog API status_code: {response.status_code}, text: {response.text}"
                     )
 
-            verbose_logger.debug(
-                f"PostHog: Batch of {len(self.log_queue)} events successfully sent"
-            )
+            if self.is_mock_mode:
+                verbose_logger.debug(f"[POSTHOG MOCK] Batch of {len(self.log_queue)} events successfully mocked")
+            else:
+                verbose_logger.debug(
+                    f"PostHog: Batch of {len(self.log_queue)} events successfully sent"
+                )
         except Exception as e:
             verbose_logger.exception(f"PostHog Error sending batch API - {str(e)}")
 
@@ -377,3 +400,63 @@ class PostHogLogger(CustomBatchLogger):
         if obj is None or not hasattr(obj, 'get'):
             return default
         return obj.get(key, default)
+
+    def _flush_on_exit(self):
+        """
+        Flush remaining events from internal log_queue before process exit.
+        Called automatically via atexit handler.
+
+        This works in conjunction with GLOBAL_LOGGING_WORKER's atexit handler:
+        1. GLOBAL_LOGGING_WORKER atexit invokes pending callbacks
+        2. Callbacks add events to this logger's internal log_queue
+        3. This atexit handler flushes the internal queue to PostHog
+        """
+        if not self.log_queue:
+            return
+
+        verbose_logger.debug(
+            f"PostHog: Flushing {len(self.log_queue)} remaining events on exit"
+        )
+
+        try:
+            # Group events by credentials (same logic as async_send_batch)
+            batches_by_credentials: Dict[Tuple[str, str], list] = {}
+            for item in self.log_queue:
+                key = (item["api_key"], item["api_url"])
+                if key not in batches_by_credentials:
+                    batches_by_credentials[key] = []
+                batches_by_credentials[key].append(item["event"])
+
+            # Send each batch synchronously using sync_client
+            for (api_key, api_url), events in batches_by_credentials.items():
+                headers = {
+                    "Content-Type": "application/json",
+                }
+
+                payload = self._create_posthog_payload(events, api_key)
+                capture_url = f"{api_url.rstrip('/')}/batch/"
+
+                response = self.sync_client.post(
+                    url=capture_url,
+                    json=payload,
+                    headers=headers,
+                )
+                response.raise_for_status()
+
+                if response.status_code != 200:
+                    verbose_logger.error(
+                        f"PostHog: Failed to flush on exit - status {response.status_code}"
+                    )
+
+            if self.is_mock_mode:
+                verbose_logger.debug(
+                    f"[POSTHOG MOCK] Successfully flushed {len(self.log_queue)} events on exit"
+                )
+            else:
+                verbose_logger.debug(
+                    f"PostHog: Successfully flushed {len(self.log_queue)} events on exit"
+                )
+            self.log_queue.clear()
+
+        except Exception as e:
+            verbose_logger.error(f"PostHog: Error flushing events on exit: {str(e)}")

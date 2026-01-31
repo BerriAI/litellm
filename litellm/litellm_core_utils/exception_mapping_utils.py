@@ -3,6 +3,7 @@ import traceback
 from typing import Any, Optional
 
 import httpx
+import re
 
 import litellm
 from litellm._logging import verbose_logger
@@ -12,6 +13,7 @@ from ..exceptions import (
     APIConnectionError,
     APIError,
     AuthenticationError,
+    BadGatewayError,
     BadRequestError,
     ContentPolicyViolationError,
     ContextWindowExceededError,
@@ -43,16 +45,23 @@ class ExceptionCheckers:
         """
         if not isinstance(error_str, str):
             return False
-        
-        if "429" in error_str or "rate limit" in error_str.lower():
+
+        # Only treat 429 as a rate limit signal when it appears as a standalone token
+        if re.search(r"\b429\b", error_str):
             return True
-        
+
+        _error_str_lower = error_str.lower()
+
+        # Match "rate limit" (including variations like rate-limit / rate_limit)
+        if re.search(r"rate[\s_\-]*limit", _error_str_lower):
+            return True
+
         #######################################
         # Mistral API returns this error string
         #########################################
-        if "service tier capacity exceeded" in error_str.lower():
+        if "service tier capacity exceeded" in _error_str_lower:
             return True
-        
+
         return False
 
     @staticmethod
@@ -68,9 +77,37 @@ class ExceptionCheckers:
             "model's maximum context limit",
             "is longer than the model's context length",
             "input tokens exceed the configured limit",
+            "`inputs` tokens + `max_new_tokens` must be",
+            "exceeds the maximum number of tokens allowed",  # Gemini
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:
+                return True
+
+        # Cerebras pattern: "Current length is X while limit is Y"
+        if (
+            "current length is" in _error_str_lowercase
+            and "while limit is" in _error_str_lowercase
+        ):
+            return True
+
+        return False
+    
+    @staticmethod
+    def is_azure_content_policy_violation_error(error_str: str) -> bool:
+        """
+        Check if an error string indicates a content policy violation error.
+        """
+        known_exception_substrings = [
+            "invalid_request_error",
+            "content_policy_violation",
+            "the response was filtered due to the prompt triggering azure openai's content management",
+            "your task failed as a result of our safety system",
+            "the model produced invalid content",
+            "content_filter_policy",
+        ]
+        for substring in known_exception_substrings:
+            if substring in error_str.lower():
                 return True
         return False
 
@@ -105,7 +142,14 @@ def get_error_message(error_obj) -> Optional[str]:
         if hasattr(error_obj, "body"):
             _error_obj_body = getattr(error_obj, "body")
             if isinstance(_error_obj_body, dict):
-                return _error_obj_body.get("message")
+                # OpenAI-style: {"message": "...", "type": "...", ...}
+                if _error_obj_body.get("message"):
+                    return _error_obj_body.get("message")
+
+                # Azure-style: {"error": {"message": "...", ...}}
+                nested_error = _error_obj_body.get("error")
+                if isinstance(nested_error, dict):
+                    return nested_error.get("message")
 
         # If all else fails, return None
         return None
@@ -136,9 +180,6 @@ def _get_response_headers(original_exception: Exception) -> Optional[httpx.Heade
     return _response_headers
 
 
-import re
-
-
 def extract_and_raise_litellm_exception(
     response: Optional[Any],
     error_str: str,
@@ -163,12 +204,22 @@ def extract_and_raise_litellm_exception(
         exception_name = exception_name.strip().replace("litellm.", "")
         raised_exception_obj = getattr(litellm, exception_name, None)
         if raised_exception_obj:
-            raise raised_exception_obj(
-                message=error_str,
-                llm_provider=custom_llm_provider,
-                model=model,
-                response=response,
-            )
+            # Try with response parameter first, fall back to without it
+            # Some exceptions (e.g., APIConnectionError) don't accept response param
+            try:
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                    response=response,
+                )
+            except TypeError:
+                # Exception doesn't accept response parameter
+                raise raised_exception_obj(
+                    message=error_str,
+                    llm_provider=custom_llm_provider,
+                    model=model,
+                )
 
 
 def exception_type(  # type: ignore  # noqa: PLR0915
@@ -507,6 +558,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             response=getattr(original_exception, "response", None),
                             litellm_debug_info=extra_information,
                         )
+                    elif original_exception.status_code == 502:
+                        exception_mapping_worked = True
+                        raise BadGatewayError(
+                            message=f"BadGatewayError: {exception_provider} - {message}",
+                            model=model,
+                            llm_provider=custom_llm_provider,
+                            response=getattr(original_exception, "response", None),
+                            litellm_debug_info=extra_information,
+                        )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
                         raise ServiceUnavailableError(
@@ -637,6 +697,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"AnthropicException - {error_str}. Handle with `litellm.InternalServerError`.",
                             llm_provider="anthropic",
                             model=model,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    elif original_exception.status_code == 502:
+                        exception_mapping_worked = True
+                        raise BadGatewayError(
+                            message=f"AnthropicException BadGatewayError - {error_str}",
+                            llm_provider="anthropic",
+                            model=model,
+                            response=getattr(original_exception, "response", None),
                         )
                     elif original_exception.status_code == 503:
                         exception_mapping_worked = True
@@ -644,6 +713,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                             message=f"AnthropicException - {error_str}. Handle with `litellm.ServiceUnavailableError`.",
                             llm_provider="anthropic",
                             model=model,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    elif original_exception.status_code == 504:  # gateway timeout error
+                        exception_mapping_worked = True
+                        raise Timeout(
+                            message=f"AnthropicException Timeout - {error_str}",
+                            model=model,
+                            llm_provider="anthropic",
+                            exception_status_code=original_exception.status_code,
                         )
             elif custom_llm_provider == "replicate":
                 if "Incorrect authentication token" in error_str:
@@ -1199,6 +1277,14 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         model=model,
                         llm_provider=custom_llm_provider,
                     )
+                elif ExceptionCheckers.is_error_str_context_window_exceeded(error_str):
+                    exception_mapping_worked = True
+                    raise ContextWindowExceededError(
+                        message=f"ContextWindowExceededError: {custom_llm_provider.capitalize()}Exception - {error_str}",
+                        model=model,
+                        llm_provider=custom_llm_provider,
+                        litellm_debug_info=extra_information,
+                    )
                 elif (
                     "None Unknown Error." in error_str
                     or "Content has no parts." in error_str
@@ -1260,6 +1346,7 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                 elif (
                     "429 Quota exceeded" in error_str
                     or "Quota exceeded for" in error_str
+                    or "Resource exhausted" in error_str
                     or "IndexError: list index out of range" in error_str
                     or "429 Unable to submit request because the service is temporarily out of capacity."
                     in error_str
@@ -1964,6 +2051,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                     else:
                         message = str(original_exception)
 
+                # Azure OpenAI (especially Images) often nests error details under
+                # body["error"]. Detect content policy violations using the structured
+                # payload in addition to string matching.
+                azure_error_code: Optional[str] = None
+                try:
+                    body_dict = getattr(original_exception, "body", None) or {}
+                    if isinstance(body_dict, dict):
+                        if isinstance(body_dict.get("error"), dict):
+                            azure_error_code = body_dict["error"].get("code")  # type: ignore[index]
+                        else:
+                            azure_error_code = body_dict.get("code")
+                except Exception:
+                    azure_error_code = None
+
                 if "Internal server error" in error_str:
                     exception_mapping_worked = True
                     raise litellm.InternalServerError(
@@ -1992,26 +2093,20 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         response=getattr(original_exception, "response", None),
                     )
                 elif (
-                    (
-                        "invalid_request_error" in error_str
-                        and "content_policy_violation" in error_str
-                    )
-                    or (
-                        "The response was filtered due to the prompt triggering Azure OpenAI's content management"
-                        in error_str
-                    )
-                    or "Your task failed as a result of our safety system" in error_str
-                    or "The model produced invalid content" in error_str
-                    or "content_filter_policy" in error_str
+                    azure_error_code == "content_policy_violation"
+                    or ExceptionCheckers.is_azure_content_policy_violation_error(error_str)
                 ):
                     exception_mapping_worked = True
-                    raise ContentPolicyViolationError(
-                        message=f"litellm.ContentPolicyViolationError: AzureException - {message}",
-                        llm_provider="azure",
-                        model=model,
-                        litellm_debug_info=extra_information,
-                        response=getattr(original_exception, "response", None),
+                    from litellm.llms.azure.exception_mapping import (
+                        AzureOpenAIExceptionMapping,
                     )
+                    raise AzureOpenAIExceptionMapping.create_content_policy_violation_error(
+                        message=message,
+                        model=model,
+                        extra_information=extra_information,
+                        original_exception=original_exception,
+                    )
+                    
                 elif "invalid_request_error" in error_str:
                     exception_mapping_worked = True
                     raise BadRequestError(
@@ -2084,6 +2179,15 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         exception_mapping_worked = True
                         raise RateLimitError(
                             message=f"AzureException RateLimitError - {message}",
+                            model=model,
+                            llm_provider="azure",
+                            litellm_debug_info=extra_information,
+                            response=getattr(original_exception, "response", None),
+                        )
+                    elif original_exception.status_code == 502:
+                        exception_mapping_worked = True
+                        raise BadGatewayError(
+                            message=f"AzureException BadGatewayError - {message}",
                             model=model,
                             llm_provider="azure",
                             litellm_debug_info=extra_information,

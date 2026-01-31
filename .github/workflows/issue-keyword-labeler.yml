@@ -19,7 +19,7 @@ jobs:
         id: scan
         env:
           PROVIDER_ISSUE_WEBHOOK_URL: ${{ secrets.PROVIDER_ISSUE_WEBHOOK_URL }}
-          KEYWORDS: azure,openai,bedrock,vertexai,vertex ai,anthropic
+          KEYWORDS: azure,openai,bedrock,vertexai,vertex ai,anthropic,gemini,cohere,mistral,groq,ollama,deepseek
         run: python3 .github/scripts/scan_keywords.py
 
       - name: Ensure label exists

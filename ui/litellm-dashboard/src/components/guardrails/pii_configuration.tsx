@@ -1,7 +1,7 @@
+import { Typography } from "antd";
 import React, { useState } from "react";
-import { Typography, Badge } from "antd";
+import { CategoryFilter, PiiEntityList, QuickActions } from "./pii_components";
 import { PiiConfigurationProps } from "./types";
-import { CategoryFilter, QuickActions, PiiEntityList } from "./pii_components";
 
 const { Title, Text } = Typography;
 
@@ -57,18 +57,11 @@ const PiiConfiguration: React.FC<PiiConfigurationProps> = ({
     <div className="pii-configuration">
       <div className="flex justify-between items-center mb-5">
         <div className="flex items-center">
-          <Title level={4} className="mb-0 font-semibold text-gray-800">
+          <Title level={4} className="!m-0 font-semibold text-gray-800">
             Configure PII Protection
           </Title>
         </div>
-        <Badge
-          count={selectedEntities.length}
-          showZero
-          style={{ backgroundColor: selectedEntities.length > 0 ? "#4f46e5" : "#d9d9d9" }}
-          overflowCount={999}
-        >
-          <Text className="text-gray-500">{selectedEntities.length} items selected</Text>
-        </Badge>
+        <Text className="text-gray-500">{selectedEntities.length} items selected</Text>
       </div>
 
       <div className="mb-6">

@@ -221,3 +221,125 @@ class GeminiImageGenerationPrediction(TypedDict):
 class GeminiImageGenerationResponse(TypedDict):
     """Complete response body from Gemini image generation API"""
     predictions: List[GeminiImageGenerationPrediction]
+
+# Video Generation Types
+class GeminiVideoGenerationInstance(TypedDict):
+    """Instance data for Gemini video generation request"""
+    prompt: str
+
+
+class GeminiVideoGenerationParameters(BaseModel):
+    """
+    Parameters for Gemini video generation request.
+    
+    See: Veo 3/3.1 parameter guide.
+    """
+    aspectRatio: Optional[str] = None
+    """Aspect ratio for generated video (e.g., '16:9', '9:16')."""
+
+    durationSeconds: Optional[int] = None
+    """
+    Length of the generated video in seconds (e.g., 4, 5, 6, 8).
+    Must be 8 when using extension/interpolation or referenceImages.
+    """
+
+    resolution: Optional[str] = None
+    """
+    Video resolution (e.g., '720p', '1080p').
+    '1080p' only supports 8s duration; extension only supports '720p'.
+    """
+
+    negativePrompt: Optional[str] = None
+    """Text describing what not to include in the video."""
+
+    image: Optional[Any] = None
+    """
+    An initial image to animate (Image object).
+    """
+
+    lastFrame: Optional[Any] = None
+    """
+    The final image for interpolation video to transition.
+    Should be used with the 'image' parameter.
+    """
+
+    referenceImages: Optional[list] = None
+    """
+    Up to three images to be used as style/content references.
+    Only supported in Veo 3.1 (list of VideoGenerationReferenceImage objects).
+    """
+
+    video: Optional[Any] = None
+    """
+    Video to be used for video extension (Video object).
+    Only supported in Veo 3.1 & Veo 3 Fast.
+    """
+
+    personGeneration: Optional[str] = None
+    """
+    Controls the generation of people.
+    Text-to-video & Extension: "allow_all" only
+    Image-to-video, Interpolation, & Reference images (Veo 3.x): "allow_adult" only
+    See documentation for region restrictions & more.
+    """
+
+
+class GeminiVideoGenerationRequest(BaseModel):
+    """Complete request body for Gemini video generation"""
+    instances: List[GeminiVideoGenerationInstance]
+    parameters: Optional[GeminiVideoGenerationParameters] = None
+
+
+# Video Generation Operation Response Types
+class GeminiVideoUri(BaseModel):
+    """Video URI in the generated sample"""
+    uri: str
+    """File URI of the generated video (e.g., 'files/abc123...')"""
+
+
+class GeminiGeneratedVideoSample(BaseModel):
+    """Individual generated video sample"""
+    video: GeminiVideoUri
+    """Video object containing the URI"""
+
+
+class GeminiGenerateVideoResponse(BaseModel):
+    """Generate video response containing the samples"""
+    generatedSamples: List[GeminiGeneratedVideoSample]
+    """List of generated video samples"""
+
+
+class GeminiOperationResponse(BaseModel):
+    """Response object in the operation when done"""
+    generateVideoResponse: GeminiGenerateVideoResponse
+    """Video generation response"""
+
+
+class GeminiOperationMetadata(BaseModel):
+    """Metadata for the operation"""
+    createTime: Optional[str] = None
+    """Creation timestamp"""
+    model: Optional[str] = None
+    """Model used for generation"""
+
+
+class GeminiLongRunningOperationResponse(BaseModel):
+    """
+    Complete response for a long-running operation.
+    
+    Used when polling operation status and extracting results.
+    """
+    name: str
+    """Operation name (e.g., 'operations/generate_1234567890')"""
+    
+    done: bool = False
+    """Whether the operation is complete"""
+    
+    metadata: Optional[GeminiOperationMetadata] = None
+    """Operation metadata"""
+    
+    response: Optional[GeminiOperationResponse] = None
+    """Response object when operation is complete"""
+    
+    error: Optional[Dict[str, Any]] = None
+    """Error details if operation failed"""

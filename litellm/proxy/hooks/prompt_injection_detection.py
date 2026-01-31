@@ -151,6 +151,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
             self.print_verbose("Inside Prompt Injection Detection Pre-Call Hook")
             try:
                 assert call_type in [
+                    "acompletion",
                     "completion",
                     "text_completion",
                     "embeddings",
@@ -220,6 +221,7 @@ class _OPTIONAL_PromptInjectionDetection(CustomLogger):
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
         call_type: Literal[
+            "acompletion",
             "completion",
             "embeddings",
             "image_generation",

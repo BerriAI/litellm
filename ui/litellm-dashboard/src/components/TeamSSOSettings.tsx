@@ -123,6 +123,9 @@ const TeamSSOSettings: React.FC<TeamSSOSettingsProps> = ({ accessToken, userID, 
           onChange={(value) => handleTextInputChange(key, value)}
           className="mt-2"
         >
+          <Option key="no-default-models" value="no-default-models">
+            No Default Models
+          </Option>
           {availableModels.map((model: string) => (
             <Option key={model} value={model}>
               {getModelDisplayName(model)}

@@ -45,6 +45,8 @@ export const guardrail_provider_map: Record<string, string> = {
   PresidioPII: "presidio",
   Bedrock: "bedrock",
   Lakera: "lakera_v2",
+  LitellmContentFilter: "litellm_content_filter",
+  ToolPermission: "tool_permission",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -88,6 +90,17 @@ export const shouldRenderAzureTextModerationConfigSettings = (provider: string |
   return providerEnum === "Azure Content Safety Text Moderation";
 };
 
+// Decides if we should render the Content Filter config settings for a given provider
+export const shouldRenderContentFilterConfigSettings = (provider: string | null) => {
+  if (!provider) {
+    return false;
+  }
+  // Check both dynamic and legacy providers
+  const currentProviders = getGuardrailProviders();
+  const providerEnum = currentProviders[provider as keyof typeof currentProviders];
+  return providerEnum === "LiteLLM Content Filter";
+};
+
 const asset_logos_folder = "../ui/assets/logos/";
 
 export const guardrailLogoMap: Record<string, string> = {
@@ -108,6 +121,8 @@ export const guardrailLogoMap: Record<string, string> = {
   "AIM Guardrail": `${asset_logos_folder}aim_security.jpeg`,
   "OpenAI Moderation": `${asset_logos_folder}openai_small.svg`,
   EnkryptAI: `${asset_logos_folder}enkrypt_ai.avif`,
+  "Prompt Security": `${asset_logos_folder}prompt_security.png`,
+  "LiteLLM Content Filter": `${asset_logos_folder}litellm_logo.jpg`,
 };
 
 export const getGuardrailLogoAndName = (guardrailValue: string): { logo: string; displayName: string } => {

@@ -91,7 +91,9 @@ def test_embedding(client):
         assert "headers" in metadata
         proxy_server_request = litellm_params.get("proxy_server_request")
         model_info = litellm_params.get("model_info")
-        assert proxy_server_request == {
+        # Remove arrival_time from comparison as it's dynamic
+        proxy_server_request_copy = {k: v for k, v in proxy_server_request.items() if k != "arrival_time"}
+        assert proxy_server_request_copy == {
             "url": "http://testserver/embeddings",
             "method": "POST",
             "headers": {
@@ -188,7 +190,9 @@ def test_chat_completion(client):
         }
 
         assert "authorization" not in proxy_server_request_object["headers"]
-        assert proxy_server_request_object == {
+        # Remove arrival_time from comparison as it's dynamic
+        proxy_server_request_copy = {k: v for k, v in proxy_server_request_object.items() if k != "arrival_time"}
+        assert proxy_server_request_copy == {
             "url": "http://testserver/chat/completions",
             "method": "POST",
             "headers": {

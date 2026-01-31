@@ -495,13 +495,13 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     mock_response = Mock()
     mock_response.status_code = 200
     mock_response.json.return_value = {"action": "NONE", "outputs": []}
-    guardrail_hook.async_handler.post = AsyncMock(return_value=mock_response)
     
     test_request_data = {
         "api_key": "test-api-key-789"
     }
     
-    with patch.object(guardrail_hook, "_load_credentials") as mock_load_creds, \
+    with patch.object(guardrail_hook.async_handler, "post", AsyncMock(return_value=mock_response)), \
+         patch.object(guardrail_hook, "_load_credentials") as mock_load_creds, \
          patch.object(guardrail_hook, "convert_to_bedrock_format") as mock_convert, \
          patch.object(guardrail_hook, "get_guardrail_dynamic_request_body_params") as mock_get_params, \
          patch.object(guardrail_hook, "add_standard_logging_guardrail_information_to_request_data"), \
@@ -751,13 +751,14 @@ async def test_patch_guardrail_endpoint(
     mock_logger = None
     if scenario == "success_with_sync":
         mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock()
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
         mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_in_memory_handler)
         
     elif scenario == "success_sync_fails":
         mock_prisma_client = mocker.Mock()
-        mock_in_memory_handler.update_in_memory_guardrail.side_effect = Exception("Sync failed")
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(side_effect=Exception("Sync failed"))
         mock_logger = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger")
         
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -792,8 +793,7 @@ async def test_patch_guardrail_endpoint(
         
         mock_guardrail_registry.update_guardrail_in_db.assert_called_once()
         
-        mock_in_memory_handler.update_in_memory_guardrail.assert_called_once_with(
-            guardrail_id="test-guardrail-id",
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
             guardrail=mocker.ANY
         )
         
