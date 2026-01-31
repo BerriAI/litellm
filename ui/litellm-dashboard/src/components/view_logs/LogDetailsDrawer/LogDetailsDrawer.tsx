@@ -1,6 +1,5 @@
 import { useState } from "react";
-import { Drawer, Typography, Button, Descriptions, Card, Tag, Tabs, Alert, message, Collapse } from "antd";
-import { CopyOutlined } from "@ant-design/icons";
+import { Drawer, Typography, Space, Descriptions, Card, Tag, Tabs, Alert, Collapse } from "antd";
 import moment from "moment";
 import { LogEntry } from "../columns";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
@@ -12,8 +11,16 @@ import { TruncatedValue } from "./TruncatedValue";
 import { TokenFlow } from "./TokenFlow";
 import { JsonViewer } from "./JsonViewer";
 import { DrawerHeader } from "./DrawerHeader";
-import { copyToClipboard } from "./clipboardUtils";
 import { useKeyboardNavigation } from "./useKeyboardNavigation";
+import {
+  formatData,
+  checkHasMessages,
+  checkHasResponse,
+  normalizeGuardrailEntries,
+  calculateTotalMaskedEntities,
+  getGuardrailLabel,
+  checkHasVectorStoreData,
+} from "./utils";
 import {
   DRAWER_WIDTH,
   DRAWER_CONTENT_PADDING,
@@ -24,7 +31,7 @@ import {
   FONT_SIZE_SMALL,
   FONT_FAMILY_MONO,
   SPACING_XLARGE,
-  MESSAGE_REQUEST_ID_COPIED,
+  SPACING_MEDIUM,
 } from "./constants";
 import { ToolsSection } from "../ToolsSection";
 
@@ -94,11 +101,6 @@ export function LogDetailsDrawer({
   const statusColor = metadata.status === "failure" ? ("error" as const) : ("success" as const);
   const environment = metadata?.user_api_key_team_alias || "default";
 
-  const handleCopyRequestId = () => {
-    navigator.clipboard.writeText(logEntry.request_id);
-    message.success(MESSAGE_REQUEST_ID_COPIED);
-  };
-
   const getRawRequest = () => {
     return formatData(logEntry.proxy_server_request || logEntry.messages);
   };
@@ -135,7 +137,6 @@ export function LogDetailsDrawer({
       <DrawerHeader
         log={logEntry}
         onClose={onClose}
-        onCopyRequestId={handleCopyRequestId}
         onPrevious={selectPreviousLog}
         onNext={selectNextLog}
         statusLabel={statusLabel}
@@ -204,7 +205,6 @@ export function LogDetailsDrawer({
         {/* Request/Response JSON - Collapsible */}
         <RequestResponseSection
           hasResponse={hasResponse}
-          onCopy={(data, label) => copyToClipboard(JSON.stringify(data, null, 2), label)}
           getRawRequest={getRawRequest}
           getFormattedResponse={getFormattedResponse}
         />
@@ -217,7 +217,7 @@ export function LogDetailsDrawer({
 
         {/* Metadata Card - Only show if there's metadata */}
         {logEntry.metadata && Object.keys(logEntry.metadata).length > 0 && (
-          <MetadataSection metadata={logEntry.metadata} onCopy={(data) => copyToClipboard(data, "Metadata")} />
+          <MetadataSection metadata={logEntry.metadata} />
         )}
         
         {/* Bottom spacing for scroll area */}
@@ -254,27 +254,27 @@ function TagsSection({ tags }: { tags: Record<string, any> }) {
       <Text strong style={{ display: "block", marginBottom: 8, fontSize: 16 }}>
         Tags
       </Text>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+      <Space size={SPACING_MEDIUM} wrap>
         {Object.entries(tags).map(([key, value]) => (
           <Tag key={key}>
             {key}: {String(value)}
           </Tag>
         ))}
-      </div>
+      </Space>
     </div>
   );
 }
 
 function GuardrailLabel({ label, maskedCount }: { label: string; maskedCount: number }) {
   return (
-    <>
+    <Space size={SPACING_MEDIUM}>
       <span>{label}</span>
       {maskedCount > 0 && (
-        <Tag color="blue" style={{ marginLeft: 8 }}>
+        <Tag color="blue">
           {maskedCount} masked
         </Tag>
       )}
-    </>
+    </Space>
   );
 }
 
@@ -337,23 +337,20 @@ function MetricsSection({ logEntry, metadata }: { logEntry: LogEntry; metadata: 
 
 interface RequestResponseSectionProps {
   hasResponse: boolean;
-  onCopy: (data: any, label: string) => void;
   getRawRequest: () => any;
   getFormattedResponse: () => any;
 }
 
 function RequestResponseSection({
   hasResponse,
-  onCopy,
   getRawRequest,
   getFormattedResponse,
 }: RequestResponseSectionProps) {
   const [activeTab, setActiveTab] = useState<typeof TAB_REQUEST | typeof TAB_RESPONSE>(TAB_REQUEST);
 
-  const handleCopy = () => {
+  const getCopyText = () => {
     const data = activeTab === TAB_REQUEST ? getRawRequest() : getFormattedResponse();
-    const label = activeTab === TAB_REQUEST ? "Request" : "Response";
-    onCopy(data, label);
+    return JSON.stringify(data, null, 2);
   };
 
   return (
@@ -371,15 +368,13 @@ function RequestResponseSection({
                   activeKey={activeTab}
                   onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
                   tabBarExtraContent={
-                    <Button
-                      type="text"
-                      size="small"
-                      icon={<CopyOutlined />}
-                      onClick={handleCopy}
+                    <Text 
+                      copyable={{ 
+                        text: getCopyText(),
+                        tooltips: ["Copy JSON", "Copied!"]
+                      }}
                       disabled={activeTab === TAB_RESPONSE && !hasResponse}
-                    >
-                      Copy
-                    </Button>
+                    />
                   }
                   items={[
                     {
@@ -417,7 +412,7 @@ function RequestResponseSection({
   );
 }
 
-function MetadataSection({ metadata, onCopy }: { metadata: Record<string, any>; onCopy: (data: string) => void }) {
+function MetadataSection({ metadata }: { metadata: Record<string, any> }) {
   return (
     <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
       <Collapse
@@ -430,14 +425,12 @@ function MetadataSection({ metadata, onCopy }: { metadata: Record<string, any>; 
             children: (
               <div>
                 <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
-                  <Button
-                    type="text"
-                    size="small"
-                    icon={<CopyOutlined />}
-                    onClick={() => onCopy(JSON.stringify(metadata, null, 2))}
-                  >
-                    Copy
-                  </Button>
+                  <Text 
+                    copyable={{ 
+                      text: JSON.stringify(metadata, null, 2),
+                      tooltips: ["Copy Metadata", "Copied!"]
+                    }}
+                  />
                 </div>
                 <pre
                   style={{
@@ -461,60 +454,3 @@ function MetadataSection({ metadata, onCopy }: { metadata: Record<string, any>; 
   );
 }
 
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-function formatData(input: any) {
-  if (typeof input === "string") {
-    try {
-      return JSON.parse(input);
-    } catch {
-      return input;
-    }
-  }
-  return input;
-}
-
-function checkHasMessages(messages: any): boolean {
-  if (!messages) return false;
-  if (Array.isArray(messages)) return messages.length > 0;
-  if (typeof messages === "object") return Object.keys(messages).length > 0;
-  return false;
-}
-
-function checkHasResponse(response: any): boolean {
-  if (!response) return false;
-  return Object.keys(formatData(response)).length > 0;
-}
-
-function normalizeGuardrailEntries(guardrailInfo: any): any[] {
-  if (Array.isArray(guardrailInfo)) return guardrailInfo;
-  if (guardrailInfo) return [guardrailInfo];
-  return [];
-}
-
-function calculateTotalMaskedEntities(entries: any[]): number {
-  return entries.reduce((sum, entry) => {
-    const maskedCounts = entry?.masked_entity_count;
-    if (!maskedCounts) return sum;
-    return (
-      sum +
-      Object.values(maskedCounts).reduce<number>((acc, count) => (typeof count === "number" ? acc + count : acc), 0)
-    );
-  }, 0);
-}
-
-function getGuardrailLabel(entries: any[]): string {
-  if (entries.length === 0) return "-";
-  if (entries.length === 1) return entries[0]?.guardrail_name ?? "-";
-  return `${entries.length} guardrails`;
-}
-
-function checkHasVectorStoreData(metadata: Record<string, any>): boolean {
-  return (
-    metadata.vector_store_request_metadata &&
-    Array.isArray(metadata.vector_store_request_metadata) &&
-    metadata.vector_store_request_metadata.length > 0
-  );
-}
