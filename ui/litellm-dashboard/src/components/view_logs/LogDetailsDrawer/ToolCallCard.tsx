@@ -4,7 +4,7 @@
 
 import { useState } from 'react';
 import { Button, Typography, message } from 'antd';
-import { CopyOutlined, ToolOutlined } from '@ant-design/icons';
+import { CopyOutlined } from '@ant-design/icons';
 import { ToolCall } from './prettyMessagesTypes';
 
 const { Text } = Typography;
