@@ -70,16 +70,14 @@ try:
         validate_tool_name,
     )
 except ImportError:
-    from typing import Any
+    from pydantic import BaseModel
     SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
 
-    def validate_tool_name(name: str) -> Any:
-        from pydantic import BaseModel
+    class ToolNameValidationResult(BaseModel):
+        is_valid: bool = True
+        warnings: list = []
 
-        class ToolNameValidationResult(BaseModel):
-            is_valid: bool = True
-            warnings: list = []
-
+    def validate_tool_name(name: str) -> ToolNameValidationResult:
         return ToolNameValidationResult()
 
 
