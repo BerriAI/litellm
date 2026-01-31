@@ -9,11 +9,36 @@ from httpx import Response
 
 sys.path.insert(0, os.path.abspath("../../.."))
 
+import litellm
 from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
     ResendEmailLogger,
 )
 
 # Test file for Resend email integration
+
+
+@pytest.fixture(autouse=True)
+def disable_aiohttp_transport():
+    """
+    Disable aiohttp transport so respx can intercept httpx requests.
+    Also clear the client cache to ensure fresh clients are created.
+    """
+    # Disable aiohttp transport so respx can intercept requests
+    original_value = getattr(litellm, "disable_aiohttp_transport", None)
+    litellm.disable_aiohttp_transport = True
+    
+    # Clear the client cache to ensure we don't reuse old clients
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    
+    yield
+    
+    # Restore original value
+    if original_value is not None:
+        litellm.disable_aiohttp_transport = original_value
+    elif hasattr(litellm, "disable_aiohttp_transport"):
+        delattr(litellm, "disable_aiohttp_transport")
 
 
 @pytest.fixture

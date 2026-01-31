@@ -19,6 +19,27 @@ from litellm import main as litellm_main
 
 
 @pytest.fixture(autouse=True)
+def disable_aiohttp_transport():
+    """
+    Disable aiohttp transport so respx can intercept httpx requests.
+    Also clear the client cache to ensure fresh clients are created.
+    """
+    original_value = getattr(litellm, "disable_aiohttp_transport", None)
+    litellm.disable_aiohttp_transport = True
+    
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    
+    yield
+    
+    if original_value is not None:
+        litellm.disable_aiohttp_transport = original_value
+    elif hasattr(litellm, "disable_aiohttp_transport"):
+        delattr(litellm, "disable_aiohttp_transport")
+
+
+@pytest.fixture(autouse=True)
 def add_api_keys_to_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-api03-1234567890")
