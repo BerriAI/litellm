@@ -192,6 +192,9 @@ export function LogDetailsDrawer({
         {/* Cost Breakdown - Show if cost breakdown data is available */}
         <CostBreakdownViewer costBreakdown={metadata?.cost_breakdown} totalSpend={logEntry.spend || 0} />
 
+        {/* Tools Section - Show if tools are present in request */}
+        <ToolsSection log={logEntry} />
+
         {/* Configuration Info Message - Show when data is missing */}
         {missingData && (
           <div className="mb-6">
