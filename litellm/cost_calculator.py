@@ -1325,18 +1325,17 @@ def completion_cost(  # noqa: PLR0915
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
-                if standard_built_in_tools_params:
-                    cost_for_built_in_tools = (
-                        StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
-                            model=model,
-                            response_object=completion_response,
-                            usage=cost_per_token_usage_object,
-                            standard_built_in_tools_params=standard_built_in_tools_params,
-                            custom_llm_provider=custom_llm_provider,
-                        )
+                # Always call: get_cost_for_built_in_tools can return non-zero from
+                # response/usage alone (e.g. web search) even when params is None/empty.
+                cost_for_built_in_tools = (
+                    StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+                        model=model,
+                        response_object=completion_response,
+                        usage=cost_per_token_usage_object,
+                        standard_built_in_tools_params=standard_built_in_tools_params,
+                        custom_llm_provider=custom_llm_provider,
                     )
-                else:
-                    cost_for_built_in_tools = 0.0
+                )
                 _final_cost += cost_for_built_in_tools
 
                 # Apply discount from module-level config if configured
