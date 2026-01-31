@@ -1022,6 +1022,7 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "VLLMConfig": (".llms.vllm.completion.transformation", "VLLMConfig"),
     "DeepSeekChatConfig": (".llms.deepseek.chat.transformation", "DeepSeekChatConfig"),
     "LMStudioChatConfig": (".llms.lm_studio.chat.transformation", "LMStudioChatConfig"),
+    "OpenClawChatConfig": (".llms.openclaw.chat.transformation", "OpenClawChatConfig"),
     "LmStudioEmbeddingConfig": (
         ".llms.lm_studio.embed.transformation",
         "LmStudioEmbeddingConfig",

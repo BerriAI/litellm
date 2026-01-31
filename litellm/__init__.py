@@ -1426,6 +1426,7 @@ if TYPE_CHECKING:
     from .llms.llamafile.chat.transformation import LlamafileChatConfig as _LlamafileChatConfig
     from .llms.lm_studio.chat.transformation import LMStudioChatConfig as _LMStudioChatConfig
     from .llms.lm_studio.embed.transformation import LmStudioEmbeddingConfig as _LmStudioEmbeddingConfig
+    from .llms.openclaw.chat.transformation import OpenClawChatConfig as _OpenClawChatConfig
     from .llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig as _IBMWatsonXEmbeddingConfig
     from .llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig as _VertexGeminiConfig
 
@@ -1444,6 +1445,7 @@ if TYPE_CHECKING:
     LlamafileChatConfig: Type[_LlamafileChatConfig]
     LMStudioChatConfig: Type[_LMStudioChatConfig]
     LmStudioEmbeddingConfig: Type[_LmStudioEmbeddingConfig]
+    OpenClawChatConfig: Type[_OpenClawChatConfig]
     IBMWatsonXEmbeddingConfig: Type[_IBMWatsonXEmbeddingConfig]
     VertexAIConfig: Type[_VertexGeminiConfig]  # Alias for VertexGeminiConfig
 

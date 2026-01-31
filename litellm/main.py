@@ -4813,6 +4813,7 @@ def embedding(  # noqa: PLR0915
             custom_llm_provider == "openai_like"
             or custom_llm_provider == "llamafile"
             or custom_llm_provider == "lm_studio"
+            or custom_llm_provider == "openclaw"
         ):
             api_base = (
                 api_base or litellm.api_base or get_secret_str("OPENAI_LIKE_API_BASE")

@@ -7832,6 +7832,7 @@ class ProviderConfigManager:
             LlmProviders.HOSTED_VLLM: (lambda: litellm.HostedVLLMChatConfig(), False),
             LlmProviders.LLAMAFILE: (lambda: litellm.LlamafileChatConfig(), False),
             LlmProviders.LM_STUDIO: (lambda: litellm.LMStudioChatConfig(), False),
+            LlmProviders.OPENCLAW: (lambda: litellm.OpenClawChatConfig(), False),
             LlmProviders.GALADRIEL: (lambda: litellm.GaladrielChatConfig(), False),
             LlmProviders.REPLICATE: (lambda: litellm.ReplicateConfig(), False),
             LlmProviders.HUGGINGFACE: (lambda: litellm.HuggingFaceChatConfig(), False),
