@@ -34,7 +34,7 @@ from litellm.types.llms.openai import (
     HttpxBinaryResponseContent,
     OpenAIFileObject,
 )
-from litellm.types.router import *
+import litellm.types.router  # noqa: F401 - side effects needed
 from litellm.types.utils import (
     OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS,
     LlmProviders,
