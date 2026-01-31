@@ -69,7 +69,7 @@ try:
 except ImportError:
     SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
 
-    def validate_tool_name(name: str):
+    def validate_tool_name(name: str):  # type: ignore[misc]
         from pydantic import BaseModel
 
         class MockResult(BaseModel):
