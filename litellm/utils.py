@@ -771,13 +771,15 @@ def function_setup(  # noqa: PLR0915
         function_id: Optional[str] = kwargs["id"] if "id" in kwargs else None
 
         ## LAZY LOAD COROUTINE CHECKER ##
-        get_coroutine_checker_fn = getattr(sys.modules[__name__], "get_coroutine_checker")
+        get_coroutine_checker_fn = getattr(
+            sys.modules[__name__], "get_coroutine_checker"
+        )
         coroutine_checker = get_coroutine_checker_fn()
 
         ## DYNAMIC CALLBACKS ##
-        dynamic_callbacks: Optional[
-            List[Union[str, Callable, "CustomLogger"]]
-        ] = kwargs.pop("callbacks", None)
+        dynamic_callbacks: Optional[List[Union[str, Callable, "CustomLogger"]]] = (
+            kwargs.pop("callbacks", None)
+        )
         all_callbacks = get_dynamic_callbacks(dynamic_callbacks=dynamic_callbacks)
 
         if len(all_callbacks) > 0:
@@ -1660,9 +1662,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -1709,9 +1711,9 @@ def client(original_function):  # noqa: PLR0915
                         exception=e,
                         retry_policy=kwargs.get("retry_policy"),
                     )
-                    kwargs[
-                        "retry_policy"
-                    ] = reset_retry_policy()  # prevent infinite loops
+                    kwargs["retry_policy"] = (
+                        reset_retry_policy()
+                    )  # prevent infinite loops
                 litellm.num_retries = (
                     None  # set retries to None to prevent infinite loops
                 )
@@ -3640,10 +3642,10 @@ def pre_process_non_default_params(
 
     if "response_format" in non_default_params:
         if provider_config is not None:
-            non_default_params[
-                "response_format"
-            ] = provider_config.get_json_schema_from_pydantic_object(
-                response_format=non_default_params["response_format"]
+            non_default_params["response_format"] = (
+                provider_config.get_json_schema_from_pydantic_object(
+                    response_format=non_default_params["response_format"]
+                )
             )
         else:
             non_default_params["response_format"] = type_to_response_format_param(
@@ -3772,16 +3774,16 @@ def pre_process_optional_params(
                     True  # so that main.py adds the function call to the prompt
                 )
                 if "tools" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("tools")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("tools")
+                    )
                     non_default_params.pop(
                         "tool_choice", None
                     )  # causes ollama requests to hang
                 elif "functions" in non_default_params:
-                    optional_params[
-                        "functions_unsupported_model"
-                    ] = non_default_params.pop("functions")
+                    optional_params["functions_unsupported_model"] = (
+                        non_default_params.pop("functions")
+                    )
             elif (
                 litellm.add_function_to_prompt
             ):  # if user opts to add it to prompt instead
@@ -4937,9 +4939,9 @@ def get_response_string(response_obj: Union[ModelResponse, ModelResponseStream])
             return delta if isinstance(delta, str) else ""
 
     # Handle standard ModelResponse and ModelResponseStream
-    _choices: Union[
-        List[Union[Choices, StreamingChoices]], List[StreamingChoices]
-    ] = response_obj.choices
+    _choices: Union[List[Union[Choices, StreamingChoices]], List[StreamingChoices]] = (
+        response_obj.choices
+    )
 
     # Use list accumulation to avoid O(n^2) string concatenation across choices
     response_parts: List[str] = []
@@ -7408,7 +7410,13 @@ def is_cached_message(message: AllMessageValues) -> bool:
     Used for anthropic/gemini context caching.
 
     Follows the anthropic format {"cache_control": {"type": "ephemeral"}}
+    
+    Can be disabled globally by setting litellm.disable_anthropic_gemini_context_caching_transform = True
     """
+    # Check if context caching is disabled globally
+    if litellm.disable_anthropic_gemini_context_caching_transform is True:
+        return False
+    
     if "content" not in message:
         return False
 
@@ -7714,25 +7722,29 @@ def validate_chat_completion_tool_choice(
         f"Invalid tool choice, tool_choice={tool_choice}. Got={type(tool_choice)}. Expecting str, or dict. Please ensure tool_choice follows the OpenAI tool_choice spec"
     )
 
-def validate_openai_optional_params(  
-    stop: Optional[Union[str, List[str]]] = None,  
-    **kwargs  
-) -> Optional[Union[str, List[str]]]:  
-    """  
-    Validates and fixes OpenAI optional parameters.  
-      
-    Args:  
-        stop: Stop sequences (string or list of strings)  
-        **kwargs: Additional optional parameters  
-          
-    Returns:  
-        Validated stop parameter (truncated to 4 elements if needed)  
-    """  
-    if stop is not None and isinstance(stop, list) and not litellm.disable_stop_sequence_limit:  
+
+def validate_openai_optional_params(
+    stop: Optional[Union[str, List[str]]] = None, **kwargs
+) -> Optional[Union[str, List[str]]]:
+    """
+    Validates and fixes OpenAI optional parameters.
+
+    Args:
+        stop: Stop sequences (string or list of strings)
+        **kwargs: Additional optional parameters
+
+    Returns:
+        Validated stop parameter (truncated to 4 elements if needed)
+    """
+    if (
+        stop is not None
+        and isinstance(stop, list)
+        and not litellm.disable_stop_sequence_limit
+    ):
         # Truncate to 4 elements if more are provided as openai only supports up to 4 stop sequences
-        if len(stop) > 4:  
-            stop = stop[:4]  
-      
+        if len(stop) > 4:
+            stop = stop[:4]
+
     return stop
 
 
@@ -7902,9 +7914,8 @@ class ProviderConfigManager:
     @staticmethod
     def _get_azure_ai_config(model: str) -> BaseConfig:
         """Get Azure AI config based on model type."""
-        if "claude" in model.lower():
-            return litellm.AzureAnthropicConfig()
-        return litellm.AzureAIStudioConfig()
+        from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+        return AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
 
     @staticmethod
     def _get_vertex_ai_config(model: str) -> BaseConfig:
@@ -8061,6 +8072,8 @@ class ProviderConfigManager:
             return VercelAIGatewayEmbeddingConfig()
         elif litellm.LlmProviders.GIGACHAT == provider:
             return litellm.GigaChatEmbeddingConfig()
+        elif litellm.LlmProviders.HOSTED_VLLM == provider:
+            return litellm.HostedVLLMEmbeddingConfig()
         elif litellm.LlmProviders.SAGEMAKER == provider:
             from litellm.llms.sagemaker.embedding.transformation import (
                 SagemakerEmbeddingConfig,
@@ -8452,6 +8465,12 @@ class ProviderConfigManager:
             )
 
             return RAGFlowVectorStoreConfig()
+        elif litellm.LlmProviders.S3_VECTORS == provider:
+            from litellm.llms.s3_vectors.vector_stores.transformation import (
+                S3VectorsVectorStoreConfig,
+            )
+
+            return S3VectorsVectorStoreConfig()
         return None
 
     @staticmethod
@@ -8699,9 +8718,9 @@ class ProviderConfigManager:
         """
         Get Search configuration for a given provider.
         """
+        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.dataforseo.search.transformation import DataForSEOSearchConfig
         from litellm.llms.exa_ai.search.transformation import ExaAISearchConfig
-        from litellm.llms.brave.search.transformation import BraveSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig

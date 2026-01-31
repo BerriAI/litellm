@@ -139,6 +139,20 @@ const sidebars = {
         "tutorials/openai_codex"
       ]
     },
+    {
+      type: "category",
+      label: "Agent SDKs",
+      link: {
+        type: "generated-index",
+        title: "Agent SDKs",
+        description: "Use LiteLLM with agent frameworks and SDKs",
+        slug: "/agent_sdks"
+      },
+      items: [
+        "tutorials/claude_agent_sdk",
+        "tutorials/google_adk",
+      ]
+    },
 
   ],
   // But you can create a sidebar manually
@@ -274,11 +288,19 @@ const sidebars = {
             "proxy/custom_sso",
             "proxy/ai_hub",
             "proxy/model_compare_ui",
-            "proxy/public_teams",
-            "proxy/self_serve",
-            "proxy/ui/bulk_edit_users",
             "proxy/ui_credentials",
             "tutorials/scim_litellm",
+            {
+              type: "category",
+              label: "UI User/Team Management",
+              items: [
+            "proxy/access_control",
+                "proxy/public_teams",
+                "proxy/self_serve",
+                "proxy/ui/bulk_edit_users",
+                "proxy/ui/page_visibility",
+              ]
+            },
             {
               type: "category",
               label: "UI Usage Tracking",
@@ -923,7 +945,6 @@ const sidebars = {
           type: "category",
           label: "LiteLLM Python SDK Tutorials",
           items: [
-            'tutorials/google_adk',
             'tutorials/azure_openai',
             'tutorials/instructor',
             "tutorials/gradio_integration",

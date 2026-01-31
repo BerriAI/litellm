@@ -335,11 +335,11 @@ def test_advanced_tool_use_header_translation_for_opus_4_5():
 
 def test_advanced_tool_use_header_filtered_for_non_opus_4_5():
     """
-    Test that advanced-tool-use-2025-11-20 header is filtered out for non-Opus 4.5 models
-    without adding Bedrock-specific headers.
+    Test that advanced-tool-use-2025-11-20 header is filtered out for models
+    that don't support tool search on Bedrock.
     
-    The translation to tool-search-tool-2025-10-19 and tool-examples-2025-10-29 should
-    only happen for Claude Opus 4.5.
+    Tool search is supported on: Claude Opus 4.5, Claude Sonnet 4.5
+    Tool search is NOT supported on: Claude 3.5 Sonnet and earlier
     """
     from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
         AmazonAnthropicClaudeMessagesConfig,
@@ -360,9 +360,9 @@ def test_advanced_tool_use_header_filtered_for_non_opus_4_5():
         "anthropic-beta": "advanced-tool-use-2025-11-20"
     }
     
-    # Test with Claude Sonnet 4.5 (not Opus 4.5)
+    # Test with Claude 3.5 Sonnet (does NOT support tool search on Bedrock)
     result = config.transform_anthropic_messages_request(
-        model="anthropic.claude-sonnet-4-5-20250929-v1:0",
+        model="anthropic.claude-3-5-sonnet-20241022-v2:0",
         messages=messages,
         anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
         litellm_params={},
@@ -374,11 +374,11 @@ def test_advanced_tool_use_header_filtered_for_non_opus_4_5():
     assert "advanced-tool-use-2025-11-20" not in beta_headers, \
         "advanced-tool-use header should be removed for Bedrock"
     
-    # Verify Bedrock-specific headers were NOT added (only for Opus 4.5)
+    # Verify Bedrock-specific headers were NOT added (only for Opus 4.5 and Sonnet 4.5)
     assert "tool-search-tool-2025-10-19" not in beta_headers, \
-        "tool-search-tool should not be added for non-Opus 4.5 models"
+        "tool-search-tool should not be added for models without tool search support"
     assert "tool-examples-2025-10-29" not in beta_headers, \
-        "tool-examples should not be added for non-Opus 4.5 models"
+        "tool-examples should not be added for models without tool search support"
 
 
 def test_advanced_tool_use_header_translation_with_multiple_beta_headers():
@@ -464,3 +464,108 @@ def test_opus_4_5_model_detection():
     for model in non_opus_4_5_models:
         assert not config._is_claude_opus_4_5(model), \
             f"Should not detect {model} as Opus 4.5"
+
+
+def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
+    """
+    Test that unsupported beta headers are filtered out for Bedrock Invoke API.
+    
+    Bedrock Invoke API only supports a specific whitelist of beta flags and returns
+    "invalid beta flag" error for others (e.g., structured-outputs, mcp-servers).
+    This test ensures unsupported headers are filtered while keeping supported ones.
+    
+    Fixes: https://github.com/BerriAI/litellm/issues/16726
+    """
+    config = AmazonAnthropicClaudeConfig()
+    
+    messages = [{"role": "user", "content": "test"}]
+    
+    # Test 1: structured-outputs beta header (unsupported)
+    headers = {"anthropic-beta": "structured-outputs-2025-11-13"}
+    
+    result = config.transform_request(
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers=headers,
+    )
+    
+    # Verify structured-outputs beta is filtered out
+    anthropic_beta = result.get("anthropic_beta", [])
+    assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+        f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+    
+    # Test 2: mcp-servers beta header (unsupported - the main issue from #16726)
+    headers = {"anthropic-beta": "mcp-servers-2025-12-04"}
+    
+    result = config.transform_request(
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers=headers,
+    )
+    
+    # Verify mcp-servers beta is filtered out
+    anthropic_beta = result.get("anthropic_beta", [])
+    assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+        f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+    
+    # Test 3: Mix of supported and unsupported beta headers
+    headers = {"anthropic-beta": "computer-use-2024-10-22,mcp-servers-2025-12-04,structured-outputs-2025-11-13"}
+    
+    result = config.transform_request(
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers=headers,
+    )
+    
+    # Verify only supported betas are kept
+    anthropic_beta = result.get("anthropic_beta", [])
+    assert not any("structured-outputs" in beta for beta in anthropic_beta), \
+        f"structured-outputs beta should be filtered, got: {anthropic_beta}"
+    assert not any("mcp-servers" in beta for beta in anthropic_beta), \
+        f"mcp-servers beta should be filtered, got: {anthropic_beta}"
+    assert any("computer-use" in beta for beta in anthropic_beta), \
+        f"computer-use beta should be kept, got: {anthropic_beta}"
+
+
+def test_output_format_removed_from_bedrock_invoke_request():
+    """
+    Test that output_format parameter is removed from Bedrock Invoke requests.
+    
+    Bedrock Invoke API doesn't support the output_format parameter (only supported
+    in Anthropic Messages API). This test ensures it's removed to prevent errors.
+    """
+    config = AmazonAnthropicClaudeConfig()
+    
+    messages = [{"role": "user", "content": "test"}]
+    
+    # Create a request with output_format via map_openai_params
+    non_default_params = {
+        "response_format": {"type": "json_object"}
+    }
+    optional_params = {}
+    
+    # This should trigger tool-based structured outputs
+    optional_params = config.map_openai_params(
+        non_default_params=non_default_params,
+        optional_params=optional_params,
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        drop_params=False,
+    )
+    
+    result = config.transform_request(
+        model="anthropic.claude-4-0-sonnet-20250514-v1:0",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    
+    # Verify output_format is not in the request
+    assert "output_format" not in result, \
+        f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"

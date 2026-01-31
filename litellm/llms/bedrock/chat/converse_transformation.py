@@ -76,6 +76,13 @@ BEDROCK_COMPUTER_USE_TOOLS = [
     "text_editor_",
 ]
 
+# Beta header patterns that are not supported by Bedrock Converse API
+# These will be filtered out to prevent errors
+UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS = [
+    "advanced-tool-use",  # Bedrock Converse doesn't support advanced-tool-use beta headers
+    "prompt-caching",  # Prompt caching not supported in Converse API
+]
+
 
 class AmazonConverseConfig(BaseConfig):
     """
@@ -610,6 +617,37 @@ class AmazonConverseConfig(BaseConfig):
 
         return transformed_tools
 
+    def _filter_unsupported_beta_headers_for_bedrock(
+        self, model: str, beta_list: list
+    ) -> list:
+        """
+        Remove beta headers that are not supported on Bedrock Converse API for the given model.
+
+        Extended thinking beta headers are only supported on specific Claude 4+ models.
+        Some beta headers are universally unsupported on Bedrock Converse API.
+
+        Args:
+            model: The model name
+            beta_list: The list of beta headers to filter
+
+        Returns:
+            Filtered list of beta headers
+        """
+        filtered_betas = []
+        
+        # 1. Filter out beta headers that are universally unsupported on Bedrock Converse
+        for beta in beta_list:
+            should_keep = True
+            for unsupported_pattern in UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS:
+                if unsupported_pattern in beta.lower():
+                    should_keep = False
+                    break
+            
+            if should_keep:
+                filtered_betas.append(beta)
+                
+        return filtered_betas
+
     def _separate_computer_use_tools(
         self, tools: List[OpenAIChatCompletionToolParam], model: str
     ) -> Tuple[
@@ -767,7 +805,7 @@ class AmazonConverseConfig(BaseConfig):
                 if bedrock_tier in ("default", "flex", "priority"):
                     optional_params["serviceTier"] = {"type": bedrock_tier}
 
-            if param == "web_search_options" and value and isinstance(value, dict):                                                                                 
+            if param == "web_search_options" and isinstance(value, dict):
                 grounding_tool = self._map_web_search_options(value, model)                                                                                         
                 if grounding_tool is not None:                                                                                                                      
                     optional_params = self._add_tools_to_optional_params(                                                                                           
@@ -1041,10 +1079,16 @@ class AmazonConverseConfig(BaseConfig):
             user_betas = get_anthropic_beta_from_headers(headers)
             anthropic_beta_list.extend(user_betas)
 
-        # Filter out tool search tools - Bedrock Converse API doesn't support them
+        # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
+        # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools = []
+        pre_formatted_tools: List[ToolBlock] = []
         if original_tools:
             for tool in original_tools:
+                # Already-formatted Bedrock tools (e.g. systemTool for Nova grounding)
+                if "systemTool" in tool:
+                    pre_formatted_tools.append(tool)
+                    continue
                 tool_type = tool.get("type", "")
                 if tool_type in (
                     "tool_search_tool_regex_20251119",
@@ -1076,6 +1120,9 @@ class AmazonConverseConfig(BaseConfig):
             # No computer use tools, process all tools as regular tools
             bedrock_tools = _bedrock_tools_pt(filtered_tools)
 
+        # Append pre-formatted tools (systemTool etc.) after transformation
+        bedrock_tools.extend(pre_formatted_tools)
+
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
         # and will error with "unknown variant anthropic_beta" if included
@@ -1088,7 +1135,14 @@ class AmazonConverseConfig(BaseConfig):
                 if beta not in seen:
                     unique_betas.append(beta)
                     seen.add(beta)
-            additional_request_params["anthropic_beta"] = unique_betas
+            
+            # Filter out unsupported beta headers for Bedrock Converse API
+            filtered_betas = self._filter_unsupported_beta_headers_for_bedrock(
+                model=model,
+                beta_list=unique_betas,
+            )
+            
+            additional_request_params["anthropic_beta"] = filtered_betas
 
         return bedrock_tools, anthropic_beta_list
 

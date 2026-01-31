@@ -468,6 +468,77 @@ class TestLiteLLMCompletionResponsesConfig:
             ]
             assert item.status != "stop"
 
+    def test_transform_chat_completion_response_preserves_hidden_params(self):
+        """Test that _hidden_params from chat completion response are preserved in responses API response"""
+        # Setup
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Test response",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+        # Set hidden params on the chat completion response
+        chat_completion_response._hidden_params = {
+            "model_id": "abc123",
+            "cache_key": "some-cache-key",
+            "custom_llm_provider": "openai",
+        }
+
+        # Execute
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        # Assert
+        assert hasattr(responses_api_response, "_hidden_params")
+        assert responses_api_response._hidden_params == {
+            "model_id": "abc123",
+            "cache_key": "some-cache-key",
+            "custom_llm_provider": "openai",
+        }
+
+    def test_transform_chat_completion_response_handles_missing_hidden_params(self):
+        """Test that missing _hidden_params defaults to empty dict"""
+        # Setup - no _hidden_params set
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content="Test response",
+                        role="assistant",
+                    ),
+                )
+            ],
+        )
+
+        # Execute
+        responses_api_response = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+            request_input="Test",
+            responses_api_request={},
+            chat_completion_response=chat_completion_response,
+        )
+
+        # Assert - should default to empty dict
+        assert hasattr(responses_api_response, "_hidden_params")
+        assert responses_api_response._hidden_params == {}
 
 class TestFunctionCallTransformation:
     """Test cases for function_call input transformation"""
@@ -1567,3 +1638,81 @@ class TestStreamingIDConsistency:
         # Verify it matches the cached ID
         assert iterator._cached_item_id is not None
         assert iterator._cached_item_id == text_done_id
+
+    def test_first_chunk_text_delta_emitted_anthropic_style(self):
+        """
+        When the first chunk has content (e.g. Anthropic content_block_start with initial text),
+        that content must be emitted as output_text.delta. Previously the first chunk was
+        dropped because we returned output_item_added and never transformed the chunk.
+        """
+        from unittest.mock import Mock
+
+        import litellm
+        from litellm.responses.litellm_completion_transformation.streaming_iterator import (
+            LiteLLMCompletionStreamingIterator,
+        )
+        from litellm.types.llms.openai import ResponsesAPIStreamEvents
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        chunk_with_initial_text = ModelResponseStream(
+            id="msg_abc",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="I", role="assistant"),
+                    finish_reason=None,
+                )
+            ],
+            created=1234567890,
+            model="anthropic/claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+        chunk_continuation = ModelResponseStream(
+            id="msg_abc",
+            choices=[
+                StreamingChoices(
+                    index=0,
+                    delta=Delta(content="'m happy", role=None),
+                    finish_reason=None,
+                )
+            ],
+            created=1234567890,
+            model="anthropic/claude-sonnet-4-5",
+            object="chat.completion.chunk",
+        )
+
+        mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
+        mock_stream_wrapper.logging_obj = Mock()
+        mock_stream_wrapper.logging_obj._response_cost_calculator = Mock(return_value=0.001)
+        chunk_list = [chunk_with_initial_text, chunk_continuation]
+
+        def next_chunk():
+            if not chunk_list:
+                raise StopIteration
+            return chunk_list.pop(0)
+
+        mock_stream_wrapper.__next__ = next_chunk
+
+        iterator = LiteLLMCompletionStreamingIterator(
+            model="anthropic/claude-sonnet-4-5",
+            litellm_custom_stream_wrapper=mock_stream_wrapper,
+            request_input=[{"type": "message", "role": "user", "content": [{"type": "text", "text": "repeat after me: I'm happy to be here"}]}],
+            responses_api_request={},
+            custom_llm_provider="anthropic",
+        )
+
+        collected_deltas = []
+        max_events = 20
+        for i, event in enumerate(iterator):
+            if i >= max_events:
+                break
+            if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA and hasattr(event, "delta"):
+                collected_deltas.append(event.delta)
+            if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                break
+
+        full_text = "".join(collected_deltas)
+        assert full_text == "I'm happy", (
+            f"First character from Anthropic content_block_start was truncated. "
+            f"Expected \"I'm happy\", got {repr(full_text)}"
+        )
