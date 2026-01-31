@@ -645,13 +645,64 @@ class PointGuardAIGuardrail(CustomGuardrail):
                         modifications_applied = True
             
             if modifications_applied:
+                # Store the modified messages for post-call output validation
+                # Use the structured_messages (which have been modified) or create from texts
+                messages_to_store = structured_messages if structured_messages else [
+                    {"role": "user", "content": text} for text in texts
+                ]
+                self._store_input_messages_for_postprocessing(request_data, messages_to_store)
+                
                 return GenericGuardrailAPIInputs(
                     texts=texts,
                     structured_messages=structured_messages,
                 )
         
+        # Store original messages even if no modifications (for post-call validation)
+        self._store_input_messages_for_postprocessing(request_data, messages)
+        
         return inputs
     
+    def _store_input_messages_for_postprocessing(self, request_data: dict, messages: list) -> None:
+        """
+        Store input messages in request metadata for post-call validation.
+        
+        This allows the output guardrail to access the original (or modified) input messages
+        that were sent to the LLM, which is required by PointGuardAI v2 /inspect/output endpoint.
+        """
+        # Store in metadata so it persists to post-call through user_api_key_dict
+        if "metadata" not in request_data:
+            request_data["metadata"] = {}
+        
+        request_data["metadata"]["_pointguardai_input_messages"] = messages
+        
+        verbose_proxy_logger.debug(
+            "PointGuardAI: Stored %d input messages for post-call validation",
+            len(messages)
+        )
+    
+    def _retrieve_input_messages_from_metadata(self, request_data: dict) -> Optional[List[dict]]:
+        """
+        Retrieve input messages stored during pre-call validation.
+        
+        Checks both litellm_metadata (transformed from user_api_key_dict) and metadata fields.
+        """
+        # Try litellm_metadata first (post-call from handler)
+        messages = (request_data.get("litellm_metadata", {})
+                   .get("_pointguardai_input_messages"))
+        
+        # Fallback to metadata field (pre-call)
+        if messages is None:
+            messages = (request_data.get("metadata", {})
+                       .get("_pointguardai_input_messages"))
+        
+        if messages:
+            verbose_proxy_logger.debug(
+                "PointGuardAI: Retrieved %d stored input messages for output validation",
+                len(messages)
+            )
+        
+        return messages
+
     async def _apply_guardrail_on_response(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -668,21 +719,31 @@ class PointGuardAIGuardrail(CustomGuardrail):
             return inputs
         
         # For /output endpoint, we need both input and output
-        # Since unified system doesn't preserve original messages in post-call,
-        # we hardcode a placeholder input for now
-        # TODO: Find a better way to preserve original messages in unified system
-        placeholder_messages = [
-            {"role": "user", "content": "[Original input not available in post-call]"}
-        ]
+        # Try to retrieve the input messages stored during pre-call
+        input_messages = self._retrieve_input_messages_from_metadata(request_data)
         
-        verbose_proxy_logger.debug(
-            "PointGuardAI: Using placeholder input for output validation (unified system limitation)"
-        )
+        # If messages not found, use placeholder
+        # NOTE: This happens when only output guardrail is configured without input guardrail.
+        # The unified system doesn't preserve original messages during post-call.
+        # For best results, configure BOTH 'pointguardai-input-guard' and 'pointguardai-output-guard'.
+        if input_messages is None:
+            verbose_proxy_logger.warning(
+                "PointGuardAI: Original input messages not available (output-only guardrail mode). "
+                "Using placeholder. For optimal validation, configure both input and output guardrails together."
+            )
+            input_messages = [
+                {"role": "user", "content": "[Input messages not available - configure input guardrail for full context]"}
+            ]
+        else:
+            verbose_proxy_logger.info(
+                "PointGuardAI: Using %d stored input messages for output validation",
+                len(input_messages)
+            )
         
-        # Make PointGuardAI API request with hardcoded input and actual output
+        # Make PointGuardAI API request with actual input and output
         modified_content = await self.make_pointguard_api_request(
             request_data=request_data,
-            new_messages=placeholder_messages,
+            new_messages=input_messages,
             response_string=output_text,
         )
         
