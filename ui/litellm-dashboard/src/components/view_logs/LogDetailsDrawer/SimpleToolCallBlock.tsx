@@ -17,16 +17,34 @@ export function SimpleToolCallBlock({ tool, compact = false }: SimpleToolCallBlo
   return (
     <div
       style={{
-        background: '#fafafa',
-        border: '1px solid #f0f0f0',
-        borderRadius: 4,
-        padding: compact ? '6px 10px' : '8px 12px',
+        background: '#f8f9fa',
+        border: '1px solid #e9ecef',
+        borderRadius: 6,
+        padding: compact ? '6px 10px' : '10px 14px',
         marginTop: 8,
         fontFamily: 'monospace',
         fontSize: 12,
+        position: 'relative',
       }}
     >
-      <Text strong style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+      {/* Function badge */}
+      <div
+        style={{
+          position: 'absolute',
+          top: -8,
+          left: 12,
+          background: '#fff',
+          padding: '0 6px',
+          fontSize: 10,
+          color: '#8c8c8c',
+          border: '1px solid #e9ecef',
+          borderRadius: 3,
+        }}
+      >
+        function
+      </div>
+
+      <Text strong style={{ fontSize: 13, display: 'block', marginBottom: 6 }}>
         {tool.name}
       </Text>
 

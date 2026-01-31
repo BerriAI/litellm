@@ -22,7 +22,7 @@ export function PrettyMessagesView({ request, response, metrics }: PrettyMessage
   const { requestMessages, responseMessage } = parseMessages(request, response);
 
   return (
-    <div style={{ paddingTop: 4, paddingBottom: 16 }}>
+    <div>
       {/* Input Card */}
       <InputCard
         messages={requestMessages}

@@ -32,8 +32,17 @@ export function SimpleMessageBlock({
   }
 
   return (
-    <div style={{ marginBottom: isCompact ? 10 : 0 }}>
-      <Text type="secondary" style={{ fontSize: 11, display: 'block', marginBottom: 4 }}>
+    <div style={{ marginBottom: isCompact ? 8 : 0 }}>
+      <Text 
+        type="secondary" 
+        style={{ 
+          fontSize: 10, 
+          letterSpacing: '0.5px', 
+          textTransform: 'uppercase',
+          display: 'block', 
+          marginBottom: 3 
+        }}
+      >
         {label}
       </Text>
 
@@ -41,11 +50,11 @@ export function SimpleMessageBlock({
         <div
           style={{
             fontSize: 13,
-            lineHeight: 1.6,
+            lineHeight: 1.7,
             color: '#262626',
             whiteSpace: 'pre-wrap',
             wordBreak: 'break-word',
-            marginBottom: hasToolCalls ? 8 : 0,
+            marginBottom: hasToolCalls ? 6 : 0,
           }}
         >
           {displayContent}

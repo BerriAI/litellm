@@ -382,9 +382,9 @@ function RequestResponseSection({
             key: "1",
             label: <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>,
             children: (
-              <div style={{ padding: "0 24px" }}>
+              <div>
                 {/* View Mode Toggle - Top Right */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, paddingRight: 24 }}>
                   <Radio.Group
                     size="small"
                     value={viewMode}
@@ -407,6 +407,7 @@ function RequestResponseSection({
                     }}
                   />
                 ) : (
+                  <div style={{ padding: "0 24px" }}>
                   <Tabs
                     activeKey={activeTab}
                     onChange={(key) => setActiveTab(key as typeof TAB_REQUEST | typeof TAB_RESPONSE)}
@@ -448,6 +449,7 @@ function RequestResponseSection({
                       },
                     ]}
                   />
+                  </div>
                 )}
               </div>
             ),

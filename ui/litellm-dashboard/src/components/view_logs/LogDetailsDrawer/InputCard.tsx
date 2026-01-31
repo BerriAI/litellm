@@ -38,7 +38,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
       style={{
         border: '1px solid #f0f0f0',
         borderRadius: 6,
-        marginBottom: 12,
+        marginBottom: 8,
         overflow: 'hidden',
       }}
     >
@@ -51,7 +51,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
       />
 
       {/* Content */}
-      <div style={{ padding: '12px 14px' }}>
+      <div style={{ padding: '12px 16px' }}>
         {/* System Message - Collapsible with arrow */}
         {systemMessage && (
           <CollapsibleMessage

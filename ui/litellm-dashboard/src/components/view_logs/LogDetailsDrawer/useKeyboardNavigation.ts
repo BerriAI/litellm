@@ -15,8 +15,8 @@ interface UseKeyboardNavigationProps {
  * Handles J/K for next/previous and Escape for close.
  *
  * Keyboard shortcuts:
- * - J: Navigate to next log
- * - K: Navigate to previous log
+ * - J: Navigate to previous log (up)
+ * - K: Navigate to next log (down)
  * - Escape: Close drawer
  */
 export function useKeyboardNavigation({
@@ -41,11 +41,11 @@ export function useKeyboardNavigation({
           break;
         case KEY_J_LOWER:
         case KEY_J_UPPER:
-          selectNextLog();
+          selectPreviousLog();
           break;
         case KEY_K_LOWER:
         case KEY_K_UPPER:
-          selectPreviousLog();
+          selectNextLog();
           break;
       }
     };

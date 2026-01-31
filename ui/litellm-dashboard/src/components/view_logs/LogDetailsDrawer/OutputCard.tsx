@@ -40,7 +40,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
           cost={outputCost}
           onCopy={handleCopy}
         />
-        <div style={{ padding: '12px 14px' }}>
+        <div style={{ padding: '12px 16px' }}>
           <Text type="secondary" style={{ fontSize: 13, fontStyle: 'italic' }}>
             No response data available
           </Text>
@@ -66,7 +66,7 @@ export function OutputCard({ message, completionTokens, outputCost }: OutputCard
       />
 
       {/* Content */}
-      <div style={{ padding: '12px 14px' }}>
+      <div style={{ padding: '12px 16px' }}>
         <SimpleMessageBlock
           label="ASSISTANT"
           content={message.content}

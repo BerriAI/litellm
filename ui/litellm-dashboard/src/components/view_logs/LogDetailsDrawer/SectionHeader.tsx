@@ -5,7 +5,6 @@
 import { Typography, Button, Tooltip } from 'antd';
 import { 
   MessageOutlined, 
-  ThunderboltOutlined, 
   CopyOutlined 
 } from '@ant-design/icons';
 
@@ -25,20 +24,20 @@ export function SectionHeader({ type, tokens, cost, onCopy }: SectionHeaderProps
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '10px 14px',
+        padding: '10px 16px',
         borderBottom: '1px solid #f0f0f0',
         background: '#fafafa',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 20 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         {/* Icon + Label */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           {type === 'input' ? (
             <MessageOutlined style={{ color: '#8c8c8c', fontSize: 14 }} />
           ) : (
-            <ThunderboltOutlined style={{ color: '#8c8c8c', fontSize: 14 }} />
+            <span style={{ fontSize: 14, color: '#8c8c8c' }}>✨</span>
           )}
-          <Text strong style={{ fontSize: 13 }}>
+          <Text style={{ fontWeight: 500, fontSize: 14 }}>
             {type === 'input' ? 'Input' : 'Output'}
           </Text>
         </div>
