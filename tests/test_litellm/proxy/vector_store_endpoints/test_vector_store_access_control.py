@@ -74,7 +74,7 @@ async def test_delete_vector_store_checks_access():
     request = VectorStoreDeleteRequest(vector_store_id="vs_123")
 
     with patch(
-        "litellm.proxy.vector_store_endpoints.management_endpoints.prisma_client",
+        "litellm.proxy.proxy_server.prisma_client",
         mock_prisma,
     ):
         with patch("litellm.vector_store_registry", None):
