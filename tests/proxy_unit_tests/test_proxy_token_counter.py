@@ -1274,3 +1274,94 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         proxy_server.token_counter = original_token_counter
 
 
+@pytest.mark.asyncio
+async def test_token_counter_with_threadpool_config_runs_inline_for_small_input():
+    """
+    With tokenizer_threadpool_min_input_size_bytes set high, small input runs in-line.
+    """
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+            }
+        ]
+    )
+
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+
+    original_general_settings = getattr(
+        litellm.proxy.proxy_server, "general_settings", {}
+    )
+    try:
+        setattr(
+            litellm.proxy.proxy_server,
+            "general_settings",
+            {
+                "tokenizer_threadpool_max_threads": 4,
+                "tokenizer_threadpool_min_input_size_bytes": 1000000,
+            },
+        )
+
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hello"}],
+            ),
+        )
+
+        assert response.total_tokens > 0
+        assert response.tokenizer_type == "openai_tokenizer"
+    finally:
+        setattr(
+            litellm.proxy.proxy_server,
+            "general_settings",
+            original_general_settings,
+        )
+
+
+@pytest.mark.asyncio
+async def test_token_counter_with_threadpool_config_returns_correct_count():
+    """
+    With threadpool config set, token counter returns correct result.
+    """
+    llm_router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4"},
+            }
+        ]
+    )
+
+    setattr(litellm.proxy.proxy_server, "llm_router", llm_router)
+
+    original_general_settings = getattr(
+        litellm.proxy.proxy_server, "general_settings", {}
+    )
+    try:
+        setattr(
+            litellm.proxy.proxy_server,
+            "general_settings",
+            {
+                "tokenizer_threadpool_max_threads": 4,
+                "tokenizer_threadpool_min_input_size_bytes": 100,
+            },
+        )
+
+        response = await token_counter(
+            request=TokenCountRequest(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "Hello world, how are you?"}],
+            ),
+        )
+
+        assert response.total_tokens > 0
+        assert response.tokenizer_type == "openai_tokenizer"
+    finally:
+        setattr(
+            litellm.proxy.proxy_server,
+            "general_settings",
+            original_general_settings,
+        )
+
