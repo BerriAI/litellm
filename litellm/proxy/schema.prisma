@@ -396,6 +396,8 @@ model LiteLLM_Config {
 }
 
 // View spend, model, api_key per request
+// NOTE: For high-volume production (1M+ logs), consider converting this table to a partitioned table. 
+// See litellm/proxy/db/PARTITIONING.md for SQL templates and instructions.
 model LiteLLM_SpendLogs {
   request_id          String @id
   call_type           String
@@ -465,6 +467,7 @@ model LiteLLM_TeamMembership {
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable?   @relation(fields: [budget_id], references: [budget_id])
   @@id([user_id, team_id])
+  @@index([team_id, user_id])
 }
 
 model LiteLLM_OrganizationMembership {

@@ -242,6 +242,7 @@ from litellm.proxy.agent_endpoints.endpoints import router as agent_endpoints_ro
 from litellm.proxy.analytics_endpoints.analytics_endpoints import (
     router as analytics_router,
 )
+from litellm.proxy.analytics.latency_analytics import router as latency_analytics_router
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints import (
     claude_code_marketplace_router,
 )
@@ -11596,6 +11597,7 @@ app.include_router(spend_management_router)
 app.include_router(cloudzero_router)
 app.include_router(caching_router)
 app.include_router(analytics_router)
+app.include_router(latency_analytics_router)
 app.include_router(guardrails_router)
 app.include_router(policy_router)
 app.include_router(policy_crud_router)
