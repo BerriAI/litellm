@@ -156,8 +156,10 @@ async def route_create_file(
     
     # Handle custom storage backend
     if target_storage and target_storage != "default":
-        from litellm.litellm_core_utils.prompt_templates.common_utils import extract_file_data
-        
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            extract_file_data,
+        )
+
         # Extract file data
         file_data = extract_file_data(cast(Any, _create_file_request.get("file")))
         
@@ -360,16 +362,16 @@ async def create_file(  # noqa: PLR0915
         # Parse expires_after if provided
         expires_after = None
         form_data = await request.form()
-        litellm_metadata = extract_nested_form_metadata(
-            form_data=form_data,
+        extracted_litellm_metadata: Optional[Dict[str, Any]] = extract_nested_form_metadata(
+            form_data=dict(form_data),
             prefix="litellm_metadata["
         )
         expires_after_anchor = form_data.get("expires_after[anchor]")
         expires_after_seconds_str = form_data.get("expires_after[seconds]")
         
         # Add litellm_metadata to data if provided (from form field)
-        if litellm_metadata is not None:
-            data["litellm_metadata"] = litellm_metadata
+        if extracted_litellm_metadata is not None:
+            data["litellm_metadata"] = extracted_litellm_metadata
 
         if expires_after_anchor is not None or expires_after_seconds_str is not None:
             if expires_after_anchor is None or expires_after_seconds_str is None:
@@ -629,13 +631,16 @@ async def get_file_content(  # noqa: PLR0915
                 )
             
             # Check if file is stored in a storage backend (check DB)
-            if hasattr(managed_files_obj, "prisma_client") and managed_files_obj.prisma_client:
-                db_file = await managed_files_obj.prisma_client.db.litellm_managedfiletable.find_first(
+            if hasattr(managed_files_obj, "prisma_client") and getattr(managed_files_obj, "prisma_client", None):
+                prisma_client = getattr(managed_files_obj, "prisma_client")
+                db_file = await prisma_client.db.litellm_managedfiletable.find_first(
                     where={"unified_file_id": file_id}
                 )
                 if db_file and db_file.storage_backend and db_file.storage_url:
                     # File is stored in a storage backend, download it
-                    from litellm.llms.base_llm.files.storage_backend_factory import get_storage_backend
+                    from litellm.llms.base_llm.files.storage_backend_factory import (
+                        get_storage_backend,
+                    )
                     
                     storage_backend_name = db_file.storage_backend
                     storage_url = db_file.storage_url
