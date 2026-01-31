@@ -7,6 +7,7 @@ export interface CostBreakdown {
   output_cost?: number;
   total_cost?: number;
   tool_usage_cost?: number;
+  additional_costs?: Record<string, number>;
   original_cost?: number;
   discount_percent?: number;
   discount_amount?: number;
@@ -91,6 +92,17 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   <span className="text-gray-600 font-medium w-1/3">Tool Usage Cost:</span>
                   <span className="text-gray-900">{formatCost(costBreakdown.tool_usage_cost)}</span>
                 </div>
+              )}
+              {/* Additional Costs (free-form) */}
+              {costBreakdown.additional_costs && Object.keys(costBreakdown.additional_costs).length > 0 && (
+                <>
+                  {Object.entries(costBreakdown.additional_costs).map(([key, value]) => (
+                    <div key={key} className="flex text-sm">
+                      <span className="text-gray-600 font-medium w-1/3">{key}:</span>
+                      <span className="text-gray-900">{formatCost(value)}</span>
+                    </div>
+                  ))}
+                </>
               )}
             </div>
 
