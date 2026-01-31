@@ -3462,19 +3462,10 @@ class ProxyConfig:
                 # If team lookup fails, continue to global settings
                 pass
 
-        # 3. Try global router_settings
-        try:
-            db_router_settings = await prisma_client.db.litellm_config.find_first(
-                where={"param_name": "router_settings"}
-            )
-            if (
-                db_router_settings is not None
-                and isinstance(db_router_settings.param_value, dict)
-                and db_router_settings.param_value
-            ):
-                return db_router_settings.param_value
-        except Exception:
-            pass
+        # Note: We intentionally skip global router_settings here.
+        # Global settings are already applied to the shared llm_router at startup
+        # via _add_router_settings_from_db_config(). Including them here would
+        # trigger redundant per-request Router creation. See issue #19921.
 
         return None
 
