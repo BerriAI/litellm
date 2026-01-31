@@ -760,10 +760,10 @@ async def cancel_batch(
             custom_llm_provider = (
                 provider or data.pop("custom_llm_provider", None) or "openai"
             )
-            _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
+            # data already contains batch_id from _cancel_batch_request created above
             response = await litellm.acancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
-                **_cancel_batch_data,
+                **data,
             )
 
         ### CALL HOOKS ### - modify outgoing data
