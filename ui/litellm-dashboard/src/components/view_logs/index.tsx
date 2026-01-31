@@ -31,7 +31,6 @@ import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsMo
 import { DataTable } from "./table";
 import { VectorStoreViewer } from "./VectorStoreViewer";
 import NewBadge from "../common_components/NewBadge";
-import { LogDetailsDrawer } from "./LogDetailsDrawer";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -90,8 +89,7 @@ export default function SpendLogsTable({
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
   const [activeTab, setActiveTab] = useState("request logs");
 
-  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
 
@@ -319,6 +317,17 @@ export default function SpendLogsTable({
     enabled: !!accessToken && !!selectedSessionId,
   });
 
+  // Add this effect to preserve expanded state when data refreshes
+  useEffect(() => {
+    if (logs.data?.data && expandedRequestId) {
+      // Check if the expanded request ID still exists in the new data
+      const stillExists = logs.data.data.some((log) => log.request_id === expandedRequestId);
+      if (!stillExists) {
+        // If the request ID no longer exists in the data, clear the expanded state
+        setExpandedRequestId(null);
+      }
+    }
+  }, [logs.data?.data, expandedRequestId]);
 
   if (!accessToken || !token || !userRole || !userID) {
     return null;
@@ -358,18 +367,8 @@ export default function SpendLogsTable({
     logs.refetch();
   };
 
-  const handleRowClick = (log: LogEntry) => {
-    setSelectedLog(log);
-    setIsDrawerOpen(true);
-  };
-
-  const handleCloseDrawer = () => {
-    setIsDrawerOpen(false);
-    // Optionally keep selectedLog for animation purposes
-  };
-
-  const handleSelectLog = (log: LogEntry) => {
-    setSelectedLog(log);
+  const handleRowExpand = (requestId: string | null) => {
+    setExpandedRequestId(requestId);
   };
 
   // Function to extract unique error codes from logs
@@ -555,7 +554,9 @@ export default function SpendLogsTable({
                 <DataTable
                   columns={columns}
                   data={sessionData}
-                  onRowClick={handleRowClick}
+                  renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
+                  getRowCanExpand={() => true}
+                // Optionally: add session-specific row expansion state
                 />
               </div>
             ) : (
@@ -752,7 +753,8 @@ export default function SpendLogsTable({
                   <DataTable
                     columns={columns}
                     data={filteredData}
-                    onRowClick={handleRowClick}
+                    renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
+                    getRowCanExpand={() => true}
                   />
                 </div>
               </>
@@ -773,16 +775,6 @@ export default function SpendLogsTable({
           <TabPanel><DeletedTeamsPage /></TabPanel>
         </TabPanels>
       </TabGroup>
-
-      {/* Log Details Drawer */}
-      <LogDetailsDrawer
-        open={isDrawerOpen}
-        onClose={handleCloseDrawer}
-        logEntry={selectedLog}
-        onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
-        allLogs={filteredData}
-        onSelectLog={handleSelectLog}
-      />
     </div>
   );
 }

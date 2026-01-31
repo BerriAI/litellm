@@ -6,10 +6,8 @@ import { Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } fro
 interface DataTableProps<TData, TValue> {
   data: TData[];
   columns: ColumnDef<TData, TValue>[];
-  onRowClick?: (row: TData) => void;
-  // Legacy props for backward compatibility (audit logs)
-  renderSubComponent?: (props: { row: Row<TData> }) => React.ReactElement;
-  getRowCanExpand?: (row: Row<TData>) => boolean;
+  renderSubComponent: (props: { row: Row<TData> }) => React.ReactElement;
+  getRowCanExpand: (row: Row<TData>) => boolean;
   isLoading?: boolean;
   loadingMessage?: string;
   noDataMessage?: string;
@@ -18,26 +16,22 @@ interface DataTableProps<TData, TValue> {
 export function DataTable<TData, TValue>({
   data = [],
   columns,
-  onRowClick,
-  renderSubComponent,
   getRowCanExpand,
+  renderSubComponent,
   isLoading = false,
   loadingMessage = "🚅 Loading logs...",
   noDataMessage = "No logs found",
 }: DataTableProps<TData, TValue>) {
-  // Determine if we're in legacy expansion mode or new drawer mode
-  const isLegacyMode = !!renderSubComponent && !!getRowCanExpand;
-
   const table = useReactTable<TData>({
     data,
     columns,
-    ...(isLegacyMode && { getRowCanExpand }),
+    getRowCanExpand,
     getRowId: (row: TData, index: number) => {
       const _row: any = row as any;
       return _row?.request_id ?? String(index);
     },
     getCoreRowModel: getCoreRowModel(),
-    ...(isLegacyMode && { getExpandedRowModel: getExpandedRowModel() }),
+    getExpandedRowModel: getExpandedRowModel(),
   });
 
   return (
@@ -68,10 +62,7 @@ export function DataTable<TData, TValue>({
           ) : table.getRowModel().rows.length > 0 ? (
             table.getRowModel().rows.map((row) => (
               <Fragment key={row.id}>
-                <TableRow
-                  className={`h-8 ${!isLegacyMode ? "cursor-pointer hover:bg-gray-50" : ""}`}
-                  onClick={() => !isLegacyMode && onRowClick?.(row.original)}
-                >
+                <TableRow className="h-8">
                   {row.getVisibleCells().map((cell) => (
                     <TableCell key={cell.id} className="py-0.5 max-h-8 overflow-hidden text-ellipsis whitespace-nowrap">
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
@@ -79,8 +70,7 @@ export function DataTable<TData, TValue>({
                   ))}
                 </TableRow>
 
-                {/* Legacy expansion mode for audit logs */}
-                {isLegacyMode && row.getIsExpanded() && renderSubComponent && (
+                {row.getIsExpanded() && (
                   <TableRow>
                     <TableCell colSpan={row.getVisibleCells().length} className="p-0">
                       <div className="w-full max-w-full overflow-hidden box-border">{renderSubComponent({ row })}</div>
