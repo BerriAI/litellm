@@ -1328,8 +1328,10 @@ class Router:
         """
         Prepare kwargs for a silent experiment by ensuring isolation from the primary call.
         """
-        # Copy kwargs to ensure isolation
-        silent_kwargs = copy.deepcopy(kwargs)
+        # Copy kwargs to ensure isolation (use safe_deep_copy to handle non-serializable objects like OTEL spans)
+        from litellm.litellm_core_utils.core_helpers import safe_deep_copy
+
+        silent_kwargs = safe_deep_copy(kwargs)
         if "metadata" not in silent_kwargs:
             silent_kwargs["metadata"] = {}
 
