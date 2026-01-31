@@ -118,6 +118,9 @@ from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import
 from litellm.router_utils.pre_call_checks.responses_api_deployment_check import (
     ResponsesApiDeploymentCheck,
 )
+from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
+    ModelRateLimitingCheck,
+)
 from litellm.router_utils.router_callbacks.track_deployment_metrics import (
     increment_deployment_failures_for_current_minute,
     increment_deployment_successes_for_current_minute,
@@ -1195,6 +1198,8 @@ class Router:
                     )
                 elif pre_call_check == "responses_api_deployment_check":
                     _callback = ResponsesApiDeploymentCheck()
+                elif pre_call_check == "enforce_model_rate_limits":
+                    _callback = ModelRateLimitingCheck(dual_cache=self.cache)
                 if _callback is not None:
                     if self.optional_callbacks is None:
                         self.optional_callbacks = []
