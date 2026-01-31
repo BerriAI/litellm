@@ -17,7 +17,7 @@ from typing import (
     Optional,
     Tuple,
     Union,
-    cast
+    cast,
 )
 
 from openai.types.responses.tool_param import FunctionToolParam
@@ -748,7 +748,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if isinstance(web_search_options, dict):
             web_search_tool.update(web_search_options)
 
-        responses_api_request["tools"].append(web_search_tool)
+        # After the check above, tools is guaranteed to be a list
+        # Cast to Any to match the expected union type for tools list items
+        responses_api_request["tools"].append(cast(Any, web_search_tool))
 
     def _transform_response_format_to_text_format(
         self, response_format: Union[Dict[str, Any], Any]
