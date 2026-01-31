@@ -904,6 +904,9 @@ async def get_file(
                 llm_router=llm_router,
             )
         else:
+            # Remove file_id from data to avoid "multiple values for keyword argument" error
+            # data was initialized with {"file_id": file_id}
+            data.pop("file_id", None)
             response = await litellm.afile_retrieve(
                 custom_llm_provider=custom_llm_provider, file_id=file_id, **data  # type: ignore
             )
