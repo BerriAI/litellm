@@ -35,7 +35,7 @@ export function SectionHeader({ type, tokens, cost, onCopy }: SectionHeaderProps
           {type === 'input' ? (
             <MessageOutlined style={{ color: '#8c8c8c', fontSize: 14 }} />
           ) : (
-            <span style={{ fontSize: 14, color: '#8c8c8c' }}>✨</span>
+            <span style={{ fontSize: 14, filter: 'grayscale(1)', opacity: 0.6 }}>✨</span>
           )}
           <Text style={{ fontWeight: 500, fontSize: 14 }}>
             {type === 'input' ? 'Input' : 'Output'}

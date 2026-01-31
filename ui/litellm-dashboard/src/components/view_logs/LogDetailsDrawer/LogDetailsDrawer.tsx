@@ -380,21 +380,31 @@ function RequestResponseSection({
         items={[
           {
             key: "1",
-            label: <h3 className="text-lg font-medium text-gray-900">Request & Response</h3>,
+            label: (
+              <div 
+                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}
+                onClick={(e) => {
+                  // Only prevent if clicking on the Radio.Group area
+                  const target = e.target as HTMLElement;
+                  if (target.closest('.ant-radio-group')) {
+                    e.stopPropagation();
+                  }
+                }}
+              >
+                <h3 className="text-lg font-medium text-gray-900" style={{ margin: 0 }}>Request & Response</h3>
+                {/* View Mode Toggle - In the header */}
+                <Radio.Group
+                  size="small"
+                  value={viewMode}
+                  onChange={(e) => setViewMode(e.target.value)}
+                >
+                  <Radio.Button value="pretty">Pretty</Radio.Button>
+                  <Radio.Button value="json">JSON</Radio.Button>
+                </Radio.Group>
+              </div>
+            ),
             children: (
               <div>
-                {/* View Mode Toggle - Top Right */}
-                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, paddingRight: 24 }}>
-                  <Radio.Group
-                    size="small"
-                    value={viewMode}
-                    onChange={(e) => setViewMode(e.target.value)}
-                  >
-                    <Radio.Button value="pretty">Pretty</Radio.Button>
-                    <Radio.Button value="json">JSON</Radio.Button>
-                  </Radio.Group>
-                </div>
-
                 {viewMode === 'pretty' ? (
                   <PrettyMessagesView
                     request={getRawRequest()}
