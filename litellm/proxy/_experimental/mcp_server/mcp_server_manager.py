@@ -11,7 +11,7 @@ import datetime
 import hashlib
 import json
 import re
-from typing import Any, Dict, List, Literal, Optional, Set, Tuple, Union, cast, Callable
+from typing import Any, Callable, Dict, List, Literal, Optional, Set, Tuple, Union, cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
@@ -30,7 +30,6 @@ from pydantic import AnyUrl
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.types.utils import CallTypes
 from litellm.exceptions import BlockedPiiEntityError, GuardrailRaisedException
 from litellm.experimental_mcp_client.client import MCPClient
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -63,20 +62,26 @@ from litellm.types.mcp_server.mcp_server_manager import (
     MCPOAuthMetadata,
     MCPServer,
 )
+from litellm.types.utils import CallTypes
 
 try:
-    from mcp.shared.tool_name_validation import SEP_986_URL, validate_tool_name  # type: ignore
+    from mcp.shared.tool_name_validation import (  # type: ignore
+        SEP_986_URL,
+        ToolNameValidationResult,
+        validate_tool_name,
+    )
 except ImportError:
+    from typing import Any
     SEP_986_URL = "https://github.com/modelcontextprotocol/protocol/blob/main/proposals/0001-tool-name-validation.md"
 
-    def validate_tool_name(name: str):
+    def validate_tool_name(name: str) -> Any:
         from pydantic import BaseModel
 
-        class MockResult(BaseModel):
+        class ToolNameValidationResult(BaseModel):
             is_valid: bool = True
             warnings: list = []
 
-        return MockResult()
+        return ToolNameValidationResult()
 
 
 # Probe includes characters on both sides of the separator to mimic real prefixed tool names.
