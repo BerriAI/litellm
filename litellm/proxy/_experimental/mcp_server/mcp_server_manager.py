@@ -77,7 +77,7 @@ except ImportError:
         is_valid: bool = True
         warnings: list = []
 
-    def validate_tool_name(name: str) -> ToolNameValidationResult:
+    def validate_tool_name(name: str) -> ToolNameValidationResult:  # type: ignore[misc]
         return ToolNameValidationResult()
 
 

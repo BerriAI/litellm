@@ -69,7 +69,7 @@ if MCP_AVAILABLE:
             is_valid: bool = True
             warnings: list = []
 
-        def validate_tool_name(name: str) -> ToolNameValidationResult:
+        def validate_tool_name(name: str) -> ToolNameValidationResult:  # type: ignore[misc]
             return ToolNameValidationResult()
 
     from litellm.proxy._experimental.mcp_server.db import (
