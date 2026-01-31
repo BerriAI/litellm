@@ -273,12 +273,22 @@ class TestAzureModelRouterCostBreakdown:
 
     def test_additional_costs_in_cost_breakdown(self):
         """Test that Azure Model Router flat cost appears in additional_costs dict."""
+        from datetime import datetime
+
         from litellm.cost_calculator import completion_cost
-        from litellm.litellm_core_utils.litellm_logging import LitellmLoggingObject
+        from litellm.litellm_core_utils.litellm_logging import Logging
         from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
-        # Create logging object
-        logging_obj = LitellmLoggingObject()
+        # Create logging object with required parameters
+        logging_obj = Logging(
+            model="azure-model-router",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=False,
+            call_type="completion",
+            start_time=datetime.now(),
+            litellm_call_id="test-123",
+            function_id="test-function",
+        )
 
         # Create a mock response for azure_ai model router
         response = ModelResponse(
