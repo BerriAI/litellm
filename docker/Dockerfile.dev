@@ -61,7 +61,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libatomic1 \
     nodejs \
     npm \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && npm install -g npm@latest tar@latest
 
 WORKDIR /app
 
