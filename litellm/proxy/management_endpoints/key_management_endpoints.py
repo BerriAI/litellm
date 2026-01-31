@@ -3314,10 +3314,22 @@ async def regenerate_key_fn(
         new_token_hash = hash_token(new_token)
         new_token_key_name = f"sk-...{new_token[-4:]}"
 
+        # Calculate grace period for zero-downtime key rotation
+        # Old key remains valid during the grace period
+        now = datetime.now(timezone.utc)
+
+        # Default to 30 minutes if no grace period is specified
+        grace_minutes = getattr(data, "grace_period_minutes", getattr(_key_in_db, "grace_period_minutes", 30))
+
+        grace_expiry = now + timedelta(minutes=grace_minutes)
+
         # Prepare the update data
         update_data = {
             "token": new_token_hash,
             "key_name": new_token_key_name,
+            "previous_token": hashed_api_key,
+            "previous_token_expires": grace_expiry,
+            "grace_period_minutes": grace_minutes,
         }
 
         non_default_values = {}

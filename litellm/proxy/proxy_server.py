@@ -5254,6 +5254,12 @@ class ProxyStartupEvent:
                         seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS,
                         id="key_rotation_job",
                     )
+                    scheduler.add_job(
+                        key_rotation_manager.cleanup_expired_grace_period_tokens,
+                        "interval",
+                        seconds=LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS, 
+                        id="key_rotation_grace_period_cleanup_job",
+                    )
                 else:
                     verbose_proxy_logger.warning(
                         "Key rotation enabled but prisma_client not available"
