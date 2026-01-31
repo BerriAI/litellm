@@ -19,6 +19,20 @@ from litellm import main as litellm_main
 
 
 @pytest.fixture(autouse=True)
+def clear_client_cache():
+    """
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    if cache is not None:
+        cache.flush_cache()
+
+
+@pytest.fixture(autouse=True)
 def add_api_keys_to_env(monkeypatch):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-api03-1234567890")
     monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-api03-1234567890")
