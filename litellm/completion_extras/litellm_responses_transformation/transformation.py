@@ -744,13 +744,18 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if "tools" not in responses_api_request or responses_api_request["tools"] is None:
             responses_api_request["tools"] = []
 
+        # Get the tools list with proper type narrowing
+        tools = responses_api_request["tools"]
+        if tools is None:
+            tools = []
+            responses_api_request["tools"] = tools
+
         web_search_tool: Dict[str, Any] = {"type": "web_search"}
         if isinstance(web_search_options, dict):
             web_search_tool.update(web_search_options)
 
-        # After the check above, tools is guaranteed to be a list
         # Cast to Any to match the expected union type for tools list items
-        responses_api_request["tools"].append(cast(Any, web_search_tool))
+        tools.append(cast(Any, web_search_tool))
 
     def _transform_response_format_to_text_format(
         self, response_format: Union[Dict[str, Any], Any]
