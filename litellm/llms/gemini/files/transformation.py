@@ -4,7 +4,7 @@ Supports writing files to Google AI Studio Files API.
 For vertex ai, check out the vertex_ai/files/handler.py file.
 """
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 import httpx
 from openai.types.file_deleted import FileDeleted
@@ -238,7 +238,7 @@ class GoogleAIStudioFilesHandler(GeminiModelInfo, BaseFilesConfig):
             
             # Map Gemini state to OpenAI status
             gemini_state = response_json.get("state", "STATE_UNSPECIFIED")
-            status = "uploaded" # Default
+            status: Literal["uploaded", "processed", "error"] = "uploaded" # Default
             if gemini_state == "ACTIVE":
                 status = "processed"
             elif gemini_state == "FAILED":
