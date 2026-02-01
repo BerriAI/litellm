@@ -4880,6 +4880,10 @@ class Router:
         content_policy_fallbacks = kwargs.pop(
             "content_policy_fallbacks", self.content_policy_fallbacks
         )
+        # Support per-request model_group_retry_policy override (from key/team settings)
+        model_group_retry_policy = kwargs.pop(
+            "model_group_retry_policy", self.model_group_retry_policy
+        )
         model_group: Optional[str] = kwargs.get("model")
         num_retries = kwargs.pop("num_retries")
 
@@ -4928,7 +4932,7 @@ class Router:
             _retry_policy_applies = False
             if (
                 self.retry_policy is not None
-                or self.model_group_retry_policy is not None
+                or model_group_retry_policy is not None
             ):
                 # get num_retries from retry policy
                 # Use the model_group captured at the start of the function, or get it from metadata
@@ -4936,9 +4940,12 @@ class Router:
                 _model_group_for_retry_policy = (
                     model_group or _metadata.get("model_group") or kwargs.get("model")
                 )
-                _retry_policy_retries = self.get_num_retries_from_retry_policy(
+                # Use per-request model_group_retry_policy if provided, otherwise use self
+                _retry_policy_retries = _get_num_retries_from_retry_policy(
                     exception=original_exception,
                     model_group=_model_group_for_retry_policy,
+                    model_group_retry_policy=model_group_retry_policy,
+                    retry_policy=self.retry_policy,
                 )
                 if _retry_policy_retries is not None:
                     num_retries = _retry_policy_retries
