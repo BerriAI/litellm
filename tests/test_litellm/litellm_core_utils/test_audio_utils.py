@@ -210,12 +210,22 @@ class TestProcessAudioFile:
         assert result.content_type == "audio/wav"
 
 
+def _soundfile_available() -> bool:
+    """Check if soundfile module is available."""
+    try:
+        import soundfile  # noqa: F401
+
+        return True
+    except ImportError:
+        return False
+
+
 class TestCalculateRequestDuration:
     """Test the calculate_request_duration function"""
 
     @pytest.mark.skipif(
-        os.environ.get("SKIP_AUDIO_TESTS") == "true",
-        reason="Skipping audio tests - soundfile may not be available",
+        not _soundfile_available(),
+        reason="soundfile module not available",
     )
     def test_bytesio_at_end_position(self):
         """
