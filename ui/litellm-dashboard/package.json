@@ -17,6 +17,7 @@
     "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts"
   },
   "dependencies": {
+    "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "@anthropic-ai/sdk": "^0.54.0",
     "@docusaurus/theme-mermaid": "^3.9.0",
     "@headlessui/react": "^1.7.18",
@@ -35,7 +36,7 @@
     "jwt-decode": "^4.0.0",
     "lucide-react": "^0.513.0",
     "moment": "^2.30.1",
-    "next": "^14.2.32",
+    "next": "^16.1.6",
     "openai": "^4.93.0",
     "papaparse": "^5.5.2",
     "react": "^18",
@@ -68,8 +69,8 @@
     "@vitest/ui": "^3.2.4",
     "autoprefixer": "^10.4.17",
     "dotenv": "^17.2.3",
-    "eslint": "^8",
-    "eslint-config-next": "14.2.32",
+    "eslint": "^9.39.2",
+    "eslint-config-next": "15.5.10",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-unused-imports": "^4.2.0",
     "jsdom": "^27.0.0",
