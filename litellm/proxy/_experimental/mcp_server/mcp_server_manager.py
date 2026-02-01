@@ -345,7 +345,8 @@ class MCPServerManager:
             f"Loaded MCP Servers: {json.dumps(self.config_mcp_servers, indent=4, default=str)}"
         )
 
-        self.initialize_tool_name_to_mcp_server_name_mapping()
+        # Defer tool listing until first request; do not call list_tools at startup.
+        # See update_tool_name_to_mcp_server_name_mapping() called from _get_tools_from_mcp_servers.
 
     def _register_openapi_tools(self, spec_path: str, server: MCPServer, base_url: str):
         """
@@ -2100,6 +2101,23 @@ class MCPServerManager:
             for tool in tools:
                 # The tool.name here is already prefixed from _get_tools_from_server
                 # Extract original name for mapping
+                original_name, _ = split_server_prefix_from_name(tool.name)
+                self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
+                self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name
+
+    def update_tool_name_to_mcp_server_name_mapping(
+        self,
+        servers: List[MCPServer],
+        per_server_tools: List[List[MCPTool]],
+    ) -> None:
+        """
+        Update the tool name to MCP server name mapping from already-fetched tool lists.
+        Called after the first successful list_tools request so we do not call MCP at startup.
+        """
+        for server, tools in zip(servers, per_server_tools):
+            if server is None:
+                continue
+            for tool in tools:
                 original_name, _ = split_server_prefix_from_name(tool.name)
                 self.tool_name_to_mcp_server_name_mapping[original_name] = server.name
                 self.tool_name_to_mcp_server_name_mapping[tool.name] = server.name

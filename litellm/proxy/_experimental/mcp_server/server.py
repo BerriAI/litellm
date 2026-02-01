@@ -916,6 +916,11 @@ if MCP_AVAILABLE:
             # Flatten results into single list
             all_tools: List[MCPTool] = [tool for tools in results for tool in tools]
 
+            # Update tool name -> MCP server mapping so routing works without startup list_tools
+            global_mcp_server_manager.update_tool_name_to_mcp_server_name_mapping(
+                allowed_mcp_servers, list(results)
+            )
+
             # If logging is enabled, enrich spend_logs_metadata with counts
             if litellm_logging_obj:
                 per_server_tool_counts: Dict[str, int] = {}

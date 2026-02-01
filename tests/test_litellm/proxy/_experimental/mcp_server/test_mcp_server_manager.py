@@ -755,7 +755,54 @@ class TestMCPServerManager:
         # Initialize the tool mapping
         await manager._initialize_tool_name_to_mcp_server_name_mapping()
         assert manager.tool_name_to_mcp_server_name_mapping == {}
-        
+
+    @pytest.mark.asyncio
+    async def test_load_servers_from_config_does_not_call_get_tools_at_startup(self):
+        """load_servers_from_config must not call list_tools at startup so MCP can start before LiteLLM."""
+        manager = MCPServerManager()
+        manager.initialize_tool_name_to_mcp_server_name_mapping = MagicMock()
+
+        config = {
+            "http_server": {
+                "url": "https://example.com/mcp",
+                "transport": MCPTransport.http,
+            }
+        }
+        await manager.load_servers_from_config(config)
+
+        manager.initialize_tool_name_to_mcp_server_name_mapping.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_update_tool_name_to_mcp_server_name_mapping_populates_mapping(self):
+        """update_tool_name_to_mcp_server_name_mapping populates mapping from request-time tool lists."""
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="jira",
+            name="jira",
+            server_name="jira",
+            transport=MCPTransport.http,
+        )
+        manager.registry = {server.server_id: server}
+
+        # Tools as returned from list_tools (prefixed names)
+        tools = [
+            MCPTool(name="jira-create_issue", description="", inputSchema={}),
+            MCPTool(name="jira-close_issue", description="", inputSchema={}),
+        ]
+        manager.update_tool_name_to_mcp_server_name_mapping([server], [tools])
+
+        assert manager.tool_name_to_mcp_server_name_mapping["create_issue"] == "jira"
+        assert manager.tool_name_to_mcp_server_name_mapping["jira-create_issue"] == "jira"
+        assert manager.tool_name_to_mcp_server_name_mapping["close_issue"] == "jira"
+        assert manager.tool_name_to_mcp_server_name_mapping["jira-close_issue"] == "jira"
+
+        resolved = manager._get_mcp_server_from_tool_name("create_issue")
+        assert resolved is not None
+        assert resolved.server_id == "jira"
+        resolved_pref = manager._get_mcp_server_from_tool_name("jira-close_issue")
+        assert resolved_pref is not None
+        assert resolved_pref.server_id == "jira"
+
     @pytest.mark.asyncio
     async def test_list_tools_handles_missing_server_alias(self):
         """Test that list_tools handles servers without alias gracefully"""
