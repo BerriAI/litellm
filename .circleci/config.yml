@@ -3754,8 +3754,8 @@ jobs:
 
             cd ui/litellm-dashboard
 
-            # Install dependencies first
-            npm install
+            # Install dependencies using npm ci (faster and more reliable for CI)
+            npm ci
 
             # Now source the build script
             source ./build_ui.sh
