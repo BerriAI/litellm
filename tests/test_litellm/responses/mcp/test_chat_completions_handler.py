@@ -751,6 +751,8 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
     )
 
     # Patch litellm.acompletion at module level to catch function-level imports
+    # NOTE: The stream consumption must be inside the patch context because
+    # the _MCPAutoExecStreamWrapper makes follow-up acompletion calls when consuming
     with patch("litellm.acompletion", mock_acompletion_func), \
          patch.object(chat_completions_handler, "litellm_acompletion", side_effect=mock_acompletion, create=True):
         result = await acompletion_with_mcp(
@@ -760,13 +762,16 @@ async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeyp
             stream=True,
         )
 
-    # Verify result is CustomStreamWrapper
-    assert isinstance(result, CustomStreamWrapper)
+        # Verify result is CustomStreamWrapper
+        assert isinstance(result, CustomStreamWrapper)
 
-    # Consume the stream and verify metadata placement
-    all_chunks = []
-    async for chunk in result:
-        all_chunks.append(chunk)
+        # Consume the stream and verify metadata placement
+        # This MUST be inside the patch context because consuming the stream
+        # triggers follow-up acompletion calls
+        all_chunks = []
+        async for chunk in result:
+            all_chunks.append(chunk)
+
     assert len(all_chunks) > 0
 
     # Find first chunk and final chunk from initial response

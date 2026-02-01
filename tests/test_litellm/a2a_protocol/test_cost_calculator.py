@@ -8,6 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+# Skip entire module if a2a is not available
+a2a = pytest.importorskip("a2a", reason="a2a SDK not installed")
+
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
