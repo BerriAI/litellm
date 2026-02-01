@@ -145,6 +145,11 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
         # Store the client factory for recreating sessions when needed
         if callable(client):
             self._client_factory = client
+        elif isinstance(client, ClientSession):
+            # When a ClientSession is passed directly, preserve its trace_configs
+            # so they can be reused when recreating the session
+            # This fixes https://github.com/BerriAI/litellm/issues/20174
+            self._trace_configs = getattr(client, "_trace_configs", None)
 
     def _get_valid_client_session(self) -> ClientSession:
         """
@@ -160,7 +165,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             if hasattr(self, "_client_factory") and callable(self._client_factory):
                 self.client = self._client_factory()
             else:
-                self.client = ClientSession()
+                self.client = self._create_session_with_trace_configs()
             # Don't return yet - check if the newly created session is valid
 
         # Check if the session itself is closed
@@ -170,7 +175,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
             if hasattr(self, "_client_factory") and callable(self._client_factory):
                 self.client = self._client_factory()
             else:
-                self.client = ClientSession()
+                self.client = self._create_session_with_trace_configs()
             return self.client
 
         # Check if the existing session is still valid for the current event loop
@@ -196,16 +201,33 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
                 else:
-                    self.client = ClientSession()
+                    self.client = self._create_session_with_trace_configs()
 
         except (RuntimeError, AttributeError):
             # If we can't check the loop or session is invalid, recreate it
             if hasattr(self, "_client_factory") and callable(self._client_factory):
                 self.client = self._client_factory()
             else:
-                self.client = ClientSession()
+                self.client = self._create_session_with_trace_configs()
 
         return self.client
+
+    def _create_session_with_trace_configs(self) -> ClientSession:
+        """
+        Create a new ClientSession with trace_configs from the original session.
+
+        This preserves trace_configs when the session needs to be recreated
+        (e.g., due to closed session or different event loop).
+
+        Fixes https://github.com/BerriAI/litellm/issues/20174
+        """
+        trace_configs = getattr(self, "_trace_configs", None)
+        if trace_configs:
+            verbose_logger.debug(
+                f"Creating new session with {len(trace_configs)} trace_configs from original session"
+            )
+            return ClientSession(trace_configs=trace_configs)
+        return ClientSession()
 
     async def _make_aiohttp_request(
         self,
@@ -285,7 +307,7 @@ class LiteLLMAiohttpTransport(AiohttpTransport):
                 if hasattr(self, "_client_factory") and callable(self._client_factory):
                     self.client = self._client_factory()
                 else:
-                    self.client = ClientSession()
+                    self.client = self._create_session_with_trace_configs()
                 client_session = self.client
 
                 # Retry the request with the new session
