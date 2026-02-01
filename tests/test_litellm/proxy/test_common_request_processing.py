@@ -78,9 +78,16 @@ class TestProxyBaseLLMRequestProcessing:
         assert data_passed["litellm_call_id"] == returned_data["litellm_call_id"]
 
     @pytest.mark.asyncio
-    async def test_should_apply_hierarchical_router_settings_to_user_config(
+    async def test_should_apply_hierarchical_router_settings_as_override(
         self, monkeypatch
     ):
+        """
+        Test that hierarchical router settings are stored as router_settings_override
+        instead of creating a full user_config with model_list.
+        
+        This approach avoids expensive per-request Router instantiation by passing
+        settings as kwargs overrides to the main router.
+        """
         processing_obj = ProxyBaseLLMRequestProcessing(data={})
         mock_request = MagicMock(spec=Request)
         mock_request.headers = {}
@@ -117,12 +124,7 @@ class TestProxyBaseLLMRequestProcessing:
             return_value=mock_router_settings
         )
 
-        mock_model_list = [
-            {"model_name": "gpt-3.5-turbo", "litellm_params": {"model": "gpt-3.5-turbo"}},
-            {"model_name": "gpt-4", "litellm_params": {"model": "gpt-4"}},
-        ]
         mock_llm_router = MagicMock()
-        mock_llm_router.get_model_list = MagicMock(return_value=mock_model_list)
 
         mock_prisma_client = MagicMock()
         monkeypatch.setattr(
@@ -146,14 +148,20 @@ class TestProxyBaseLLMRequestProcessing:
             user_api_key_dict=mock_user_api_key_dict,
             prisma_client=mock_prisma_client,
         )
-        mock_llm_router.get_model_list.assert_called_once()
+        # get_model_list should NOT be called - we no longer copy model list for per-request routers
+        mock_llm_router.get_model_list.assert_not_called()
 
-        assert "user_config" in returned_data
-        user_config = returned_data["user_config"]
-        assert user_config["model_list"] == mock_model_list
-        assert user_config["routing_strategy"] == "least-busy"
-        assert user_config["timeout"] == 30.0
-        assert user_config["num_retries"] == 3
+        # Settings should be stored as router_settings_override (not user_config)
+        # This allows passing them as kwargs to the main router instead of creating a new one
+        assert "router_settings_override" in returned_data
+        assert "user_config" not in returned_data
+        
+        router_settings_override = returned_data["router_settings_override"]
+        assert router_settings_override["routing_strategy"] == "least-busy"
+        assert router_settings_override["timeout"] == 30.0
+        assert router_settings_override["num_retries"] == 3
+        # model_list should NOT be in the override settings
+        assert "model_list" not in router_settings_override
 
     @pytest.mark.asyncio
     async def test_stream_timeout_header_processing(self):
