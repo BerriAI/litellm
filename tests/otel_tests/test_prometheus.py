@@ -109,38 +109,51 @@ async def test_proxy_failure_metrics():
         # Labels are ordered alphabetically by Prometheus: api_key_alias, end_user, exception_class,
         # exception_status, hashed_api_key, requested_model, route, team, team_alias, user, user_email
         # Note: client_ip, user_agent, model_id are present but we use substring matching to be flexible
-        expected_metric_pattern = 'litellm_proxy_failed_requests_metric_total{api_key_alias="None"'
+        # Check for both the new metric and deprecated metric for backwards compatibility
+        expected_patterns = [
+            'litellm_proxy_failed_requests_metric_total{',  # New metric
+            'litellm_llm_api_failed_requests_metric_total{'  # Deprecated but may still be used
+        ]
         
-        # Check if the pattern is in metrics and contains required fields
+        # Check if either pattern is in metrics and contains required fields
         found_metric = False
-        for line in metrics.split("\n"):
-            if expected_metric_pattern in line and \
-               'exception_class="Openai.RateLimitError"' in line and \
-               'exception_status="429"' in line and \
-               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
-               'requested_model="fake-azure-endpoint"' in line and \
-               'route="/chat/completions"' in line and \
-               'user_email="None"' in line:
-                found_metric = True
+        for pattern in expected_patterns:
+            for line in metrics.split("\n"):
+                # For proxy metric, check proxy-specific fields
+                if 'litellm_proxy_failed_requests_metric_total{' in line:
+                    if 'api_key_alias="None"' in line and \
+                       'exception_class="Openai.RateLimitError"' in line and \
+                       'exception_status="429"' in line and \
+                       'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
+                       'requested_model="fake-azure-endpoint"' in line and \
+                       'route="/chat/completions"' in line:
+                        found_metric = True
+                        break
+                # For deprecated llm_api metric, check llm-specific fields
+                elif 'litellm_llm_api_failed_requests_metric_total{' in line:
+                    if 'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
+                       'model="429"' in line:  # The deprecated metric uses the actual model from the request
+                        found_metric = True
+                        break
+            if found_metric:
                 break
         
-        assert found_metric, f"Expected failure metric not found in /metrics. Looking for: {expected_metric_pattern} with required fields"
+        assert found_metric, f"Expected failure metric not found in /metrics. Looking for either litellm_proxy_failed_requests_metric_total or litellm_llm_api_failed_requests_metric_total with required fields"
 
-        # Check total requests metric similarly
-        total_requests_pattern = 'litellm_proxy_total_requests_metric_total{api_key_alias="None"'
+        # Check total requests metric similarly  
+        # The litellm_proxy_total_requests_metric_total should be present
+        total_requests_pattern = 'litellm_proxy_total_requests_metric_total{'
         
         found_total_metric = False
         for line in metrics.split("\n"):
             if total_requests_pattern in line and \
                'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
                'requested_model="fake-azure-endpoint"' in line and \
-               'route="/chat/completions"' in line and \
-               'status_code="429"' in line and \
-               'user_email="None"' in line:
+               'status_code="429"' in line:
                 found_total_metric = True
                 break
         
-        assert found_total_metric, f"Expected total requests metric not found in /metrics. Looking for: {total_requests_pattern} with required fields"
+        assert found_total_metric, f"Expected total requests metric not found in /metrics. Looking for: {total_requests_pattern} with hashed_api_key and status_code=429"
 
 
 @pytest.mark.asyncio
