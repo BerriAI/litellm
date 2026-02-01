@@ -817,17 +817,47 @@ environment_variables:
 
 - `object_id_jwt_field`: The field in the JWT token that contains the object id. This id can be either a user id or a team id. Use this instead of `user_id_jwt_field` and `team_id_jwt_field`. If the same field could be both. **Supports dot notation** for nested claims (e.g., `"profile.object_id"`).
 
-- `roles_jwt_field`: The field in the JWT token that contains the roles. This field is a list of roles that the user has. **Supports dot notation** for nested fields - e.g., `resource_access.litellm-test-client-id.roles`.
+- `roles_jwt_field`: The field in the JWT token that contains roles. **Supports dot notation** for nested fields (e.g., `resource_access.litellm-test-client-id.roles`). You can provide **multiple claim paths** as a comma-separated string or a list; values from all claims are merged and de-duplicated in order. Each claim can be a list, a single string, or a stringified list like `"['role1','role2']"`.
 
 **Additional JWT Field Configuration Options:**
 
-- `team_ids_jwt_field`: Field containing team IDs (as a list). **Supports dot notation** (e.g., `"groups"`, `"teams.ids"`).
+- `team_ids_jwt_field`: Field containing team IDs. **Supports dot notation** (e.g., `"groups"`, `"teams.ids"`). You can provide **multiple claim paths** as a comma-separated string or a list; values from all claims are merged and de-duplicated in order. Each claim can be a list, a single string, or a stringified list like `"['team1','team2']"`.
 - `user_email_jwt_field`: Field containing user email. **Supports dot notation** (e.g., `"email"`, `"user.email"`).
 - `end_user_id_jwt_field`: Field containing end-user ID for cost tracking. **Supports dot notation** (e.g., `"customer_id"`, `"customer.id"`).
 
 - `role_mappings`: A list of role mappings. Map the received role in the JWT token to an internal role on LiteLLM.
 
 - `JWT_AUDIENCE`: The audience of the JWT token. This is used to validate the audience of the JWT token. Set via an environment variable.
+
+#### Multiple Claim Paths (Roles + Team IDs)
+
+Use this when your IdP spreads roles or team/group IDs across multiple claims.
+
+```yaml
+litellm_jwtauth:
+  roles_jwt_field: "realm_access.roles, roles, roles_extra"
+  team_ids_jwt_field:
+    - "groups"
+    - "alt_groups"
+    - "teams"
+```
+
+Example JWT:
+
+```json
+{
+  "realm_access": { "roles": ["admin"] },
+  "roles": "['user','admin']",
+  "roles_extra": ["viewer"],
+  "groups": ["team1", "team2"],
+  "alt_groups": "['team2','team3']",
+  "teams": "team4"
+}
+```
+
+Result:
+- Roles: `["admin", "user", "viewer"]`
+- Team IDs: `["team1", "team2", "team3", "team4"]`
 
 ### Example Token 
 
@@ -1057,5 +1087,4 @@ curl -X GET 'http://0.0.0.0:4000/user/info?user_id=user-123' \
 ## All JWT Params
 
 [**See Code**](https://github.com/BerriAI/litellm/blob/b204f0c01c703317d812a1553363ab0cb989d5b6/litellm/proxy/_types.py#L95)
-
 
