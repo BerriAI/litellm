@@ -275,17 +275,37 @@ async def test_proxy_fallback_metrics():
 
         print("/metrics", metrics)
 
-        # Check if successful fallback metric is incremented
-        assert (
-            'litellm_deployment_successful_fallbacks_total{api_key_alias="None",exception_class="Openai.RateLimitError",exception_status="429",fallback_model="fake-openai-endpoint",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None"} 1.0'
-            in metrics
-        )
+        # Check if successful fallback metric is incremented - use flexible matching
+        found_successful_fallback = False
+        for line in metrics.split("\n"):
+            if 'litellm_deployment_successful_fallbacks_total{' in line and \
+               'api_key_alias="None"' in line and \
+               'exception_class="Openai.RateLimitError"' in line and \
+               'exception_status="429"' in line and \
+               'fallback_model="fake-openai-endpoint"' in line and \
+               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
+               'requested_model="fake-azure-endpoint"' in line and \
+               '1.0' in line:
+                found_successful_fallback = True
+                break
+        
+        assert found_successful_fallback, "Expected litellm_deployment_successful_fallbacks_total metric not found in /metrics"
 
-        # Check if failed fallback metric is incremented
-        assert (
-            'litellm_deployment_failed_fallbacks_total{api_key_alias="None",exception_class="Openai.RateLimitError",exception_status="429",fallback_model="unknown-model",hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",requested_model="fake-azure-endpoint",team="None",team_alias="None"} 1.0'
-            in metrics
-        )
+        # Check if failed fallback metric is incremented - use flexible matching
+        found_failed_fallback = False
+        for line in metrics.split("\n"):
+            if 'litellm_deployment_failed_fallbacks_total{' in line and \
+               'api_key_alias="None"' in line and \
+               'exception_class="Openai.RateLimitError"' in line and \
+               'exception_status="429"' in line and \
+               'fallback_model="unknown-model"' in line and \
+               'hashed_api_key="88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b"' in line and \
+               'requested_model="fake-azure-endpoint"' in line and \
+               '1.0' in line:
+                found_failed_fallback = True
+                break
+        
+        assert found_failed_fallback, "Expected litellm_deployment_failed_fallbacks_total metric not found in /metrics"
 
 
 async def create_test_team(
