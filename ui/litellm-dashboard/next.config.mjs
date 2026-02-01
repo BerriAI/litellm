@@ -1,10 +1,17 @@
+import path from "path";
+import { fileURLToPath } from "url";
+
 /** @type {import('next').NextConfig} */
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const nextConfig = {
   output: "export",
   basePath: "",
-  assetPrefix: "/litellm-asset-prefix", // If a server_root_path is set, this will be overridden by runtime injection
+  assetPrefix: "/litellm-asset-prefix",
   turbopack: {
-    root: ".", // Explicitly set the project root to silence the multiple lockfiles warning
+    // Must be absolute; "." is no longer allowed
+    root: __dirname,
   },
 };
 
