@@ -1213,6 +1213,13 @@ def completion(  # type: ignore # noqa: PLR0915
         headers = {}
     if extra_headers is not None:
         headers.update(extra_headers)
+    # Inject proxy auth headers if configured
+    if litellm.proxy_auth is not None:
+        try:
+            proxy_headers = litellm.proxy_auth.get_auth_headers()
+            headers.update(proxy_headers)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get proxy auth headers: {e}")
     num_retries = kwargs.get(
         "num_retries", None
     )  ## alt. param for 'max_retries'. Use this to pass retries w/ instructor.
@@ -4542,6 +4549,13 @@ def embedding(  # noqa: PLR0915
         headers = {}
     if extra_headers is not None:
         headers.update(extra_headers)
+    # Inject proxy auth headers if configured
+    if litellm.proxy_auth is not None:
+        try:
+            proxy_headers = litellm.proxy_auth.get_auth_headers()
+            headers.update(proxy_headers)
+        except Exception as e:
+            verbose_logger.warning(f"Failed to get proxy auth headers: {e}")
     ### CUSTOM MODEL COST ###
     input_cost_per_token = kwargs.get("input_cost_per_token", None)
     output_cost_per_token = kwargs.get("output_cost_per_token", None)
