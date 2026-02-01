@@ -104,7 +104,8 @@ RUN for i in 1 2 3; do \
     done \
   && for i in 1 2 3; do \
     apk add --no-cache python3 py3-pip bash openssl tzdata nodejs npm supervisor && break || sleep 5; \
-    done
+    done \
+  && npm install -g npm@latest tar@latest
 
 # Copy artifacts from builder
 COPY --from=builder /app/requirements.txt /app/requirements.txt

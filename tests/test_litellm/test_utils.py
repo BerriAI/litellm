@@ -2282,8 +2282,19 @@ def test_register_model_with_scientific_notation():
     """
     Test that the register_model function can handle scientific notation in the model name.
     """
+    # Use a unique model name to avoid conflicts with other tests
+    test_model_name = "test-scientific-notation-model-unique-12345"
+    
+    # Clean up any pre-existing entry and clear caches
+    if test_model_name in litellm.model_cost:
+        del litellm.model_cost[test_model_name]
+    
+    # Clear LRU caches that might have stale data
+    from litellm.utils import get_model_info, _cached_get_model_info_helper, _invalidate_model_cost_lowercase_map
+    _invalidate_model_cost_lowercase_map()
+    
     model_cost_dict = {
-        "my-custom-model": {
+        test_model_name: {
             "max_tokens": 8192,
             "input_cost_per_token": "3e-07",
             "output_cost_per_token": "6e-07",
@@ -2294,12 +2305,17 @@ def test_register_model_with_scientific_notation():
 
     litellm.register_model(model_cost_dict)
 
-    registered_model = litellm.model_cost["my-custom-model"]
+    registered_model = litellm.model_cost[test_model_name]
     print(registered_model)
     assert registered_model["input_cost_per_token"] == 3e-07
     assert registered_model["output_cost_per_token"] == 6e-07
     assert registered_model["litellm_provider"] == "openai"
     assert registered_model["mode"] == "chat"
+    
+    # Clean up after test
+    if test_model_name in litellm.model_cost:
+        del litellm.model_cost[test_model_name]
+    _invalidate_model_cost_lowercase_map()
 
 
 def test_reasoning_content_preserved_in_text_completion_wrapper():
