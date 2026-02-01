@@ -98,7 +98,7 @@ async def test_send_email_success(mock_env_vars, mock_httpx_client):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_send_email_missing_api_key(mock_httpx_client):
+async def test_send_email_missing_api_key():
     # Block all HTTP requests at network level to prevent real API calls
     respx.post("https://api.resend.com/emails").mock(
         return_value=httpx.Response(200, json={"id": "test_email_id"})
@@ -117,13 +117,18 @@ async def test_send_email_missing_api_key(mock_httpx_client):
         subject = "Test Subject"
         html_body = "<p>Test email body</p>"
 
-        # Mock the response to avoid making real HTTP requests
+        # Create mock HTTP client and inject it directly into the logger
+        # This ensures the mock is used regardless of any caching issues
         mock_response = mock.Mock(spec=Response)
         mock_response.raise_for_status.return_value = None
-
         mock_response.status_code = 200
         mock_response.json.return_value = {"id": "test_email_id"}
-        mock_httpx_client.post.return_value = mock_response
+        
+        mock_async_client = mock.AsyncMock()
+        mock_async_client.post.return_value = mock_response
+        
+        # Directly inject the mock client to bypass any caching
+        logger.async_httpx_client = mock_async_client
 
         # Send email
         await logger.send_email(
@@ -131,8 +136,8 @@ async def test_send_email_missing_api_key(mock_httpx_client):
         )
 
         # Verify the HTTP client was called with None as the API key
-        mock_httpx_client.post.assert_called_once()
-        call_args = mock_httpx_client.post.call_args
+        mock_async_client.post.assert_called_once()
+        call_args = mock_async_client.post.call_args
         assert call_args[1]["headers"] == {"Authorization": "Bearer None"}
     finally:
         # Restore the original key if it existed
