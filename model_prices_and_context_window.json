@@ -749,7 +749,7 @@
     "anthropic.claude-3-5-sonnet-20240620-v1:0": {
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 4096,
         "max_tokens": 4096,
         "mode": "chat",
@@ -758,14 +758,22 @@
         "supports_pdf_input": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_above_200k_tokens": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 3e-05,
+        "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
+        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
+        "cache_creation_input_token_cost_above_1hr": 7.5e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.5e-05,
+        "cache_creation_input_token_cost": 3.75e-06,
+        "cache_read_input_token_cost": 3e-07
     },
     "anthropic.claude-3-5-sonnet-20241022-v2:0": {
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
         "litellm_provider": "bedrock",
-        "max_input_tokens": 200000,
+        "max_input_tokens": 1000000,
         "max_output_tokens": 8192,
         "max_tokens": 8192,
         "mode": "chat",
@@ -777,7 +785,13 @@
         "supports_prompt_caching": true,
         "supports_response_schema": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "input_cost_per_token_above_200k_tokens": 6e-06,
+        "output_cost_per_token_above_200k_tokens": 3e-05,
+        "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
+        "cache_read_input_token_cost_above_200k_tokens": 6e-07,
+        "cache_creation_input_token_cost_above_1hr": 7.5e-06,
+        "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.5e-05
     },
     "anthropic.claude-3-7-sonnet-20240620-v1:0": {
         "cache_creation_input_token_cost": 4.5e-06,
@@ -24390,21 +24404,21 @@
         "supports_tool_choice": true
     },
     "openrouter/xiaomi/mimo-v2-flash": {
-            "input_cost_per_token": 9e-08,
-            "output_cost_per_token": 2.9e-07,
-            "cache_creation_input_token_cost": 0.0,
-            "cache_read_input_token_cost": 0.0,
-            "litellm_provider": "openrouter",
-            "max_input_tokens": 262144,
-            "max_output_tokens": 16384,
-            "max_tokens": 16384,
-            "mode": "chat",
-            "supports_function_calling": true,
-            "supports_tool_choice": true,
-            "supports_reasoning": true,
-            "supports_vision": false,
-            "supports_prompt_caching": false
-        },
+        "input_cost_per_token": 9e-08,
+        "output_cost_per_token": 2.9e-07,
+        "cache_creation_input_token_cost": 0.0,
+        "cache_read_input_token_cost": 0.0,
+        "litellm_provider": "openrouter",
+        "max_input_tokens": 262144,
+        "max_output_tokens": 16384,
+        "max_tokens": 16384,
+        "mode": "chat",
+        "supports_function_calling": true,
+        "supports_tool_choice": true,
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_prompt_caching": false
+    },
     "openrouter/z-ai/glm-4.7": {
         "input_cost_per_token": 4e-07,
         "output_cost_per_token": 1.5e-06,
@@ -26319,13 +26333,13 @@
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
         "mode": "image_edit",
-        "output_cost_per_image": 0.40
+        "output_cost_per_image": 0.4
     },
     "stability.stable-creative-upscale-v1:0": {
         "litellm_provider": "bedrock",
         "max_input_tokens": 77,
         "mode": "image_edit",
-        "output_cost_per_image": 0.60
+        "output_cost_per_image": 0.6
     },
     "stability.stable-fast-upscale-v1:0": {
         "litellm_provider": "bedrock",
