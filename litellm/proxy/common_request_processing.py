@@ -616,26 +616,6 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
 
-        # Apply hierarchical router_settings (Key > Team > Global)
-        if llm_router is not None and proxy_config is not None:
-            from litellm.proxy.proxy_server import prisma_client
-
-            router_settings = await proxy_config._get_hierarchical_router_settings(
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-            )
-
-            # If router_settings found (from key, team, or global), apply them
-            # This ensures key/team settings override global settings
-            if router_settings is not None and router_settings:
-                # Get model_list from current router
-                model_list = llm_router.get_model_list()
-                if model_list is not None:
-                    # Create user_config with model_list and router_settings
-                    # This creates a per-request router with the hierarchical settings
-                    user_config = {"model_list": model_list, **router_settings}
-                    self.data["user_config"] = user_config
-
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
 
