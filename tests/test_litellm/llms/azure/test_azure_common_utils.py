@@ -1833,3 +1833,67 @@ def test_default_azure_credential_without_options(monkeypatch):
         mock_dac.assert_called_once_with(process_timeout=10)
         assert callable(result)
 
+
+def test_default_azure_credential_provider_caching(monkeypatch):
+    """
+    Test that DefaultAzureCredential token provider is cached and reused.
+    
+    This is important for performance - we don't want to recreate DefaultAzureCredential
+    on every request, as it can be expensive especially for CLI-based credentials.
+    
+    See Microsoft best practices: https://learn.microsoft.com/en-us/azure/developer/javascript/sdk/authentication/best-practices#reuse-credential-instances
+    """
+    # Clear Azure env vars
+    monkeypatch.delenv("AZURE_CLIENT_ID", raising=False)
+    monkeypatch.delenv("AZURE_CLIENT_SECRET", raising=False)
+    monkeypatch.delenv("AZURE_TENANT_ID", raising=False)
+    
+    # Clear the cache before the test
+    from litellm.llms.azure.common_utils import _default_azure_credential_provider_cache
+    _default_azure_credential_provider_cache.clear()
+    
+    with patch("litellm.llms.azure.common_utils.get_azure_ad_token_provider") as mock_get_provider:
+        mock_provider = MagicMock(return_value="test-token")
+        mock_get_provider.return_value = mock_provider
+        
+        # First call should create the provider
+        result1 = BaseAzureLLM._try_get_default_azure_credential_provider(
+            scope="https://cognitiveservices.azure.com/.default",
+            azure_default_credential_options=None,
+        )
+        
+        # Second call with same parameters should use cached provider
+        result2 = BaseAzureLLM._try_get_default_azure_credential_provider(
+            scope="https://cognitiveservices.azure.com/.default",
+            azure_default_credential_options=None,
+        )
+        
+        # Verify get_azure_ad_token_provider was only called ONCE (cached on second call)
+        assert mock_get_provider.call_count == 1
+        
+        # Both results should be the same cached provider
+        assert result1 is result2
+        assert result1 is mock_provider
+        
+        # Third call with DIFFERENT options should create a new provider
+        result3 = BaseAzureLLM._try_get_default_azure_credential_provider(
+            scope="https://cognitiveservices.azure.com/.default",
+            azure_default_credential_options={"managed_identity_client_id": "test-id"},
+        )
+        
+        # Now get_azure_ad_token_provider should have been called twice
+        assert mock_get_provider.call_count == 2
+        
+        # Fourth call with same options as third should use cached provider
+        result4 = BaseAzureLLM._try_get_default_azure_credential_provider(
+            scope="https://cognitiveservices.azure.com/.default",
+            azure_default_credential_options={"managed_identity_client_id": "test-id"},
+        )
+        
+        # Still only 2 calls (third and fourth share cache)
+        assert mock_get_provider.call_count == 2
+        assert result3 is result4
+    
+    # Clean up
+    _default_azure_credential_provider_cache.clear()
+

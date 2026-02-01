@@ -19,6 +19,11 @@ from litellm.utils import _add_path_to_api_base
 
 azure_ad_cache = DualCache()
 
+# Cache for DefaultAzureCredential token providers to avoid recreating on each request
+# Key: frozenset of azure_default_credential_options items + scope
+# Value: token provider callable
+_default_azure_credential_provider_cache: Dict[str, Callable[[], str]] = {}
+
 
 class AzureOpenAIError(BaseLLMException):
     def __init__(
@@ -412,7 +417,10 @@ class BaseAzureLLM(BaseOpenAILLM):
         azure_default_credential_options: Optional[dict] = None,
     ) -> Optional[Callable[[], str]]:
         """
-        Try to get DefaultAzureCredential provider
+        Try to get DefaultAzureCredential provider with caching.
+
+        The credential provider is cached to avoid recreating DefaultAzureCredential
+        on every request, which can be expensive especially for CLI-based credentials.
 
         Args:
             scope: Azure scope for the token
@@ -424,6 +432,20 @@ class BaseAzureLLM(BaseOpenAILLM):
         from litellm.types.secret_managers.get_azure_ad_token_provider import (
             AzureCredentialType,
         )
+
+        # Create cache key from scope and options
+        options_key = ""
+        if azure_default_credential_options:
+            # Sort for consistent key regardless of dict ordering
+            options_key = json.dumps(azure_default_credential_options, sort_keys=True)
+        cache_key = f"{scope}:{options_key}"
+
+        # Check cache first
+        if cache_key in _default_azure_credential_provider_cache:
+            verbose_logger.debug(
+                "Using cached DefaultAzureCredential token provider for Azure Auth"
+            )
+            return _default_azure_credential_provider_cache[cache_key]
 
         verbose_logger.debug("Attempting to use DefaultAzureCredential for Azure Auth")
 
@@ -437,6 +459,8 @@ class BaseAzureLLM(BaseOpenAILLM):
                 "Using DefaultAzureCredential for Azure authentication. "
                 "Set api_key to skip credential discovery."
             )
+            # Cache the provider for future requests
+            _default_azure_credential_provider_cache[cache_key] = azure_ad_token_provider
             return azure_ad_token_provider
         except Exception as e:
             verbose_logger.debug(f"DefaultAzureCredential failed: {str(e)}")
