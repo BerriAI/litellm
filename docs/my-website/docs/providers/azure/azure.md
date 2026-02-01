@@ -1032,7 +1032,7 @@ print("list_batches_response=", list_batches_response)
 </TabItem>
 </Tabs>
 
-### [Health Check Azure Batch models](./proxy/health.md#batch-models-azure-only)
+### [Health Check Azure Batch models](../../proxy/health.md#batch-models-azure-only)
 
 
 ### [BETA] Loadbalance Multiple Azure Deployments 

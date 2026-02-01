@@ -35,7 +35,7 @@ With LiteLLM Cloud, we handle:
 ### Self-hosted Instances LiteLLM
 
 - **No data or telemetry is stored on LiteLLM Servers when you self-host**
-- For installation and configuration, see: [Self-hosting guide](../docs/proxy/deploy.md)
+- For installation and configuration, see: [Self-hosting guide](./proxy/deploy.md)
 - **Telemetry**: We run no telemetry when you self-host LiteLLM
 
 For security inquiries, please contact us at support@berri.ai

@@ -78,8 +78,8 @@ LiteLLM provides **full end-to-end support** for Gemini 3 Flash on:
 
 - ✅ `/v1/chat/completions` - OpenAI-compatible chat completions endpoint
 - ✅ `/v1/responses` - OpenAI Responses API endpoint (streaming and non-streaming)
-- ✅ [`/v1/messages`](../../docs/anthropic_unified) - Anthropic-compatible messages endpoint
-- ✅ `/v1/generateContent` – [Google Gemini API](../../docs/generateContent.md) compatible endpoint 
+- ✅ [`/v1/messages`](https://docs.litellm.ai/docs/anthropic_unified) - Anthropic-compatible messages endpoint
+- ✅ `/v1/generateContent` – [Google Gemini API](https://docs.litellm.ai/docs/generateContent) compatible endpoint 
 All endpoints support:
 - Streaming and non-streaming responses
 - Function calling with thought signatures

@@ -372,7 +372,7 @@ response = completion(
 
 ## Related Documentation
 
-- [Anthropic Provider Documentation](./anthropic.md) - For standard Anthropic API usage
+- [Anthropic Provider Documentation](../anthropic.md) - For standard Anthropic API usage
 - [Azure OpenAI Documentation](./azure.md) - For Azure OpenAI models
-- [Azure Authentication Guide](../secret_managers/azure_key_vault.md) - For Azure AD token setup
+- [Azure Authentication Guide](../../secret_managers/azure_key_vault.md) - For Azure AD token setup
 

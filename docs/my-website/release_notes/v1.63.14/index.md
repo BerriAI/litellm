@@ -62,10 +62,10 @@ Here's a Demo Instance to test changes:
    - Infer aws region from bedrock application profile id - (`arn:aws:bedrock:us-east-1:...`)
 - Ollama - support calling via `/v1/completions` [Get Started](../../docs/providers/ollama#using-ollama-fim-on-v1completions)
 - Bedrock - support `us.deepseek.r1-v1:0` model name [Docs](../../docs/providers/bedrock#supported-aws-bedrock-models)
-- OpenRouter - `OPENROUTER_API_BASE` env var support [Docs](../../docs/providers/openrouter.md)
+- OpenRouter - `OPENROUTER_API_BASE` env var support [Docs](https://docs.litellm.ai/docs/providers/openrouter)
 - Azure - add audio model parameter support - [Docs](../../docs/providers/azure#azure-audio-model)
 - OpenAI - PDF File support [Docs](../../docs/completion/document_understanding#openai-file-message-type)
-- OpenAI - o1-pro Responses API streaming support [Docs](../../docs/response_api.md#streaming)
+- OpenAI - o1-pro Responses API streaming support [Docs](https://docs.litellm.ai/docs/response_api#streaming)
 - [BETA] MCP - Use MCP Tools with LiteLLM SDK [Docs](../../docs/mcp)
 
 2. **Bug Fixes**
@@ -102,7 +102,7 @@ Here's a Demo Instance to test changes:
    - fix logging to just log the LLM I/O [PR](https://github.com/BerriAI/litellm/pull/9353)
    - Dynamic API Key/Space param support [Get Started](../../docs/observability/arize_integration#pass-arize-spacekey-per-request)
 - StandardLoggingPayload - Log litellm_model_name in payload. Allows knowing what the model sent to API provider was [Get Started](../../docs/proxy/logging_spec#standardlogginghiddenparams)
-- Prompt Management - Allow building custom prompt management integration [Get Started](../../docs/proxy/custom_prompt_management.md)
+- Prompt Management - Allow building custom prompt management integration [Get Started](https://docs.litellm.ai/docs/proxy/custom_prompt_management)
 
 ## Performance / Reliability improvements
 

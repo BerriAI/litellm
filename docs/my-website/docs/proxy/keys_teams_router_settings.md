@@ -146,5 +146,5 @@ Test new router settings on specific keys or teams before applying globally:
 - [Router Settings Reference](./config_settings.md#router_settings---reference) - Complete reference of all router settings
 - [Load Balancing](./load_balancing.md) - Learn about routing strategies and load balancing
 - [Reliability](./reliability.md) - Configure fallbacks, retries, and error handling
-- [Keys](./keys.md) - Manage API keys and their settings
-- [Teams](./teams.md) - Organize keys into teams
+- [Keys](./virtual_keys.md) - Manage API keys and their settings
+- [Teams](./customers.md) - Organize keys into teams

@@ -99,6 +99,7 @@ const config = {
         showReadingTime: false,
         sortPosts: 'descending',
         include: ['**/*.{md,mdx}'],
+        onInlineAuthors: 'ignore',
       },
     ],
     [
@@ -114,6 +115,7 @@ const config = {
         showReadingTime: false,
         sortPosts: 'descending',
         include: ['**/index.{md,mdx}'],
+        onInlineAuthors: 'ignore',
       },
     ],
 

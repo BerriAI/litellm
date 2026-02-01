@@ -998,4 +998,4 @@ response = completion(
 
 LiteLLM supports OpenAI's video generation models including Sora.
 
-For detailed documentation on video generation, see [OpenAI Video Generation →](./openai/video_generation.md)
+For detailed documentation on video generation, see [OpenAI Video Generation →](./openai/videos.md)

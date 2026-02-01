@@ -79,4 +79,4 @@ curl -X POST http://localhost:4000/v1/chat/completions \
 ## See Also
 - [Proxy Quick Start](./quick_start.md)
 - [User Management](./users.md)
-- [Key Management](./key_management.md)
+- [Key Management](./virtual_keys.md)
