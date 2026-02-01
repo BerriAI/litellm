@@ -4,20 +4,39 @@ A2A (Agent-to-Agent) Provider for LiteLLM
 This provider enables calling A2A-compliant agents through the standard LiteLLM completion API.
 It transforms OpenAI chat completion requests to A2A protocol and vice versa.
 
-Usage:
+Agent Resolution:
+    1. Looks up the agent from LiteLLM's global agent registry by name
+    2. Falls back to explicit api_base parameter
+    3. Falls back to A2A_AGENT_API_BASE environment variable
+
+Registering Agents:
+    Agents can be registered in LiteLLM via:
+    - config.yaml `agent_config` list
+    - Database (via POST /agent/new API)
+    - Programmatic registration via global_agent_registry
+
+Usage with registered agents (recommended):
     import litellm
-    
+
+    # Agent is registered in LiteLLM config or database
     response = litellm.completion(
-        model="a2a_agent/my-agent",
+        model="a2a_agent/my-registered-agent",
         messages=[{"role": "user", "content": "Hello!"}],
-        api_base="http://localhost:9999",  # A2A agent endpoint
+    )
+
+Usage with unregistered agents (fallback):
+    import litellm
+
+    response = litellm.completion(
+        model="a2a_agent/external-agent",
+        messages=[{"role": "user", "content": "Hello!"}],
+        api_base="http://localhost:9999",  # Required for unregistered agents
     )
 
 For streaming:
     response = litellm.completion(
-        model="a2a_agent/my-agent", 
+        model="a2a_agent/my-agent",
         messages=[{"role": "user", "content": "Hello!"}],
-        api_base="http://localhost:9999",
         stream=True,
     )
     for chunk in response:

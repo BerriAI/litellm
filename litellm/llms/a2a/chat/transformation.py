@@ -5,6 +5,25 @@ Transforms OpenAI chat completion API requests/responses to/from A2A protocol.
 
 A2A Protocol Reference: https://github.com/a2aproject/A2A
 
+This provider integrates with LiteLLM's Agent Registry to look up registered agents.
+Agents can be registered via:
+- config.yaml `agent_config` list
+- Database (via /agent/new API)
+
+Usage:
+    # When agent is registered in LiteLLM:
+    response = litellm.completion(
+        model="a2a_agent/my-registered-agent",
+        messages=[{"role": "user", "content": "Hello!"}],
+    )
+
+    # When calling an unregistered agent directly (fallback):
+    response = litellm.completion(
+        model="a2a_agent/external-agent",
+        messages=[{"role": "user", "content": "Hello!"}],
+        api_base="http://localhost:9999",  # Required for unregistered agents
+    )
+
 OpenAI Message Format:
     {"role": "user", "content": "Hello!"}
 
@@ -57,6 +76,46 @@ class A2AAgentError(BaseLLMException):
     """Exception for A2A Agent errors."""
 
     pass
+
+
+def _get_agent_from_registry(agent_name: str) -> Optional[Any]:
+    """
+    Look up an agent from the global agent registry.
+
+    Returns the AgentResponse if found, None otherwise.
+    """
+    try:
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        # Try to find by name first
+        agent = global_agent_registry.get_agent_by_name(agent_name)
+        if agent is not None:
+            return agent
+
+        # Also try by ID as fallback
+        agent = global_agent_registry.get_agent_by_id(agent_name)
+        return agent
+    except ImportError:
+        # Agent registry not available (e.g., running without proxy)
+        verbose_logger.debug(
+            "Agent registry not available - falling back to explicit api_base"
+        )
+        return None
+    except Exception as e:
+        verbose_logger.debug(f"Error looking up agent from registry: {e}")
+        return None
+
+
+def _extract_agent_name_from_model(model: str) -> str:
+    """
+    Extract the agent name from the model string.
+
+    Model format: "a2a_agent/agent-name" or just "agent-name"
+    """
+    if "/" in model:
+        # Format: "a2a_agent/agent-name"
+        return model.split("/", 1)[1]
+    return model
 
 
 class A2AAgentConfig(BaseConfig):
@@ -134,12 +193,62 @@ class A2AAgentConfig(BaseConfig):
         return optional_params
 
     def _get_openai_compatible_provider_info(
-        self, api_base: Optional[str], api_key: Optional[str]
+        self,
+        api_base: Optional[str],
+        api_key: Optional[str],
+        model: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
-        """Get the API base and key for A2A agent."""
-        api_base = api_base or get_secret_str("A2A_AGENT_API_BASE")
-        api_key = api_key or get_secret_str("A2A_AGENT_API_KEY")
-        return api_base, api_key
+        """
+        Get the API base and key for A2A agent.
+
+        Resolution order:
+        1. Look up agent from registry by name (extracted from model)
+        2. Use explicit api_base parameter
+        3. Use A2A_AGENT_API_BASE env var
+
+        Args:
+            api_base: Explicit API base URL
+            api_key: Explicit API key
+            model: Model string in format "a2a_agent/agent-name"
+
+        Returns:
+            Tuple of (api_base, api_key)
+        """
+        resolved_api_base = api_base
+        resolved_api_key = api_key
+
+        # Try to look up agent from registry
+        if model:
+            agent_name = _extract_agent_name_from_model(model)
+            agent = _get_agent_from_registry(agent_name)
+
+            if agent is not None:
+                verbose_logger.debug(
+                    f"Found agent '{agent_name}' in registry"
+                )
+
+                # Get URL from agent card params
+                agent_card_params = getattr(agent, "agent_card_params", {}) or {}
+                registry_url = agent_card_params.get("url")
+                if registry_url and not resolved_api_base:
+                    resolved_api_base = registry_url
+                    verbose_logger.debug(
+                        f"Using api_base from registry: {resolved_api_base}"
+                    )
+
+                # Get API key from litellm_params if present
+                litellm_params = getattr(agent, "litellm_params", {}) or {}
+                registry_api_key = litellm_params.get("api_key")
+                if registry_api_key and not resolved_api_key:
+                    resolved_api_key = registry_api_key
+
+        # Fall back to env vars
+        if not resolved_api_base:
+            resolved_api_base = get_secret_str("A2A_AGENT_API_BASE")
+        if not resolved_api_key:
+            resolved_api_key = get_secret_str("A2A_AGENT_API_KEY")
+
+        return resolved_api_base, resolved_api_key
 
     def validate_environment(
         self,
@@ -153,19 +262,29 @@ class A2AAgentConfig(BaseConfig):
     ) -> dict:
         """
         Validate and set up the request headers for A2A.
+
+        Looks up the agent from the registry first, then falls back to
+        explicit api_base or environment variables.
         """
-        api_base, api_key = self._get_openai_compatible_provider_info(api_base, api_key)
+        api_base, api_key = self._get_openai_compatible_provider_info(
+            api_base, api_key, model=model
+        )
 
         if not api_base:
+            agent_name = _extract_agent_name_from_model(model)
             raise A2AAgentError(
                 status_code=400,
-                message="api_base is required for A2A agent calls. Set via api_base parameter or A2A_AGENT_API_BASE env var.",
+                message=(
+                    f"api_base is required for A2A agent '{agent_name}'. "
+                    f"Either register the agent in LiteLLM (config or /agent/new API), "
+                    f"or provide api_base parameter or A2A_AGENT_API_BASE env var."
+                ),
             )
 
         # Set up headers
         headers = headers or {}
         headers["Content-Type"] = "application/json"
-        
+
         # Add authorization if API key is provided
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -183,20 +302,29 @@ class A2AAgentConfig(BaseConfig):
     ) -> str:
         """
         Construct the complete URL for the A2A agent endpoint.
-        
+
+        Looks up the agent from the registry first, then falls back to
+        explicit api_base or environment variables.
+
         A2A uses JSON-RPC at the agent's base URL.
         """
-        api_base, _ = self._get_openai_compatible_provider_info(api_base, api_key)
+        api_base, _ = self._get_openai_compatible_provider_info(
+            api_base, api_key, model=model
+        )
 
         if not api_base:
+            agent_name = _extract_agent_name_from_model(model)
             raise A2AAgentError(
                 status_code=400,
-                message="api_base is required for A2A agent calls.",
+                message=(
+                    f"api_base is required for A2A agent '{agent_name}'. "
+                    f"Either register the agent in LiteLLM or provide api_base."
+                ),
             )
 
         # Strip trailing slash
         api_base = api_base.rstrip("/")
-        
+
         return api_base
 
     def get_error_class(
