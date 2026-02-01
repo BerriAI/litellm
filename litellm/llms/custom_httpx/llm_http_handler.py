@@ -4408,6 +4408,35 @@ class BaseLLMHTTPHandler:
                             stream=stream,
                             kwargs=kwargs_with_provider,
                         )
+                        
+                        # Check if we need to convert agentic response to fake stream
+                        # This happens when stream was converted from True to False for interception
+                        # Fixes https://github.com/BerriAI/litellm/issues/20187
+                        websearch_converted_stream = (
+                            logging_obj.model_call_details.get("websearch_interception_converted_stream", False)
+                            if logging_obj is not None
+                            else False
+                        )
+                        
+                        if websearch_converted_stream and isinstance(agentic_response, dict):
+                            from typing import cast
+
+                            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+                                FakeAnthropicMessagesStreamIterator,
+                            )
+                            from litellm.types.llms.anthropic_messages.anthropic_response import (
+                                AnthropicMessagesResponse,
+                            )
+                            
+                            verbose_logger.debug(
+                                "WebSearchInterception: Converting agentic response to fake stream"
+                            )
+                            
+                            # Convert the non-streaming agentic response to a fake stream
+                            return FakeAnthropicMessagesStreamIterator(
+                                response=cast(AnthropicMessagesResponse, agentic_response)
+                            )
+                        
                         # First hook that runs agentic loop wins
                         return agentic_response
 
