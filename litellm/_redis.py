@@ -111,7 +111,7 @@ def _generate_gcp_iam_access_token(service_account: str) -> str:
         Access token string for GCP IAM authentication
     """
     try:
-        from google.cloud import iam_credentials_v1
+        from google.cloud import iam_credentials_v1  # type: ignore[attr-defined]
     except ImportError:
         raise ImportError(
             "google-cloud-iam is required for GCP IAM Redis authentication. "
@@ -395,7 +395,7 @@ def get_redis_async_client(
         return async_redis.Redis.from_url(**url_kwargs)
 
     if "startup_nodes" in redis_kwargs:
-        from redis.cluster import ClusterNode
+        from redis.asyncio.cluster import ClusterNode
 
         args = _get_redis_cluster_kwargs()
         cluster_kwargs = {}
