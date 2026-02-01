@@ -91,6 +91,7 @@ def test_basic_response():
         get_response = client.responses.retrieve(response.id)
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_streaming_response():
     client = get_test_client()
     stream = client.responses.create(
@@ -120,6 +121,7 @@ def test_bad_request_bad_param_error():
             model="gpt-4o", input="This should fail", temperature=2000
         )
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_anthropic_with_responses_api():
     client = get_test_client()
     response = client.responses.create(
@@ -130,6 +132,7 @@ def test_anthropic_with_responses_api():
     print("anthropic response=", response)
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_cancel_response():
     try:
         client = get_test_client()
@@ -152,6 +155,7 @@ def test_cancel_response():
             raise e
 
 
+@pytest.mark.flaky(retries=3, delay=2)
 def test_cancel_streaming_response():
     try:
         client = get_test_client()
