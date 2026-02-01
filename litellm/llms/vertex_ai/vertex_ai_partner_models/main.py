@@ -161,6 +161,11 @@ class VertexAIPartnerModels(VertexBase):
             else:
                 raise ValueError(f"Unknown partner model: {model}")
 
+            # Resolve vertex_location based on model's supported_regions
+            vertex_location = self.get_vertex_region(
+                vertex_region=vertex_location, model=model
+            )
+
             api_base = self.get_complete_vertex_url(
                 custom_api_base=api_base,
                 vertex_location=vertex_location,
