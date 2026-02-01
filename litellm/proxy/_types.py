@@ -2155,10 +2155,6 @@ class LiteLLM_VerificationToken(LiteLLMPydanticObjectBase):
     rotation_interval: Optional[str] = None  # How often to rotate (e.g., "30d", "90d")
     last_rotation_at: Optional[datetime] = None  # When this key was last rotated
     key_rotation_at: Optional[datetime] = None  # When this key should next be rotated
-    router_settings: Optional[
-        Dict
-    ] = None  # Router settings for this key (Key > Team > Global precedence)
-
     model_config = ConfigDict(protected_namespaces=())
 
 
