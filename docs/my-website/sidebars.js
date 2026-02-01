@@ -185,6 +185,7 @@ const sidebars = {
       items: [
         'tutorials/azure_openai',
         'tutorials/instructor',
+        'tutorials/openclaw',
         'tutorials/oobabooga',
         "tutorials/gradio_integration",
         "tutorials/huggingface_codellama",
