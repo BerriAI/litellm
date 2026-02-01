@@ -133,14 +133,10 @@ def test_add_vector_store_to_registry():
 
 
 
-@respx.mock
 def test_search_uses_registry_credentials():
     """search() should pull credentials from vector_store_registry when available"""
-    # Import the actual instance to patch it correctly
-    from litellm.vector_stores.main import base_llm_http_handler
-    
-    # Block all HTTP requests at the network level to prevent real API calls
-    respx.route().mock(return_value=httpx.Response(200, json={"object": "list", "data": []}))
+    # Import the module to get the actual handler instance
+    import litellm.vector_stores.main as vector_stores_main
     
     vector_store = LiteLLM_ManagedVectorStore(
         vector_store_id="vs1",
@@ -172,7 +168,7 @@ def test_search_uses_registry_credentials():
             "litellm.vector_stores.main.ProviderConfigManager.get_provider_vector_stores_config",
             return_value=MagicMock(),
         ), patch.object(
-            base_llm_http_handler,
+            vector_stores_main.base_llm_http_handler,
             "vector_store_search_handler",
             return_value=mock_search_response,
         ) as mock_handler:
