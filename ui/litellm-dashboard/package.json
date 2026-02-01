@@ -17,7 +17,6 @@
     "e2e:ui": "playwright test --ui --config e2e_tests/playwright.config.ts"
   },
   "dependencies": {
-    "@ant-design/v5-patch-for-react-19": "^1.0.3",
     "@anthropic-ai/sdk": "^0.54.0",
     "@headlessui/tailwindcss": "^0.2.0",
     "@heroicons/react": "^1.0.6",
@@ -35,9 +34,9 @@
     "next": "^16.1.6",
     "openai": "^4.93.0",
     "papaparse": "^5.5.2",
-    "react": "^19.2.4",
+    "react": "^18.3.1",
     "react-copy-to-clipboard": "^5.1.0",
-    "react-dom": "^19.2.4",
+    "react-dom": "^18.3.1",
     "react-json-view-lite": "^2.5.0",
     "react-markdown": "^9.0.1",
     "react-syntax-highlighter": "^15.6.6",
