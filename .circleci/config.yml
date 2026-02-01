@@ -3754,8 +3754,11 @@ jobs:
 
             cd ui/litellm-dashboard
 
-            # Install dependencies using npm ci (faster and more reliable for CI)
-            npm ci
+            # Remove node_modules and package-lock to ensure clean install (fixes dependency resolution issues)
+            rm -rf node_modules package-lock.json
+
+            # Install dependencies first
+            npm install
 
             # Now source the build script
             source ./build_ui.sh
