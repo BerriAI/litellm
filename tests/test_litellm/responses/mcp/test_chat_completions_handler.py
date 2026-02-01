@@ -303,12 +303,9 @@ async def test_acompletion_with_mcp_adds_metadata_to_streaming(monkeypatch):
     """
     from litellm.utils import CustomStreamWrapper
     from litellm.types.utils import ModelResponseStream, StreamingChoices, Delta
-    from litellm.litellm_core_utils.litellm_logging import Logging
 
     tools = [{"type": "mcp", "server_url": "litellm_proxy/mcp/local"}]
     openai_tools = [{"type": "function", "function": {"name": "local_search"}}]
-    tool_calls = [{"id": "call-1", "type": "function", "function": {"name": "local_search", "arguments": "{}"}}]
-    tool_results = [{"tool_call_id": "call-1", "result": "executed"}]
 
     # Create mock streaming chunks
     def create_chunk(content, finish_reason=None):
@@ -577,7 +574,7 @@ async def test_acompletion_with_mcp_streaming_initial_call_is_streaming(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeypatch):
+async def test_acompletion_with_mcp_streaming_metadata_in_correct_chunks(monkeypatch):  # noqa: PLR0915
     """
     Test that MCP metadata is added to the correct chunks:
     - mcp_list_tools should be in the first chunk
@@ -865,7 +862,7 @@ async def test_execute_tool_calls_sets_proxy_server_request_arguments(monkeypatc
     user_api_key_auth.api_key = "test_key"
     
     # Call _execute_tool_calls
-    result = await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
+    await LiteLLM_Proxy_MCP_Handler._execute_tool_calls(
         tool_server_map=tool_server_map,
         tool_calls=tool_calls,
         user_api_key_auth=user_api_key_auth,

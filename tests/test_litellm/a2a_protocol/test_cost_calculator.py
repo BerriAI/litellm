@@ -149,13 +149,6 @@ async def test_asend_message_uses_input_output_cost_per_token():
     completion_tokens = token_cost_logger.completion_tokens
     response_cost = token_cost_logger.response_cost
 
-    print(f"\n=== Token-Based Cost Results ===")
-    print(f"prompt_tokens: {prompt_tokens}")
-    print(f"completion_tokens: {completion_tokens}")
-    print(f"input_cost_per_token: {input_cost_per_token}")
-    print(f"output_cost_per_token: {output_cost_per_token}")
-    print(f"response_cost: {response_cost}")
-
     # Verify tokens were captured
     assert prompt_tokens is not None, "prompt_tokens should be captured"
     assert completion_tokens is not None, "completion_tokens should be captured"
@@ -163,7 +156,6 @@ async def test_asend_message_uses_input_output_cost_per_token():
 
     # Calculate expected cost
     expected_cost = (prompt_tokens * input_cost_per_token) + (completion_tokens * output_cost_per_token)
-    print(f"expected_cost: {expected_cost}")
 
     # Verify exact cost calculation
     assert response_cost == expected_cost, f"response_cost {response_cost} should equal expected {expected_cost}"
