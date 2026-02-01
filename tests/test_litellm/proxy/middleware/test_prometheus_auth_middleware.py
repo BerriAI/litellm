@@ -107,6 +107,48 @@ def test_invalid_auth_metrics(app_with_middleware, monkeypatch):
     assert "Unauthorized access to metrics endpoint" in response.text
 
 
+def test_non_http_scope_passed_through():
+    """
+    Test that non-HTTP scopes (e.g. websocket) are passed through without
+    interference from the middleware.
+    """
+    received_scope = {}
+
+    async def fake_app(scope, receive, send):
+        received_scope.update(scope)
+
+    middleware = PrometheusAuthMiddleware(fake_app)
+
+    import asyncio
+
+    async def run():
+        await middleware({"type": "websocket"}, None, None)
+
+    asyncio.get_event_loop().run_until_complete(run())
+    assert received_scope["type"] == "websocket"
+
+
+def test_non_metrics_endpoint_bypasses_auth(app_with_middleware, monkeypatch):
+    """
+    Test that requests to non-metrics endpoints pass through
+    without triggering authentication.
+    """
+    litellm.require_auth_for_metrics_endpoint = True
+
+    def should_not_be_called(*args, **kwargs):
+        raise Exception("Auth should not be called for non-metrics endpoints")
+
+    monkeypatch.setattr(
+        "litellm.proxy.middleware.prometheus_auth_middleware.user_api_key_auth",
+        should_not_be_called,
+    )
+
+    client = TestClient(app_with_middleware)
+    response = client.get("/chat/completions")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"msg": "chat completions OK"}
+
+
 def test_no_auth_metrics_when_disabled(app_with_middleware, monkeypatch):
     """
     Test that when require_auth_for_metrics_endpoint is False, requests to /metrics
