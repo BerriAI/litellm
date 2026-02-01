@@ -12309,7 +12309,7 @@
         "supports_web_search": true
     },
     "gemini-2.0-flash-exp": {
-        "cache_read_input_token_cost": 3.75e-08,
+        "cache_read_input_token_cost": 0.0,
         "input_cost_per_audio_per_second": 0,
         "input_cost_per_audio_per_second_above_128k_tokens": 0,
         "input_cost_per_character": 0,
@@ -12354,10 +12354,12 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_creation_input_token_cost": 1.875e-08,
+        "cache_creation_input_token_cost_above_1hr": 3e-08
     },
     "gemini-2.0-flash-lite": {
-        "cache_read_input_token_cost": 1.875e-08,
+        "cache_read_input_token_cost": 0.0,
         "deprecation_date": "2026-03-31",
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_token": 7.5e-08,
@@ -12390,10 +12392,12 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_creation_input_token_cost": 1.875e-08,
+        "cache_creation_input_token_cost_above_1hr": 3e-08
     },
     "gemini-2.0-flash-lite-001": {
-        "cache_read_input_token_cost": 1.875e-08,
+        "cache_read_input_token_cost": 0.0,
         "deprecation_date": "2026-03-31",
         "input_cost_per_audio_token": 7.5e-08,
         "input_cost_per_token": 7.5e-08,
@@ -12426,7 +12430,9 @@
         "supports_system_messages": true,
         "supports_tool_choice": true,
         "supports_vision": true,
-        "supports_web_search": true
+        "supports_web_search": true,
+        "cache_creation_input_token_cost": 1.875e-08,
+        "cache_creation_input_token_cost_above_1hr": 3e-08
     },
     "gemini-2.0-flash-live-preview-04-09": {
         "cache_read_input_token_cost": 7.5e-08,
@@ -14258,7 +14264,9 @@
         "supports_tool_choice": true,
         "supports_vision": true,
         "supports_web_search": true,
-        "tpm": 4000000
+        "tpm": 4000000,
+        "cache_creation_input_token_cost": 1.875e-08,
+        "cache_creation_input_token_cost_above_1hr": 3e-08
     },
     "gemini/gemini-2.0-flash-lite": {
         "cache_read_input_token_cost": 1.875e-08,
@@ -30670,14 +30678,14 @@
         "supports_web_search": true
     },
     "xai/grok-3": {
-        "cache_read_input_token_cost": 7.5e-07,
-        "input_cost_per_token": 3e-06,
+        "cache_read_input_token_cost": 1.25e-07,
+        "input_cost_per_token": 5e-07,
         "litellm_provider": "xai",
         "max_input_tokens": 131072,
         "max_output_tokens": 131072,
         "max_tokens": 131072,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-05,
+        "output_cost_per_token": 2e-06,
         "source": "https://x.ai/api#pricing",
         "supports_function_calling": true,
         "supports_response_schema": false,
