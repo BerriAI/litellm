@@ -31,7 +31,7 @@ class PrometheusAuthMiddleware:
             await self.app(scope, receive, send)
             return
 
-        request = Request(scope, receive)
+        request = Request(scope)
 
         if self._is_prometheus_metrics_endpoint(request):
             if self._should_run_auth_on_metrics_endpoint() is True:
