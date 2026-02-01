@@ -1335,6 +1335,8 @@ def test_anthropic_text_disable_url_suffix_env_var():
 
 
 def test_image_edit_merges_headers_and_extra_headers():
+    from litellm.images.main import base_llm_http_handler
+    
     combined_headers = {
         "x-test-header-one": "value-1",
         "x-test-header-two": "value-2",
@@ -1351,8 +1353,9 @@ def test_image_edit_merges_headers_and_extra_headers():
             "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
             return_value=mock_image_edit_config,
         ) as mock_config,
-        patch(
-            "litellm.images.main.base_llm_http_handler.image_edit_handler",
+        patch.object(
+            base_llm_http_handler,
+            "image_edit_handler",
             return_value="ok",
         ) as mock_handler,
     ):
