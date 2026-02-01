@@ -600,9 +600,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                         if team_membership is not None
                         else None
                     ),
-                    team_metadata=team_object.metadata
-                    if team_object is not None
-                    else None,
+                    team_metadata=(
+                        team_object.metadata if team_object is not None else None
+                    ),
                 )
                 # run through common checks
                 _ = await common_checks(
@@ -685,9 +685,9 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     route=route,
                 )
                 if _end_user_object is not None:
-                    end_user_params[
-                        "allowed_model_region"
-                    ] = _end_user_object.allowed_model_region
+                    end_user_params["allowed_model_region"] = (
+                        _end_user_object.allowed_model_region
+                    )
                     if _end_user_object.litellm_budget_table is not None:
                         _apply_budget_limits_to_end_user_params(
                             end_user_params=end_user_params,
@@ -1008,6 +1008,21 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                     )
                     user_obj = None
 
+            user_teams: List[LiteLLM_TeamTable] = []
+            if user_obj is not None and user_obj.teams:
+                try:
+                    for t_id in user_obj.teams:
+                        _team = await get_team_object(
+                            team_id=t_id,
+                            prisma_client=prisma_client,
+                            user_api_key_cache=user_api_key_cache,
+                            proxy_logging_obj=proxy_logging_obj,
+                        )
+                        if _team:
+                            user_teams.append(_team)
+                except Exception as e:
+                    verbose_proxy_logger.debug(f"Error fetching user teams: {e}")
+
             # Check 3. Check if user is in their team budget
             if valid_token.team_member_spend is not None:
                 if prisma_client is not None:
@@ -1171,6 +1186,7 @@ async def _user_api_key_auth_builder(  # noqa: PLR0915
                 llm_router=llm_router,
                 proxy_logging_obj=proxy_logging_obj,
                 valid_token=valid_token,
+                user_teams=user_teams,
             )
             # Token passed all checks
             if valid_token is None:
