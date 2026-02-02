@@ -173,11 +173,16 @@ class ProxyInitializationHelpers:
         _proxy_cli_dir = os.path.dirname(os.path.abspath(__file__))
         _litellm_root = os.path.dirname(_proxy_cli_dir)
         _repo_root = os.path.dirname(_litellm_root)
-        script_path = os.path.join(_repo_root, "scripts", "run_benchmark_after_proxy.py")
+        rps_suite = os.getenv("LITELLM_AUTO_BENCHMARK_RPS_SUITE", "").strip().lower() in ("1", "true", "yes")
+        if rps_suite:
+            script_path = os.path.join(_repo_root, "scripts", "run_benchmark_rps_suite.py")
+        else:
+            script_path = os.path.join(_repo_root, "scripts", "run_benchmark_after_proxy.py")
         if not os.path.isfile(script_path):
             return
 
         output = os.getenv("LITELLM_AUTO_BENCHMARK_OUTPUT", "").strip()
+        output_dir = os.getenv("LITELLM_AUTO_BENCHMARK_OUTPUT_DIR", "").strip()
         extra_args_str = os.getenv("LITELLM_AUTO_BENCHMARK_ARGS", "--rps-control 10000 --requests 500000").strip()
         extra_args = extra_args_str.split() if extra_args_str else ["--rps-control", "10000", "--requests", "500000"]
 
@@ -207,24 +212,38 @@ class ProxyInitializationHelpers:
             else:
                 print("LiteLLM: Auto-benchmark timed out waiting for proxy health", file=sys.stderr)
                 return
-            # Proxy is up: run benchmark and save to file
+            # Proxy is up: run benchmark (single run or RPS suite)
             from datetime import datetime
 
-            if not output:
-                out_path = os.path.join(_repo_root, f"benchmark_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
-            else:
-                out_path = output if os.path.isabs(output) else os.path.join(_repo_root, output)
             mock_base, _ = ProxyInitializationHelpers._get_mock_chat_endpoint()
             provider_url_default = f"{mock_base.rstrip('/')}/chat/completions"
             env = os.environ.copy()
             env["LITELLM_PROXY_URL"] = f"{proxy_base_url}/chat/completions"
             env.setdefault("PROVIDER_URL", provider_url_default)
-            cmd = [sys.executable, script_path, "--no-wait", "--output", out_path, "--proxy-url", env["LITELLM_PROXY_URL"], "--provider-url", env["PROVIDER_URL"]] + extra_args
-            try:
-                print(f"LiteLLM: Auto-benchmark starting, output -> {out_path}", flush=True)
-                subprocess.run(cmd, env=env, cwd=_repo_root)
-            except Exception as e:
-                print(f"LiteLLM: Auto-benchmark failed: {e}", file=sys.stderr)
+
+            if rps_suite:
+                cmd = [sys.executable, script_path, "--no-wait", "--proxy-url", env["LITELLM_PROXY_URL"], "--provider-url", env["PROVIDER_URL"]]
+                if output_dir:
+                    cmd.extend(["--output-dir", output_dir if os.path.isabs(output_dir) else os.path.join(_repo_root, output_dir)])
+                requests_env = os.getenv("LITELLM_AUTO_BENCHMARK_REQUESTS", "").strip()
+                if requests_env.isdigit():
+                    cmd.extend(["--requests", requests_env])
+                try:
+                    print("LiteLLM: Auto-benchmark RPS suite starting (1k–10k RPS, 10 runs)", flush=True)
+                    subprocess.run(cmd, env=env, cwd=_repo_root)
+                except Exception as e:
+                    print(f"LiteLLM: Auto-benchmark RPS suite failed: {e}", file=sys.stderr)
+            else:
+                if not output:
+                    out_path = os.path.join(_repo_root, f"benchmark_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+                else:
+                    out_path = output if os.path.isabs(output) else os.path.join(_repo_root, output)
+                cmd = [sys.executable, script_path, "--no-wait", "--output", out_path, "--proxy-url", env["LITELLM_PROXY_URL"], "--provider-url", env["PROVIDER_URL"]] + extra_args
+                try:
+                    print(f"LiteLLM: Auto-benchmark starting, output -> {out_path}", flush=True)
+                    subprocess.run(cmd, env=env, cwd=_repo_root)
+                except Exception as e:
+                    print(f"LiteLLM: Auto-benchmark failed: {e}", file=sys.stderr)
 
         t = threading.Thread(target=_run, daemon=True)
         t.start()
