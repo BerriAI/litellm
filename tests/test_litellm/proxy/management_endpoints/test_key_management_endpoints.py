@@ -360,8 +360,8 @@ async def test_budget_reset_and_expires_at_first_of_month(monkeypatch):
     expires = response.get("expires")
     assert expires is not None, "expires not found in response"
     # expires should be approximately 1 month from now (same day next month, same time)
-    # Allow for some variance due to test execution time
-    expected_expires_min = now + timedelta(days=28)
+    # Allow for some variance due to test execution time (subtract 1 second buffer for timing)
+    expected_expires_min = now + timedelta(days=28, seconds=-1)
     expected_expires_max = now + timedelta(days=32)
     assert (
         expected_expires_min <= expires <= expected_expires_max
@@ -4010,8 +4010,8 @@ async def test_list_keys_with_invalid_status():
     mock_prisma_client = AsyncMock()
     
     # Mock the endpoint function directly to test validation
-    from litellm.proxy.management_endpoints.key_management_endpoints import list_keys
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import list_keys
     from litellm.proxy.utils import ProxyException
     
     mock_request = Mock()
@@ -4240,7 +4240,7 @@ async def test_validate_max_budget():
     4. None max_budget should pass
     """
     from fastapi import HTTPException
-    
+
     # Test Case 1: Positive max_budget should pass
     try:
         _validate_max_budget(100.0)
@@ -4273,7 +4273,7 @@ async def test_get_and_validate_existing_key():
     3. Database not connected raises HTTPException
     """
     from fastapi import HTTPException
-    
+
     # Test Case 1: Successfully retrieve existing key
     mock_prisma_client = AsyncMock()
     mock_key = LiteLLM_VerificationToken(
@@ -4329,7 +4329,7 @@ async def test_process_single_key_update():
     from litellm.types.proxy.management_endpoints.key_management_endpoints import (
         BulkUpdateKeyRequestItem,
     )
-    
+
     # Setup mocks
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()
@@ -4435,10 +4435,6 @@ async def test_bulk_update_keys_success(monkeypatch):
     1. Multiple keys updated successfully
     2. Response contains correct counts and data
     """
-    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
-        BulkUpdateKeyRequest,
-        BulkUpdateKeyRequestItem,
-    )
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         bulk_update_keys,
     )
@@ -4448,7 +4444,11 @@ async def test_bulk_update_keys_success(monkeypatch):
         proxy_logging_obj,
         user_api_key_cache,
     )
-    
+    from litellm.types.proxy.management_endpoints.key_management_endpoints import (
+        BulkUpdateKeyRequest,
+        BulkUpdateKeyRequestItem,
+    )
+
     # Setup mocks
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()
@@ -4581,14 +4581,14 @@ async def test_bulk_update_keys_partial_failures(monkeypatch):
     2. Response contains both successful and failed updates
     3. Failed updates include error messages
     """
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        bulk_update_keys,
+    )
     from litellm.types.proxy.management_endpoints.key_management_endpoints import (
         BulkUpdateKeyRequest,
         BulkUpdateKeyRequestItem,
     )
-    from litellm.proxy.management_endpoints.key_management_endpoints import (
-        bulk_update_keys,
-    )
-    
+
     # Setup mocks
     mock_prisma_client = AsyncMock()
     mock_user_api_key_cache = MagicMock()

@@ -8,7 +8,10 @@ sys.path.insert(0, os.path.abspath("../../../../.."))
 
 
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    OPENAI_MAX_TOOL_NAME_LENGTH,
     LiteLLMAnthropicMessagesAdapter,
+    create_tool_name_mapping,
+    truncate_tool_name,
 )
 from litellm.types.llms.anthropic import (
     AnthopicMessagesAssistantMessageParam,
@@ -1388,12 +1391,13 @@ def test_cache_control_preserved_in_tools_for_claude():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_tools_to_openai(
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
         tools=tools, model=CACHE_CONTROL_BEDROCK_CONVERSE_MODEL
     )
 
     assert len(result) == 1
     assert result[0]["cache_control"] == {"type": "ephemeral"}
+    assert tool_name_mapping == {}  # No truncation needed for short names
 
 
 def test_cache_control_not_preserved_in_tools_for_non_claude():
@@ -1408,9 +1412,297 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
     ]
 
     adapter = LiteLLMAnthropicMessagesAdapter()
-    result = adapter.translate_anthropic_tools_to_openai(
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
         tools=tools, model=CACHE_CONTROL_NON_ANTHROPIC_MODEL
     )
 
     assert len(result) == 1
     assert "cache_control" not in result[0]
+
+
+def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
+    """
+    Test that reasoning_content is converted to thinking block when thinking_blocks is not present.
+    This handles providers like OpenRouter that return reasoning_content instead of thinking_blocks.
+    
+    Regression test for: OpenRouter models returning reasoning_content in /v1/messages endpoint
+    should be converted to Anthropic's thinking block format.
+    """
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="There are **3** \"r\"s in the word strawberry.",
+                reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'. I've identified the target word, \"strawberry,\" and confirmed my understanding of the letter's location. The first 'r' follows 't', the second after 'e', and the third… well, I'm almost there.\n\n\n**Calculating the Count**\n\nMy analysis is complete! I've confirmed that the letter \"r\" appears three times in \"strawberry.\" The first follows \"t,\" the second \"e,\" and the third immediately follows the second. The count is definitively three.",
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 2
+    # First block should be thinking block with reasoning_content
+    assert result[0].type == "thinking"
+    assert "Considering Letter Frequency" in result[0].thinking
+    assert "Calculating the Count" in result[0].thinking
+    assert result[0].signature is None
+    # Second block should be text block with content
+    assert result[1].type == "text"
+    assert result[1].text == "There are **3** \"r\"s in the word strawberry."
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without_thinking_blocks():
+    """
+    Test that reasoning_content in streaming chunks is converted to thinking_delta 
+    when thinking_blocks is not present.
+    
+    This handles providers like OpenRouter that return reasoning_content in streaming 
+    responses without thinking_blocks.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="I need to analyze this carefully...",
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    assert type_of_content == "thinking_delta"
+    assert content_block_delta["type"] == "thinking_delta"
+    assert content_block_delta["thinking"] == "I need to analyze this carefully..."
+
+
+def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
+    """
+    Test the full response translation when only reasoning_content is present 
+    (no thinking_blocks).
+    
+    This simulates OpenRouter's response format being translated to Anthropic format
+    through /v1/messages endpoint.
+    """
+    openai_response = ModelResponse(
+        id="gen-1770027855-HyrqYvLcX8oTLNgfyDob",
+        model="gemini-3-flash",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="There are **3** \"r\"s in the word strawberry.",
+                    reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'.",
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=13, completion_tokens=138),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 2
+    
+    # First block should be thinking
+    assert cast(Any, anthropic_content[0]).type == "thinking"
+    assert "Considering Letter Frequency" in cast(Any, anthropic_content[0]).thinking
+    assert cast(Any, anthropic_content[0]).signature is None
+    
+    # Second block should be text
+    assert cast(Any, anthropic_content[1]).type == "text"
+    assert cast(Any, anthropic_content[1]).text == "There are **3** \"r\"s in the word strawberry."
+    
+    assert anthropic_response.get("stop_reason") == "end_turn"
+
+
+# =====================================================================
+# Tool Name Truncation Tests (Issue #17904)
+# OpenAI has a 64-character limit for function/tool names
+# =====================================================================
+
+
+def test_truncate_tool_name_short_name():
+    """Short tool names should not be truncated."""
+    short_name = "get_weather"
+    result = truncate_tool_name(short_name)
+    assert result == short_name
+    assert len(result) <= OPENAI_MAX_TOOL_NAME_LENGTH
+
+
+def test_truncate_tool_name_exactly_64_chars():
+    """Tool names exactly 64 chars should not be truncated."""
+    name_64_chars = "a" * 64
+    result = truncate_tool_name(name_64_chars)
+    assert result == name_64_chars
+    assert len(result) == 64
+
+
+def test_truncate_tool_name_long_name():
+    """Long tool names should be truncated with hash suffix."""
+    long_name = "computer_tool_with_very_long_name_that_exceeds_openai_64_character_limit_and_keeps_going"
+    result = truncate_tool_name(long_name)
+
+    assert len(result) == OPENAI_MAX_TOOL_NAME_LENGTH
+    assert result != long_name
+    # Should have format: {55-char-prefix}_{8-char-hash}
+    assert "_" in result
+    parts = result.rsplit("_", 1)
+    assert len(parts[0]) == 55
+    assert len(parts[1]) == 8
+
+
+def test_truncate_tool_name_deterministic():
+    """Truncation should be deterministic (same input = same output)."""
+    long_name = "a_very_long_tool_name_that_needs_to_be_truncated_for_openai_compatibility_reasons"
+    result1 = truncate_tool_name(long_name)
+    result2 = truncate_tool_name(long_name)
+    assert result1 == result2
+
+
+def test_truncate_tool_name_avoids_collisions():
+    """Similar long names should produce different truncated names."""
+    name1 = "process_user_data_with_validation_and_error_handling_for_production_environment"
+    name2 = "process_user_data_with_validation_and_error_handling_for_staging_environment"
+
+    result1 = truncate_tool_name(name1)
+    result2 = truncate_tool_name(name2)
+
+    assert result1 != result2  # Different hashes prevent collision
+
+
+def test_create_tool_name_mapping_no_long_names():
+    """Mapping should be empty when no names need truncation."""
+    tools = [
+        {"name": "get_weather"},
+        {"name": "search_web"},
+    ]
+    mapping = create_tool_name_mapping(tools)
+    assert mapping == {}
+
+
+def test_create_tool_name_mapping_with_long_names():
+    """Mapping should contain entries for truncated names."""
+    long_name = "a_very_long_tool_name_that_exceeds_the_64_character_limit_imposed_by_openai"
+    tools = [
+        {"name": "short_name"},
+        {"name": long_name},
+    ]
+    mapping = create_tool_name_mapping(tools)
+
+    assert len(mapping) == 1
+    truncated = truncate_tool_name(long_name)
+    assert truncated in mapping
+    assert mapping[truncated] == long_name
+
+
+def test_translate_anthropic_tools_with_long_names():
+    """Tools with long names should be truncated and mapped."""
+    long_name = "computer_tool_with_very_long_descriptive_name_that_exceeds_openai_limit_completely"
+    tools = [
+        {
+            "name": long_name,
+            "description": "A tool with a very long name",
+            "input_schema": {"type": "object", "properties": {}},
+        }
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model="gpt-4"
+    )
+
+    assert len(result) == 1
+    # The tool name should be truncated
+    truncated_name = result[0]["function"]["name"]
+    assert len(truncated_name) <= 64
+    assert truncated_name != long_name
+    # Mapping should have the reverse lookup
+    assert truncated_name in tool_name_mapping
+    assert tool_name_mapping[truncated_name] == long_name
+
+
+def test_translate_anthropic_tools_mixed_names():
+    """Mix of short and long names should work correctly."""
+    short_name = "get_weather"
+    long_name = "process_complex_data_transformation_with_validation_and_error_handling_pipeline"
+    tools = [
+        {"name": short_name, "input_schema": {"type": "object"}},
+        {"name": long_name, "input_schema": {"type": "object"}},
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result, tool_name_mapping = adapter.translate_anthropic_tools_to_openai(
+        tools=tools, model="gpt-4"
+    )
+
+    assert len(result) == 2
+    # Short name unchanged
+    assert result[0]["function"]["name"] == short_name
+    # Long name truncated
+    assert result[1]["function"]["name"] != long_name
+    assert len(result[1]["function"]["name"]) <= 64
+    # Only long name in mapping
+    assert len(tool_name_mapping) == 1
+
+
+def test_translate_openai_response_restores_tool_names():
+    """Tool names in responses should be restored to original."""
+    original_name = "a_very_long_tool_name_that_needs_truncation_for_openai_api_compatibility"
+    truncated_name = truncate_tool_name(original_name)
+    tool_name_mapping = {truncated_name: original_name}
+
+    # Create a mock OpenAI response with the truncated name
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                index=0,
+                finish_reason="tool_calls",
+                message=Message(
+                    role="assistant",
+                    content=None,
+                    tool_calls=[
+                        ChatCompletionAssistantToolCall(
+                            id="call_123",
+                            type="function",
+                            function=Function(
+                                name=truncated_name,
+                                arguments='{"arg": "value"}',
+                            ),
+                        )
+                    ],
+                ),
+            )
+        ],
+        model="gpt-4",
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter.translate_openai_response_to_anthropic(
+        response=response, tool_name_mapping=tool_name_mapping
+    )
+
+    # Find the tool_use block in the response
+    tool_use_blocks = [c for c in result["content"] if getattr(c, "type", None) == "tool_use"]
+    assert len(tool_use_blocks) == 1
+    # Name should be restored to original
+    assert getattr(tool_use_blocks[0], "name", None) == original_name

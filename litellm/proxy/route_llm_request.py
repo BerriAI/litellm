@@ -160,6 +160,8 @@ async def route_request(
         "aget_interaction",
         "adelete_interaction",
         "acancel_interaction",
+        "acancel_batch",
+        "afile_delete",
     ],
 ):
     """

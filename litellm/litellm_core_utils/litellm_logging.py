@@ -2442,6 +2442,36 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             ) is not None:
                 emit_standard_logging_payload(standard_logging_payload)
+        elif self.call_type == "pass_through_endpoint":
+            print_verbose(
+                "Async success callbacks: Got a pass-through endpoint response"
+            )
+
+            self.model_call_details["async_complete_streaming_response"] = result
+
+            # cost calculation not possible for pass-through
+            self.model_call_details["response_cost"] = None
+
+            ## STANDARDIZED LOGGING PAYLOAD
+            self.model_call_details[
+                "standard_logging_object"
+            ] = get_standard_logging_object_payload(
+                kwargs=self.model_call_details,
+                init_response_obj=result,
+                start_time=start_time,
+                end_time=end_time,
+                logging_obj=self,
+                status="success",
+                standard_built_in_tools_params=self.standard_built_in_tools_params,
+            )
+
+            # print standard logging payload
+            if (
+                standard_logging_payload := self.model_call_details.get(
+                    "standard_logging_object"
+                )
+            ) is not None:
+                emit_standard_logging_payload(standard_logging_payload)
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,

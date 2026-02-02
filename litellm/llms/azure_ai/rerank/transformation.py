@@ -11,6 +11,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.cohere.rerank.transformation import CohereRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import RerankResponse
+from litellm.utils import _add_path_to_api_base
 
 
 class AzureAIRerankConfig(CohereRerankConfig):
@@ -28,9 +29,34 @@ class AzureAIRerankConfig(CohereRerankConfig):
             raise ValueError(
                 "Azure AI API Base is required. api_base=None. Set in call or via `AZURE_AI_API_BASE` env var."
             )
-        if not api_base.endswith("/v1/rerank"):
-            api_base = f"{api_base}/v1/rerank"
-        return api_base
+        original_url = httpx.URL(api_base)
+        if not original_url.is_absolute_url:
+            raise ValueError(
+                "Azure AI API Base must be an absolute URL including scheme (e.g. "
+                "'https://<resource>.services.ai.azure.com'). "
+                f"Got api_base={api_base!r}."
+            )
+        normalized_path = original_url.path.rstrip("/")
+
+        # Allow callers to pass either full v1/v2 rerank endpoints:
+        # - https://<resource>.services.ai.azure.com/v1/rerank
+        # - https://<resource>.services.ai.azure.com/providers/cohere/v2/rerank
+        if normalized_path.endswith("/v1/rerank") or normalized_path.endswith("/v2/rerank"):
+            return str(original_url.copy_with(path=normalized_path or "/"))
+
+        # If callers pass just the version path (e.g. ".../v2" or ".../providers/cohere/v2"), append "/rerank"
+        if (
+            normalized_path.endswith("/v1")
+            or normalized_path.endswith("/v2")
+            or normalized_path.endswith("/providers/cohere/v2")
+        ):
+            return _add_path_to_api_base(
+                api_base=str(original_url.copy_with(path=normalized_path or "/")),
+                ending_path="/rerank",
+            )
+
+        # Backwards compatible default: Azure AI rerank was originally exposed under /v1/rerank
+        return _add_path_to_api_base(api_base=api_base, ending_path="/v1/rerank")
 
     def validate_environment(
         self,

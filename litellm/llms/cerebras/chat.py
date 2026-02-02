@@ -7,6 +7,7 @@ this is OpenAI compatible - no translation needed / occurs
 from typing import Optional
 
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
+from litellm.utils import supports_reasoning
 
 
 class CerebrasConfig(OpenAIGPTConfig):
@@ -24,6 +25,7 @@ class CerebrasConfig(OpenAIGPTConfig):
     tool_choice: Optional[str] = None
     tools: Optional[list] = None
     user: Optional[str] = None
+    reasoning_effort: Optional[str] = None
 
     def __init__(
         self,
@@ -37,6 +39,7 @@ class CerebrasConfig(OpenAIGPTConfig):
         tool_choice: Optional[str] = None,
         tools: Optional[list] = None,
         user: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> None:
         locals_ = locals().copy()
         for key, value in locals_.items():
@@ -53,7 +56,7 @@ class CerebrasConfig(OpenAIGPTConfig):
 
         """
 
-        return [
+        supported_params = [
             "max_tokens",
             "max_completion_tokens",
             "response_format",
@@ -66,6 +69,12 @@ class CerebrasConfig(OpenAIGPTConfig):
             "tools",
             "user",
         ]
+
+        # Only add reasoning_effort for models that support it
+        if supports_reasoning(model=model, custom_llm_provider="cerebras"):
+            supported_params.append("reasoning_effort")
+
+        return supported_params
 
     def map_openai_params(
         self,

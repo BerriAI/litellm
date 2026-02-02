@@ -1021,6 +1021,37 @@ async def add_litellm_data_to_request(  # noqa: PLR0915
         "user_api_key_user_max_budget"
     ] = user_api_key_dict.user_max_budget
 
+    # Extract allowed access groups for router filtering (GitHub issue #18333)
+    # This allows the router to filter deployments based on key's and team's access groups
+    # NOTE: We keep key and team access groups SEPARATE because a key doesn't always
+    # inherit all team access groups (per maintainer feedback).
+    if llm_router is not None:
+        from litellm.proxy.auth.model_checks import get_access_groups_from_models
+
+        model_access_groups = llm_router.get_model_access_groups()
+
+        # Key-level access groups (from user_api_key_dict.models)
+        key_models = list(user_api_key_dict.models) if user_api_key_dict.models else []
+        key_allowed_access_groups = get_access_groups_from_models(
+            model_access_groups=model_access_groups, models=key_models
+        )
+        if key_allowed_access_groups:
+            data[_metadata_variable_name][
+                "user_api_key_allowed_access_groups"
+            ] = key_allowed_access_groups
+
+        # Team-level access groups (from user_api_key_dict.team_models)
+        team_models = (
+            list(user_api_key_dict.team_models) if user_api_key_dict.team_models else []
+        )
+        team_allowed_access_groups = get_access_groups_from_models(
+            model_access_groups=model_access_groups, models=team_models
+        )
+        if team_allowed_access_groups:
+            data[_metadata_variable_name][
+                "user_api_key_team_allowed_access_groups"
+            ] = team_allowed_access_groups
+
     data[_metadata_variable_name]["user_api_key_metadata"] = user_api_key_dict.metadata
     _headers = dict(request.headers)
     _headers.pop(

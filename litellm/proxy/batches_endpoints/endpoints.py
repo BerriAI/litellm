@@ -760,6 +760,9 @@ async def cancel_batch(
             custom_llm_provider = (
                 provider or data.pop("custom_llm_provider", None) or "openai"
             )
+            # Extract batch_id from data to avoid "multiple values for keyword argument" error
+            # data was cast from CancelBatchRequest which already contains batch_id
+            data.pop("batch_id", None)
             _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
             response = await litellm.acancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore

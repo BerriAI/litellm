@@ -1596,10 +1596,12 @@ async def _prepare_vertex_auth_headers(
         if router_credentials is not None:
             vertex_credentials_str = None
         elif vertex_credentials is not None:
-            # Only override vertex_project and vertex_location if they're not already set from router config
-            if vertex_project is None:
+            # Use credentials from vertex_credentials
+            # When vertex_credentials are provided (including default credentials), 
+            # use their project/location values if available
+            if vertex_credentials.vertex_project is not None:
                 vertex_project = vertex_credentials.vertex_project
-            if vertex_location is None:
+            if vertex_credentials.vertex_location is not None:
                 vertex_location = vertex_credentials.vertex_location
             vertex_credentials_str = vertex_credentials.vertex_credentials
         else:

@@ -55,14 +55,9 @@ class DataDogLLMObsLogger(CustomBatchLogger):
                 create_mock_datadog_client()
                 verbose_logger.debug("[DATADOG MOCK] DataDogLLMObs logger initialized in mock mode")
             
-            if os.getenv("DD_API_KEY", None) is None:
-                raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
-            if os.getenv("DD_SITE", None) is None:
-                raise Exception(
-                    "DD_SITE is not set, set 'DD_SITE=<>', example sit = `us5.datadoghq.com`"
-                )
             # Configure DataDog endpoint (Agent or Direct API)
             # Use LITELLM_DD_AGENT_HOST to avoid conflicts with ddtrace's DD_AGENT_HOST
+            # Check for agent mode FIRST - agent mode doesn't require DD_API_KEY or DD_SITE
             dd_agent_host = os.getenv("LITELLM_DD_AGENT_HOST")
 
             self.async_client = get_async_httpx_client(
@@ -73,6 +68,13 @@ class DataDogLLMObsLogger(CustomBatchLogger):
             if dd_agent_host:
                 self._configure_dd_agent(dd_agent_host=dd_agent_host)
             else:
+                # Only require DD_API_KEY and DD_SITE for direct API mode
+                if os.getenv("DD_API_KEY", None) is None:
+                    raise Exception("DD_API_KEY is not set, set 'DD_API_KEY=<>'")
+                if os.getenv("DD_SITE", None) is None:
+                    raise Exception(
+                        "DD_SITE is not set, set 'DD_SITE=<>', example sit = `us5.datadoghq.com`"
+                    )
                 self._configure_dd_direct_api()
 
             # Optional override for testing
