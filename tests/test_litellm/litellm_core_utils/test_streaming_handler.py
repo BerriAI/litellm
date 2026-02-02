@@ -1259,4 +1259,8 @@ async def test_custom_stream_wrapper_anext_does_not_block_event_loop_for_sync_it
     finally:
         if not anext_task.done():
             anext_task.cancel()
+            try:
+                await anext_task
+            except asyncio.CancelledError:
+                pass
         await bg_task
