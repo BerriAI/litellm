@@ -841,6 +841,16 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     ## Initialize shared aiohttp session for connection reuse
     shared_aiohttp_session = await _initialize_shared_aiohttp_session()
 
+    # Start auto-benchmark from app (after server is up) so uvicorn/gunicorn init is not blocked
+    try:
+        from litellm.proxy.auto_benchmark import start_auto_benchmark_from_app
+
+        _benchmark_host = os.environ.get("LITELLM_HOST", "0.0.0.0")
+        _benchmark_port = int(os.environ.get("PORT", "4000"))
+        start_auto_benchmark_from_app(host=_benchmark_host, port=_benchmark_port)
+    except Exception as e:
+        verbose_proxy_logger.debug("Auto-benchmark from app skipped: %s", e)
+
     # End of startup event
     yield
 
