@@ -1982,7 +1982,7 @@ class CustomStreamWrapper:
                     ):
                         chunk = self.completion_stream
                     else:
-                        chunk = next(self.completion_stream)  # type: ignore[arg-type]
+                        chunk = await asyncio.to_thread(next, self.completion_stream)  # type: ignore[arg-type]
                     if chunk is not None and chunk != b"":
                         processed_chunk: Optional[
                             ModelResponseStream
