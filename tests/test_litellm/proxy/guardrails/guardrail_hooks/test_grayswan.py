@@ -320,3 +320,134 @@ def test_format_violation_message() -> None:
     assert "the model response has a violation score of 0.85" in message
     assert "violating the rule(s): 1, 3, 5" in message
     assert "Mutation effort to make the harmful intention disguised was DETECTED" in message
+
+
+def test_extract_litellm_metadata_from_root_level(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Test extracting metadata when fields are at root level of request_data."""
+    request_data = {
+        "litellm_call_id": "call-123",
+        "user_api_key_user_id": "user-456",
+        "user_api_key_team_id": "team-789",
+        "user_api_key_end_user_id": "end-user-abc",
+        "user_api_key_org_id": "org-def",
+        "user_api_key_hash": "hash-xyz",
+        "model": "gpt-4",
+        "user": "openai-user-field",
+    }
+
+    metadata = grayswan_guardrail._extract_litellm_metadata(request_data)
+
+    assert metadata["litellm_call_id"] == "call-123"
+    assert metadata["user_id"] == "user-456"
+    assert metadata["team_id"] == "team-789"
+    assert metadata["end_user_id"] == "end-user-abc"
+    assert metadata["org_id"] == "org-def"
+    assert metadata["api_key_hash"] == "hash-xyz"
+    assert metadata["model"] == "gpt-4"
+    assert metadata["openai_user"] == "openai-user-field"
+
+
+def test_extract_litellm_metadata_from_nested_metadata(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Test extracting metadata when fields are in nested 'metadata' dict."""
+    request_data = {
+        "litellm_call_id": "call-123",
+        "model": "gpt-4",
+        "metadata": {
+            "user_api_key_user_id": "user-456",
+            "user_api_key_team_id": "team-789",
+            "user_api_key_end_user_id": "end-user-abc",
+            "user_api_key_org_id": "org-def",
+            "user_api_key_hash": "hash-xyz",
+            "user_api_key_alias": "my-api-key",
+            "user_api_key_user_email": "user@example.com",
+            "user_api_key_request_route": "/chat/completions",
+        },
+    }
+
+    metadata = grayswan_guardrail._extract_litellm_metadata(request_data)
+
+    assert metadata["litellm_call_id"] == "call-123"
+    assert metadata["user_id"] == "user-456"
+    assert metadata["team_id"] == "team-789"
+    assert metadata["end_user_id"] == "end-user-abc"
+    assert metadata["org_id"] == "org-def"
+    assert metadata["api_key_hash"] == "hash-xyz"
+    assert metadata["api_key_alias"] == "my-api-key"
+    assert metadata["user_email"] == "user@example.com"
+    assert metadata["request_route"] == "/chat/completions"
+    assert metadata["model"] == "gpt-4"
+
+
+def test_extract_litellm_metadata_from_litellm_metadata_dict(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Test extracting metadata when fields are in 'litellm_metadata' dict."""
+    request_data = {
+        "litellm_metadata": {
+            "user_api_key_user_id": "user-456",
+            "user_api_key_team_id": "team-789",
+            "user_api_key_api_key": "hashed-key-value",
+        },
+    }
+
+    metadata = grayswan_guardrail._extract_litellm_metadata(request_data)
+
+    assert metadata["user_id"] == "user-456"
+    assert metadata["team_id"] == "team-789"
+    assert metadata["api_key_hash"] == "hashed-key-value"
+
+
+def test_extract_litellm_metadata_empty_request(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Test extracting metadata from empty request_data returns empty dict."""
+    metadata = grayswan_guardrail._extract_litellm_metadata({})
+    assert metadata == {}
+
+
+def test_prepare_payload_includes_litellm_metadata(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Test that _prepare_payload includes litellm_metadata when request_data provided."""
+    messages = [{"role": "user", "content": "hello"}]
+    request_data = {
+        "litellm_call_id": "call-123",
+        "user_api_key_user_id": "user-456",
+        "user_api_key_team_id": "team-789",
+        "model": "gpt-4",
+    }
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, request_data)
+
+    assert "litellm_metadata" in payload
+    assert payload["litellm_metadata"]["litellm_call_id"] == "call-123"
+    assert payload["litellm_metadata"]["user_id"] == "user-456"
+    assert payload["litellm_metadata"]["team_id"] == "team-789"
+    assert payload["litellm_metadata"]["model"] == "gpt-4"
+
+
+def test_prepare_payload_no_litellm_metadata_when_no_request_data(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Test that _prepare_payload omits litellm_metadata when request_data is None."""
+    messages = [{"role": "user", "content": "hello"}]
+
+    payload = grayswan_guardrail._prepare_payload(messages, {})
+
+    assert "litellm_metadata" not in payload
+
+
+def test_prepare_payload_no_litellm_metadata_when_empty_request_data(
+    grayswan_guardrail: GraySwanGuardrail,
+) -> None:
+    """Test that _prepare_payload omits litellm_metadata when request_data is empty."""
+    messages = [{"role": "user", "content": "hello"}]
+
+    payload = grayswan_guardrail._prepare_payload(messages, {}, {})
+
+    # litellm_metadata should not be present if it would be empty
+    assert "litellm_metadata" not in payload
