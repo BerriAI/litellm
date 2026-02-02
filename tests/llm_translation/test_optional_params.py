@@ -224,7 +224,7 @@ def test_bedrock_optional_params_simple(model):
         ("bedrock/amazon.titan-embed-text-v1", False, None),
         ("bedrock/amazon.titan-embed-image-v1", True, "embeddingConfig"),
         ("bedrock/amazon.titan-embed-text-v2:0", True, "dimensions"),
-        ("bedrock/cohere.embed-multilingual-v3", False, None),
+        ("bedrock/cohere.embed-multilingual-v3", True, None),
     ],
 )
 def test_bedrock_optional_params_embeddings_dimension(
