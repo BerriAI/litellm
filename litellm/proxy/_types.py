@@ -2958,7 +2958,9 @@ class ProxyException(Exception):
         openai_code: Optional[str] = None,  # maps to 'code'  in openai
         provider_specific_fields: Optional[dict] = None,
     ):
-        self.message = str(message)
+        from litellm.litellm_core_utils.redact_api_keys import redact_api_keys
+
+        self.message = redact_api_keys(str(message)) or str(message)
         self.type = type
         self.param = param
         self.openai_code = openai_code or code
