@@ -743,6 +743,14 @@ async def get_category_yaml(category_name: str):
         The raw YAML content of the category file
     """
     import os
+    import re
+
+    # Validate category_name to prevent path traversal
+    # Only allow alphanumeric characters, hyphens, and underscores
+    if not re.match(r'^[a-zA-Z0-9_-]+$', category_name):
+        raise HTTPException(
+            status_code=400, detail="Invalid category name. Only alphanumeric characters, hyphens, and underscores are allowed."
+        )
 
     # Get the categories directory path
     categories_dir = os.path.join(
@@ -754,6 +762,14 @@ async def get_category_yaml(category_name: str):
 
     # Construct the file path
     category_file_path = os.path.join(categories_dir, f"{category_name}.yaml")
+
+    # Resolve to absolute path and verify it stays within categories_dir
+    resolved_path = os.path.realpath(category_file_path)
+    resolved_categories_dir = os.path.realpath(categories_dir)
+    if not resolved_path.startswith(resolved_categories_dir + os.sep):
+        raise HTTPException(
+            status_code=400, detail="Invalid category name."
+        )
 
     if not os.path.exists(category_file_path):
         raise HTTPException(
