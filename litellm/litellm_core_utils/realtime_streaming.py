@@ -111,7 +111,13 @@ class RealTimeStreaming:
             self.messages.append(message_obj)
 
         if self.proxy_logging_obj:
-            await self.run_post_call_guardrails(cast(OpenAIRealtimeEvents, message_obj))
+            try:
+                await self.run_post_call_guardrails(
+                    cast(OpenAIRealtimeEvents, message_obj)
+                )
+            except Exception as e:
+                verbose_logger.exception(f"Error running post-call guardrails: {e}")
+                raise e
 
     def store_input(self, message: dict):
         """Store input message"""
