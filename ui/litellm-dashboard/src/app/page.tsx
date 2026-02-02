@@ -43,7 +43,7 @@ import { isJwtExpired } from "@/utils/jwtUtils";
 import { isAdminRole } from "@/utils/roles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { jwtDecode } from "jwt-decode";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, ReadonlyURLSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { ConfigProvider, theme } from "antd";
 
@@ -101,7 +101,7 @@ interface ProxySettings {
 
 const queryClient = new QueryClient();
 
-export default function CreateKeyPage() {
+function CreateKeyPageContent() {
   const [userRole, setUserRole] = useState("");
   const [premiumUser, setPremiumUser] = useState(false);
   const [disabledPersonalKeyCreation, setDisabledPersonalKeyCreation] = useState(false);
@@ -595,6 +595,14 @@ export default function CreateKeyPage() {
           </ThemeProvider>
         </ConfigProvider>
       </QueryClientProvider>
+    </Suspense>
+  );
+}
+
+export default function CreateKeyPage() {
+  return (
+    <Suspense fallback={<LoadingScreen />}>
+      <CreateKeyPageContent />
     </Suspense>
   );
 }

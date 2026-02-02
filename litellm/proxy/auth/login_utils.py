@@ -226,10 +226,6 @@ async def authenticate_user(  # noqa: PLR0915
         )
 
         if os.getenv("DATABASE_URL") is not None:
-            # Expire any previous UI session tokens for this user
-            await expire_previous_ui_session_tokens(
-                user_id=key_user_id, prisma_client=prisma_client
-            )
             response = await generate_key_helper_fn(
                 request_type="key",
                 **{
@@ -321,11 +317,6 @@ async def authenticate_user(  # noqa: PLR0915
             password.encode("utf-8"), _password.encode("utf-8")
         ) or secrets.compare_digest(hash_password.encode("utf-8"), _password.encode("utf-8")):
             if os.getenv("DATABASE_URL") is not None:
-                # Expire any previous UI session tokens for this user
-                await expire_previous_ui_session_tokens(
-                    user_id=user_id, prisma_client=prisma_client
-                )
-
                 response = await generate_key_helper_fn(
                     request_type="key",
                     **{  # type: ignore
