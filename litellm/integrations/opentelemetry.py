@@ -1017,7 +1017,7 @@ class OpenTelemetry(CustomLogger):
                 LogRecord as _SdkLogRecordCtor,
             )  # OTEL >= 1.39.0
         except ImportError:
-            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]  # OTEL < 1.39.0
+            from opentelemetry.sdk._logs import (  # type: ignore[attr-defined,no-redef]  # OTEL < 1.39.0
                 LogRecord as _SdkLogRecordCtor,
             )
 
