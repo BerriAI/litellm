@@ -15,6 +15,7 @@ from litellm.types.llms.anthropic import (
     AnthropicMessagesUserMessageParam,
 )
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
+from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     Choices,
@@ -417,6 +418,60 @@ def test_translate_openai_response_to_anthropic_text_and_tool_calls():
     assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
     assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
     assert anthropic_response.get("stop_reason") == "tool_use"
+
+def test_translate_openai_responses_api_response_to_anthropic_text_and_tool_calls():
+    """Responses API output should translate to Anthropic text + tool_use blocks."""
+
+    responses_api_response = ResponsesAPIResponse(
+        id="resp_text_tool_responses_api",
+        created_at=0,
+        model="gpt-4o-mini",
+        object="response",
+        status="completed",
+        output=[
+            {
+                "type": "message",
+                "id": "msg_1",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Let me grab the current weather.",
+                        "annotations": [],
+                    }
+                ],
+            },
+            {
+                "type": "function_call",
+                "id": "call_tool_combo",
+                "call_id": "call_tool_combo",
+                "name": "get_weather",
+                "arguments": '{"location": "Paris"}',
+                "status": "completed",
+                "provider_specific_fields": {"thought_signature": "sigsig"},
+            },
+        ],
+        usage=ResponseAPIUsage(input_tokens=5, output_tokens=2, total_tokens=7),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=responses_api_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 2
+    assert cast(Any, anthropic_content[0]).type == "text"
+    assert cast(Any, anthropic_content[0]).text == "Let me grab the current weather."
+    assert cast(Any, anthropic_content[1]).type == "tool_use"
+    assert cast(Any, anthropic_content[1]).id == "call_tool_combo"
+    assert cast(Any, anthropic_content[1]).name == "get_weather"
+    assert cast(Any, anthropic_content[1]).input == {"location": "Paris"}
+    assert cast(Any, anthropic_content[1]).provider_specific_fields.get("signature") == "sigsig"
+    assert anthropic_response.get("stop_reason") == "tool_use"
+
 
 
 def test_translate_streaming_openai_chunk_to_anthropic_with_partial_json():

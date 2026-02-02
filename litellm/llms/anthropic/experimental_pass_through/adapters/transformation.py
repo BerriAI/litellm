@@ -60,6 +60,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolParam,
     ChatCompletionToolParamFunctionChunk,
     ChatCompletionUserMessage,
+    ResponsesAPIResponse,
 )
 from litellm.types.utils import Choices, ModelResponse, StreamingChoices, Usage
 
@@ -902,6 +903,126 @@ class LiteLLMAnthropicMessagesAdapter:
 
         return new_content
 
+    def _extract_signature_from_responses_tool_call(
+        self, tool_call: Dict[str, Any]
+    ) -> Optional[str]:
+        """Extract thought signature from a Responses API tool call output item."""
+
+        provider_specific_fields = tool_call.get("provider_specific_fields")
+        if not provider_specific_fields or not isinstance(provider_specific_fields, dict):
+            return None
+
+        if provider_specific_fields.get("thought_signature"):
+            return cast(str, provider_specific_fields.get("thought_signature"))
+        if provider_specific_fields.get("signature"):
+            return cast(str, provider_specific_fields.get("signature"))
+        return None
+
+    def _translate_openai_responses_api_output_to_anthropic(
+        self, response: ResponsesAPIResponse
+    ) -> List[
+        Union[
+            AnthropicResponseContentBlockText,
+            AnthropicResponseContentBlockToolUse,
+            AnthropicResponseContentBlockThinking,
+            AnthropicResponseContentBlockRedactedThinking,
+        ]
+    ]:
+        """Translate OpenAI Responses API `output` list to Anthropic content blocks."""
+
+        anthropic_content: List[
+            Union[
+                AnthropicResponseContentBlockText,
+                AnthropicResponseContentBlockToolUse,
+                AnthropicResponseContentBlockThinking,
+                AnthropicResponseContentBlockRedactedThinking,
+            ]
+        ] = []
+
+        output_items = getattr(response, "output", []) or []
+        for raw_item in output_items:
+            try:
+                item: Dict[str, Any] = (
+                    raw_item if isinstance(raw_item, dict) else dict(raw_item)
+                )
+            except Exception:
+                continue
+
+            item_type = item.get("type")
+
+            if item_type == "message":
+                for raw_content in item.get("content") or []:
+                    try:
+                        content: Dict[str, Any] = (
+                            raw_content
+                            if isinstance(raw_content, dict)
+                            else dict(raw_content)
+                        )
+                    except Exception:
+                        continue
+
+                    if content.get("type") in ("output_text", "text", "refusal"):
+                        text = content.get("text")
+                        if text is None:
+                            continue
+                        anthropic_content.append(
+                            AnthropicResponseContentBlockText(
+                                type="text", text=str(text)
+                            )
+                        )
+
+            elif item_type == "reasoning":
+                texts: List[str] = []
+                for raw_content in item.get("content") or []:
+                    try:
+                        content_item: Dict[str, Any] = (
+                            raw_content
+                            if isinstance(raw_content, dict)
+                            else dict(raw_content)
+                        )
+                    except Exception:
+                        continue
+
+                    if content_item.get("type") in ("output_text", "text"):
+                        t = content_item.get("text")
+                        if t:
+                            texts.append(str(t))
+
+                if texts:
+                    anthropic_content.append(
+                        AnthropicResponseContentBlockThinking(
+                            type="thinking",
+                            thinking="".join(texts),
+                            signature=None,
+                        )
+                    )
+
+            elif item_type == "function_call":
+                tool_id = item.get("call_id") or item.get("id") or ""
+                tool_name = item.get("name") or ""
+                tool_args = item.get("arguments") or ""
+
+                tool_use_block = AnthropicResponseContentBlockToolUse(
+                    type="tool_use",
+                    id=str(tool_id),
+                    name=str(tool_name),
+                    input=parse_tool_call_arguments(
+                        str(tool_args),
+                        tool_name=str(tool_name),
+                        context="Anthropic pass-through adapter",
+                    ),
+                )
+
+                signature = self._extract_signature_from_responses_tool_call(item)
+                if signature:
+                    tool_use_block.provider_specific_fields = {
+                        "signature": signature
+                    }
+
+                anthropic_content.append(tool_use_block)
+
+        return anthropic_content
+
     def _translate_openai_finish_reason_to_anthropic(
         self, openai_finish_reason: str
     ) -> AnthropicFinishReason:
@@ -914,16 +1035,62 @@ class LiteLLMAnthropicMessagesAdapter:
         return "end_turn"
 
     def translate_openai_response_to_anthropic(
-        self, response: ModelResponse
+        self, response: Union[ModelResponse, ResponsesAPIResponse]
     ) -> AnthropicMessagesResponse:
+        """Translate either OpenAI Chat Completions or OpenAI Responses API output."""
+
+        # Responses API: has `.output` and no `.choices`
+        if hasattr(response, "output") and not hasattr(response, "choices"):
+            responses_api_response = cast(ResponsesAPIResponse, response)
+
+            anthropic_content = self._translate_openai_responses_api_output_to_anthropic(
+                response=responses_api_response
+            )
+
+            status = getattr(responses_api_response, "status", None)
+            has_tool_use = any(
+                getattr(block, "type", None) == "tool_use"
+                for block in anthropic_content
+            )
+            if has_tool_use:
+                openai_finish_reason = "tool_calls"
+            elif status == "incomplete":
+                openai_finish_reason = "length"
+            else:
+                openai_finish_reason = "stop"
+
+            anthropic_finish_reason = self._translate_openai_finish_reason_to_anthropic(
+                openai_finish_reason=openai_finish_reason
+            )
+
+            response_usage = getattr(responses_api_response, "usage", None)
+            input_tokens = getattr(response_usage, "input_tokens", 0) or 0
+            output_tokens = getattr(response_usage, "output_tokens", 0) or 0
+
+            return AnthropicMessagesResponse(
+                id=responses_api_response.id,
+                type="message",
+                role="assistant",
+                model=responses_api_response.model or "unknown-model",
+                stop_sequence=None,
+                usage=AnthropicUsage(
+                    input_tokens=int(input_tokens),
+                    output_tokens=int(output_tokens),
+                ),  # type: ignore
+                content=anthropic_content,  # type: ignore
+                stop_reason=anthropic_finish_reason,
+            )
+
         ## translate content block
-        anthropic_content = self._translate_openai_content_to_anthropic(choices=response.choices)  # type: ignore
+        anthropic_content = self._translate_openai_content_to_anthropic(
+            choices=cast(ModelResponse, response).choices  # type: ignore[arg-type]
+        )
         ## extract finish reason
         anthropic_finish_reason = self._translate_openai_finish_reason_to_anthropic(
-            openai_finish_reason=response.choices[0].finish_reason  # type: ignore
+            openai_finish_reason=cast(ModelResponse, response).choices[0].finish_reason  # type: ignore
         )
         # extract usage
-        usage: Usage = getattr(response, "usage")
+        usage: Usage = getattr(response, "usage")  # type: ignore[arg-type]
         anthropic_usage = AnthropicUsage(
             input_tokens=usage.prompt_tokens or 0,
             output_tokens=usage.completion_tokens or 0,
@@ -935,10 +1102,10 @@ class LiteLLMAnthropicMessagesAdapter:
             anthropic_usage["cache_read_input_tokens"] = usage._cache_read_input_tokens
 
         translated_obj = AnthropicMessagesResponse(
-            id=response.id,
+            id=cast(ModelResponse, response).id,
             type="message",
             role="assistant",
-            model=response.model or "unknown-model",
+            model=cast(ModelResponse, response).model or "unknown-model",
             stop_sequence=None,
             usage=anthropic_usage,  # type: ignore
             content=anthropic_content,  # type: ignore
@@ -946,6 +1113,7 @@ class LiteLLMAnthropicMessagesAdapter:
         )
 
         return translated_obj
+
 
     def _translate_streaming_openai_chunk_to_anthropic_content_block(
         self, choices: List[Union[OpenAIStreamingChoice, StreamingChoices]]
