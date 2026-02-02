@@ -102,21 +102,22 @@ describe("responses_api", () => {
       mockUpdateTextUI,
       "gpt-4",
       "test-token",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      undefined, // tags
+      undefined, // signal
+      undefined, // onReasoningContent
+      undefined, // onTimingData
+      undefined, // onUsageData
+      undefined, // traceId
+      undefined, // vector_store_ids
+      undefined, // guardrails
+      undefined, // policies
       selectedMCPServers,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
+      undefined, // previousResponseId
+      undefined, // onResponseId
+      undefined, // onMCPEvent
+      undefined, // codeInterpreterEnabled
+      undefined, // onCodeInterpreterResult
+      undefined, // customBaseUrl
       mcpServers,
       mcpServerToolRestrictions,
     );

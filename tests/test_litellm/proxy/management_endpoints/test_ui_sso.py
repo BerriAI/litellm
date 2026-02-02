@@ -24,12 +24,15 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    normalize_email,
+    _setup_team_mappings,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     MicrosoftGraphAPIUserGroupDirectoryObject,
     MicrosoftGraphAPIUserGroupResponse,
     MicrosoftServicePrincipalTeam,
+    TeamMappings,
 )
 
 
@@ -667,6 +670,85 @@ def test_build_sso_user_update_data_without_role():
     assert "user_role" not in update_data
 
 
+def test_normalize_email():
+    """
+    Test that normalize_email correctly lowercases email addresses and handles edge cases.
+    """
+    # Test with lowercase email
+    assert normalize_email("test@example.com") == "test@example.com"
+    
+    # Test with uppercase email
+    assert normalize_email("TEST@EXAMPLE.COM") == "test@example.com"
+    
+    # Test with mixed case email
+    assert normalize_email("Test.User@Example.COM") == "test.user@example.com"
+    
+    # Test with None
+    assert normalize_email(None) is None
+    
+    # Test with empty string
+    assert normalize_email("") == ""
+
+
+def test_build_sso_user_update_data_normalizes_email():
+    """
+    Test that _build_sso_user_update_data normalizes email addresses to lowercase.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="test-user-789",
+        email="Test.User@Example.COM",
+        display_name="Test User",
+        provider="microsoft",
+        team_ids=[],
+        user_role=None,
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="Test.User@Example.COM",
+        user_id="test-user-789",
+    )
+
+    # Email should be normalized to lowercase
+    assert update_data["user_email"] == "test.user@example.com"
+    assert "user_role" not in update_data
+
+
+def test_generic_response_convertor_normalizes_email():
+    """
+    Test that generic_response_convertor normalizes email addresses.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import generic_response_convertor
+
+    mock_response = {
+        "preferred_username": "user123",
+        "email": "Test.User@Example.COM",
+        "sub": "Test User",
+        "first_name": "Test",
+        "last_name": "User",
+        "provider": "generic",
+    }
+
+    # Mock JWT handler
+    mock_jwt_handler = MagicMock(spec=JWTHandler)
+    mock_jwt_handler.get_team_ids_from_jwt.return_value = []
+
+    result = generic_response_convertor(
+        response=mock_response,
+        jwt_handler=mock_jwt_handler,
+        sso_jwt_handler=None,
+        role_mappings=None,
+    )
+
+    # Email should be normalized to lowercase
+    assert result.email == "test.user@example.com"
+    assert result.id == "user123"
+    assert result.display_name == "Test User"
+
+
 @pytest.mark.asyncio
 async def test_upsert_sso_user_updates_role_for_existing_user():
     """
@@ -844,9 +926,9 @@ def test_get_user_email_and_id_extracts_microsoft_role():
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db():
+async def test_get_user_info_from_db_user_exists():
     """
-    received args in get_user_info_from_db: {'result': CustomOpenID(id='krrishd', email='krrishdholakia@gmail.com', first_name=None, last_name=None, display_name='a3f1c107-04dc-4c93-ae60-7f32eb4b05ce', picture=None, provider=None, team_ids=[]), 'prisma_client': <litellm.proxy.utils.PrismaClient object at 0x14a74e3c0>, 'user_api_key_cache': <litellm.caching.dual_cache.DualCache object at 0x148d37110>, 'proxy_logging_obj': <litellm.proxy.utils.ProxyLogging object at 0x148dd9090>, 'user_email': 'krrishdholakia@gmail.com', 'user_defined_values': {'models': [], 'user_id': 'krrishd', 'user_email': 'krrishdholakia@gmail.com', 'max_budget': None, 'user_role': None, 'budget_duration': None}}
+    Test that get_user_info_from_db finds existing user and calls upsert_sso_user to update.
     """
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
@@ -888,7 +970,7 @@ async def test_get_user_info_from_db():
 
 
 @pytest.mark.asyncio
-async def test_get_user_info_from_db_alternate_user_id():
+async def test_get_user_info_from_db_user_exists_alternate_user_id():
     from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
 
     prisma_client = MagicMock()
@@ -928,6 +1010,190 @@ async def test_get_user_info_from_db_alternate_user_id():
         mock_get_user_object.assert_called_once()
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd-email1234"
 
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_user_not_exists_creates_user():
+    """
+    Test that get_user_info_from_db creates a new user when user doesn't exist in DB.
+    
+    When get_existing_user_info_from_db returns None, get_user_info_from_db should:
+    1. Call upsert_sso_user with user_info=None
+    2. upsert_sso_user should call insert_sso_user to create the user
+    3. Add user to teams from SSO response
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "newuser@example.com"
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "new-user-123",
+        "user_email": "newuser@example.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+
+    sso_result = CustomOpenID(
+        id="new-user-123",
+        email="newuser@example.com",
+        first_name="New",
+        last_name="User",
+        display_name="New User",
+        picture=None,
+        provider="microsoft",
+        team_ids=["team-1", "team-2"],
+    )
+
+    args = {
+        "result": sso_result,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+    }
+
+    # Mock new user response
+    mock_new_user = NewUserResponse(
+        user_id="new-user-123",
+        key="sk-xxxxx",
+        teams=None,
+    )
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+        return_value=None,  # User doesn't exist
+    ) as mock_get_existing, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+        return_value=mock_new_user,
+    ) as mock_upsert, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+    ) as mock_add_teams:
+        # Act
+        user_info = await get_user_info_from_db(**args)
+
+        # Assert
+        # Should try to find user by id
+        mock_get_existing.assert_called_once()
+        assert mock_get_existing.call_args.kwargs["user_id"] == "new-user-123"
+        assert mock_get_existing.call_args.kwargs["user_email"] == "newuser@example.com"
+
+        # Should call upsert_sso_user with None user_info
+        mock_upsert.assert_called_once()
+        upsert_call_args = mock_upsert.call_args
+        assert upsert_call_args.kwargs["user_info"] is None
+        assert upsert_call_args.kwargs["user_email"] == "newuser@example.com"
+        assert upsert_call_args.kwargs["user_defined_values"] == user_defined_values
+
+        # Should add user to teams
+        mock_add_teams.assert_called_once()
+        add_teams_call_args = mock_add_teams.call_args
+        assert add_teams_call_args.kwargs["result"] == sso_result
+        assert add_teams_call_args.kwargs["user_info"] == mock_new_user
+
+        # Should return the new user
+        assert user_info == mock_new_user
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_user_exists_updates_user():
+    """
+    Test that get_user_info_from_db updates existing user when user exists in DB.
+    
+    When get_existing_user_info_from_db returns a user, get_user_info_from_db should:
+    1. Call upsert_sso_user with the existing user_info
+    2. upsert_sso_user should update the user in the database
+    3. Add user to teams from SSO response
+    """
+    from litellm.proxy._types import LiteLLM_UserTable, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    prisma_client = MagicMock()
+    user_api_key_cache = MagicMock()
+    proxy_logging_obj = MagicMock()
+    user_email = "existing@example.com"
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "existing-user-456",
+        "user_email": "existing@example.com",
+        "max_budget": None,
+        "user_role": None,
+        "budget_duration": None,
+    }
+
+    sso_result = CustomOpenID(
+        id="existing-user-456",
+        email="existing@example.com",
+        first_name="Existing",
+        last_name="User",
+        display_name="Existing User",
+        picture=None,
+        provider="microsoft",
+        team_ids=["team-3"],
+    )
+
+    # Existing user in DB
+    existing_user = LiteLLM_UserTable(
+        user_id="existing-user-456",
+        user_email="old@example.com",
+        user_role="internal_user",
+        models=["gpt-4"],
+        teams=[],
+    )
+
+    # Updated user after upsert
+    updated_user = LiteLLM_UserTable(
+        user_id="existing-user-456",
+        user_email="existing@example.com",  # Updated email
+        user_role="internal_user",
+        models=["gpt-4"],
+        teams=[],
+    )
+
+    args = {
+        "result": sso_result,
+        "prisma_client": prisma_client,
+        "user_api_key_cache": user_api_key_cache,
+        "proxy_logging_obj": proxy_logging_obj,
+        "user_email": user_email,
+        "user_defined_values": user_defined_values,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.get_existing_user_info_from_db",
+        return_value=existing_user,  # User exists
+    ) as mock_get_existing, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.upsert_sso_user",
+        return_value=updated_user,
+    ) as mock_upsert, patch(
+        "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.add_user_to_teams_from_sso_response",
+    ) as mock_add_teams:
+        # Act
+        user_info = await get_user_info_from_db(**args)
+
+        # Assert
+        # Should find existing user
+        mock_get_existing.assert_called_once()
+        assert mock_get_existing.call_args.kwargs["user_id"] == "existing-user-456"
+
+        # Should call upsert_sso_user with existing user_info
+        mock_upsert.assert_called_once()
+        upsert_call_args = mock_upsert.call_args
+        assert upsert_call_args.kwargs["user_info"] == existing_user
+        assert upsert_call_args.kwargs["user_email"] == "existing@example.com"
+
+        # Should add user to teams
+        mock_add_teams.assert_called_once()
+        add_teams_call_args = mock_add_teams.call_args
+        assert add_teams_call_args.kwargs["result"] == sso_result
+        assert add_teams_call_args.kwargs["user_info"] == updated_user
+
+        # Should return the updated user
+        assert user_info == updated_user
 
 @pytest.mark.asyncio
 async def test_check_and_update_if_proxy_admin_id():
@@ -3551,3 +3817,34 @@ class TestCustomMicrosoftSSO:
         )
 
         assert isinstance(sso, MicrosoftSSO)
+
+
+@pytest.mark.asyncio
+async def test_setup_team_mappings():
+    """Test _setup_team_mappings function loads team mappings from database."""
+    # Arrange
+    mock_prisma = MagicMock()
+    mock_sso_config = MagicMock()
+    mock_sso_config.sso_settings = {
+        "team_mappings": {
+            "team_ids_jwt_field": "groups"
+        }
+    }
+    mock_prisma.db.litellm_ssoconfig.find_unique = AsyncMock(
+        return_value=mock_sso_config
+    )
+
+    with patch(
+        "litellm.proxy.utils.get_prisma_client_or_throw",
+        return_value=mock_prisma,
+    ):
+        # Act
+        result = await _setup_team_mappings()
+
+        # Assert
+        assert result is not None
+        assert isinstance(result, TeamMappings)
+        assert result.team_ids_jwt_field == "groups"
+        mock_prisma.db.litellm_ssoconfig.find_unique.assert_called_once_with(
+            where={"id": "sso_config"}
+        )

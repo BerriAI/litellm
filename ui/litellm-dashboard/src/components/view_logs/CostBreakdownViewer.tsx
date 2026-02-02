@@ -1,5 +1,5 @@
 import React from "react";
-import { Accordion, AccordionHeader, AccordionBody } from "@tremor/react";
+import { Collapse } from "antd";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
 export interface CostBreakdown {
@@ -7,6 +7,7 @@ export interface CostBreakdown {
   output_cost?: number;
   total_cost?: number;
   tool_usage_cost?: number;
+  additional_costs?: Record<string, number>;
   original_cost?: number;
   discount_percent?: number;
   discount_amount?: number;
@@ -59,19 +60,23 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
   }
 
   return (
-    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden">
-      <Accordion>
-        <AccordionHeader className="p-4 border-b hover:bg-gray-50 transition-colors text-left">
-          <div className="flex items-center justify-between w-full">
-            <h3 className="text-lg font-medium text-gray-900">Cost Breakdown</h3>
-            <div className="flex items-center space-x-2 mr-4">
-              <span className="text-sm text-gray-500">Total:</span>
-              <span className="text-sm font-semibold text-gray-900">{formatCost(totalSpend)}</span>
-            </div>
-          </div>
-        </AccordionHeader>
-        <AccordionBody className="px-0">
-          <div className="p-6 space-y-4">
+    <div className="bg-white rounded-lg shadow w-full max-w-full overflow-hidden mb-6">
+      <Collapse
+        expandIconPosition="start"
+        items={[
+          {
+            key: "1",
+            label: (
+              <div className="flex items-center justify-between w-full">
+                <h3 className="text-lg font-medium text-gray-900">Cost Breakdown</h3>
+                <div className="flex items-center space-x-2 mr-4">
+                  <span className="text-sm text-gray-500">Total:</span>
+                  <span className="text-sm font-semibold text-gray-900">{formatCost(totalSpend)}</span>
+                </div>
+              </div>
+            ),
+            children: (
+              <div className="p-6 space-y-4">
             {/* Step 1: Base Token Costs */}
             <div className="space-y-2 max-w-2xl">
               <div className="flex text-sm">
@@ -87,6 +92,17 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
                   <span className="text-gray-600 font-medium w-1/3">Tool Usage Cost:</span>
                   <span className="text-gray-900">{formatCost(costBreakdown.tool_usage_cost)}</span>
                 </div>
+              )}
+              {/* Additional Costs (free-form) */}
+              {costBreakdown.additional_costs && Object.keys(costBreakdown.additional_costs).length > 0 && (
+                <>
+                  {Object.entries(costBreakdown.additional_costs).map(([key, value]) => (
+                    <div key={key} className="flex text-sm">
+                      <span className="text-gray-600 font-medium w-1/3">{key}:</span>
+                      <span className="text-gray-900">{formatCost(value)}</span>
+                    </div>
+                  ))}
+                </>
               )}
             </div>
 
@@ -149,8 +165,10 @@ export const CostBreakdownViewer: React.FC<CostBreakdownViewerProps> = ({
               </div>
             </div>
           </div>
-        </AccordionBody>
-      </Accordion>
+            ),
+          },
+        ]}
+      />
     </div>
   );
 };

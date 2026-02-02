@@ -13,14 +13,28 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
         self._model = model
 
     @staticmethod
-    def get_azure_ai_route(model: str) -> Literal["agents", "default"]:
+    def get_azure_ai_route(model: str) -> Literal["agents", "model_router", "default"]:
         """
         Get the Azure AI route for the given model.
 
         Similar to BedrockModelInfo.get_bedrock_route().
+        
+        Supported routes:
+        - agents: azure_ai/agents/<agent_id>
+        - model_router: azure_ai/model_router/<actual-model-name> or models with "model-router"/"model_router" in name
+        - default: standard models
         """
         if "agents/" in model:
             return "agents"
+        # Detect model router by prefix (model_router/<name>) or by name containing "model-router"/"model_router"
+        model_lower = model.lower()
+        if (
+            "model_router/" in model_lower 
+            or "model-router/" in model_lower
+            or "model-router" in model_lower
+            or "model_router" in model_lower
+        ):
+            return "model_router"
         return "default"
 
     @staticmethod
@@ -75,8 +89,73 @@ class AzureFoundryModelInfo(BaseLLMModelInfo):
     #########################################################
 
     @staticmethod
-    def get_base_model(model: str) -> Optional[str]:
-        raise NotImplementedError("Azure Foundry does not support base model")
+    def strip_model_router_prefix(model: str) -> str:
+        """
+        Strip the model_router prefix from model name.
+        
+        Examples:
+        - "model_router/gpt-4o" -> "gpt-4o"
+        - "model-router/gpt-4o" -> "gpt-4o"
+        - "gpt-4o" -> "gpt-4o"
+        
+        Args:
+            model: Model name potentially with model_router prefix
+            
+        Returns:
+            Model name without the prefix
+        """
+        if "model_router/" in model:
+            return model.split("model_router/", 1)[1]
+        if "model-router/" in model:
+            return model.split("model-router/", 1)[1]
+        return model
+    
+    @staticmethod
+    def get_base_model(model: str) -> str:
+        """
+        Get the base model name, stripping any Azure AI routing prefixes.
+        
+        Args:
+            model: Model name potentially with routing prefixes
+            
+        Returns:
+            Base model name
+        """
+        # Strip model_router prefix if present
+        model = AzureFoundryModelInfo.strip_model_router_prefix(model)
+        return model
+
+    @staticmethod
+    def get_azure_ai_config_for_model(model: str):
+        """
+        Get the appropriate Azure AI config class for the given model.
+        
+        Routes to specialized configs based on model type:
+        - Model Router: AzureModelRouterConfig
+        - Claude models: AzureAnthropicConfig  
+        - Default: AzureAIStudioConfig
+        
+        Args:
+            model: The model name
+            
+        Returns:
+            The appropriate config instance
+        """
+        azure_ai_route = AzureFoundryModelInfo.get_azure_ai_route(model)
+        
+        if azure_ai_route == "model_router":
+            from litellm.llms.azure_ai.azure_model_router.transformation import (
+                AzureModelRouterConfig,
+            )
+            return AzureModelRouterConfig()
+        elif "claude" in model.lower():
+            from litellm.llms.azure_ai.anthropic.transformation import (
+                AzureAnthropicConfig,
+            )
+            return AzureAnthropicConfig()
+        else:
+            from litellm.llms.azure_ai.chat.transformation import AzureAIStudioConfig
+            return AzureAIStudioConfig()
 
     def validate_environment(
         self,

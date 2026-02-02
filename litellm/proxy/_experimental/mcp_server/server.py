@@ -8,8 +8,7 @@ import contextlib
 from datetime import datetime
 import traceback
 import uuid
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast
-
+from typing import Any, AsyncIterator, Dict, List, Optional, Tuple, Union, cast, Callable
 from fastapi import FastAPI, HTTPException
 from pydantic import AnyUrl, ConfigDict
 from starlette.types import Receive, Scope, Send
@@ -74,7 +73,11 @@ if MCP_AVAILABLE:
         AuthContextMiddleware,
         auth_context_var,
     )
-    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    try:
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    except ImportError:
+        StreamableHTTPSessionManager = None  # type: ignore
     from mcp.types import (
         CallToolResult,
         EmbeddedResource,
@@ -124,8 +127,8 @@ if MCP_AVAILABLE:
     session_manager = StreamableHTTPSessionManager(
         app=server,
         event_store=None,
-        json_response=True,  # Use JSON responses instead of SSE by default
-        stateless=True,
+        json_response=False, # enables SSE streaming
+        stateless=False, # enables session state
     )
 
     # Create SSE session manager
@@ -278,6 +281,30 @@ if MCP_AVAILABLE:
         verbose_logger.debug(
             f"MCP mcp_server_tool_call - User API Key Auth from context: {user_api_key_auth}"
         )
+        host_progress_callback = None
+        try:
+            host_ctx = server.request_context
+            if host_ctx and hasattr(host_ctx, 'meta') and host_ctx.meta:
+                host_token = getattr(host_ctx.meta, 'progressToken', None)
+                if host_token and hasattr(host_ctx, 'session') and host_ctx.session:
+                    host_session = host_ctx.session
+                    
+                    async def forward_progress(progress: float, total: float | None):
+                        """Forward progress notifications from external MCP to Host"""
+                        try:
+                            await host_session.send_progress_notification(
+                                progress_token=host_token,
+                                progress=progress,
+                                total=total
+                            )
+                            verbose_logger.debug(f"Forwarded progress {progress}/{total} to Host")
+                        except Exception as e:
+                            verbose_logger.error(f"Failed to forward progress to Host: {e}")
+                    
+                    host_progress_callback = forward_progress
+                    verbose_logger.debug(f"Host progressToken captured: {host_token[:8]}...")
+        except Exception as e:
+            verbose_logger.warning(f"Could not capture host progress context: {e}")
         try:
             # Create a body date for logging
             body_data = {"name": name, "arguments": arguments}
@@ -307,6 +334,7 @@ if MCP_AVAILABLE:
                 mcp_server_auth_headers=mcp_server_auth_headers,
                 oauth2_headers=oauth2_headers,
                 raw_headers=raw_headers,
+                host_progress_callback=host_progress_callback,
                 **data,  # for logging
             )
         except BlockedPiiEntityError as e:
@@ -1341,6 +1369,7 @@ if MCP_AVAILABLE:
         mcp_server_auth_headers: Optional[Dict[str, Dict[str, str]]] = None,
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
+        host_progress_callback: Optional[Callable] = None,
         **kwargs: Any,
     ) -> CallToolResult:
         """
@@ -1438,6 +1467,7 @@ if MCP_AVAILABLE:
                     oauth2_headers=oauth2_headers,
                     raw_headers=raw_headers,
                     litellm_logging_obj=litellm_logging_obj,
+                    host_progress_callback=host_progress_callback,
                 )
 
             # Fall back to local tool registry with original name (legacy support)
@@ -1685,6 +1715,7 @@ if MCP_AVAILABLE:
         oauth2_headers: Optional[Dict[str, str]] = None,
         raw_headers: Optional[Dict[str, str]] = None,
         litellm_logging_obj: Optional[Any] = None,
+        host_progress_callback: Optional[Callable] = None, 
     ) -> CallToolResult:
         """Handle tool execution for managed server tools"""
         # Import here to avoid circular import
@@ -1700,6 +1731,7 @@ if MCP_AVAILABLE:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             proxy_logging_obj=proxy_logging_obj,
+            host_progress_callback=host_progress_callback,
         )
         verbose_logger.debug("CALL TOOL RESULT: %s", call_tool_result)
         return call_tool_result
@@ -1808,6 +1840,43 @@ if MCP_AVAILABLE:
             raw_headers,
         )
 
+    def _strip_stale_mcp_session_header(
+        scope: Scope,
+        mgr: "StreamableHTTPSessionManager",
+    ) -> None:
+        """
+        Strip stale ``mcp-session-id`` headers so the session manager
+        creates a fresh session instead of returning 404 "Session not found".
+
+        When clients like VSCode reconnect after a reload they may resend a
+        session id that has already been cleaned up.  Rather than letting the
+        SDK return a 404 error loop, we detect the stale id and remove the
+        header so a brand-new session is created transparently.
+
+        Fixes https://github.com/BerriAI/litellm/issues/20292
+        """
+        _mcp_session_header = b"mcp-session-id"
+        _session_id: Optional[str] = None
+        for header_name, header_value in scope.get("headers", []):
+            if header_name == _mcp_session_header:
+                _session_id = header_value.decode("utf-8", errors="replace")
+                break
+
+        if _session_id is None:
+            return
+
+        known_sessions = getattr(mgr, "_server_instances", None)
+        if known_sessions is not None and _session_id not in known_sessions:
+            verbose_logger.warning(
+                "MCP session ID '%s' not found in active sessions. "
+                "Stripping stale header to force new session creation.",
+                _session_id,
+            )
+            scope["headers"] = [
+                (k, v) for k, v in scope["headers"]
+                if k != _mcp_session_header
+            ]
+
     async def handle_streamable_http_mcp(
         scope: Scope, receive: Receive, send: Send
     ) -> None:
@@ -1863,6 +1932,8 @@ if MCP_AVAILABLE:
                 await initialize_session_managers()
                 # Give it a moment to start up
                 await asyncio.sleep(0.1)
+
+            _strip_stale_mcp_session_header(scope, session_manager)
 
             await session_manager.handle_request(scope, receive, send)
         except Exception as e:

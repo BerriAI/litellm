@@ -191,3 +191,52 @@ class TestAzureExceptionMapping:
         print("exception fields=", vars(e))
         assert e.provider_specific_fields is not None
         assert e.provider_specific_fields.get("innererror") is None 
+
+    def test_azure_images_content_policy_violation_preserves_nested_inner_error(self):
+        """Azure Images endpoints return errors nested under body['error'] with inner_error.
+
+        Ensure we:
+        - Detect the violation via structured payload (code=content_policy_violation)
+        - Preserve code/type/message
+        - Surface inner_error + revised_prompt + content_filter_results
+        """
+
+        mock_exception = Exception("Bad request")  # does not include policy substrings
+        mock_exception.body = {
+            "error": {
+                "code": "content_policy_violation",
+                "inner_error": {
+                    "code": "ResponsibleAIPolicyViolation",
+                    "content_filter_results": {
+                        "violence": {"filtered": True, "severity": "low"}
+                    },
+                    "revised_prompt": "revised",
+                },
+                "message": "Your request was rejected as a result of our safety system.",
+                "type": "invalid_request_error",
+            }
+        }
+
+        mock_response = MagicMock()
+        mock_response.status_code = 400
+        mock_exception.response = mock_response
+
+        with pytest.raises(ContentPolicyViolationError) as exc_info:
+            exception_type(
+                model="azure/dall-e-3",
+                original_exception=mock_exception,
+                custom_llm_provider="azure",
+            )
+
+        e = exc_info.value
+
+        # OpenAI-style error fields should be populated
+        assert getattr(e, "code", None) == "content_policy_violation"
+        assert getattr(e, "type", None) == "invalid_request_error"
+        assert "safety system" in str(e)
+
+        # Provider-specific nested details must be preserved
+        assert e.provider_specific_fields is not None
+        assert e.provider_specific_fields["inner_error"]["code"] == "ResponsibleAIPolicyViolation"
+        assert e.provider_specific_fields["inner_error"]["revised_prompt"] == "revised"
+        assert e.provider_specific_fields["inner_error"]["content_filter_results"]["violence"]["filtered"] is True

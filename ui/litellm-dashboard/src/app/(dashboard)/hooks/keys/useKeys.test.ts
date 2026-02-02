@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { renderHook, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React, { ReactNode } from "react";
-import { useKeys } from "./useKeys";
+import { useKeys, useDeletedKeys } from "./useKeys";
 import type { KeyResponse } from "@/components/key_team_helpers/key_list";
 
 // Mock the networking utilities
@@ -395,5 +395,295 @@ describe("useKeys", () => {
         },
       },
     );
+  });
+});
+
+describe("useDeletedKeys", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    // Reset all mocks
+    vi.clearAllMocks();
+
+    // Set default mock for useAuthorized (enabled state)
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userRole: "Admin",
+      userId: "test-user-id",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    // Reset fetch mock
+    mockFetch.mockClear();
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("should return deleted keys data when query is successful", async () => {
+    // Mock successful API call
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useDeletedKeys(1, 10), { wrapper });
+
+    // Initially loading
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.data).toBeUndefined();
+
+    // Wait for success
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data).toEqual(mockKeysResponse);
+    expect(result.current.error).toBeNull();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  });
+
+  it("should pass status=deleted parameter to the API", async () => {
+    // Mock successful API call
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const { result } = renderHook(() => useDeletedKeys(1, 10), { wrapper });
+
+    // Wait for success
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    // Verify that status=deleted is included in the URL
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).toContain("status=deleted");
+    expect(result.current.data).toEqual(mockKeysResponse);
+  });
+
+  it("should handle error when deleted keys API call fails", async () => {
+    const errorMessage = "Failed to fetch deleted keys";
+    const errorResponse = { error: errorMessage };
+
+    // Mock failed API call
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+      json: async () => errorResponse,
+    });
+
+    const { result } = renderHook(() => useDeletedKeys(1, 10), { wrapper });
+
+    // Initially loading
+    expect(result.current.isLoading).toBe(true);
+
+    // Wait for error
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isError).toBe(true);
+    });
+
+    expect(result.current.error).toBeDefined();
+    expect(result.current.error?.message).toBe(errorMessage);
+    expect(result.current.data).toBeUndefined();
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  });
+
+  it("should not execute query when accessToken is missing", async () => {
+    // Mock missing accessToken
+    mockUseAuthorized.mockReturnValue({
+      accessToken: null,
+      userRole: "Admin",
+      userId: "test-user-id",
+      token: null,
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    const { result } = renderHook(() => useDeletedKeys(1, 10), { wrapper });
+
+    // Query should not execute
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isFetched).toBe(false);
+
+    // API should not be called
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("should pass correct page and pageSize parameters to the API", async () => {
+    // Mock successful API call
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const page = 2;
+    const pageSize = 20;
+
+    const { result } = renderHook(() => useDeletedKeys(page, pageSize), { wrapper });
+
+    // Wait for success
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(mockFetch).toHaveBeenCalledWith(
+      `/key/list?page=${page}&size=${pageSize}&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true`,
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  });
+
+  it("should return empty deleted keys array when API returns empty data", async () => {
+    // Mock API returning empty keys array
+    const emptyResponse = {
+      keys: [],
+      total_count: 0,
+      current_page: 1,
+      total_pages: 0,
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => emptyResponse,
+    });
+
+    const { result } = renderHook(() => useDeletedKeys(1, 10), { wrapper });
+
+    // Wait for success
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(result.current.data).toEqual(emptyResponse);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=1&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  });
+
+  it("should handle network timeout error", async () => {
+    const timeoutError = new Error("Network timeout");
+
+    // Mock network timeout
+    mockFetch.mockRejectedValueOnce(timeoutError);
+
+    const { result } = renderHook(() => useDeletedKeys(1, 10), { wrapper });
+
+    // Wait for error
+    await waitFor(() => {
+      expect(result.current.isError).toBe(true);
+    });
+
+    expect(result.current.error).toEqual(timeoutError);
+    expect(result.current.data).toBeUndefined();
+  });
+
+  it("should handle pagination correctly", async () => {
+    const paginatedResponse = {
+      keys: [mockKeys[0]], // Only first key
+      total_count: 15,
+      current_page: 2,
+      total_pages: 2,
+    };
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => paginatedResponse,
+    });
+
+    const { result } = renderHook(() => useDeletedKeys(2, 10), { wrapper });
+
+    // Wait for success
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    expect(result.current.data).toEqual(paginatedResponse);
+    expect(mockFetch).toHaveBeenCalledWith(
+      "/key/list?page=2&size=10&status=deleted&return_full_object=true&include_team_keys=true&include_created_by_keys=true",
+      {
+        method: "GET",
+        headers: {
+          Authorization: "Bearer test-access-token",
+          "Content-Type": "application/json",
+        },
+      },
+    );
+  });
+
+  it("should pass additional options along with status=deleted", async () => {
+    // Mock successful API call
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockKeysResponse,
+    });
+
+    const options = {
+      organizationID: "org-1",
+      teamID: "team-1",
+      selectedKeyAlias: "test-alias",
+    };
+
+    const { result } = renderHook(() => useDeletedKeys(1, 10, options), { wrapper });
+
+    // Wait for success
+    await waitFor(() => {
+      expect(result.current.isLoading).toBe(false);
+    });
+
+    const callUrl = mockFetch.mock.calls[0][0];
+    expect(callUrl).toContain("status=deleted");
+    expect(callUrl).toContain("organization_id=org-1");
+    expect(callUrl).toContain("team_id=team-1");
+    expect(callUrl).toContain("key_alias=test-alias");
+    expect(result.current.data).toEqual(mockKeysResponse);
   });
 });

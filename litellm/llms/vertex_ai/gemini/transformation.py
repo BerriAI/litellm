@@ -591,7 +591,7 @@ def _transform_request_body(
             data["toolConfig"] = tool_choice
         if safety_settings is not None:
             data["safetySettings"] = safety_settings
-        if generation_config is not None:
+        if generation_config is not None and len(generation_config) > 0:
             data["generationConfig"] = generation_config
         if cached_content is not None:
             data["cachedContent"] = cached_content

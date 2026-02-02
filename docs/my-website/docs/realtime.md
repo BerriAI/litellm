@@ -10,6 +10,7 @@ Supported Providers:
 - Azure
 - Google AI Studio (Gemini)
 - Vertex AI
+- Bedrock
 
 ## Proxy Usage
 

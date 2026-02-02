@@ -81,10 +81,10 @@ run_trivy_scans() {
     echo "Running Trivy scans..."
     
     echo "Scanning LiteLLM Docs..."
-    trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
+    trivy fs --ignorefile .trivyignore --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./docs/
     
     echo "Scanning LiteLLM UI..."
-    trivy fs --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
+    trivy fs --ignorefile .trivyignore --scanners vuln --dependency-tree --exit-code 1 --severity HIGH,CRITICAL,MEDIUM ./ui/
     
     echo "Trivy scans completed successfully"
 }
@@ -137,6 +137,23 @@ run_grype_scans() {
         "CVE-2019-1010025" # glibc pthread heap address leak - awaiting patched Wolfi glibc build
         "CVE-2026-22184" # zlib untgz buffer overflow - untgz unused + no fixed Wolfi build yet
         "GHSA-58pv-8j8x-9vj2" # jaraco.context path traversal - setuptools vendored only (v5.3.0), not used in application code (using v6.1.0+)
+        "GHSA-34x7-hfp2-rc4v" # node-tar hardlink path traversal - not applicable, tar CLI not exposed in application code
+        "GHSA-r6q2-hw4h-h46w" # node-tar not used by application runtime, Linux-only container, not affect by macOS APFS-specific exploit
+        "GHSA-8rrh-rw8j-w5fx" # wheel is from chainguard and will be handled by then TODO: Remove this after Chainguard updates the wheel
+        "CVE-2025-59465" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-55131" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59466" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-55130" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-59467" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2026-21637" # We do not use Node in application runtime, only used for building Admin UI
+        "CVE-2025-15281" # No fix available yet
+        "CVE-2026-0865" # No fix available yet
+        "CVE-2025-15282" # No fix available yet
+        "CVE-2026-0672" # No fix available yet
+        "CVE-2025-15366" # No fix available yet
+        "CVE-2025-15367" # No fix available yet
+        "CVE-2025-12781" # No fix available yet
+        "CVE-2025-11468" # No fix available yet
     )
 
     # Build JSON array of allowlisted CVE IDs for jq

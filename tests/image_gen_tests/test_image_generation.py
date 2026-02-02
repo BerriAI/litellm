@@ -112,7 +112,7 @@ class TestVertexImageGeneration(BaseImageGenTest):
 
         litellm.in_memory_llm_clients_cache = InMemoryCache()
         return {
-            "model": "vertex_ai/imagegeneration@006",
+            "model": "vertex_ai/imagen-3.0-fast-generate-001",
             "vertex_ai_project": "pathrise-convert-1606954137718",
             "vertex_ai_location": "us-central1",
             "n": 1,

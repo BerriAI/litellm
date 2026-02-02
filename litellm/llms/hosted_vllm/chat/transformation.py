@@ -23,7 +23,7 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 class HostedVLLMChatConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> List[str]:
         params = super().get_supported_openai_params(model)
-        params.append("reasoning_effort")
+        params.extend(["reasoning_effort", "thinking"])
         return params
 
     def map_openai_params(
@@ -41,6 +41,27 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             _tools = _remove_strict_from_schema(_tools)
         if _tools is not None:
             non_default_params["tools"] = _tools
+
+        # Handle thinking parameter - convert Anthropic-style to OpenAI-style reasoning_effort
+        # vLLM is OpenAI-compatible, so it understands reasoning_effort, not thinking
+        # Reference: https://github.com/BerriAI/litellm/issues/19761
+        thinking = non_default_params.pop("thinking", None)
+        if thinking is not None and isinstance(thinking, dict):
+            if thinking.get("type") == "enabled":
+                # Only convert if reasoning_effort not already set
+                if "reasoning_effort" not in non_default_params:
+                    budget_tokens = thinking.get("budget_tokens", 0)
+                    # Map budget_tokens to reasoning_effort level
+                    # Same logic as Anthropic adapter (translate_anthropic_thinking_to_reasoning_effort)
+                    if budget_tokens >= 10000:
+                        non_default_params["reasoning_effort"] = "high"
+                    elif budget_tokens >= 5000:
+                        non_default_params["reasoning_effort"] = "medium"
+                    elif budget_tokens >= 2000:
+                        non_default_params["reasoning_effort"] = "low"
+                    else:
+                        non_default_params["reasoning_effort"] = "minimal"
+
         return super().map_openai_params(
             non_default_params, optional_params, model, drop_params
         )

@@ -1,3 +1,4 @@
+import json
 import importlib
 import logging
 import os
@@ -990,6 +991,68 @@ class TestMCPServerManager:
         assert result.health_check_error is None
 
     @pytest.mark.asyncio
+    async def test_register_openapi_tools_includes_static_headers(self, tmp_path):
+        """Ensure OpenAPI-to-MCP tool calls include server.static_headers (Issue #19341)."""
+        manager = MCPServerManager()
+
+        spec_path = tmp_path / "openapi.json"
+        spec_path.write_text(
+            json.dumps(
+                {
+                    "openapi": "3.0.0",
+                    "info": {"title": "Demo", "version": "1.0.0"},
+                    "paths": {
+                        "/health": {
+                            "get": {
+                                "operationId": "health_check",
+                                "summary": "health",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+        server = MCPServer(
+            server_id="openapi-server",
+            name="openapi-server",
+            server_name="openapi-server",
+            url="https://example.com",
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.none,
+            static_headers={"Authorization": "STATIC token"},
+        )
+
+        captured: dict = {}
+
+        def fake_create_tool_function(path, method, operation, base_url, headers=None):
+            captured["headers"] = headers
+
+            async def tool_func(**kwargs):
+                return "ok"
+
+            return tool_func
+
+        with patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.create_tool_function",
+            side_effect=fake_create_tool_function,
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator.build_input_schema",
+            return_value={"type": "object", "properties": {}, "required": []},
+        ), patch(
+            "litellm.proxy._experimental.mcp_server.tool_registry.global_mcp_tool_registry.register_tool",
+            return_value=None,
+        ):
+            manager._register_openapi_tools(
+                spec_path=str(spec_path),
+                server=server,
+                base_url="https://example.com",
+            )
+
+        assert captured["headers"] is not None
+        assert captured["headers"]["Authorization"] == "STATIC token"
+
+    @pytest.mark.asyncio
     async def test_pre_call_tool_check_allowed_tools_list_allows_tool(self):
         """Test pre_call_tool_check allows tool when it's in allowed_tools list"""
         manager = MCPServerManager()
@@ -1822,7 +1885,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params):
+        async def mock_call_tool(params, host_progress_callback=None):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]

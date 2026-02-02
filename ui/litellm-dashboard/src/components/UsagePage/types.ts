@@ -52,6 +52,15 @@ export interface TopApiKeyData {
   tokens: number;
 }
 
+export interface TopModelData {
+  model: string;
+  spend: number;
+  requests: number;
+  successful_requests: number;
+  failed_requests: number;
+  tokens: number;
+}
+
 export interface ModelActivityData {
   label: string;
   total_requests: number;
@@ -64,6 +73,7 @@ export interface ModelActivityData {
   completion_tokens: number;
   total_spend: number;
   top_api_keys: TopApiKeyData[];
+  top_models: TopModelData[];
   daily_data: {
     date: string;
     metrics: {

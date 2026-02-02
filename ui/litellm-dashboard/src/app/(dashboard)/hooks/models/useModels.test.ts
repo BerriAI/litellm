@@ -101,7 +101,12 @@ describe("useModelsInfo", () => {
       "test-user-id",
       "Admin",
       1,
-      50
+      50,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -120,7 +125,12 @@ describe("useModelsInfo", () => {
       "test-user-id",
       "Admin",
       2,
-      25
+      25,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined
     );
   });
 
@@ -379,7 +389,11 @@ describe("useAllProxyModels", () => {
       "test-access-token",
       "test-user-id",
       "Admin",
-      true
+      true,
+      null,
+      true,
+      false,
+      "expand"
     );
     expect(modelAvailableCall).toHaveBeenCalledTimes(1);
   });

@@ -619,7 +619,7 @@ class VertexPassthroughLoggingHandler:
                 
                 # Add batch-specific metadata to indicate this is a pending batch job
                 litellm_model_response.choices = [Choices(
-                    finish_reason="batch_pending",
+                    finish_reason="stop",
                     index=0,
                     message={
                         "role": "assistant",
@@ -661,7 +661,7 @@ class VertexPassthroughLoggingHandler:
                 
                 # Add error-specific metadata
                 litellm_model_response.choices = [Choices(
-                    finish_reason="batch_error",
+                    finish_reason="stop",
                     index=0,
                     message={
                         "role": "assistant",
@@ -695,7 +695,7 @@ class VertexPassthroughLoggingHandler:
             
             # Add error-specific metadata
             litellm_model_response.choices = [Choices(
-                finish_reason="batch_error",
+                finish_reason="stop",
                 index=0,
                 message={
                     "role": "assistant",

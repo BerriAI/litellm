@@ -2,7 +2,7 @@ import type { DateRangePickerValue } from "@tremor/react";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 export type ExportFormat = "csv" | "json";
-export type ExportScope = "daily" | "daily_with_models";
+export type ExportScope = "daily" | "daily_with_keys" | "daily_with_models";
 export type EntityType = "tag" | "team" | "organization" | "customer" | "agent";
 
 export interface EntitySpendData {

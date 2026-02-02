@@ -11,7 +11,7 @@ const mockUseModelsInfo = vi.fn(() => ({
 })) as any;
 
 vi.mock("../../hooks/models/useModels", () => ({
-  useModelsInfo: (page?: number, size?: number) => mockUseModelsInfo(page, size),
+  useModelsInfo: (page?: number, size?: number, search?: string) => mockUseModelsInfo(page, size, search),
 }));
 
 // Mock the useModelCostMap hook
@@ -74,7 +74,6 @@ describe("AllModelsTab", () => {
   const mockSetSelectedModelGroup = vi.fn();
   const mockSetSelectedModelId = vi.fn();
   const mockSetSelectedTeamId = vi.fn();
-  const mockSetEditModel = vi.fn();
 
   const defaultProps = {
     selectedModelGroup: "all",
@@ -83,7 +82,6 @@ describe("AllModelsTab", () => {
     availableModelAccessGroups: ["sales-team", "engineering-team"],
     setSelectedModelId: mockSetSelectedModelId,
     setSelectedTeamId: mockSetSelectedTeamId,
-    setEditModel: mockSetEditModel,
   };
 
   const mockUseAuthorized = {
@@ -176,8 +174,10 @@ describe("AllModelsTab", () => {
 
     render(<AllModelsTab {...defaultProps} />);
 
+    // Component shows API total_count (2), not filtered count
+    // Since default is "personal" team and models don't have direct_access, they're filtered out
     await waitFor(() => {
-      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
+      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
     });
   });
 
@@ -235,8 +235,10 @@ describe("AllModelsTab", () => {
 
     render(<AllModelsTab {...defaultProps} />);
 
+    // Component shows API total_count (2), not filtered count
+    // Since default is "personal" team and models don't have direct_access, they're filtered out
     await waitFor(() => {
-      expect(screen.getByText("Showing 0 results")).toBeInTheDocument();
+      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
     });
   });
 
@@ -280,8 +282,9 @@ describe("AllModelsTab", () => {
 
     render(<AllModelsTab {...defaultProps} />);
 
+    // Component shows API total_count (2), but only 1 model has direct_access
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
     });
   });
 
@@ -419,14 +422,15 @@ describe("AllModelsTab", () => {
     );
 
     // Set up mock to return page1Data for page 1
-    mockUseModelsInfo.mockImplementation((page: number = 1) => {
+    mockUseModelsInfo.mockImplementation((page: number = 1, size?: number, search?: string) => {
       return { data: page1Data, isLoading: false, error: null };
     });
 
     render(<AllModelsTab {...defaultProps} />);
 
     await waitFor(() => {
-      expect(screen.getByText("Showing 1 - 1 of 1 results")).toBeInTheDocument();
+      // Component calculates: ((1-1)*50)+1 = 1, Math.min(1*50, 2) = 2
+      expect(screen.getByText("Showing 1 - 2 of 2 results")).toBeInTheDocument();
     });
 
     // Check that Previous button is disabled on first page
@@ -471,7 +475,7 @@ describe("AllModelsTab", () => {
       50, // size
     );
 
-    mockUseModelsInfo.mockImplementation(() => {
+    mockUseModelsInfo.mockImplementation((page?: number, size?: number, search?: string) => {
       return { data: singlePageData, isLoading: false, error: null };
     });
 

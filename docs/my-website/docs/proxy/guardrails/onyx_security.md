@@ -128,6 +128,7 @@ guardrails:
       mode: ["pre_call", "post_call", "during_call"] # Run at multiple stages
       api_key: os.environ/ONYX_API_KEY
       api_base: os.environ/ONYX_API_BASE
+      timeout: 10.0 # Optional, defaults to 10 seconds
 ```
 
 ### Required Parameters
@@ -137,6 +138,7 @@ guardrails:
 ### Optional Parameters
 
 - **`api_base`**: Onyx API base URL (defaults to `https://ai-guard.onyx.security`)
+- **`timeout`**: Request timeout in seconds (defaults to `10.0`)
 
 ## Environment Variables
 
@@ -145,4 +147,5 @@ You can set these environment variables instead of hardcoding values in your con
 ```shell
 export ONYX_API_KEY="your-api-key-here"
 export ONYX_API_BASE="https://ai-guard.onyx.security"   # Optional
+export ONYX_TIMEOUT=10                                  # Optional, timeout in seconds
 ```

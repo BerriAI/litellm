@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { Suspense, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 
 const RESULT_STORAGE_KEY = "litellm-mcp-oauth-result";
@@ -21,7 +21,7 @@ const resolveDefaultRedirect = () => {
   return "/";
 };
 
-const McpOAuthCallbackPage = () => {
+const McpOAuthCallbackContent = () => {
   const searchParams = useSearchParams();
 
   const payload = useMemo(() => {
@@ -64,6 +64,14 @@ const McpOAuthCallbackPage = () => {
           </p>
       </div>
     </div>
+  );
+};
+
+const McpOAuthCallbackPage = () => {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">Loading...</div>}>
+      <McpOAuthCallbackContent />
+    </Suspense>
   );
 };
 

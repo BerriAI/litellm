@@ -1413,6 +1413,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             user=getattr(chat_completion_response, "user", None),
         )
+        responses_api_response._hidden_params = getattr(chat_completion_response, "_hidden_params", {})
         return responses_api_response
 
     @staticmethod
@@ -1743,13 +1744,15 @@ class LiteLLMCompletionResponsesConfig:
             and usage.prompt_tokens_details is not None
         ):
             prompt_details = usage.prompt_tokens_details
-            input_details_dict: Dict[str, Optional[int]] = {}
+            input_details_dict: Dict[str, int] = {}
 
             if (
                 hasattr(prompt_details, "cached_tokens")
                 and prompt_details.cached_tokens is not None
             ):
                 input_details_dict["cached_tokens"] = prompt_details.cached_tokens
+            else:
+                input_details_dict["cached_tokens"] = 0
 
             if (
                 hasattr(prompt_details, "text_tokens")
@@ -1774,7 +1777,7 @@ class LiteLLMCompletionResponsesConfig:
             and usage.completion_tokens_details is not None
         ):
             completion_details = usage.completion_tokens_details
-            output_details_dict: Dict[str, Optional[int]] = {}
+            output_details_dict: Dict[str, int] = {}
             if (
                 hasattr(completion_details, "reasoning_tokens")
                 and completion_details.reasoning_tokens is not None
@@ -1782,6 +1785,8 @@ class LiteLLMCompletionResponsesConfig:
                 output_details_dict["reasoning_tokens"] = (
                     completion_details.reasoning_tokens
                 )
+            else:
+                output_details_dict["reasoning_tokens"] = 0
 
             if (
                 hasattr(completion_details, "text_tokens")

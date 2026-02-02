@@ -15,6 +15,7 @@ authors:
     title: "CTO, LiteLLM"
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+description: "Common questions and best practices for using gemini-3-pro-preview with LiteLLM Proxy and SDK."
 tags: [gemini, day 0 support, llms]
 hide_table_of_contents: false
 ---
