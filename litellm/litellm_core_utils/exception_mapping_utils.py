@@ -25,6 +25,7 @@ from ..exceptions import (
     Timeout,
     UnprocessableEntityError,
 )
+from litellm.litellm_core_utils.redact_api_keys import redact_api_keys
 
 
 class ExceptionCheckers:
@@ -251,10 +252,10 @@ def exception_type(  # type: ignore  # noqa: PLR0915
         original_exception=original_exception
     )
     try:
-        error_str = str(original_exception)
+        error_str = redact_api_keys(str(original_exception))
         if model:
             if hasattr(original_exception, "message"):
-                error_str = str(original_exception.message)
+                error_str = redact_api_keys(str(original_exception.message))
             if isinstance(original_exception, BaseException):
                 exception_type = type(original_exception).__name__
             else:
@@ -359,6 +360,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message = original_exception.message
                     else:
                         message = str(original_exception)
+
+                # Redact any API keys that may have leaked into the error message
+                message = redact_api_keys(message)
 
                 if message is not None and isinstance(
                     message, str
@@ -2050,6 +2054,9 @@ def exception_type(  # type: ignore  # noqa: PLR0915
                         message = original_exception.message
                     else:
                         message = str(original_exception)
+
+                # Redact any API keys that may have leaked into the error message
+                message = redact_api_keys(message)
 
                 # Azure OpenAI (especially Images) often nests error details under
                 # body["error"]. Detect content policy violations using the structured
