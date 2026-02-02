@@ -454,6 +454,14 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
       }
 
       // Prepare the payload with cost configuration and permission fields
+      const mcpInfoServerName =
+        restValues.server_name ||
+        restValues.url ||
+        mcpServer.server_name ||
+        mcpServer.url ||
+        restValues.alias ||
+        mcpServer.alias;
+
       const payload: Record<string, any> = {
         ...restValues,
         ...stdioFields,
@@ -462,7 +470,7 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         env_json: undefined,
         server_id: mcpServer.server_id,
         mcp_info: {
-          server_name: restValues.server_name || restValues.url,
+          server_name: mcpInfoServerName,
           description: restValues.description,
           mcp_server_cost_info: Object.keys(costConfig).length > 0 ? costConfig : null,
         },
