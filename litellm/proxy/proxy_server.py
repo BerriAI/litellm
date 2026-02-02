@@ -795,12 +795,18 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
 
     ## SEMANTIC TOOL FILTER ##
     # Read litellm_settings from config for semantic filter initialization
-    _config = proxy_config.get_config_state()
-    _litellm_settings = _config.get("litellm_settings", {})
-    ProxyStartupEvent._initialize_semantic_tool_filter(
-        llm_router=llm_router,
-        litellm_settings=_litellm_settings,
-    )
+    try:
+        verbose_proxy_logger.debug("About to initialize semantic tool filter")
+        _config = proxy_config.get_config_state()
+        _litellm_settings = _config.get("litellm_settings", {})
+        verbose_proxy_logger.debug(f"litellm_settings keys = {list(_litellm_settings.keys())}")
+        ProxyStartupEvent._initialize_semantic_tool_filter(
+            llm_router=llm_router,
+            litellm_settings=_litellm_settings,
+        )
+        verbose_proxy_logger.debug("After semantic tool filter initialization")
+    except Exception as e:
+        verbose_proxy_logger.error(f"Semantic filter init failed: {e}", exc_info=True)
 
     ## JWT AUTH ##
     ProxyStartupEvent._initialize_jwt_auth(
@@ -4759,14 +4765,24 @@ class ProxyStartupEvent:
         """Initialize MCP semantic tool filter if configured"""
         from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
         
+        verbose_proxy_logger.info(
+            f"Initializing semantic tool filter: llm_router={llm_router is not None}, "
+            f"litellm_settings keys={list(litellm_settings.keys())}"
+        )
+        
         mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
+        verbose_proxy_logger.debug(f"Semantic filter config: {mcp_semantic_filter_config}")
+        
         hook = SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
             llm_router=llm_router,
         )
         
         if hook:
+            verbose_proxy_logger.debug("✅ Semantic tool filter hook registered")
             litellm.logging_callback_manager.add_litellm_callback(hook)
+        else:
+            verbose_proxy_logger.warning("❌ Semantic tool filter hook not initialized")
 
     @classmethod
     def _initialize_jwt_auth(
