@@ -11,7 +11,7 @@ import sys
 import time
 import traceback
 import warnings
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 import enum
 from typing import (
     TYPE_CHECKING,

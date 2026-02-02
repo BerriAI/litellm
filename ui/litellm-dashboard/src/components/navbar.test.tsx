@@ -15,14 +15,8 @@ vi.mock("@/utils/proxyUtils", () => ({
 // Create mock functions that can be controlled in tests
 let mockUseThemeImpl = () => ({ logoUrl: null as string | null });
 let mockUseHealthReadinessImpl = () => ({ data: null as any });
-let mockGetLocalStorageItemImpl = (key: string) => null as string | null;
+let mockGetLocalStorageItemImpl = () => null as string | null;
 let mockUseDisableShowPromptsImpl = () => false;
-let mockUseAuthorizedImpl = () => ({
-  userId: "test-user",
-  userEmail: "test@example.com",
-  userRole: "Admin",
-  premiumUser: false,
-});
 
 vi.mock("@/contexts/ThemeContext", () => ({
   useTheme: () => mockUseThemeImpl(),
@@ -36,13 +30,9 @@ vi.mock("@/app/(dashboard)/hooks/useDisableShowPrompts", () => ({
   useDisableShowPrompts: () => mockUseDisableShowPromptsImpl(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
-  default: () => mockUseAuthorizedImpl(),
-}));
-
 vi.mock("@/utils/localStorageUtils", () => ({
   LOCAL_STORAGE_EVENT: "local-storage-change",
-  getLocalStorageItem: (key: string) => mockGetLocalStorageItemImpl(key),
+  getLocalStorageItem: () => mockGetLocalStorageItemImpl(),
   setLocalStorageItem: vi.fn(),
   removeLocalStorageItem: vi.fn(),
   emitLocalStorageChange: vi.fn(),
@@ -133,26 +123,13 @@ describe("Navbar", () => {
 
   it("should show premium user badge when premiumUser is true", async () => {
     const user = userEvent.setup();
-    mockUseAuthorizedImpl = () => ({
-      userId: "test-user",
-      userEmail: "test@example.com",
-      userRole: "Admin",
-      premiumUser: true,
-    });
-    renderWithProviders(<Navbar {...defaultProps} />);
+    const premiumProps = { ...defaultProps, premiumUser: true };
+    renderWithProviders(<Navbar {...premiumProps} />);
 
     await user.click(screen.getByText("User"));
 
     await waitFor(() => {
       expect(screen.getByText("Premium")).toBeInTheDocument();
-    });
-
-    // Reset mock
-    mockUseAuthorizedImpl = () => ({
-      userId: "test-user",
-      userEmail: "test@example.com",
-      userRole: "Admin",
-      premiumUser: false,
     });
   });
 
@@ -190,10 +167,7 @@ describe("Navbar", () => {
     const user = userEvent.setup();
 
     // Initially disabled
-    mockGetLocalStorageItemImpl = (key: string) => {
-      if (key === "disableShowNewBadge") return "false";
-      return null;
-    };
+    mockGetLocalStorageItemImpl = () => "false";
 
     renderWithProviders(<Navbar {...defaultProps} />);
 
@@ -212,9 +186,6 @@ describe("Navbar", () => {
     const localStorageUtils = vi.mocked(await import("@/utils/localStorageUtils"));
     expect(localStorageUtils.setLocalStorageItem).toHaveBeenCalledWith("disableShowNewBadge", "true");
     expect(localStorageUtils.emitLocalStorageChange).toHaveBeenCalledWith("disableShowNewBadge");
-
-    // Reset mock
-    mockGetLocalStorageItemImpl = (key: string) => null;
   });
 
   it("should handle logout functionality", async () => {

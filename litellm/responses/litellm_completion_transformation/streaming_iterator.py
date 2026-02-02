@@ -869,6 +869,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                 try:
                     chunk = self.litellm_custom_stream_wrapper.__next__()
                     self._ensure_output_item_for_chunk(chunk)
+                    # Emit any just-queued output_item event
+                    if self._pending_response_events:
+                        return self._pending_response_events.pop(0)
                     self.collected_chat_completion_chunks.append(chunk)
                     response_api_chunk = (
                         self._transform_chat_completion_chunk_to_response_api_chunk(
@@ -876,9 +879,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         )
                     )
                     if response_api_chunk:
-                        self._pending_response_events.append(response_api_chunk)
-                    if self._pending_response_events:
-                        return self._pending_response_events.pop(0)
+                        return response_api_chunk
                     # Otherwise, loop to next chunk
                 except StopIteration:
                     return self.common_done_event_logic(sync_mode=True)
