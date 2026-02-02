@@ -233,8 +233,15 @@ class ProxyInitializationHelpers:
                 if requests_env.isdigit():
                     cmd.extend(["--requests", requests_env])
                 try:
-                    print("LiteLLM: Auto-benchmark RPS suite starting (1k–10k RPS, 10 runs)", flush=True)
-                    subprocess.run(cmd, env=env, cwd=_repo_root)
+                    print("LiteLLM: Auto-benchmark RPS suite starting in background (1k–10k RPS, 10 runs)", flush=True)
+                    subprocess.Popen(
+                        cmd,
+                        env=env,
+                        cwd=_repo_root,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 except Exception as e:
                     print(f"LiteLLM: Auto-benchmark RPS suite failed: {e}", file=sys.stderr)
             else:
@@ -244,8 +251,15 @@ class ProxyInitializationHelpers:
                     out_path = output if os.path.isabs(output) else os.path.join(_repo_root, output)
                 cmd = [sys.executable, script_path, "--no-wait", "--output", out_path, "--proxy-url", env["LITELLM_PROXY_URL"], "--provider-url", env["PROVIDER_URL"]] + extra_args
                 try:
-                    print(f"LiteLLM: Auto-benchmark starting, output -> {out_path}", flush=True)
-                    subprocess.run(cmd, env=env, cwd=_repo_root)
+                    print(f"LiteLLM: Auto-benchmark starting in background, output -> {out_path}", flush=True)
+                    subprocess.Popen(
+                        cmd,
+                        env=env,
+                        cwd=_repo_root,
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 except Exception as e:
                     print(f"LiteLLM: Auto-benchmark failed: {e}", file=sys.stderr)
 
