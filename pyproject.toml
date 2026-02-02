@@ -184,6 +184,7 @@ plugins = "pydantic.mypy"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "--import-mode=importlib"
 retries = 20
 retry_delay = 5
 markers = [
