@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Run the proxy-vs-provider benchmark 10 times: 1k, 2k, ..., 10k RPS, one at a time.
+Run the proxy-vs-provider benchmark 30 times: 1k, 2k, ..., 30k RPS, one at a time.
 Each run writes to a separate results file (e.g. benchmark_results_1000rps.txt, ...).
 
 Usage:
-  # Wait for proxy, then run 10 tests (1k–10k RPS), 1M requests each:
+  # Wait for proxy, then run 30 tests (1k–30k RPS), 1M requests each:
   python scripts/run_benchmark_rps_suite.py
 
   # Skip proxy wait (proxy already up):
@@ -22,13 +22,13 @@ import os
 import subprocess
 import sys
 
-# RPS values for the 10 runs: 1k, 2k, ..., 10k
-RPS_LEVELS = [1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000, 9000, 10000]
+# RPS values for the runs: 1k, 2k, ..., 30k
+RPS_LEVELS = list(range(1000, 31_000, 1000))
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run benchmark 10 times at 1k–10k RPS, one at a time, each to a separate file.",
+        description="Run benchmark 30 times at 1k–30k RPS, one at a time, each to a separate file.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -74,7 +74,8 @@ def main() -> int:
     env["LITELLM_PROXY_URL"] = args.proxy_url
     env["PROVIDER_URL"] = args.provider_url
 
-    print(f"RPS suite: 10 runs at {RPS_LEVELS[0]}–{RPS_LEVELS[-1]} RPS, {args.requests} requests each")
+    num_runs = len(RPS_LEVELS)
+    print(f"RPS suite: {num_runs} runs at {RPS_LEVELS[0]}–{RPS_LEVELS[-1]} RPS, {args.requests} requests each")
     print(f"Output dir: {os.path.abspath(output_dir)}")
     print()
 
@@ -97,7 +98,7 @@ def main() -> int:
         # Only wait for proxy on first run (unless --no-wait)
         if i > 1 or args.no_wait:
             cmd.append("--no-wait")
-        print(f"[{i}/10] RPS={rps} -> {os.path.basename(out_file)}")
+        print(f"[{i}/{num_runs}] RPS={rps} -> {os.path.basename(out_file)}")
         cwd = os.path.dirname(script_dir)  # repo root so benchmark script finds benchmark_proxy_vs_provider.py
         ret = subprocess.run(cmd, env=env, cwd=cwd)
         if ret.returncode != 0:
@@ -105,7 +106,7 @@ def main() -> int:
             return ret.returncode
         print()
 
-    print("All 10 runs completed.")
+    print(f"All {num_runs} runs completed.")
     return 0
 
 
