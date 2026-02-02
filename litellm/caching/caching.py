@@ -302,8 +302,11 @@ class Cache:
         verbose_logger.debug("\nCreated cache key: %s", cache_key)
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
+        # Remove preset_cache_key from kwargs to avoid "got multiple values" TypeError
+        # when kwargs already contains preset_cache_key from upstream callers
+        kwargs_for_preset = {k: v for k, v in kwargs.items() if k != "preset_cache_key"}
         self._set_preset_cache_key_in_kwargs(
-            preset_cache_key=hashed_cache_key, **kwargs
+            preset_cache_key=hashed_cache_key, **kwargs_for_preset
         )
         return hashed_cache_key
 
