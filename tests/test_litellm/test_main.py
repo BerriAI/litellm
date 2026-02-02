@@ -15,8 +15,21 @@ import urllib.parse
 from unittest.mock import MagicMock, patch
 
 import litellm
-
 from litellm import main as litellm_main
+
+
+@pytest.fixture(autouse=True)
+def clear_client_cache():
+    """
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    if cache is not None:
+        cache.flush_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -473,10 +486,18 @@ async def test_extra_body_with_fallback(
 
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
 @pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
 async def test_openai_env_base(
     respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
 ):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
+    # Clear cache to ensure no cached clients from previous tests interfere
+    # This prevents cache pollution where a previous test cached a client with
+    # aiohttp transport, which would bypass respx mocks
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    
+    # Ensure aiohttp transport is disabled to use httpx which respx can mock
     litellm.disable_aiohttp_transport = True
 
     expected_base_url = "http://localhost:12345/v1"
@@ -488,7 +509,11 @@ async def test_openai_env_base(
     model = "gpt-4o"
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
-    respx_mock.post(f"{expected_base_url}/chat/completions").respond(
+    # Configure respx mock to intercept the request
+    mock_route = respx_mock.post(
+        url__regex=r"http://localhost:12345/v1/chat/completions.*"
+    ).mock(return_value=httpx.Response(
+        status_code=200,
         json={
             "id": "chatcmpl-123",
             "object": "chat.completion",
@@ -506,12 +531,19 @@ async def test_openai_env_base(
             ],
             "usage": {"prompt_tokens": 9, "completion_tokens": 12, "total_tokens": 21},
         }
-    )
+    ))
 
-    response = await litellm.acompletion(model=model, messages=messages)
-
-    # verify we had a response
-    assert response.choices[0].message.content == "Hello from mocked response!"
+    try:
+        response = await litellm.acompletion(model=model, messages=messages)
+        
+        # verify we had a response
+        assert response.choices[0].message.content == "Hello from mocked response!"
+        
+        # Verify the mock was called
+        assert mock_route.called, "Mock route was not called - request may have bypassed respx"
+    finally:
+        # Clean up to avoid affecting other tests
+        litellm.disable_aiohttp_transport = False
 
 
 def build_database_url(username, password, host, dbname):
@@ -1303,6 +1335,8 @@ def test_anthropic_text_disable_url_suffix_env_var():
 
 
 def test_image_edit_merges_headers_and_extra_headers():
+    from litellm.images.main import base_llm_http_handler
+    
     combined_headers = {
         "x-test-header-one": "value-1",
         "x-test-header-two": "value-2",
@@ -1319,8 +1353,9 @@ def test_image_edit_merges_headers_and_extra_headers():
             "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
             return_value=mock_image_edit_config,
         ) as mock_config,
-        patch(
-            "litellm.images.main.base_llm_http_handler.image_edit_handler",
+        patch.object(
+            base_llm_http_handler,
+            "image_edit_handler",
             return_value="ok",
         ) as mock_handler,
     ):

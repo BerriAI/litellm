@@ -76,7 +76,7 @@ response = requests.post(
 print(response.json())
 ```
 
-### GET /fallback/{model}
+### GET /fallback/\{model\}
 
 Get fallback configuration for a specific model.
 
@@ -112,7 +112,7 @@ response = requests.get(
 print(response.json())
 ```
 
-### DELETE /fallback/{model}
+### DELETE /fallback/\{model\}
 
 Delete fallback configuration for a specific model.
 
@@ -150,9 +150,6 @@ print(response.json())
 
 ### Test fallback
 
-</TabItem>
-<TabItem value="proxy" label="PROXY">
-
 ```bash
 curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 -H 'Content-Type: application/json' \
@@ -169,9 +166,6 @@ curl -X POST 'http://0.0.0.0:4000/chat/completions' \
 }
 '
 ```
-
-</TabItem>
-</Tabs>
 
 
 

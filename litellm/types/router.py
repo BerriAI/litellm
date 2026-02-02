@@ -404,6 +404,10 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     aws_access_key_id: Optional[str]
     aws_secret_access_key: Optional[str]
     aws_region_name: Optional[str]
+    ## AWS S3 VECTORS ##
+    vector_bucket_name: Optional[str]
+    index_name: Optional[str]
+    embedding_model: Optional[str]
     ## IBM WATSONX ##
     watsonx_region_name: Optional[str]
     ## CUSTOM PRICING ##
@@ -619,7 +623,13 @@ class SearchToolLiteLLMParams(TypedDict, total=False):
     max_retries: Optional[int]
 
 
-class SearchToolTypedDict(TypedDict):
+class SearchToolInfoTypedDict(TypedDict, total=False):
+    """Optional metadata about a search tool."""
+
+    description: str
+
+
+class SearchToolTypedDict(TypedDict, total=False):
     """
     Configuration for a search tool in the router.
 
@@ -635,6 +645,7 @@ class SearchToolTypedDict(TypedDict):
 
     search_tool_name: Required[str]
     litellm_params: Required[SearchToolLiteLLMParams]
+    search_tool_info: SearchToolInfoTypedDict
 
 
 class GuardrailLiteLLMParams(TypedDict, total=False):

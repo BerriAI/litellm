@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union, cast, overload
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -903,11 +903,11 @@ def convert_to_anthropic_image_obj(
             media_type=media_type,
             data=base64_data,
         )
+    except litellm.ImageFetchError:
+        raise
     except Exception as e:
-        if "Error: Unable to fetch image from URL" in str(e):
-            raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {str(e)}"""
         )
 
 
@@ -1462,7 +1462,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def convert_to_gemini_tool_call_result(
+def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
 ) -> Union[VertexPartType, List[VertexPartType]]:
@@ -1529,6 +1529,33 @@ def convert_to_gemini_tool_call_result(
                             verbose_logger.warning(
                                 f"Failed to process image in tool response: {e}"
                             )
+                elif content_type in ("file", "input_file"):
+                    # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
+                    file_data = content.get("file_data", "")
+                    if not file_data:
+                        file_content = content.get("file", {})
+                        file_data = (
+                            file_content.get("file_data", "")
+                            if isinstance(file_content, dict)
+                            else file_content
+                            if isinstance(file_content, str)
+                            else ""
+                        )
+
+                    if file_data:
+                        # Convert file to base64 blob format for Gemini
+                        try:
+                            file_obj = convert_to_anthropic_image_obj(
+                                file_data, format=None
+                            )
+                            inline_data = BlobType(
+                                data=file_obj["data"],
+                                mime_type=file_obj["media_type"],
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process file in tool response: {e}"
+                            )
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
@@ -1555,8 +1582,6 @@ def convert_to_gemini_tool_call_result(
     # For Computer Use, the response should contain structured data like {"url": "..."}
     response_data: dict
     try:
-        import json
-
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed = json.loads(content_str)
@@ -1607,6 +1632,7 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
 
 def convert_to_anthropic_tool_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
+    force_base64: bool = False,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1652,13 +1678,16 @@ def convert_to_anthropic_tool_result(
         ] = []
         for content in content_list:
             if content["type"] == "text":
-                anthropic_content_list.append(
-                    AnthropicMessagesToolResultContent(
-                        type="text",
-                        text=content["text"],
-                        cache_control=content.get("cache_control", None),
-                    )
-                )
+                # Only include cache_control if explicitly set and not None
+                # to avoid sending "cache_control": null which breaks some API channels
+                text_content: AnthropicMessagesToolResultContent = {
+                    "type": "text",
+                    "text": content["text"],
+                }
+                cache_control_value = content.get("cache_control")
+                if cache_control_value is not None:
+                    text_content["cache_control"] = cache_control_value
+                anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
                 format = (
                     content["image_url"].get("format")
@@ -1666,13 +1695,13 @@ def convert_to_anthropic_tool_result(
                     else None
                 )
                 _anthropic_image_param = create_anthropic_image_param(
-                    content["image_url"], format=format
+                    content["image_url"], format=format, is_bedrock_invoke=force_base64
                 )
                 _anthropic_image_param = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_image_param,
                     original_content_element=content,
                 )
-                anthropic_content_list.append(_anthropic_image_param)
+                anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -1989,223 +2018,6 @@ def anthropic_process_openai_file_message(
     )
 
 
-def _sanitize_empty_text_content(
-    message: AllMessageValues,
-) -> AllMessageValues:
-    """
-    Case C: Sanitize empty text content
-    - Replace empty or whitespace-only text content with a placeholder message.
-        
-    Returns:
-        The message with sanitized content if needed, otherwise the original message
-    """
-    if message.get("role") in ["user", "assistant"]:
-        content = message.get("content")
-        if isinstance(content, str):
-            if not content or not content.strip():
-                message = dict(message)  # Make a copy
-                message["content"] = "[System: Empty message content sanitised to satisfy protocol]"
-                verbose_logger.debug(
-                    f"_sanitize_empty_text_content: Replaced empty text content in {message.get('role')} message"
-                )
-    return message
-
-
-def _add_missing_tool_results(
-    current_message: AllMessageValues,
-    messages: List[AllMessageValues],
-    current_index: int,
-) -> List[AllMessageValues]:
-    """
-    Case A: Missing tool_result for tool_use (orphaned tool calls)
-    - If an assistant message has tool_calls but no corresponding tool result follows,
-      add a dummy tool result message indicating the user did not provide the result.
-
-    Returns:
-        A list containing the assistant message followed by any dummy tool results needed
-    """
-    result_messages: List[AllMessageValues] = []
-    tool_calls = current_message.get("tool_calls")
-    
-    if not tool_calls or len(tool_calls) == 0:
-        return [current_message]
-    
-    # Collect all tool_call_ids from this assistant message
-    expected_tool_call_ids = set()
-    for tool_call in tool_calls:
-        tool_call_id = None
-        if isinstance(tool_call, dict):
-            tool_call_id = tool_call.get("id")
-        else:
-            tool_call_id = getattr(tool_call, "id", None)
-        if tool_call_id:
-            expected_tool_call_ids.add(tool_call_id)
-    
-    found_tool_call_ids = set()
-    j = current_index + 1
-    
-    while j < len(messages):
-        next_msg = messages[j]
-        next_role = next_msg.get("role")
-        
-        if next_role == "assistant":
-            break
-        
-        if next_role in ["tool", "function"]:
-            tool_call_id = next_msg.get("tool_call_id")
-            if tool_call_id:
-                found_tool_call_ids.add(tool_call_id)
-        
-        j += 1
-    
-    # Find missing tool results
-    missing_tool_call_ids = expected_tool_call_ids - found_tool_call_ids
-    
-    if missing_tool_call_ids:
-        verbose_logger.debug(
-            f"_add_missing_tool_results: Found {len(missing_tool_call_ids)} orphaned tool calls. Adding dummy tool results."
-        )
-        
-        result_messages.append(current_message)
-        
-        for tool_call_id in missing_tool_call_ids:
-            tool_name = "unknown_tool"
-            for tool_call in tool_calls:
-                tc_id = None
-                if isinstance(tool_call, dict):
-                    tc_id = tool_call.get("id")
-                else:
-                    tc_id = getattr(tool_call, "id", None)
-                
-                if tc_id == tool_call_id:
-                    if isinstance(tool_call, dict):
-                        function = tool_call.get("function", {})
-                        if isinstance(function, dict):
-                            tool_name = function.get("name", "unknown_tool")
-                        else:
-                            tool_name = getattr(function, "name", "unknown_tool")
-                    else:
-                        function = getattr(tool_call, "function", None)
-                        if function:
-                            tool_name = getattr(function, "name", "unknown_tool")
-                    break
-            
-            dummy_tool_result: ChatCompletionToolMessage = {
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "content": f"[System: Tool execution skipped/interrupted by user. No result provided for tool '{tool_name}'.]",
-            }
-            result_messages.append(dummy_tool_result)
-        
-        return result_messages
-    
-    return [current_message]
-
-
-def _is_orphaned_tool_result(
-    current_message: AllMessageValues,
-    sanitized_messages: List[AllMessageValues],
-) -> bool:
-    """
-    Case B: Orphaned tool_result (unexpected result)
-    - Check if a tool message references a tool_call_id that doesn't exist in the previous
-      assistant message.
-        
-    Returns:
-        True if this is an orphaned tool result that should be removed, False otherwise
-    """
-    if current_message.get("role") not in ["tool", "function"]:
-        return False
-    
-    tool_call_id = current_message.get("tool_call_id")
-    
-    if not tool_call_id:
-        return False
-    
-    # Look back to find the most recent assistant message with tool_calls
-    found_matching_tool_call = False
-    
-    for j in range(len(sanitized_messages) - 1, -1, -1):
-        prev_msg = sanitized_messages[j]
-        if prev_msg.get("role") == "assistant":
-            tool_calls = prev_msg.get("tool_calls")
-            if tool_calls:
-                for tool_call in tool_calls:
-                    tc_id = None
-                    if isinstance(tool_call, dict):
-                        tc_id = tool_call.get("id")
-                    else:
-                        tc_id = getattr(tool_call, "id", None)
-                    
-                    if tc_id == tool_call_id:
-                        found_matching_tool_call = True
-                        break
-            
-            break
-    
-    if not found_matching_tool_call:
-        verbose_logger.debug(
-            "_is_orphaned_tool_result: Found orphaned tool result with redacted tool_call_id"
-        )
-        return True
-    
-    return False
-
-
-def sanitize_messages_for_tool_calling(
-    messages: List[AllMessageValues],
-) -> List[AllMessageValues]:
-    """
-    Sanitize messages for tool calling to handle common issues when modify_params=True:
-    
-    Case A: Missing tool_result for tool_use (orphaned tool calls)
-    - If an assistant message has tool_calls but no corresponding tool result follows,
-      add a dummy tool result message indicating the user did not provide the result.
-    
-    Case B: Orphaned tool_result (unexpected result)
-    - If a tool message references a tool_call_id that doesn't exist in the previous
-      assistant message, remove that tool message.
-    
-    Case C: Empty text content
-    - Replace empty or whitespace-only text content with a placeholder message.
-    
-    This function operates on OpenAI format messages before they are converted to
-    provider-specific formats.
-    """
-    if not litellm.modify_params:
-        return messages
-    
-    sanitized_messages: List[AllMessageValues] = []
-    i = 0
-    
-    while i < len(messages):
-        current_message = messages[i]
-        
-        # Case C: Sanitize empty text content
-        current_message = _sanitize_empty_text_content(current_message)
-        
-        # Case A: Check if assistant message has tool_calls without following tool results
-        if current_message.get("role") == "assistant":
-            result_messages = _add_missing_tool_results(current_message, messages, i)
-            
-            # If dummy tool results were added, extend sanitized_messages and continue
-            if len(result_messages) > 1:
-                sanitized_messages.extend(result_messages)
-                i += 1
-                continue
-        
-        # Case B: Check for orphaned tool results
-        if _is_orphaned_tool_result(current_message, sanitized_messages):
-            i += 1
-            continue  # Skip this orphaned tool result
-        
-        # Add the message to sanitized list
-        sanitized_messages.append(current_message)
-        i += 1
-    
-    return sanitized_messages
-
-
 def anthropic_messages_pt(  # noqa: PLR0915
     messages: List[AllMessageValues],
     model: str,
@@ -2225,9 +2037,6 @@ def anthropic_messages_pt(  # noqa: PLR0915
     5. System messages are a separate param to the Messages API
     6. Ensure we only accept role, content. (message.name is not supported)
     """
-    # Sanitize messages for tool calling issues when modify_params=True
-    messages = sanitize_messages_for_tool_calling(messages)
-    
     # add role=tool support to allow function call result/error submission
     user_message_types = {"user", "tool", "function"}
     # reformat messages to ensure user/assistant are alternating, if there's either 2 consecutive 'user' messages or 2 consecutive 'assistant' message, merge them.
@@ -2247,6 +2056,12 @@ def anthropic_messages_pt(  # noqa: PLR0915
             )
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
+
+    # Bedrock invoke models have format: invoke/...
+    # Vertex AI Anthropic also doesn't support URL sources for images
+    is_bedrock_invoke = model.lower().startswith("invoke/")
+    is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
+    force_base64 = is_bedrock_invoke or is_vertex_ai
 
     msg_i = 0
     while msg_i < len(messages):
@@ -2357,13 +2172,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ):
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block)
+                    convert_to_anthropic_tool_result(
+                        user_message_types_block, force_base64=force_base64
+                    )
                 )
 
             msg_i += 1
 
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
+
+        # Track unique tool IDs in this merge block to avoid duplication
+        unique_tool_ids: Set[str] = set()
 
         assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
@@ -2458,13 +2278,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                 )
-                # AnthropicMessagesAssistantMessageValues includes AnthropicMessagesToolUseParam
-                assistant_content.extend(
-                    cast(
-                        List[AnthropicMessagesAssistantMessageValues],
-                        tool_invoke_results,
+
+                # Prevent "tool_use ids must be unique" errors by filtering duplicates
+                # This can happen when merging history that already contains the tool calls
+                for item in tool_invoke_results:
+                    # tool_use items are typically dicts, but handle objects just in case
+                    item_id = (
+                        item.get("id")
+                        if isinstance(item, dict)
+                        else getattr(item, "id", None)
                     )
-                )
+
+                    if item_id:
+                        if item_id in unique_tool_ids:
+                            continue
+                        unique_tool_ids.add(item_id)
+
+                    assistant_content.append(
+                        cast(AnthropicMessagesAssistantMessageValues, item)
+                    )
 
             assistant_function_call = assistant_content_block.get("function_call")
 
@@ -3453,21 +3285,17 @@ def _convert_to_bedrock_tool_call_invoke(
                 id = tool["id"]
                 name = tool["function"].get("name", "")
                 arguments = tool["function"].get("arguments", "")
+                arguments_dict = json.loads(arguments) if arguments else {}
+                # Ensure arguments_dict is always a dict (Bedrock requires toolUse.input to be an object)
+                # When some providers return arguments: '""' (JSON-encoded empty string), json.loads returns ""
+                if not isinstance(arguments_dict, dict):
+                    arguments_dict = {}
                 if not arguments or not arguments.strip():
-                    arguments_input = {}
+                    arguments_dict = {}
                 else:
-                    # Try to parse the arguments JSON
-                    try:
-                        arguments_input = json.loads(arguments)
-                    except json.JSONDecodeError as e:
-                        verbose_logger.warning(
-                            f"Malformed JSON in tool call arguments for tool '{name}': {str(e)}. "
-                            f"Storing as raw string to allow conversation to continue."
-                        )
-                        arguments_input = arguments
-                
+                    arguments_dict = json.loads(arguments)
                 bedrock_tool = BedrockToolUseBlock(
-                    input=arguments_input, name=name, toolUseId=id
+                    input=arguments_dict, name=name, toolUseId=id
                 )
                 bedrock_content_block = BedrockContentBlock(toolUse=bedrock_tool)
                 _parts_list.append(bedrock_content_block)
@@ -4567,6 +4395,32 @@ def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
     return None
 
 
+def _is_bedrock_tool_block(tool: dict) -> bool:
+    """
+    Check if a tool is already a BedrockToolBlock.
+    
+    BedrockToolBlock has one of: systemTool, toolSpec, or cachePoint.
+    This is used to detect tools that are already in Bedrock format
+    (e.g., systemTool for Nova grounding) vs OpenAI-style function tools
+    that need transformation.
+    
+    Args:
+        tool: The tool dict to check
+        
+    Returns:
+        True if the tool is already a BedrockToolBlock, False otherwise
+        
+    Examples:
+        >>> _is_bedrock_tool_block({"systemTool": {"name": "nova_grounding"}})
+        True
+        >>> _is_bedrock_tool_block({"type": "function", "function": {...}})
+        False
+    """
+    return isinstance(tool, dict) and (
+        "systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool
+    )
+
+
 def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -4592,7 +4446,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     ]
     """
     """
-    Bedrock toolConfig looks like: 
+    Bedrock toolConfig looks like:
     "tools": [
         {
             "toolSpec": {
@@ -4620,6 +4474,13 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
+        # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
+        if _is_bedrock_tool_block(tool):
+            # Already a BedrockToolBlock, pass it through
+            tool_block_list.append(tool)  # type: ignore
+            continue
+
+        # Handle regular OpenAI-style function tools
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )
@@ -4636,9 +4497,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
-        # flatten the defs
-        for _, value in defs_copy.items():
-            unpack_defs(value, defs_copy)
+        # Expand $ref references in parameters using the definitions
+        # Note: We don't pre-flatten defs as that causes exponential memory growth
+        # with circular references (see issue #19098). unpack_defs handles nested
+        # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(

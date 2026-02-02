@@ -2,7 +2,7 @@
 // A2A Protocol (JSON-RPC 2.0) implementation for sending messages to agents
 
 import { v4 as uuidv4 } from "uuid";
-import { getProxyBaseUrl } from "../../networking";
+import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "../../networking";
 import { A2ATaskMetadata } from "../chat_ui/types";
 
 interface A2AMessagePart {
@@ -143,7 +143,7 @@ export const makeA2ASendMessageRequest = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(jsonRpcRequest),
@@ -276,7 +276,7 @@ export const makeA2AStreamMessageRequest = async (
     const response = await fetch(url, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${accessToken}`,
+        [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(jsonRpcRequest),

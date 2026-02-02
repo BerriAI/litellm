@@ -15,6 +15,17 @@ import TabItem from '@theme/TabItem';
 
 <br />
 
+:::tip Gemini API vs Vertex AI
+| Model Format | Provider | Auth Required |
+|-------------|----------|---------------|
+| `gemini/gemini-2.0-flash` | Gemini API | `GEMINI_API_KEY` (simple API key) |
+| `vertex_ai/gemini-2.0-flash` | Vertex AI | GCP credentials + project |
+| `gemini-2.0-flash` (no prefix) | Vertex AI | GCP credentials + project |
+
+**If you just want to use an API key** (like OpenAI), use the `gemini/` prefix.
+
+Models without a prefix default to Vertex AI which requires full GCP authentication.
+:::
 
 ## API Keys
 
@@ -1547,16 +1558,21 @@ LiteLLM Supports the following image types passed in `url`
 - Images with direct links - https://storage.googleapis.com/github-repo/img/gemini/intro/landmark3.jpg
 - Image in local storage - ./localimage.jpeg
 
-## Image Resolution Control (Gemini 3+)
+## Media Resolution Control (Images & Videos)
 
-For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images in your request.
+For Gemini 3+ models, LiteLLM supports per-part media resolution control using OpenAI's `detail` parameter. This allows you to specify different resolution levels for individual images and videos in your request, whether using `image_url` or `file` content types.
 
 **Supported `detail` values:**
 - `"low"` - Maps to `media_resolution: "low"` (280 tokens for images, 70 tokens per frame for videos)
+- `"medium"` - Maps to `media_resolution: "medium"`
 - `"high"` - Maps to `media_resolution: "high"` (1120 tokens for images)
+- `"ultra_high"` - Maps to `media_resolution: "ultra_high"`
 - `"auto"` or `None` - Model decides optimal resolution (no `media_resolution` set)
 
-**Usage Example:**
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="images" label="Images">
 
 ```python
 from litellm import completion
@@ -1593,9 +1609,192 @@ response = completion(
 )
 ```
 
+</TabItem>
+<TabItem value="videos" label="Videos with Files">
+
+```python
+from litellm import completion
+
+messages = [
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "text",
+                "text": "Analyze this video"
+            },
+            {
+                "type": "file",
+                "file": {
+                    "file_id": "gs://my-bucket/video.mp4",
+                    "format": "video/mp4",
+                    "detail": "high"  # High resolution for detailed video analysis
+                }
+            }
+        ]
+    }
+]
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=messages,
+)
+```
+
+</TabItem>
+</Tabs>
+
 :::info
-**Per-Part Resolution:** Each image in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature is only available for Gemini 3+ models.
+**Per-Part Resolution:** Each image or video in your request can have its own `detail` setting, allowing mixed-resolution requests (e.g., a high-res chart alongside a low-res icon). This feature works with both `image_url` and `file` content types, and is only available for Gemini 3+ models.
 :::
+
+## Video Metadata Control
+
+For Gemini 3+ models, LiteLLM supports fine-grained video processing control through the `video_metadata` field. This allows you to specify frame extraction rates and time ranges for video analysis.
+
+**Supported `video_metadata` parameters:**
+
+| Parameter | Type | Description | Example |
+|-----------|------|-------------|---------|
+| `fps` | Number | Frame extraction rate (frames per second) | `5` |
+| `start_offset` | String | Start time for video clip processing | `"10s"` |
+| `end_offset` | String | End time for video clip processing | `"60s"` |
+
+:::note
+**Field Name Conversion:** LiteLLM automatically converts snake_case field names to camelCase for the Gemini API:
+- `start_offset` → `startOffset`
+- `end_offset` → `endOffset`
+- `fps` remains unchanged
+:::
+
+:::warning
+- **Gemini 3+ Only:** This feature is only available for Gemini 3.0 and newer models
+- **Video Files Recommended:** While `video_metadata` is designed for video files, error handling for other media types is delegated to the Vertex AI API
+- **File Formats Supported:** Works with `gs://`, `https://`, and base64-encoded video files
+:::
+
+**Usage Examples:**
+
+<Tabs>
+<TabItem value="basic" label="Basic Video Metadata">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Analyze this video clip"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "gs://my-bucket/video.mp4",
+                        "format": "video/mp4",
+                        "video_metadata": {
+                            "fps": 5,               # Extract 5 frames per second
+                            "start_offset": "10s",  # Start from 10 seconds
+                            "end_offset": "60s"     # End at 60 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="combined" label="Combined with Detail">
+
+```python
+from litellm import completion
+
+response = completion(
+    model="gemini/gemini-3-pro-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Provide detailed analysis of this video segment"},
+                {
+                    "type": "file",
+                    "file": {
+                        "file_id": "https://example.com/presentation.mp4",
+                        "format": "video/mp4",
+                        "detail": "high",  # High resolution for detailed analysis
+                        "video_metadata": {
+                            "fps": 10,              # Extract 10 frames per second
+                            "start_offset": "30s",  # Start from 30 seconds
+                            "end_offset": "90s"     # End at 90 seconds
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+)
+
+print(response.choices[0].message.content)
+```
+
+</TabItem>
+<TabItem value="proxy" label="PROXY">
+
+1. Setup config.yaml
+
+```yaml
+model_list:
+  - model_name: gemini-3-pro
+    litellm_params:
+      model: gemini/gemini-3-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+```
+
+2. Start proxy
+
+```bash
+litellm --config /path/to/config.yaml
+```
+
+3. Make request
+
+```bash
+curl http://0.0.0.0:4000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <YOUR-LITELLM-KEY>" \
+  -d '{
+    "model": "gemini-3-pro",
+    "messages": [
+      {
+        "role": "user",
+        "content": [
+          {"type": "text", "text": "Analyze this video clip"},
+          {
+            "type": "file",
+            "file": {
+              "file_id": "gs://my-bucket/video.mp4",
+              "format": "video/mp4",
+              "detail": "high",
+              "video_metadata": {
+                "fps": 5,
+                "start_offset": "10s",
+                "end_offset": "60s"
+              }
+            }
+          }
+        ]
+      }
+    ]
+  }'
+```
+
+</TabItem>
+</Tabs>
 
 ## Sample Usage
 ```python
@@ -1639,6 +1838,57 @@ content = response.get('choices', [{}])[0].get('message', {}).get('content')
 
 # Print the result
 print(content)
+```
+
+## gemini-robotics-er-1.5-preview Usage
+
+```python
+from litellm import api_base
+from openai import OpenAI
+import os
+import base64
+
+client = OpenAI(base_url="http://0.0.0.0:4000", api_key="sk-12345")
+base64_image = base64.b64encode(open("closeup-object-on-table-many-260nw-1216144471.webp", "rb").read()).decode()
+
+import json
+import re
+tools = [{"codeExecution": {}}] 
+response = client.chat.completions.create(
+    model="gemini/gemini-robotics-er-1.5-preview",
+    messages=[
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Point to no more than 10 items in the image. The label returned should be an identifying name for the object detected. The answer should follow the json format: [{\"point\": [y, x], \"label\": <label1>}, ...]. The points are in [y, x] format normalized to 0-1000."
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}
+                }
+            ]
+        }
+    ],
+    tools=tools
+)
+
+# Extract JSON from markdown code block if present
+content = response.choices[0].message.content
+# Look for triple-backtick JSON block
+match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+if match:
+    json_str = match.group(1)
+else:
+    json_str = content
+
+try:
+    data = json.loads(json_str)
+    print(json.dumps(data, indent=2))
+except Exception as e:
+    print("Error parsing response as JSON:", e)
+    print("Response content:", content)
 ```
 
 ## Usage - PDF / Videos / etc. Files

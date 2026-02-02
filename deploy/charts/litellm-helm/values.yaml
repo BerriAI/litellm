@@ -156,6 +156,40 @@ autoscaling:
   targetCPUUtilizationPercentage: 80
   # targetMemoryUtilizationPercentage: 80
 
+# Autoscaling with keda is mutually exclusive with hpa
+keda:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  pollingInterval: 30
+  cooldownPeriod: 300
+  # fallback:
+  #   failureThreshold: 3
+  #   replicas: 11
+  restoreToOriginalReplicaCount: false
+  scaledObject:
+    annotations: {}
+  triggers: []
+  # - type: prometheus
+  #   metadata:
+  #     serverAddress: http://<prometheus-host>:9090
+  #     metricName: http_requests_total
+  #     threshold: '100'
+  #     query: sum(rate(http_requests_total{deployment="my-deployment"}[2m]))
+  behavior: {}
+  # scaleDown:
+  #   stabilizationWindowSeconds: 300
+  #   policies:
+  #   - type: Pods
+  #     value: 1
+  #     periodSeconds: 180
+  # scaleUp:
+  #   stabilizationWindowSeconds: 300
+  #   policies:
+  #   - type: Pods
+  #     value: 2
+  #     periodSeconds: 60
+
 # Additional volumes on the output Deployment definition.
 volumes: []
 # - name: foo
@@ -200,6 +234,14 @@ db:
   #  instance.  See the "postgresql" top level key for additional configuration.
   deployStandalone: true
 
+# Lifecycle hooks for the LiteLLM container
+# Example:
+# lifecycle:
+#   preStop:
+#     exec:
+#       command: ["/bin/sh", "-c", "sleep 10"]
+lifecycle: {}
+
 # Settings for Bitnami postgresql chart (if db.deployStandalone is true, ignored
 #  otherwise)
 postgresql:
@@ -239,6 +281,7 @@ migrationJob:
   #    cpu: 100m
   #    memory: 100Mi
   extraContainers: []
+  extraInitContainers: []
 
   # Hook configuration
   hooks:

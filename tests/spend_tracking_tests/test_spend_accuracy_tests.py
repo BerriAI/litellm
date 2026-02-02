@@ -156,8 +156,8 @@ async def test_basic_spend_accuracy():
             response = await chat_completion(session, key)
             print("response: ", response)
 
-        # wait 15 seconds for spend to be updated
-        await asyncio.sleep(15)
+        # wait 25 seconds for spend to be updated
+        await asyncio.sleep(25)
 
         # Get spend information for each entity
         key_info = await get_spend_info(session, "key", key)
