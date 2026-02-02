@@ -7,6 +7,11 @@ Reduces context window size and improves tool selection accuracy.
 from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import (
+    DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL,
+    DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD,
+    DEFAULT_MCP_SEMANTIC_FILTER_TOP_K,
+)
 from litellm.integrations.custom_logger import CustomLogger
 
 if TYPE_CHECKING:
@@ -15,6 +20,7 @@ if TYPE_CHECKING:
         SemanticMCPToolFilter,
     )
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.router import Router
 
 
 class SemanticToolFilterHook(CustomLogger):
@@ -77,6 +83,16 @@ class SemanticToolFilterHook(CustomLogger):
             verbose_proxy_logger.debug("No tools in request, skipping semantic filter")
             return None
         
+        # Skip filtering if tools are MCP references (type: "mcp")
+        # These will be expanded by the responses API handler
+        if isinstance(tools, list) and len(tools) > 0:
+            first_tool = tools[0]
+            if isinstance(first_tool, dict) and first_tool.get("type") == "mcp":
+                verbose_proxy_logger.debug(
+                    "Skipping semantic filter for MCP tool references (type: mcp)"
+                )
+                return None
+        
         # Check if messages are present
         messages = data.get("messages", [])
         if not messages:
@@ -125,5 +141,73 @@ class SemanticToolFilterHook(CustomLogger):
         except Exception as e:
             verbose_proxy_logger.warning(
                 f"Semantic tool filter hook failed: {e}. Proceeding with all tools."
+            )
+            return None
+    
+    @staticmethod
+    def initialize_from_config(
+        config: Optional[Dict[str, Any]],
+        llm_router: Optional["Router"],
+    ) -> Optional["SemanticToolFilterHook"]:
+        """
+        Initialize semantic tool filter from proxy config.
+        
+        Args:
+            config: Proxy configuration dict (litellm_settings.mcp_semantic_tool_filter)
+            llm_router: LiteLLM router instance for embeddings
+            
+        Returns:
+            SemanticToolFilterHook instance if enabled, None otherwise
+        """
+        from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+            SemanticMCPToolFilter,
+        )
+        if not config or not config.get("enabled", False):
+            verbose_proxy_logger.debug("Semantic tool filter not enabled in config")
+            return None
+        
+        if llm_router is None:
+            verbose_proxy_logger.warning(
+                "Cannot initialize semantic filter: llm_router is None"
+            )
+            return None
+        
+        try:
+            
+            embedding_model = config.get(
+                "embedding_model", DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL
+            )
+            top_k = config.get("top_k", DEFAULT_MCP_SEMANTIC_FILTER_TOP_K)
+            similarity_threshold = config.get(
+                "similarity_threshold", DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD
+            )
+            
+            semantic_filter = SemanticMCPToolFilter(
+                embedding_model=embedding_model,
+                litellm_router_instance=llm_router,
+                top_k=top_k,
+                similarity_threshold=similarity_threshold,
+                enabled=True,
+            )
+            
+            hook = SemanticToolFilterHook(semantic_filter)
+            
+            verbose_proxy_logger.info(
+                f"✅ MCP Semantic Tool Filter enabled: "
+                f"embedding_model={embedding_model}, top_k={top_k}, "
+                f"similarity_threshold={similarity_threshold}"
+            )
+            
+            return hook
+            
+        except ImportError as e:
+            verbose_proxy_logger.warning(
+                f"semantic-router not installed. Install with: "
+                f"pip install 'litellm[semantic-router]'. Error: {e}"
+            )
+            return None
+        except Exception as e:
+            verbose_proxy_logger.exception(
+                f"Failed to initialize MCP semantic tool filter: {e}"
             )
             return None

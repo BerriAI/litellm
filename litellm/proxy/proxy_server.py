@@ -793,6 +793,15 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
         redis_usage_cache=redis_usage_cache,
     )
 
+    ## SEMANTIC TOOL FILTER ##
+    # Read litellm_settings from config for semantic filter initialization
+    _config = proxy_config.get_config_state()
+    _litellm_settings = _config.get("litellm_settings", {})
+    ProxyStartupEvent._initialize_semantic_tool_filter(
+        llm_router=llm_router,
+        litellm_settings=_litellm_settings,
+    )
+
     ## JWT AUTH ##
     ProxyStartupEvent._initialize_jwt_auth(
         general_settings=general_settings,
@@ -4740,6 +4749,24 @@ class ProxyStartupEvent:
         proxy_logging_obj.startup_event(
             llm_router=llm_router, redis_usage_cache=redis_usage_cache
         )
+
+    @classmethod
+    def _initialize_semantic_tool_filter(
+        cls,
+        llm_router: Optional[Router],
+        litellm_settings: Dict[str, Any],
+    ):
+        """Initialize MCP semantic tool filter if configured"""
+        from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+        
+        mcp_semantic_filter_config = litellm_settings.get("mcp_semantic_tool_filter", None)
+        hook = SemanticToolFilterHook.initialize_from_config(
+            config=mcp_semantic_filter_config,
+            llm_router=llm_router,
+        )
+        
+        if hook:
+            litellm.logging_callback_manager.add_litellm_callback(hook)
 
     @classmethod
     def _initialize_jwt_auth(
