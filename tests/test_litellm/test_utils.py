@@ -749,7 +749,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         },
     }
 
-    prod_json = "litellm/model_prices_and_context_window.json"
+    prod_json = "./model_prices_and_context_window.json"
     # prod_json = "../../model_prices_and_context_window.json"
     with open(prod_json, "r") as model_prices_file:
         actual_json = json.load(model_prices_file)
