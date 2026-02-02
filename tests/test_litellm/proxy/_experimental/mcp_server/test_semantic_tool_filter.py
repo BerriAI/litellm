@@ -269,7 +269,7 @@ async def test_semantic_filter_hook_triggers_on_completion():
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
-    from litellm.proxy.hooks.semantic_tool_filter_hook import SemanticToolFilterHook
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
     from litellm.types.utils import Embedding, EmbeddingResponse
 
     # Create mock filter
@@ -343,7 +343,7 @@ async def test_semantic_filter_hook_skips_no_tools():
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
-    from litellm.proxy.hooks.semantic_tool_filter_hook import SemanticToolFilterHook
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
 
     # Create mock filter
     mock_router = Mock()
