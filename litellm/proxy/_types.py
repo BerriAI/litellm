@@ -358,7 +358,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/vector_stores/{vector_store_id}/files/{file_id}/content",
         "/vector_store/list",
         "/v1/vector_store/list",
-
         # search
         "/search",
         "/v1/search",
@@ -1480,6 +1479,9 @@ class TeamBase(LiteLLMPydanticObjectBase):
     members: list = []
     members_with_roles: List[Member] = []
     team_member_permissions: Optional[List[str]] = None
+    allow_team_guardrail_config: Optional[
+        bool
+    ] = None  # if True, team admin can configure guardrails for this team
     metadata: Optional[dict] = None
     tpm_limit: Optional[int] = None
     rpm_limit: Optional[int] = None
@@ -1577,6 +1579,9 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     model_tpm_limit: Optional[Dict[str, int]] = None
     allowed_vector_store_indexes: Optional[List[AllowedVectorStoreIndexItem]] = None
     router_settings: Optional[dict] = None
+    allow_team_guardrail_config: Optional[
+        bool
+    ] = None  # if True, team admin can configure guardrails for this team
 
 
 class ResetTeamBudgetRequest(LiteLLMPydanticObjectBase):

@@ -32,6 +32,11 @@ def mock_other_team_user_auth():
 
 
 @pytest.fixture
+def mock_proxy_admin_auth():
+    return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, team_id="team-123")
+
+
+@pytest.fixture
 def mock_prisma_client(mocker):
     return mocker.Mock()
 
@@ -42,6 +47,13 @@ def mock_in_memory_handler(mocker):
     mock.get_guardrail_by_id.return_value = None
     mock.list_in_memory_guardrails.return_value = []
     return mock
+
+
+def _make_mock_team(mocker, allow_team_guardrail_config: bool):
+    """Create a mock team object for get_team_object. Used by guardrail permission checks."""
+    team = mocker.Mock()
+    team.allow_team_guardrail_config = allow_team_guardrail_config
+    return team
 
 
 @pytest.mark.asyncio
@@ -111,8 +123,15 @@ async def test_team_list_guardrails_v2_isolation(
 async def test_team_create_guardrail_sets_team_id(
     mocker, mock_prisma_client, mock_team_user_auth
 ):
-    """Test that creating a guardrail as a team user sets the team_id"""
+    """Test that creating a guardrail as a team user sets the team_id when team has allow_team_guardrail_config."""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    # Team user must have allow_team_guardrail_config=True to create guardrails
+    mock_team = _make_mock_team(mocker, allow_team_guardrail_config=True)
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_team_object",
+        AsyncMock(return_value=mock_team),
+    )
 
     mock_registry = mocker.Mock()
     mock_registry.get_guardrail_by_name_from_db = AsyncMock(return_value=None)
@@ -197,3 +216,80 @@ async def test_team_update_other_team_guardrail_fails(
         )
 
     assert excinfo.value.status_code == 403
+
+
+# ----- Regression tests for allow_team_guardrail_config -----
+
+
+@pytest.mark.asyncio
+async def test_team_create_guardrail_forbidden_when_allow_team_guardrail_config_false(
+    mocker, mock_prisma_client, mock_team_user_auth
+):
+    """Team user gets 403 when team has allow_team_guardrail_config=False."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_team = _make_mock_team(mocker, allow_team_guardrail_config=False)
+    mocker.patch(
+        "litellm.proxy.auth.auth_checks.get_team_object",
+        AsyncMock(return_value=mock_team),
+    )
+
+    request = CreateGuardrailRequest(
+        guardrail={
+            "guardrail_name": "Forbidden Guardrail",
+            "litellm_params": {"guardrail": "bedrock", "mode": "pre_call"},
+            "guardrail_info": {},
+        }
+    )
+
+    with pytest.raises(HTTPException) as excinfo:
+        await create_guardrail(request=request, user_api_key_dict=mock_team_user_auth)
+
+    assert excinfo.value.status_code == 403
+    assert "Guardrail configuration is not enabled" in str(excinfo.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_proxy_admin_can_create_guardrail_without_team_guardrail_config_permission(
+    mocker, mock_prisma_client, mock_proxy_admin_auth
+):
+    """Proxy admin can create guardrails without team allow_team_guardrail_config (check is skipped)."""
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_registry = mocker.Mock()
+    mock_registry.get_guardrail_by_name_from_db = AsyncMock(return_value=None)
+    mock_registry.add_guardrail_to_db = AsyncMock(
+        return_value={
+            "guardrail_id": "admin-g",
+            "guardrail_name": "Admin Guardrail",
+            "team_id": "team-123",
+            "created_at": "2024-01-01T00:00:00.000Z",
+            "updated_at": "2024-01-01T00:00:00.000Z",
+        }
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+        mock_registry,
+    )
+    mock_in_memory = mocker.Mock()
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory,
+    )
+
+    # Do NOT mock get_team_object: proxy admin skips _check_team_can_configure_guardrails
+    request = CreateGuardrailRequest(
+        guardrail={
+            "guardrail_name": "Admin Guardrail",
+            "litellm_params": {"guardrail": "bedrock", "mode": "pre_call"},
+            "guardrail_info": {},
+        }
+    )
+
+    response = await create_guardrail(
+        request=request, user_api_key_dict=mock_proxy_admin_auth
+    )
+
+    mock_registry.add_guardrail_to_db.assert_called_once()
+    assert response["guardrail_id"] == "admin-g"
+    assert response["team_id"] == "team-123"

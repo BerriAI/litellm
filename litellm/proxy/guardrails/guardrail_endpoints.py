@@ -42,6 +42,37 @@ router = APIRouter()
 GUARDRAIL_REGISTRY = GuardrailRegistry()
 
 
+async def _check_team_can_configure_guardrails(
+    user_api_key_dict: UserAPIKeyAuth,
+    team_id: Optional[str],
+    prisma_client: Any,
+    user_api_key_cache: Any,
+) -> None:
+    """
+    If the user is not proxy admin and team_id is set, verify the team has
+    allow_team_guardrail_config enabled. Raise HTTPException 403 otherwise.
+    """
+    if team_id is None or team_id == "litellm-dashboard":
+        return
+    user_role = getattr(user_api_key_dict, "user_role", None)
+    if user_role == LitellmUserRoles.PROXY_ADMIN:
+        return
+    from litellm.proxy.auth.auth_checks import get_team_object
+
+    team_table = await get_team_object(
+        team_id=team_id,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
+    )
+    allow_config = getattr(team_table, "allow_team_guardrail_config", False)
+    if not allow_config:
+        raise HTTPException(
+            status_code=403,
+            detail="Guardrail configuration is not enabled for this team. Contact your administrator to enable it.",
+        )
+
+
 def _get_guardrails_list_response(
     guardrails_config: List[Dict],
 ) -> ListGuardrailsResponse:
@@ -245,13 +276,19 @@ async def create_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
 
     try:
         team_id = getattr(user_api_key_dict, "team_id", None)
+        await _check_team_can_configure_guardrails(
+            user_api_key_dict=user_api_key_dict,
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+        )
         result = await GUARDRAIL_REGISTRY.add_guardrail_to_db(
             guardrail=request.guardrail, prisma_client=prisma_client, team_id=team_id
         )
@@ -272,6 +309,8 @@ async def create_guardrail(
             )
 
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception(f"Error adding guardrail to db: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -335,7 +374,7 @@ async def update_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -363,6 +402,12 @@ async def update_guardrail(
                         status_code=403,
                         detail="Not authorized to access this guardrail",
                     )
+                await _check_team_can_configure_guardrails(
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=existing_guardrail.get("team_id"),
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
         result = await GUARDRAIL_REGISTRY.update_guardrail_in_db(
             guardrail_id=guardrail_id,
@@ -418,7 +463,7 @@ async def delete_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -446,6 +491,12 @@ async def delete_guardrail(
                         status_code=403,
                         detail="Not authorized to access this guardrail",
                     )
+                await _check_team_can_configure_guardrails(
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=existing_guardrail.get("team_id"),
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
         result = await GUARDRAIL_REGISTRY.delete_guardrail_from_db(
             guardrail_id=guardrail_id, prisma_client=prisma_client
@@ -528,7 +579,7 @@ async def patch_guardrail(
     ```
     """
     from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Prisma client not initialized")
@@ -556,6 +607,12 @@ async def patch_guardrail(
                         status_code=403,
                         detail="Not authorized to access this guardrail",
                     )
+                await _check_team_can_configure_guardrails(
+                    user_api_key_dict=user_api_key_dict,
+                    team_id=existing_guardrail.get("team_id"),
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                )
 
         # Create updated guardrail object
         guardrail_name = (
