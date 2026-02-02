@@ -36,7 +36,7 @@ def test_oauth_integration_in_validate_environment():
 
     updated_headers = config.validate_environment(
         headers=headers,
-        model="anthropic/claude-3-haiku-20240307",
+        model="claude-3-haiku-20240307",
         messages=[{"role": "user", "content": "Hello"}],
         optional_params={},
         litellm_params={},
@@ -60,7 +60,7 @@ def test_oauth_detection_in_messages_transformation():
 
     updated_headers, _ = config.validate_anthropic_messages_environment(
         headers=headers,
-        model="anthropic/claude-3-haiku-20240307",
+        model="claude-3-haiku-20240307",
         messages=[{"role": "user", "content": "Hello"}],
         optional_params={},
         litellm_params={},
