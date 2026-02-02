@@ -442,6 +442,7 @@ const sidebars = {
           label: "Spend Tracking",
           items: [
             "proxy/cost_tracking",
+            "proxy/request_tags",
             "proxy/custom_pricing",
             "proxy/pricing_calculator",
             "proxy/provider_margins",
