@@ -6,6 +6,7 @@ from typing import (
     Dict,
     List,
     Optional,
+    Tuple,
     Union,
     cast,
 )
@@ -47,8 +48,14 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         top_p: Optional[float] = None,
         output_format: Optional[Dict] = None,
         extra_kwargs: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
-        """Prepare kwargs for litellm.completion/acompletion"""
+    ) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        """Prepare kwargs for litellm.completion/acompletion.
+
+        Returns:
+            Tuple of (completion_kwargs, tool_name_mapping)
+            - tool_name_mapping maps truncated tool names back to original names
+              for tools that exceeded OpenAI's 64-char limit
+        """
         from litellm.litellm_core_utils.litellm_logging import (
             Logging as LiteLLMLoggingObject,
         )
@@ -80,7 +87,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         if output_format:
             request_data["output_format"] = output_format
 
-        openai_request = ANTHROPIC_ADAPTER.translate_completion_input_params(
+        openai_request, tool_name_mapping = ANTHROPIC_ADAPTER.translate_completion_input_params_with_tool_mapping(
             request_data
         )
 
@@ -116,7 +123,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
             ):
                 completion_kwargs[key] = value
 
-        return completion_kwargs
+        return completion_kwargs, tool_name_mapping
 
     @staticmethod
     async def async_anthropic_messages_handler(
@@ -137,7 +144,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         **kwargs,
     ) -> Union[AnthropicMessagesResponse, AsyncIterator]:
         """Handle non-Anthropic models asynchronously using the adapter"""
-        completion_kwargs = (
+        completion_kwargs, tool_name_mapping = (
             LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
                 max_tokens=max_tokens,
                 messages=messages,
@@ -164,6 +171,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                     completion_response,
                     model=model,
+                    tool_name_mapping=tool_name_mapping,
                 )
             )
             if transformed_stream is not None:
@@ -172,7 +180,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         else:
             anthropic_response = (
                 ANTHROPIC_ADAPTER.translate_completion_output_params(
-                    cast(ModelResponse, completion_response)
+                    cast(ModelResponse, completion_response),
+                    tool_name_mapping=tool_name_mapping,
                 )
             )
             if anthropic_response is not None:
@@ -222,7 +231,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 **kwargs,
             )
 
-        completion_kwargs = (
+        completion_kwargs, tool_name_mapping = (
             LiteLLMMessagesToCompletionTransformationHandler._prepare_completion_kwargs(
                 max_tokens=max_tokens,
                 messages=messages,
@@ -249,6 +258,7 @@ class LiteLLMMessagesToCompletionTransformationHandler:
                 ANTHROPIC_ADAPTER.translate_completion_output_params_streaming(
                     completion_response,
                     model=model,
+                    tool_name_mapping=tool_name_mapping,
                 )
             )
             if transformed_stream is not None:
@@ -257,7 +267,8 @@ class LiteLLMMessagesToCompletionTransformationHandler:
         else:
             anthropic_response = (
                 ANTHROPIC_ADAPTER.translate_completion_output_params(
-                    cast(ModelResponse, completion_response)
+                    cast(ModelResponse, completion_response),
+                    tool_name_mapping=tool_name_mapping,
                 )
             )
             if anthropic_response is not None:

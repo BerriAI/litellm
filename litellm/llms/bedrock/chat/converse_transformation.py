@@ -1081,10 +1081,16 @@ class AmazonConverseConfig(BaseConfig):
             user_betas = get_anthropic_beta_from_headers(headers)
             anthropic_beta_list.extend(user_betas)
 
-        # Filter out tool search tools - Bedrock Converse API doesn't support them
+        # Separate pre-formatted Bedrock tools (e.g. systemTool from web_search_options)
+        # from OpenAI-format tools that need transformation via _bedrock_tools_pt
         filtered_tools = []
+        pre_formatted_tools: List[ToolBlock] = []
         if original_tools:
             for tool in original_tools:
+                # Already-formatted Bedrock tools (e.g. systemTool for Nova grounding)
+                if "systemTool" in tool:
+                    pre_formatted_tools.append(tool)
+                    continue
                 tool_type = tool.get("type", "")
                 if tool_type in (
                     "tool_search_tool_regex_20251119",
@@ -1115,6 +1121,9 @@ class AmazonConverseConfig(BaseConfig):
         else:
             # No computer use tools, process all tools as regular tools
             bedrock_tools = _bedrock_tools_pt(filtered_tools)
+
+        # Append pre-formatted tools (systemTool etc.) after transformation
+        bedrock_tools.extend(pre_formatted_tools)
 
         # Set anthropic_beta in additional_request_params if we have any beta features
         # ONLY apply to Anthropic/Claude models - other models (e.g., Qwen, Llama) don't support this field
