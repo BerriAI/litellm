@@ -1896,6 +1896,32 @@ if MCP_AVAILABLE:
                 # Give it a moment to start up
                 await asyncio.sleep(0.1)
 
+            # Handle stale mcp-session-id headers (Fixes #20292)
+            # When clients like VSCode reconnect after a reload, they may send a
+            # stale mcp-session-id that no longer exists in the session manager.
+            # This causes a 404 "Session not found" error loop. Strip the header
+            # so the session manager creates a fresh session instead.
+            _mcp_session_header = b"mcp-session-id"
+            _stale_session_id: Optional[str] = None
+            for header_name, header_value in scope.get("headers", []):
+                if header_name == _mcp_session_header:
+                    _stale_session_id = header_value.decode("utf-8", errors="replace")
+                    break
+
+            if _stale_session_id is not None:
+                # Check if this session ID exists in the session manager
+                _known_sessions = getattr(session_manager, "_server_instances", None)
+                if _known_sessions is not None and _stale_session_id not in _known_sessions:
+                    verbose_logger.warning(
+                        "MCP session ID '%s' not found in active sessions. "
+                        "Stripping stale mcp-session-id header to force new session creation.",
+                        _stale_session_id,
+                    )
+                    scope["headers"] = [
+                        (k, v) for k, v in scope["headers"]
+                        if k != _mcp_session_header
+                    ]
+
             await session_manager.handle_request(scope, receive, send)
         except Exception as e:
             raise e
