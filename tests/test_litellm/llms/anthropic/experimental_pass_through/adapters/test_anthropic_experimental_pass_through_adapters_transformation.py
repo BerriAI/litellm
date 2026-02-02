@@ -1414,3 +1414,116 @@ def test_cache_control_not_preserved_in_tools_for_non_claude():
 
     assert len(result) == 1
     assert "cache_control" not in result[0]
+
+
+def test_translate_openai_content_to_anthropic_reasoning_content_without_thinking_blocks():
+    """
+    Test that reasoning_content is converted to thinking block when thinking_blocks is not present.
+    This handles providers like OpenRouter that return reasoning_content instead of thinking_blocks.
+    
+    Regression test for: OpenRouter models returning reasoning_content in /v1/messages endpoint
+    should be converted to Anthropic's thinking block format.
+    """
+    openai_choices = [
+        Choices(
+            message=Message(
+                role="assistant",
+                content="There are **3** \"r\"s in the word strawberry.",
+                reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'. I've identified the target word, \"strawberry,\" and confirmed my understanding of the letter's location. The first 'r' follows 't', the second after 'e', and the third… well, I'm almost there.\n\n\n**Calculating the Count**\n\nMy analysis is complete! I've confirmed that the letter \"r\" appears three times in \"strawberry.\" The first follows \"t,\" the second \"e,\" and the third immediately follows the second. The count is definitively three.",
+            )
+        )
+    ]
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    result = adapter._translate_openai_content_to_anthropic(choices=openai_choices)
+
+    assert len(result) == 2
+    # First block should be thinking block with reasoning_content
+    assert result[0].type == "thinking"
+    assert "Considering Letter Frequency" in result[0].thinking
+    assert "Calculating the Count" in result[0].thinking
+    assert result[0].signature is None
+    # Second block should be text block with content
+    assert result[1].type == "text"
+    assert result[1].text == "There are **3** \"r\"s in the word strawberry."
+
+
+def test_translate_streaming_openai_chunk_to_anthropic_reasoning_content_without_thinking_blocks():
+    """
+    Test that reasoning_content in streaming chunks is converted to thinking_delta 
+    when thinking_blocks is not present.
+    
+    This handles providers like OpenRouter that return reasoning_content in streaming 
+    responses without thinking_blocks.
+    """
+    choices = [
+        StreamingChoices(
+            finish_reason=None,
+            index=0,
+            delta=Delta(
+                reasoning_content="I need to analyze this carefully...",
+                content="",
+                role="assistant",
+                function_call=None,
+                tool_calls=None,
+                audio=None,
+            ),
+            logprobs=None,
+        )
+    ]
+
+    (
+        type_of_content,
+        content_block_delta,
+    ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic(
+        choices=choices
+    )
+
+    assert type_of_content == "thinking_delta"
+    assert content_block_delta["type"] == "thinking_delta"
+    assert content_block_delta["thinking"] == "I need to analyze this carefully..."
+
+
+def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
+    """
+    Test the full response translation when only reasoning_content is present 
+    (no thinking_blocks).
+    
+    This simulates OpenRouter's response format being translated to Anthropic format
+    through /v1/messages endpoint.
+    """
+    openai_response = ModelResponse(
+        id="gen-1770027855-HyrqYvLcX8oTLNgfyDob",
+        model="gemini-3-flash",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                message=Message(
+                    role="assistant",
+                    content="There are **3** \"r\"s in the word strawberry.",
+                    reasoning_content="**Considering Letter Frequency**\n\nI've homed in on the specifics: The task focuses on counting the letter 'r'.",
+                ),
+            )
+        ],
+        usage=Usage(prompt_tokens=13, completion_tokens=138),
+    )
+
+    adapter = LiteLLMAnthropicMessagesAdapter()
+    anthropic_response = adapter.translate_openai_response_to_anthropic(
+        response=openai_response
+    )
+
+    anthropic_content = anthropic_response.get("content")
+    assert anthropic_content is not None
+    assert len(anthropic_content) == 2
+    
+    # First block should be thinking
+    assert cast(Any, anthropic_content[0]).type == "thinking"
+    assert "Considering Letter Frequency" in cast(Any, anthropic_content[0]).thinking
+    assert cast(Any, anthropic_content[0]).signature is None
+    
+    # Second block should be text
+    assert cast(Any, anthropic_content[1]).type == "text"
+    assert cast(Any, anthropic_content[1]).text == "There are **3** \"r\"s in the word strawberry."
+    
+    assert anthropic_response.get("stop_reason") == "end_turn"
