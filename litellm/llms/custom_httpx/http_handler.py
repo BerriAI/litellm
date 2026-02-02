@@ -388,7 +388,7 @@ class AsyncHTTPHandler:
     async def __aenter__(self):
         return self.client
 
-    async def __aexit__(self):
+    async def __aexit__(self, exc_type, exc, tb):
         # close the client when exiting
         await self.client.aclose()
 
