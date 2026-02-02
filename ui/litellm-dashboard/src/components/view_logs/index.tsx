@@ -1,38 +1,37 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import moment from "moment";
-import { useQuery } from "@tanstack/react-query";
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { uiSpendLogsCall, keyInfoV1Call, sessionSpendLogsCall, keyListCall, allEndUsersCall } from "../networking";
-import { DataTable } from "./table";
-import { columns, LogEntry } from "./columns";
-import { Row } from "@tanstack/react-table";
-import { prefetchLogDetails } from "./prefetch";
-import { RequestResponsePanel } from "./RequestResponsePanel";
-import { ErrorViewer } from "./ErrorViewer";
-import { internalUserRoles } from "../../utils/roles";
-import { ConfigInfoMessage } from "./ConfigInfoMessage";
-import { Button, Tooltip } from "antd";
-import { KeyResponse, Team } from "../key_team_helpers/key_list";
-import KeyInfoView from "../templates/key_info_view";
-import { SessionView } from "./SessionView";
-import { VectorStoreViewer } from "./VectorStoreViewer";
 import GuardrailViewer from "@/components/view_logs/GuardrailViewer/GuardrailViewer";
-import { CostBreakdownViewer } from "./CostBreakdownViewer";
-import FilterComponent from "../molecules/filter";
-import { FilterOption } from "../molecules/filter";
-import { useLogFilterLogic } from "./log_filter_logic";
-import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
-import { Tab, TabGroup, TabList, TabPanels, TabPanel, Switch } from "@tremor/react";
-import AuditLogs from "./audit_logs";
-import { getTimeRangeDisplay } from "./logs_utils";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { truncateString } from "@/utils/textUtils";
+import { SettingOutlined } from "@ant-design/icons";
+import { Row } from "@tanstack/react-table";
+import { Switch, Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Button, Tooltip } from "antd";
+import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
-import NewBadge from "../common_components/NewBadge";
+import { fetchAllKeyAliases } from "../key_team_helpers/filter_helpers";
+import { KeyResponse, Team } from "../key_team_helpers/key_list";
+import FilterComponent, { FilterOption } from "../molecules/filter";
+import { allEndUsersCall, keyInfoV1Call, keyListCall, sessionSpendLogsCall, uiSpendLogsCall } from "../networking";
+import KeyInfoView from "../templates/key_info_view";
+import AuditLogs from "./audit_logs";
+import { columns, LogEntry } from "./columns";
+import { ConfigInfoMessage } from "./ConfigInfoMessage";
+import { CostBreakdownViewer } from "./CostBreakdownViewer";
+import { ErrorViewer } from "./ErrorViewer";
+import { useLogFilterLogic } from "./log_filter_logic";
+import { getTimeRangeDisplay } from "./logs_utils";
+import { prefetchLogDetails } from "./prefetch";
+import { RequestResponsePanel } from "./RequestResponsePanel";
+import { SessionView } from "./SessionView";
 import SpendLogsSettingsModal from "./SpendLogsSettingsModal/SpendLogsSettingsModal";
-import { SettingOutlined } from "@ant-design/icons";
+import { DataTable } from "./table";
+import { VectorStoreViewer } from "./VectorStoreViewer";
+import NewBadge from "../common_components/NewBadge";
+import { LogDetailsDrawer } from "./LogDetailsDrawer";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -91,7 +90,8 @@ export default function SpendLogsTable({
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
   const [activeTab, setActiveTab] = useState("request logs");
 
-  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
+  const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
+  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [isSpendLogsSettingsModalVisible, setIsSpendLogsSettingsModalVisible] = useState(false);
 
@@ -319,17 +319,6 @@ export default function SpendLogsTable({
     enabled: !!accessToken && !!selectedSessionId,
   });
 
-  // Add this effect to preserve expanded state when data refreshes
-  useEffect(() => {
-    if (logs.data?.data && expandedRequestId) {
-      // Check if the expanded request ID still exists in the new data
-      const stillExists = logs.data.data.some((log) => log.request_id === expandedRequestId);
-      if (!stillExists) {
-        // If the request ID no longer exists in the data, clear the expanded state
-        setExpandedRequestId(null);
-      }
-    }
-  }, [logs.data?.data, expandedRequestId]);
 
   if (!accessToken || !token || !userRole || !userID) {
     return null;
@@ -369,8 +358,18 @@ export default function SpendLogsTable({
     logs.refetch();
   };
 
-  const handleRowExpand = (requestId: string | null) => {
-    setExpandedRequestId(requestId);
+  const handleRowClick = (log: LogEntry) => {
+    setSelectedLog(log);
+    setIsDrawerOpen(true);
+  };
+
+  const handleCloseDrawer = () => {
+    setIsDrawerOpen(false);
+    // Optionally keep selectedLog for animation purposes
+  };
+
+  const handleSelectLog = (log: LogEntry) => {
+    setSelectedLog(log);
   };
 
   // Function to extract unique error codes from logs
@@ -513,8 +512,8 @@ export default function SpendLogsTable({
         <TabList>
           <Tab>Request Logs</Tab>
           <Tab>Audit Logs</Tab>
-          <Tab><>Deleted Keys <NewBadge /></></Tab>
-          <Tab><>Deleted Teams <NewBadge /></></Tab>
+          <Tab>Deleted Keys</Tab>
+          <Tab>Deleted Teams</Tab>
         </TabList>
         <TabPanels>
           <TabPanel>
@@ -535,11 +534,12 @@ export default function SpendLogsTable({
                 )}
               </h1>
               {!selectedSessionId && (
-                <Button
+                <NewBadge dot><Button
                   icon={<SettingOutlined />}
                   onClick={() => setIsSpendLogsSettingsModalVisible(true)}
                   title="Spend Logs Settings"
-                />
+                /></NewBadge>
+
               )}
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
@@ -555,9 +555,7 @@ export default function SpendLogsTable({
                 <DataTable
                   columns={columns}
                   data={sessionData}
-                  renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
-                  getRowCanExpand={() => true}
-                // Optionally: add session-specific row expansion state
+                  onRowClick={handleRowClick}
                 />
               </div>
             ) : (
@@ -754,8 +752,7 @@ export default function SpendLogsTable({
                   <DataTable
                     columns={columns}
                     data={filteredData}
-                    renderSubComponent={({ row }) => <RequestViewer row={row} onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)} />}
-                    getRowCanExpand={() => true}
+                    onRowClick={handleRowClick}
                   />
                 </div>
               </>
@@ -776,6 +773,16 @@ export default function SpendLogsTable({
           <TabPanel><DeletedTeamsPage /></TabPanel>
         </TabPanels>
       </TabGroup>
+
+      {/* Log Details Drawer */}
+      <LogDetailsDrawer
+        open={isDrawerOpen}
+        onClose={handleCloseDrawer}
+        logEntry={selectedLog}
+        onOpenSettings={() => setIsSpendLogsSettingsModalVisible(true)}
+        allLogs={filteredData}
+        onSelectLog={handleSelectLog}
+      />
     </div>
   );
 }

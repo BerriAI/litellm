@@ -1,10 +1,7 @@
 import json
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
-
-import httpx
-import pytest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(
     0, os.path.abspath("../../../../..")
@@ -47,15 +44,34 @@ def test_hosted_vllm_chat_transformation_file_url():
 
 def test_hosted_vllm_chat_transformation_with_audio_url():
     from litellm import completion
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
-    client = MagicMock()
+    mock_client = MagicMock()
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    mock_response.json.return_value = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion",
+        "created": 1234567890,
+        "model": "llama-3.1-70b-instruct",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Test response"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+    }
+    mock_response.text = json.dumps(mock_response.json.return_value)
+    mock_client.post.return_value = mock_response
 
-    with patch.object(
-        client.chat.completions.with_raw_response, "create", return_value=MagicMock()
-    ) as mock_post:
+    with patch(
+        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+        return_value=mock_client,
+    ):
         try:
-            response = completion(
+            completion(
                 model="hosted_vllm/llama-3.1-70b-instruct",
                 messages=[
                     {
@@ -68,14 +84,15 @@ def test_hosted_vllm_chat_transformation_with_audio_url():
                         ],
                     },
                 ],
-                client=client,
+                api_base="https://test-vllm.example.com/v1",
             )
-        except Exception as e:
-            print(f"Error: {e}")
+        except Exception:
+            pass
 
-        mock_post.assert_called_once()
-        print(f"mock_post.call_args.kwargs: {mock_post.call_args.kwargs}")
-        assert mock_post.call_args.kwargs["messages"] == [
+        mock_client.post.assert_called_once()
+        call_kwargs = mock_client.post.call_args[1]
+        request_data = json.loads(call_kwargs["data"])
+        assert request_data["messages"] == [
             {
                 "role": "user",
                 "content": [

@@ -36,6 +36,9 @@ from litellm.llms.anthropic.cost_calculation import (
 from litellm.llms.azure.cost_calculation import (
     cost_per_token as azure_openai_cost_per_token,
 )
+from litellm.llms.azure_ai.cost_calculator import (
+    cost_per_token as azure_ai_cost_per_token,
+)
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.bedrock.cost_calculation import (
     cost_per_token as bedrock_cost_per_token,
@@ -135,6 +138,51 @@ def _cost_per_token_custom_pricing_helper(
         output_cost = custom_cost_per_second * response_time_ms / 1000  # type: ignore
         return 0, output_cost
 
+    return None
+
+
+def _get_additional_costs(
+    model: str,
+    custom_llm_provider: Optional[str],
+    prompt_tokens: int,
+    completion_tokens: int,
+) -> Optional[dict]:
+    """
+    Calculate additional costs beyond standard token costs.
+    
+    This function delegates to provider-specific config classes to calculate
+    any additional costs like routing fees, infrastructure costs, etc.
+    
+    Args:
+        model: The model name
+        custom_llm_provider: The provider name (optional)
+        prompt_tokens: Number of prompt tokens
+        completion_tokens: Number of completion tokens
+        
+    Returns:
+        Optional dictionary with cost names and amounts, or None if no additional costs
+    """
+    if not custom_llm_provider:
+        return None
+        
+    try:
+        config_class = None
+        if custom_llm_provider == "azure_ai":
+            from litellm.llms.azure_ai.common_utils import AzureFoundryModelInfo
+            config_class = AzureFoundryModelInfo.get_azure_ai_config_for_model(model)
+        # Add more providers here as needed
+        # elif custom_llm_provider == "other_provider":
+        #     config_class = get_other_provider_config(model)
+        
+        if config_class and hasattr(config_class, 'calculate_additional_costs'):
+            return config_class.calculate_additional_costs(
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+    except Exception as e:
+        verbose_logger.debug(f"Error calculating additional costs: {e}")
+    
     return None
 
 
@@ -427,8 +475,8 @@ def cost_per_token(  # noqa: PLR0915
 
         return dashscope_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure_ai":
-        return generic_cost_per_token(
-            model=model, usage=usage_block, custom_llm_provider=custom_llm_provider
+        return azure_ai_cost_per_token(
+            model=model, usage=usage_block, response_time_ms=response_time_ms
         )
     else:
         model_info = _cached_get_model_info_helper(
@@ -805,6 +853,7 @@ def _store_cost_breakdown_in_logging_obj(
     completion_tokens_cost_usd_dollar: float,
     cost_for_built_in_tools_cost_usd_dollar: float,
     total_cost_usd_dollar: float,
+    additional_costs: Optional[dict] = None,
     original_cost: Optional[float] = None,
     discount_percent: Optional[float] = None,
     discount_amount: Optional[float] = None,
@@ -821,6 +870,7 @@ def _store_cost_breakdown_in_logging_obj(
         completion_tokens_cost_usd_dollar: Cost of completion tokens (includes reasoning if applicable)
         cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
         total_cost_usd_dollar: Total cost of request
+        additional_costs: Free-form additional costs dict (e.g., {"azure_model_router_flat_cost": 0.00014})
         original_cost: Cost before discount
         discount_percent: Discount percentage applied (0.05 = 5%)
         discount_amount: Discount amount in USD
@@ -838,6 +888,7 @@ def _store_cost_breakdown_in_logging_obj(
             output_cost=completion_tokens_cost_usd_dollar,
             total_cost=total_cost_usd_dollar,
             cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools_cost_usd_dollar,
+            additional_costs=additional_costs,
             original_cost=original_cost,
             discount_percent=discount_percent,
             discount_amount=discount_amount,
@@ -1335,6 +1386,15 @@ def completion_cost(  # noqa: PLR0915
                     service_tier=service_tier,
                     response=completion_response,
                 )
+                
+                # Get additional costs from provider (e.g., routing fees, infrastructure costs)
+                additional_costs = _get_additional_costs(
+                    model=model,
+                    custom_llm_provider=custom_llm_provider,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                )
+                
                 _final_cost = (
                     prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 )
@@ -1388,6 +1448,7 @@ def completion_cost(  # noqa: PLR0915
                         cost_for_built_in_tools_cost_usd_dollar=cost_for_built_in_tools,
                         total_cost_usd_dollar=_final_cost,
                         original_cost=original_cost,
+                        additional_costs=additional_costs,
                         discount_percent=discount_percent,
                         discount_amount=discount_amount,
                         margin_percent=margin_percent,

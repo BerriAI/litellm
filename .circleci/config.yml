@@ -3407,6 +3407,110 @@ jobs:
       - store_test_results:
           path: test-results
 
+  proxy_e2e_anthropic_messages_tests:
+    machine:
+      image: ubuntu-2204:2023.10.1
+    resource_class: xlarge
+    working_directory: ~/project
+    steps:
+      - checkout
+      - setup_google_dns
+      - run:
+          name: Install Docker CLI (In case it's not already installed)
+          command: |
+            curl -fsSL https://get.docker.com | sh
+            sudo usermod -aG docker $USER
+            docker version
+      - run:
+          name: Install Python 3.10
+          command: |
+            curl https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh --output miniconda.sh
+            bash miniconda.sh -b -p $HOME/miniconda
+            export PATH="$HOME/miniconda/bin:$PATH"
+            conda init bash
+            source ~/.bashrc
+            conda create -n myenv python=3.10 -y
+            conda activate myenv
+            python --version
+      - run:
+          name: Install Dependencies
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            pip install "pytest==7.3.1"
+            pip install "pytest-asyncio==0.21.1"
+            pip install "boto3==1.36.0"
+            pip install "httpx==0.27.0"
+            pip install "claude-agent-sdk"
+            pip install -r requirements.txt
+      - run:
+          name: Install dockerize
+          command: |
+            wget https://github.com/jwilder/dockerize/releases/download/v0.6.1/dockerize-linux-amd64-v0.6.1.tar.gz
+            sudo tar -C /usr/local/bin -xzvf dockerize-linux-amd64-v0.6.1.tar.gz
+            rm dockerize-linux-amd64-v0.6.1.tar.gz
+      - run:
+          name: Start PostgreSQL Database
+          command: |
+            docker run -d \
+              --name postgres-db \
+              -e POSTGRES_USER=postgres \
+              -e POSTGRES_PASSWORD=postgres \
+              -e POSTGRES_DB=circle_test \
+              -p 5432:5432 \
+              postgres:14
+      - run:
+          name: Wait for PostgreSQL to be ready
+          command: dockerize -wait tcp://localhost:5432 -timeout 1m
+      - attach_workspace:
+          at: ~/project
+      - run:
+          name: Load Docker Database Image
+          command: |
+            gunzip -c litellm-docker-database.tar.gz | docker load
+            docker images | grep litellm-docker-database
+      - run:
+          name: Run Docker container with test config
+          command: |
+            docker run -d \
+              -p 4000:4000 \
+              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
+              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
+              -e AWS_REGION_NAME="us-east-1" \
+              --add-host host.docker.internal:host-gateway \
+              --name my-app \
+              -v $(pwd)/tests/proxy_e2e_anthropic_messages_tests/test_config.yaml:/app/config.yaml \
+              litellm-docker-database:ci \
+              --config /app/config.yaml \
+              --port 4000 \
+              --detailed_debug
+      - run:
+          name: Start outputting logs
+          command: docker logs -f my-app
+          background: true
+      - run:
+          name: Wait for app to be ready
+          command: dockerize -wait http://localhost:4000 -timeout 5m
+      - run:
+          name: Run Claude Agent SDK E2E Tests
+          command: |
+            export PATH="$HOME/miniconda/bin:$PATH"
+            source $HOME/miniconda/etc/profile.d/conda.sh
+            conda activate myenv
+            export LITELLM_PROXY_URL="http://localhost:4000"
+            export LITELLM_API_KEY="sk-1234"
+            pwd
+            ls
+            python -m pytest -vv tests/proxy_e2e_anthropic_messages_tests/ -x -s --junitxml=test-results/junit.xml --durations=5
+          no_output_timeout: 120m
+
+      # Store test results
+      - store_test_results:
+          path: test-results
+
   upload-coverage:
     docker:
       - image: cimg/python:3.9
@@ -3649,6 +3753,9 @@ jobs:
             nvm use v20
 
             cd ui/litellm-dashboard
+
+            # Remove node_modules and package-lock to ensure clean install (fixes dependency resolution issues)
+            rm -rf node_modules package-lock.json
 
             # Install dependencies first
             npm install
@@ -4068,6 +4175,14 @@ workflows:
                 - main
                 - /litellm_.*/
       - proxy_pass_through_endpoint_tests:
+          requires:
+            - build_docker_database_image
+          filters:
+            branches:
+              only:
+                - main
+                - /litellm_.*/
+      - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
           filters:

@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import enum
 import inspect
 import io
 import os
@@ -29,6 +30,8 @@ from typing import (
     get_type_hints,
 )
 
+from pydantic import BaseModel, Json
+
 from litellm._uuid import uuid
 from litellm.constants import (
     AIOHTTP_CONNECTOR_LIMIT,
@@ -45,7 +48,43 @@ from litellm.constants import (
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
 )
+from litellm.litellm_core_utils.litellm_logging import (
+    _init_custom_logger_compatible_class,
+)
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy._types import (
+    CallbackDelete,
+    CallInfo,
+    CommonProxyErrors,
+    ConfigFieldDelete,
+    ConfigFieldInfo,
+    ConfigFieldUpdate,
+    ConfigGeneralSettings,
+    ConfigList,
+    ConfigYAML,
+    EnterpriseLicenseData,
+    FieldDetail,
+    InvitationClaim,
+    InvitationDelete,
+    InvitationModel,
+    InvitationNew,
+    InvitationUpdate,
+    Litellm_EntityType,
+    LiteLLM_JWTAuth,
+    LiteLLM_TeamTable,
+    LiteLLM_UserTable,
+    LitellmUserRoles,
+    PassThroughGenericEndpoint,
+    ProxyErrorTypes,
+    ProxyException,
+    RoleBasedPermissions,
+    SpecialModelNames,
+    SupportedDBObjectType,
+    TeamDefaultSettings,
+    TokenCountRequest,
+    TransformRequestBody,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.common_utils.callback_utils import (
     normalize_callback_names,
     process_callback,
@@ -226,6 +265,7 @@ from litellm.proxy.auth.model_checks import (
     get_team_models,
 )
 from litellm.proxy.auth.user_api_key_auth import (
+    _fetch_global_spend_with_event_coordination,
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
@@ -767,6 +807,13 @@ async def proxy_startup_event(app: FastAPI):  # noqa: PLR0915
     if prisma_client is not None and litellm.max_budget > 0:
         ProxyStartupEvent._add_proxy_budget_to_db(
             litellm_proxy_budget_name=litellm_proxy_admin_name
+        )
+        asyncio.create_task(
+            ProxyStartupEvent._warm_global_spend_cache(
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
         )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -2147,6 +2194,12 @@ class ProxyConfig:
         """
         search_tools_raw = config.get("search_tools", None)
         if not search_tools_raw:
+            # Check in general_settings
+            general_settings = config.get("general_settings", {})
+            if general_settings:
+                search_tools_raw = general_settings.get("search_tools", None)
+
+        if not search_tools_raw:
             return None
 
         search_tools_parsed: List[SearchToolTypedDict] = []
@@ -2890,9 +2943,6 @@ class ProxyConfig:
         """
         Initialize alerting settings
         """
-        from litellm.litellm_core_utils.litellm_logging import (
-            _init_custom_logger_compatible_class,
-        )
 
         _alerting_callbacks = general_settings.get("alerting", None)
         verbose_proxy_logger.debug(f"_alerting_callbacks: {general_settings}")
@@ -3190,6 +3240,8 @@ class ProxyConfig:
                     verbose_proxy_logger.debug(f"updated llm_router: {llm_router}")
             else:
                 verbose_proxy_logger.debug(f"len new_models: {len(models_list)}")
+                if search_tools is not None and llm_router is not None:
+                    llm_router.search_tools = search_tools
                 ## DELETE MODEL LOGIC
                 await self._delete_deployment(db_models=models_list)
 
@@ -3327,105 +3379,6 @@ class ProxyConfig:
             )
             decrypted_variables[k] = decrypted_value
         return decrypted_variables
-
-    async def _get_hierarchical_router_settings(
-        self,
-        user_api_key_dict: Optional["UserAPIKeyAuth"],
-        prisma_client: Optional[PrismaClient],
-    ) -> Optional[dict]:
-        """
-        Get router_settings in priority order: Key > Team > Global
-
-        Returns:
-            dict: Combined router_settings, or None if no settings found
-        """
-        if prisma_client is None:
-            return None
-
-        import json
-
-        import yaml
-
-        # 1. Try key-level router_settings
-        if user_api_key_dict is not None:
-            # Check if router_settings is available on the key object
-            key_router_settings_value = getattr(
-                user_api_key_dict, "router_settings", None
-            )
-            if key_router_settings_value is not None:
-                key_router_settings = None
-                if isinstance(key_router_settings_value, str):
-                    try:
-                        key_router_settings = yaml.safe_load(key_router_settings_value)
-                    except (yaml.YAMLError, json.JSONDecodeError):
-                        try:
-                            key_router_settings = json.loads(key_router_settings_value)
-                        except json.JSONDecodeError:
-                            pass
-                elif isinstance(key_router_settings_value, dict):
-                    key_router_settings = key_router_settings_value
-
-                # If key has router_settings (non-empty dict), use it
-                if (
-                    key_router_settings is not None
-                    and isinstance(key_router_settings, dict)
-                    and key_router_settings
-                ):
-                    return key_router_settings
-
-        # 2. Try team-level router_settings
-        if user_api_key_dict is not None and user_api_key_dict.team_id is not None:
-            try:
-                team_obj = await prisma_client.db.litellm_teamtable.find_unique(
-                    where={"team_id": user_api_key_dict.team_id}
-                )
-                if team_obj is not None:
-                    team_router_settings_value = getattr(
-                        team_obj, "router_settings", None
-                    )
-                    if team_router_settings_value is not None:
-                        team_router_settings = None
-                        if isinstance(team_router_settings_value, str):
-                            try:
-                                team_router_settings = yaml.safe_load(
-                                    team_router_settings_value
-                                )
-                            except (yaml.YAMLError, json.JSONDecodeError):
-                                try:
-                                    team_router_settings = json.loads(
-                                        team_router_settings_value
-                                    )
-                                except json.JSONDecodeError:
-                                    pass
-                        elif isinstance(team_router_settings_value, dict):
-                            team_router_settings = team_router_settings_value
-
-                        # If team has router_settings (non-empty dict), use it
-                        if (
-                            team_router_settings is not None
-                            and isinstance(team_router_settings, dict)
-                            and team_router_settings
-                        ):
-                            return team_router_settings
-            except Exception:
-                # If team lookup fails, continue to global settings
-                pass
-
-        # 3. Try global router_settings
-        try:
-            db_router_settings = await prisma_client.db.litellm_config.find_first(
-                where={"param_name": "router_settings"}
-            )
-            if (
-                db_router_settings is not None
-                and isinstance(db_router_settings.param_value, dict)
-                and db_router_settings.param_value
-            ):
-                return db_router_settings.param_value
-        except Exception:
-            pass
-
-        return None
 
     async def _add_router_settings_from_db_config(
         self,
@@ -3593,7 +3546,9 @@ class ProxyConfig:
                     )
             else:
                 # Interval-based scheduling (existing behavior)
-                from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+                from litellm.litellm_core_utils.duration_parser import (
+                    duration_in_seconds,
+                )
 
                 retention_interval = general_settings.get(
                     "maximum_spend_logs_retention_interval", "1d"
@@ -3956,8 +3911,9 @@ class ProxyConfig:
                 where={"id": "sso_config"}
             )
             if sso_settings is not None:
-                # Capitalize all keys in sso_settings dictionary
                 sso_settings.sso_settings.pop("role_mappings", None)
+                sso_settings.sso_settings.pop("team_mappings", None)
+                sso_settings.sso_settings.pop("ui_access_mode", None)
                 uppercase_sso_settings = {
                     key.upper(): value
                     for key, value in sso_settings.sso_settings.items()
@@ -4571,6 +4527,68 @@ async def async_assistants_data_generator(
         yield f"data: {error_returned}\n\n"
 
 
+def _get_client_requested_model_for_streaming(request_data: dict) -> str:
+    """
+    Prefer the original client-requested model (pre-alias mapping) when available.
+
+    Pre-call processing can rewrite `request_data["model"]` for aliasing/routing purposes.
+    The OpenAI-compatible public `model` field should reflect what the client sent.
+    """
+    requested_model = request_data.get("_litellm_client_requested_model")
+    if isinstance(requested_model, str):
+        return requested_model
+
+    requested_model = request_data.get("model")
+    return requested_model if isinstance(requested_model, str) else ""
+
+
+def _restamp_streaming_chunk_model(
+    *,
+    chunk: Any,
+    requested_model_from_client: str,
+    request_data: dict,
+    model_mismatch_logged: bool,
+) -> Tuple[Any, bool]:
+    # Always return the client-requested model name (not provider-prefixed internal identifiers)
+    # on streaming chunks.
+    #
+    # Note: This warning is intentionally verbose. A mismatch is a useful signal that an
+    # internal provider/deployment identifier is leaking into the public API, and helps
+    # maintainers/operators catch regressions while preserving OpenAI-compatible output.
+    if not requested_model_from_client or not isinstance(chunk, (BaseModel, dict)):
+        return chunk, model_mismatch_logged
+
+    downstream_model = (
+        chunk.get("model") if isinstance(chunk, dict) else getattr(chunk, "model", None)
+    )
+    if not model_mismatch_logged and downstream_model != requested_model_from_client:
+        verbose_proxy_logger.warning(
+            "litellm_call_id=%s: streaming chunk model mismatch - requested=%r downstream=%r. Overriding model to requested.",
+            request_data.get("litellm_call_id"),
+            requested_model_from_client,
+            downstream_model,
+        )
+        model_mismatch_logged = True
+
+    if isinstance(chunk, dict):
+        chunk["model"] = requested_model_from_client
+        return chunk, model_mismatch_logged
+
+    try:
+        setattr(chunk, "model", requested_model_from_client)
+    except Exception as e:
+        verbose_proxy_logger.error(
+            "litellm_call_id=%s: failed to override chunk.model=%r on chunk_type=%s. error=%s",
+            request_data.get("litellm_call_id"),
+            requested_model_from_client,
+            type(chunk),
+            str(e),
+            exc_info=True,
+        )
+
+    return chunk, model_mismatch_logged
+
+
 async def async_data_generator(
     response, user_api_key_dict: UserAPIKeyAuth, request_data: dict
 ):
@@ -4579,6 +4597,10 @@ async def async_data_generator(
         # Use a list to accumulate response segments to avoid O(n^2) string concatenation
         str_so_far_parts: list[str] = []
         error_message: Optional[str] = None
+        requested_model_from_client = _get_client_requested_model_for_streaming(
+            request_data=request_data
+        )
+        model_mismatch_logged = False
         async for chunk in proxy_logging_obj.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=response,
@@ -4599,6 +4621,13 @@ async def async_data_generator(
             if isinstance(chunk, (ModelResponse, ModelResponseStream)):
                 response_str = litellm.get_response_string(response_obj=chunk)
                 str_so_far_parts.append(response_str)
+
+            chunk, model_mismatch_logged = _restamp_streaming_chunk_model(
+                chunk=chunk,
+                requested_model_from_client=requested_model_from_client,
+                request_data=request_data,
+                model_mismatch_logged=model_mismatch_logged,
+            )
 
             if isinstance(chunk, BaseModel):
                 chunk = chunk.model_dump_json(exclude_none=True, exclude_unset=True)
@@ -4762,6 +4791,26 @@ class ProxyStartupEvent:
                 },
             )
         )
+
+    @classmethod
+    async def _warm_global_spend_cache(
+        cls,
+        litellm_proxy_admin_name: str,
+        user_api_key_cache: DualCache,
+        prisma_client: PrismaClient,
+    ) -> None:
+        """Warm global spend cache once at startup to reduce impact of first wave of requests."""
+        try:
+            cache_key = "{}:spend".format(litellm_proxy_admin_name)
+            await _fetch_global_spend_with_event_coordination(
+                cache_key=cache_key,
+                user_api_key_cache=user_api_key_cache,
+                prisma_client=prisma_client,
+            )
+        except Exception as e:
+            verbose_proxy_logger.debug(
+                "Global spend cache warm-up at startup skipped or failed: %s", e
+            )
 
     @classmethod
     async def _update_default_team_member_budget(cls):
@@ -10020,9 +10069,13 @@ async def get_image():
     if logo_path.startswith(("http://", "https://")):
         try:
             # Download the image and cache it
-            from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+            from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+            from litellm.types.llms.custom_http import httpxSpecialProvider
 
-            async_client = AsyncHTTPHandler(timeout=5.0)
+            async_client = get_async_httpx_client(
+                llm_provider=httpxSpecialProvider.UI,
+                params={"timeout": 5.0},
+            )
             response = await async_client.get(logo_path)
             if response.status_code == 200:
                 # Save the image to a local file
