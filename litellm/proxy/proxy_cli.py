@@ -118,8 +118,24 @@ class ProxyInitializationHelpers:
         print(completion_response)  # noqa
 
     @staticmethod
+    def _get_mock_chat_endpoint() -> tuple:
+        """Return (base_url, port) for mock chat API from LITELLM_MOCK_CHAT_ENDPOINT (default http://localhost:8090)."""
+        endpoint = os.getenv("LITELLM_MOCK_CHAT_ENDPOINT", "http://localhost:8090").strip().rstrip("/")
+        if endpoint.isdigit():
+            port = int(endpoint)
+            return f"http://localhost:{port}", port
+        parsed = urlparse.urlparse(endpoint)
+        port = parsed.port if parsed.port is not None else 8090
+        base = endpoint if parsed.scheme else f"http://localhost:{port}"
+        return base, port
+
+    @staticmethod
     def _start_mock_chat_api_once() -> None:
-        """Start the mock chat completions API on port 8090 once in the main process (for testing)."""
+        """Start the mock chat completions API once in the main process (for testing). Set LITELLM_MOCK_CHAT_API=1 to enable (or use LITELLM_AUTO_BENCHMARK=1, which starts the mock too)."""
+        enabled = os.getenv("LITELLM_MOCK_CHAT_API", "").strip().lower() in ("1", "true", "yes")
+        auto_benchmark = os.getenv("LITELLM_AUTO_BENCHMARK", "").strip().lower() in ("1", "true", "yes")
+        if not enabled and not auto_benchmark:
+            return
         _proxy_cli_dir = os.path.dirname(os.path.abspath(__file__))
         _litellm_root = os.path.dirname(_proxy_cli_dir)
         _repo_root = os.path.dirname(_litellm_root)
@@ -130,20 +146,90 @@ class ProxyInitializationHelpers:
         except ImportError:
             return
 
+        _, mock_port = ProxyInitializationHelpers._get_mock_chat_endpoint()
+
         def _run_mock():
             import uvicorn
 
             uvicorn.run(
                 mock_chat_app,
                 host="0.0.0.0",
-                port=8090,
-                log_level="warning",
+                port=mock_port,
+                log_level="error",
             )
 
         t = threading.Thread(target=_run_mock, daemon=True)
         t.start()
         print(  # noqa: T201
-            "\033[1;32mLiteLLM: Mock chat completions API started on http://0.0.0.0:8090 (for testing)\033[0m\n"
+            f"\033[1;32mLiteLLM: Mock chat completions API started on http://0.0.0.0:{mock_port} (for testing)\033[0m\n"
+        )
+
+    @staticmethod
+    def _start_auto_benchmark_when_proxy_up(host: str, port: int) -> None:
+        """When LITELLM_AUTO_BENCHMARK=1, wait for proxy health then run benchmark and save output to a .txt file."""
+        if not os.getenv("LITELLM_AUTO_BENCHMARK", "").strip().lower() in ("1", "true", "yes"):
+            return
+
+        _proxy_cli_dir = os.path.dirname(os.path.abspath(__file__))
+        _litellm_root = os.path.dirname(_proxy_cli_dir)
+        _repo_root = os.path.dirname(_litellm_root)
+        script_path = os.path.join(_repo_root, "scripts", "run_benchmark_after_proxy.py")
+        if not os.path.isfile(script_path):
+            return
+
+        output = os.getenv("LITELLM_AUTO_BENCHMARK_OUTPUT", "").strip()
+        extra_args_str = os.getenv("LITELLM_AUTO_BENCHMARK_ARGS", "--rps-control 10000 --requests 500000").strip()
+        extra_args = extra_args_str.split() if extra_args_str else ["--rps-control", "10000", "--requests", "500000"]
+
+        def _run():
+            import time
+
+            try:
+                import httpx
+            except ImportError:
+                print("LiteLLM: Auto-benchmark skipped (httpx not installed)", file=sys.stderr)
+                return
+            # Use 127.0.0.1 for health check so it works on Windows when proxy binds to 0.0.0.0
+            health_host = "127.0.0.1" if host == "0.0.0.0" else host
+            health_url = f"http://{health_host}:{port}/health"
+            proxy_base_url = f"http://{health_host}:{port}"
+            # Give proxy a moment to bind after uvicorn.run() starts
+            time.sleep(3.0)
+            deadline = time.monotonic() + 300
+            while time.monotonic() < deadline:
+                try:
+                    r = httpx.get(health_url, timeout=5.0)
+                    if r.status_code == 200:
+                        break
+                except Exception:
+                    pass
+                time.sleep(2.0)
+            else:
+                print("LiteLLM: Auto-benchmark timed out waiting for proxy health", file=sys.stderr)
+                return
+            # Proxy is up: run benchmark and save to file
+            from datetime import datetime
+
+            if not output:
+                out_path = os.path.join(_repo_root, f"benchmark_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt")
+            else:
+                out_path = output if os.path.isabs(output) else os.path.join(_repo_root, output)
+            mock_base, _ = ProxyInitializationHelpers._get_mock_chat_endpoint()
+            provider_url_default = f"{mock_base.rstrip('/')}/chat/completions"
+            env = os.environ.copy()
+            env["LITELLM_PROXY_URL"] = f"{proxy_base_url}/chat/completions"
+            env.setdefault("PROVIDER_URL", provider_url_default)
+            cmd = [sys.executable, script_path, "--no-wait", "--output", out_path, "--proxy-url", env["LITELLM_PROXY_URL"], "--provider-url", env["PROVIDER_URL"]] + extra_args
+            try:
+                print(f"LiteLLM: Auto-benchmark starting, output -> {out_path}", flush=True)
+                subprocess.run(cmd, env=env, cwd=_repo_root)
+            except Exception as e:
+                print(f"LiteLLM: Auto-benchmark failed: {e}", file=sys.stderr)
+
+        t = threading.Thread(target=_run, daemon=True)
+        t.start()
+        print(  # noqa: T201
+            "\033[1;32mLiteLLM: Auto-benchmark enabled; will run when proxy is up and save output to .txt\033[0m\n"
         )
 
     @staticmethod
@@ -858,6 +944,9 @@ def run_server(  # noqa: PLR0915
 
         # Start mock chat API once in main process (port 8090) before forking workers
         ProxyInitializationHelpers._start_mock_chat_api_once()
+
+        # When LITELLM_AUTO_BENCHMARK=1, run benchmark when proxy is up and save output to .txt
+        ProxyInitializationHelpers._start_auto_benchmark_when_proxy_up(host=host, port=port)
 
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
