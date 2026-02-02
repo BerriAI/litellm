@@ -74,6 +74,57 @@ You can find [supported data regions litellm here](../docs/data_security#support
 
 ## Frequently Asked Questions
 
+### How to set up your Enterprise License (`LITELLM_LICENSE`)
+
+After purchasing an Enterprise license, you will receive a license key (a JWT string starting with `eyJ...`). To activate Enterprise features on your self-hosted LiteLLM Proxy, add the key to your environment:
+
+**Step 1: Add `LITELLM_LICENSE` to your `.env` file**
+
+```env
+LITELLM_LICENSE="eyJ..."
+```
+
+Or if you're using Docker, pass it as an environment variable:
+
+```bash
+docker run -e LITELLM_LICENSE="eyJ..." ghcr.io/berriai/litellm:main-latest
+```
+
+Or add it to your `docker-compose.yml`:
+
+```yaml
+environment:
+  - LITELLM_LICENSE=eyJ...
+```
+
+**Step 2: Restart LiteLLM Proxy**
+
+After setting the environment variable, restart your LiteLLM Proxy so it picks up the new license key.
+
+### How to verify your Enterprise License is active
+
+Once LiteLLM Proxy has restarted with the `LITELLM_LICENSE` set, you can verify the license is applied by checking the Swagger API docs:
+
+1. Open your browser and navigate to your LiteLLM Proxy's API docs page:
+   ```
+   http://<your-proxy-host>:<port>/
+   ```
+2. Look at the **description text** at the top of the Swagger page.
+3. If the license is valid, you will see **"Enterprise Edition"** in the description, for example:
+   > *Enterprise Edition*
+   >
+   > *Proxy Server to call 100+ LLMs in the OpenAI format.*
+4. If you do **not** see "Enterprise Edition", the description will simply say:
+   > *Proxy Server to call 100+ LLMs in the OpenAI format.*
+
+:::tip
+If "Enterprise Edition" is not showing up after setting `LITELLM_LICENSE`:
+- Double-check that the license key is correct and has not expired.
+- Ensure there are no extra spaces or quotes around the key.
+- Confirm that the proxy was fully restarted after setting the variable.
+- Check the proxy logs for any license validation errors.
+:::
+
 ### SLA's + Professional Support
 
 Professional Support can assist with LLM/Provider integrations, deployment, upgrade management, and LLM Provider troubleshooting.  We can’t solve your own infrastructure-related issues but we will guide you to fix them.
