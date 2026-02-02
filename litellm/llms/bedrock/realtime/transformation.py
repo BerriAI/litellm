@@ -6,7 +6,7 @@ Transforms between OpenAI Realtime API format and Bedrock Nova Sonic format.
 
 import json
 import uuid as uuid_lib
-from typing import List, Optional, Union
+from typing import Any, List, Optional, Union
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -28,6 +28,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeStreamSessionEvents,
 )
 from litellm.types.realtime import (
+    ALL_DELTA_TYPES,
     RealtimeResponseTransformInput,
     RealtimeResponseTypedDict,
 )
@@ -573,7 +574,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         Optional[str],
         Optional[str],
         Optional[str],
-        Optional[str],
+        Optional[ALL_DELTA_TYPES],
     ]:
         """
         Transform Bedrock contentStart event to OpenAI response events.
@@ -605,7 +606,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Determine content type
         content_type = content_start.get("type", "TEXT")
-        current_delta_type = "text" if content_type == "TEXT" else "audio"
+        current_delta_type: ALL_DELTA_TYPES = "text" if content_type == "TEXT" else "audio"
 
         returned_messages: List[OpenAIRealtimeEvents] = []
 
@@ -849,7 +850,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         event: dict,
         current_response_id: Optional[str],
         current_conversation_id: Optional[str],
-    ) -> tuple[List[OpenAIRealtimeEvents], Optional[str], Optional[str], Optional[str]]:
+    ) -> tuple[List[OpenAIRealtimeEvents], Optional[str], Optional[str], Optional[ALL_DELTA_TYPES]]:
         """
         Transform Bedrock promptEnd event to OpenAI response.done.
 
@@ -866,6 +867,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not current_response_id or not current_conversation_id:
             return [], None, None, None
 
+        usage_obj = get_empty_usage()
         response_done = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id=f"event_{uuid.uuid4()}",
@@ -875,7 +877,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 status="completed",
                 output=[],
                 conversation_id=current_conversation_id,
-                usage=get_empty_usage(),
+                usage={
+                    "prompt_tokens": usage_obj.prompt_tokens,
+                    "completion_tokens": usage_obj.completion_tokens,
+                    "total_tokens": usage_obj.total_tokens,
+                },
             ),
         )
 
@@ -918,7 +924,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
 
         # Create a function call arguments done event
         # This is a custom event format that matches what clients expect
-        function_call_event = {
+        from typing import cast
+        function_call_event: dict[str, Any] = {
             "type": "response.function_call_arguments.done",
             "event_id": f"event_{uuid.uuid4()}",
             "response_id": current_response_id,
@@ -929,7 +936,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             "arguments": json.dumps(tool_input),
         }
 
-        return [function_call_event], tool_call_id, tool_name
+        return [cast(OpenAIRealtimeEvents, function_call_event)], tool_call_id, tool_name
 
     def transform_conversation_item_create_tool_result_event(self, json_message: dict) -> List[str]:
         """
@@ -1018,7 +1025,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         try:
             json_message = json.loads(message)
         except json.JSONDecodeError:
-            verbose_logger.warning(f"Invalid JSON message: {message[:200]}")
+            message_preview = message[:200].decode('utf-8', errors='replace') if isinstance(message, bytes) else message[:200]
+            verbose_logger.warning(f"Invalid JSON message: {message_preview}")
             return {
                 "response": [],
                 "current_output_item_id": realtime_response_transform_input.get(
