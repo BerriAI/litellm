@@ -88,3 +88,29 @@ def test_regular_api_keys_still_work():
     assert extracted_api_key == regular_key
     # OAuth headers should NOT be added
     assert "anthropic-dangerous-direct-browser-access" not in updated_headers
+
+
+def test_is_anthropic_oauth_key_edge_cases():
+    """Test 5: is_anthropic_oauth_key() with various edge cases"""
+    from litellm.llms.anthropic.common_utils import is_anthropic_oauth_key
+
+    # OAuth tokens should return True
+    assert is_anthropic_oauth_key("sk-ant-oat01-abc123") is True
+    assert is_anthropic_oauth_key("sk-ant-oat02-xyz789") is True
+    assert is_anthropic_oauth_key("Bearer sk-ant-oat01-abc123") is True
+    assert is_anthropic_oauth_key("Bearer sk-ant-oat02-xyz789") is True
+
+    # Non-OAuth should return False
+    assert is_anthropic_oauth_key(None) is False
+    assert is_anthropic_oauth_key("") is False
+    assert is_anthropic_oauth_key("sk-ant-api01-abc123") is False
+    assert is_anthropic_oauth_key("sk-ant-api02-xyz789") is False
+    assert is_anthropic_oauth_key("Bearer sk-ant-api01-abc123") is False
+    assert is_anthropic_oauth_key("Bearer sk-ant-api02-xyz789") is False
+
+    # Just the prefix (edge case - starts with sk-ant-oat)
+    assert is_anthropic_oauth_key("sk-ant-oat") is True
+
+    # Case sensitivity (lowercase should not match)
+    assert is_anthropic_oauth_key("sk-ant-OAT01-abc123") is False
+    assert is_anthropic_oauth_key("SK-ANT-OAT01-abc123") is False
