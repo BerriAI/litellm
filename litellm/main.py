@@ -4709,11 +4709,11 @@ def embedding(  # noqa: PLR0915
                 litellm_params=litellm_params_dict,
             )
         elif (
-            model in litellm.open_ai_embedding_models
-            or custom_llm_provider == "openai"
+            custom_llm_provider == "openai"
             or custom_llm_provider == "together_ai"
             or custom_llm_provider == "nvidia_nim"
             or custom_llm_provider == "litellm_proxy"
+            or (model in litellm.open_ai_embedding_models and custom_llm_provider is None)
         ):
             api_base = (
                 api_base
