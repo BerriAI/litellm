@@ -6517,7 +6517,7 @@ async def realtime_websocket_endpoint(
         RealtimeQueryParams, dict(_realtime_query_params_template(model, intent))
     )
 
-    data = {
+    data: Dict = {
         "model": model,
         "websocket": websocket,
         "query_params": query_params,  # Only explicit params
@@ -6559,6 +6559,11 @@ async def realtime_websocket_endpoint(
             model=model,
             route_type="_arealtime",
         )
+
+        ## POST-CALL GUARDRAILS ##
+        # PASS post-call guardrails to the route request for realtime requests
+        data["proxy_logging_obj"] = proxy_logging_obj
+
         llm_call = await route_request(
             data=data,
             route_type="_arealtime",

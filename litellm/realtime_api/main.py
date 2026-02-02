@@ -3,8 +3,8 @@
 from typing import Any, Optional, cast
 
 import litellm
-from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.secret_managers.main import get_secret_str
@@ -16,9 +16,9 @@ from litellm.utils import ProviderConfigManager
 from ..litellm_core_utils.get_litellm_params import get_litellm_params
 from ..litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from ..llms.azure.realtime.handler import AzureOpenAIRealtime
+from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 from ..llms.openai.realtime.handler import OpenAIRealtime
 from ..utils import client as wrapper_client
-from ..llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
 
 azure_realtime = AzureOpenAIRealtime()
 openai_realtime = OpenAIRealtime()
@@ -50,6 +50,7 @@ async def _arealtime(
     if extra_headers is not None:
         headers.update(extra_headers)
     litellm_logging_obj: LiteLLMLogging = kwargs.get("litellm_logging_obj")  # type: ignore
+    proxy_logging_obj: LiteLLMLogging = kwargs.pop("proxy_logging_obj", None)  # type: ignore
     user = kwargs.get("user", None)
     litellm_params = GenericLiteLLMParams(**kwargs)
 
@@ -85,6 +86,7 @@ async def _arealtime(
             websocket=websocket,
             logging_obj=litellm_logging_obj,
             provider_config=provider_config,
+            proxy_logging_obj=proxy_logging_obj,
             api_base=api_base,
             api_key=api_key,
             client=client,
@@ -106,16 +108,9 @@ async def _arealtime(
             or get_secret_str("AZURE_API_KEY")
         )
 
-        api_version = (
-            api_version
-            or litellm_params.api_version
-            or "2024-10-01-preview"
-        )
-        
-        realtime_protocol = (
-            kwargs.get("realtime_protocol")
-            or "beta"
-        )
+        api_version = api_version or litellm_params.api_version or "2024-10-01-preview"
+
+        realtime_protocol = kwargs.get("realtime_protocol") or "beta"
         await azure_realtime.async_realtime(
             model=model,
             websocket=websocket,
@@ -127,6 +122,7 @@ async def _arealtime(
             timeout=timeout,
             logging_obj=litellm_logging_obj,
             realtime_protocol=realtime_protocol,
+            proxy_logging_obj=proxy_logging_obj,
         )
     elif _custom_llm_provider == "openai":
         api_base = (
@@ -152,6 +148,7 @@ async def _arealtime(
             client=None,
             timeout=timeout,
             query_params=query_params,
+            proxy_logging_obj=proxy_logging_obj,
         )
     else:
         raise ValueError(f"Unsupported model: {model}")
@@ -193,7 +190,8 @@ async def _realtime_health_check(
         )
     elif custom_llm_provider == "openai":
         url = openai_realtime._construct_url(
-            api_base=api_base or "https://api.openai.com/", query_params={"model": model}
+            api_base=api_base or "https://api.openai.com/",
+            query_params={"model": model},
         )
     else:
         raise ValueError(f"Unsupported model: {model}")

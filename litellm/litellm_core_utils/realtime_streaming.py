@@ -1,11 +1,12 @@
 import asyncio
 import concurrent.futures
 import json
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union, cast
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import (
     OpenAIRealtimeEvents,
     OpenAIRealtimeOutputItemDone,
@@ -16,6 +17,13 @@ from litellm.types.llms.openai import (
 from litellm.types.realtime import ALL_DELTA_TYPES
 
 from .litellm_logging import Logging as LiteLLMLogging
+
+if TYPE_CHECKING:
+    from litellm.proxy.utils import ProxyLogging
+
+    ProxyLoggingObj = ProxyLogging
+else:
+    ProxyLoggingObj = Any
 
 if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
@@ -40,6 +48,7 @@ class RealTimeStreaming:
         websocket: Any,
         backend_ws: CLIENT_CONNECTION_CLASS,
         logging_obj: LiteLLMLogging,
+        proxy_logging_obj: Optional[Any] = None,
         provider_config: Optional[BaseRealtimeConfig] = None,
         model: str = "",
     ):
@@ -55,6 +64,7 @@ class RealTimeStreaming:
             _logged_real_time_event_types = DefaultLoggedRealTimeEventTypes
         self.logged_real_time_event_types = _logged_real_time_event_types
         self.provider_config = provider_config
+        self.proxy_logging_obj = proxy_logging_obj
         self.model = model
         self.current_delta_chunks: Optional[List[OpenAIRealtimeResponseDelta]] = None
         self.current_output_item_id: Optional[str] = None
@@ -75,7 +85,9 @@ class RealTimeStreaming:
             return True
         return False
 
-    def store_message(self, message: Union[str, bytes, OpenAIRealtimeEvents]):
+    async def store_and_check_message(
+        self, message: Union[str, bytes, OpenAIRealtimeEvents]
+    ):
         """Store message in list"""
         if isinstance(message, bytes):
             message = message.decode("utf-8")
@@ -98,6 +110,9 @@ class RealTimeStreaming:
         if self._should_store_message(message_obj):
             self.messages.append(message_obj)
 
+        if self.proxy_logging_obj:
+            await self.run_post_call_guardrails(cast(OpenAIRealtimeEvents, message_obj))
+
     def store_input(self, message: dict):
         """Store input message"""
         self.input_message = message
@@ -112,6 +127,14 @@ class RealTimeStreaming:
             asyncio.create_task(self.logging_obj.async_success_handler(self.messages))
             ## SYNC LOGGING
             executor.submit(self.logging_obj.success_handler(self.messages))
+
+    async def run_post_call_guardrails(self, message: OpenAIRealtimeEvents):
+        if self.proxy_logging_obj:
+            await cast(ProxyLoggingObj, self.proxy_logging_obj).post_call_success_hook(
+                data={},
+                user_api_key_dict=UserAPIKeyAuth(),
+                response=message,
+            )
 
     async def backend_to_client_send_messages(self):
         import websockets
@@ -159,17 +182,17 @@ class RealTimeStreaming:
                         for event in transformed_response:
                             event_str = json.dumps(event)
                             ## LOGGING
-                            self.store_message(event_str)
+                            await self.store_and_check_message(event_str)
                             await self.websocket.send_text(event_str)
                     else:
                         event_str = json.dumps(transformed_response)
                         ## LOGGING
-                        self.store_message(event_str)
+                        await self.store_and_check_message(event_str)
                         await self.websocket.send_text(event_str)
 
                 else:
                     ## LOGGING
-                    self.store_message(raw_response)
+                    await self.store_and_check_message(raw_response)
                     await self.websocket.send_text(raw_response)
 
         except websockets.exceptions.ConnectionClosed as e:  # type: ignore

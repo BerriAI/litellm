@@ -42,9 +42,11 @@ class OpenAIRealtime(OpenAIChatCompletion):
         client: Optional[Any] = None,
         timeout: Optional[float] = None,
         query_params: Optional[RealtimeQueryParams] = None,
+        proxy_logging_obj: Optional[Any] = None,
     ):
         import websockets
         from websockets.asyncio.client import ClientConnection
+
         if api_base is None:
             api_base = "https://api.openai.com/"
         if api_key is None:
@@ -58,7 +60,9 @@ class OpenAIRealtime(OpenAIChatCompletion):
         try:
             # Only use SSL context for secure websocket connections (wss://)
             # websockets library doesn't accept ssl argument for ws:// URIs
-            ssl_context = None if url.startswith("ws://") else get_shared_realtime_ssl_context()
+            ssl_context = (
+                None if url.startswith("ws://") else get_shared_realtime_ssl_context()
+            )
             # Log a masked request preview consistent with other endpoints.
             logging_obj.pre_call(
                 input=None,
@@ -82,7 +86,10 @@ class OpenAIRealtime(OpenAIChatCompletion):
                 ssl=ssl_context,
             ) as backend_ws:
                 realtime_streaming = RealTimeStreaming(
-                    websocket, cast(ClientConnection, backend_ws), logging_obj
+                    websocket,
+                    cast(ClientConnection, backend_ws),
+                    logging_obj,
+                    proxy_logging_obj,
                 )
                 await realtime_streaming.bidirectional_forward()
 
