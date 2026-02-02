@@ -1008,16 +1008,17 @@ class OpenTelemetry(CustomLogger):
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
+        from typing import Any, Dict, cast
 
         # NOTE: In OTEL SDK >= 1.39.0, LogRecord moved to `_internal`.
         # We keep a fallback import for older SDKs.
         try:
             from opentelemetry.sdk._logs._internal import (
-                LogRecord as SdkLogRecord,
+                LogRecord as _SdkLogRecordCtor,
             )  # OTEL >= 1.39.0
         except ImportError:
             from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]  # OTEL < 1.39.0
-                LogRecord as SdkLogRecord,
+                LogRecord as _SdkLogRecordCtor,
             )
 
         otel_logger = get_logger(LITELLM_LOGGER_NAME)
@@ -1033,6 +1034,33 @@ class OpenTelemetry(CustomLogger):
             "custom_llm_provider", "Unknown"
         )
 
+        def _create_sdk_log_record(*, body: Any, attributes: Dict[str, Any]) -> Any:
+            """Best-effort SDK LogRecord creation across OTEL versions.
+
+            OTEL >= 1.39.0 changed the LogRecord constructor (no `resource` kwarg).
+            We try the legacy signature first and gracefully fall back.
+
+            Returns:
+              An SDK LogRecord instance (typed as Any to keep MyPy stable across OTEL versions).
+            """
+
+            base_kwargs: Dict[str, Any] = {
+                "timestamp": self._to_ns(datetime.now()),
+                "trace_id": parent_ctx.trace_id,
+                "span_id": parent_ctx.span_id,
+                "trace_flags": parent_ctx.trace_flags,
+                "severity_number": SeverityNumber.INFO,
+                "severity_text": "INFO",
+                "body": body,
+                "attributes": attributes,
+            }
+
+            # OTEL < 1.39.0 accepted `resource=`; OTEL >= 1.39.0 does not.
+            try:
+                return cast(Any, _SdkLogRecordCtor)(resource=resource, **base_kwargs)
+            except TypeError:
+                return cast(Any, _SdkLogRecordCtor)(**base_kwargs)
+
         # per-message events
         for msg in kwargs.get("messages", []):
             role = msg.get("role", "user")
@@ -1042,17 +1070,7 @@ class OpenTelemetry(CustomLogger):
             if self.message_logging and msg.get("content"):
                 attrs["gen_ai.prompt"] = msg["content"]
 
-            log_record = SdkLogRecord(
-                timestamp=self._to_ns(datetime.now()),
-                trace_id=parent_ctx.trace_id,
-                span_id=parent_ctx.span_id,
-                trace_flags=parent_ctx.trace_flags,
-                severity_number=SeverityNumber.INFO,
-                severity_text="INFO",
-                body=msg.copy(),
-                resource=resource,
-                attributes=attrs,
-            )
+            log_record = _create_sdk_log_record(body=msg.copy(), attributes=attrs)
             otel_logger.emit(log_record)
 
         # per-choice events
@@ -1074,17 +1092,7 @@ class OpenTelemetry(CustomLogger):
             if self.message_logging and body_msg.get("content"):
                 body["message"]["content"] = body_msg["content"]
 
-            log_record = SdkLogRecord(
-                timestamp=self._to_ns(datetime.now()),
-                trace_id=parent_ctx.trace_id,
-                span_id=parent_ctx.span_id,
-                trace_flags=parent_ctx.trace_flags,
-                severity_number=SeverityNumber.INFO,
-                severity_text="INFO",
-                body=body,
-                resource=resource,
-                attributes=attrs,
-            )
+            log_record = _create_sdk_log_record(body=body, attributes=attrs)
             otel_logger.emit(log_record)
 
     def _create_guardrail_span(
