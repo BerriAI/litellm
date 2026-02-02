@@ -11598,3 +11598,5 @@ async def dynamic_mcp_route(mcp_server_name: str, request: Request):
 app.mount(path=BASE_MCP_ROUTE, app=mcp_app)
 app.include_router(mcp_rest_endpoints_router)
 app.include_router(mcp_discoverable_endpoints_router)
+
+# Mock chat completions API (for testing) is started once on port 8090 from proxy_cli._start_mock_chat_api_once()

@@ -5,6 +5,7 @@ import os
 import random
 import subprocess
 import sys
+import threading
 import urllib.parse as urlparse
 from typing import TYPE_CHECKING, Any, Optional, Union
 
@@ -115,6 +116,35 @@ class ProxyInitializationHelpers:
             model=request_model, prompt="this is a test request, write a short poem"
         )
         print(completion_response)  # noqa
+
+    @staticmethod
+    def _start_mock_chat_api_once() -> None:
+        """Start the mock chat completions API on port 8090 once in the main process (for testing)."""
+        _proxy_cli_dir = os.path.dirname(os.path.abspath(__file__))
+        _litellm_root = os.path.dirname(_proxy_cli_dir)
+        _repo_root = os.path.dirname(_litellm_root)
+        if _repo_root not in sys.path:
+            sys.path.insert(0, _repo_root)
+        try:
+            from chat_completions_api import app as mock_chat_app
+        except ImportError:
+            return
+
+        def _run_mock():
+            import uvicorn
+
+            uvicorn.run(
+                mock_chat_app,
+                host="0.0.0.0",
+                port=8090,
+                log_level="warning",
+            )
+
+        t = threading.Thread(target=_run_mock, daemon=True)
+        t.start()
+        print(  # noqa: T201
+            "\033[1;32mLiteLLM: Mock chat completions API started on http://0.0.0.0:8090 (for testing)\033[0m\n"
+        )
 
     @staticmethod
     def _get_default_unvicorn_init_args(
@@ -825,6 +855,9 @@ def run_server(  # noqa: PLR0915
                 "LiteLLM: Setup complete. Skipping server startup as requested."
             )
             return
+
+        # Start mock chat API once in main process (port 8090) before forking workers
+        ProxyInitializationHelpers._start_mock_chat_api_once()
 
         uvicorn_args = ProxyInitializationHelpers._get_default_unvicorn_init_args(
             host=host,
