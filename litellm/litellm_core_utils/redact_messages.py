@@ -30,8 +30,15 @@ else:
 
 
 def redact_message_input_output_from_custom_logger(
-    litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
+    litellm_logging_obj: LiteLLMLoggingObject,
+    result,
+    custom_logger: CustomLogger,
+    global_redaction_applied: bool = False,
 ):
+    # skip redundant redaction if global redaction was already applied
+    if global_redaction_applied:
+        return result
+
     if (
         hasattr(custom_logger, "message_logging")
         and custom_logger.message_logging is not True
@@ -172,13 +179,18 @@ def should_redact_message_logging(model_call_details: dict) -> bool:
 
 
 def redact_message_input_output_from_logging(
-    model_call_details: dict, result, input: Optional[Any] = None
+    model_call_details: dict,
+    result,
+    input: Optional[Any] = None,
+    should_redact: Optional[bool] = None,
 ) -> Any:
     """
     Removes messages, prompts, input, response from logging. This modifies the data in-place
     only redacts when litellm.turn_off_message_logging == True
     """
-    if should_redact_message_logging(model_call_details):
+    if should_redact is None:
+        should_redact = should_redact_message_logging(model_call_details)
+    if should_redact:
         return perform_redaction(model_call_details, result)
     return result
 

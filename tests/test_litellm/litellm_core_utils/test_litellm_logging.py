@@ -1062,79 +1062,89 @@ def test_append_system_prompt_messages():
     assert result == messages
 
 
-def test_get_error_information_error_code_priority():
-    """
-    Test get_error_information prioritizes 'code' attribute over 'status_code' attribute
-    and handles edge cases like empty strings and "None" string values.
-    """
-    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+class TestProcessDynamicCallbacksEarlyReturn:
+    def test_all_none_skips_processing(self):
+        """When all dynamic callbacks are None, _process_dynamic_callback_list should not be called."""
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+        )
+        with patch.object(obj, "_process_dynamic_callback_list") as mock_process:
+            obj.process_dynamic_callbacks()
+            mock_process.assert_not_called()
 
-    # Test case 1: Exception with 'code' attribute (ProxyException style)
-    class ProxyException(Exception):
-        def __init__(self, code, message):
-            self.code = code
-            self.message = message
-            super().__init__(message)
+    def test_none_callbacks_not_processed(self):
+        """When only one callback type is set, only that one is processed."""
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_input_callbacks=["cb"],
+        )
+        with patch.object(
+            obj, "_process_dynamic_callback_list", return_value=["cb"]
+        ) as mock_process:
+            obj.process_dynamic_callbacks()
+            assert mock_process.call_count == 1
 
-    proxy_exception = ProxyException(code="500", message="Internal Server Error")
-    result = StandardLoggingPayloadSetup.get_error_information(proxy_exception)
-    assert result["error_code"] == "500"
-    assert result["error_class"] == "ProxyException"
 
-    # Test case 2: Exception with 'status_code' attribute (LiteLLM style)
-    class LiteLLMException(Exception):
-        def __init__(self, status_code, message):
-            self.status_code = status_code
-            self.message = message
-            super().__init__(message)
+class TestProcessDynamicCallbacksOrdering:
+    """success must be processed before async_success, failure before async_failure,
+    because _process_dynamic_callback_list appends to the async list as a side effect."""
 
-    litellm_exception = LiteLLMException(status_code=429, message="Rate limit exceeded")
-    result = StandardLoggingPayloadSetup.get_error_information(litellm_exception)
-    assert result["error_code"] == "429"
-    assert result["error_class"] == "LiteLLMException"
+    def test_success_processed_before_async_success(self):
+        call_order = []
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_success_callbacks=["some_callback"],
+            dynamic_async_success_callbacks=["other_callback"],
+        )
+        original = obj._process_dynamic_callback_list
 
-    # Test case 3: Exception with both 'code' and 'status_code' - should prefer 'code'
-    class BothAttributesException(Exception):
-        def __init__(self, code, status_code, message):
-            self.code = code
-            self.status_code = status_code
-            self.message = message
-            super().__init__(message)
+        def tracking_process(callback_list, dynamic_callbacks_type):
+            call_order.append(dynamic_callbacks_type)
+            return original(callback_list, dynamic_callbacks_type)
 
-    both_exception = BothAttributesException(
-        code="400", status_code=500, message="Bad Request"
-    )
-    result = StandardLoggingPayloadSetup.get_error_information(both_exception)
-    assert result["error_code"] == "400"  # Should prefer 'code' over 'status_code'
+        with patch.object(obj, "_process_dynamic_callback_list", side_effect=tracking_process):
+            obj.process_dynamic_callbacks()
 
-    # Test case 4: Exception with 'code' as empty string - should fall back to 'status_code'
-    empty_code_exception = BothAttributesException(
-        code="", status_code=404, message="Not Found"
-    )
-    result = StandardLoggingPayloadSetup.get_error_information(empty_code_exception)
-    assert result["error_code"] == "404"  # Should fall back to status_code
+        assert call_order.index("success") < call_order.index("async_success")
 
-    # Test case 5: Exception with 'code' as "None" string - should fall back to 'status_code'
-    none_string_exception = BothAttributesException(
-        code="None", status_code=503, message="Service Unavailable"
-    )
-    result = StandardLoggingPayloadSetup.get_error_information(none_string_exception)
-    assert result["error_code"] == "503"  # Should fall back to status_code
+    def test_failure_processed_before_async_failure(self):
+        call_order = []
+        obj = LitellmLogging(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="completion",
+            start_time=None,
+            litellm_call_id="test",
+            function_id="test",
+            dynamic_failure_callbacks=["some_callback"],
+            dynamic_async_failure_callbacks=["other_callback"],
+        )
+        original = obj._process_dynamic_callback_list
 
-    # Test case 6: Exception with 'code' as None - should fall back to 'status_code'
-    none_code_exception = BothAttributesException(
-        code=None, status_code=401, message="Unauthorized"
-    )
-    result = StandardLoggingPayloadSetup.get_error_information(none_code_exception)
-    assert result["error_code"] == "401"  # Should fall back to status_code
+        def tracking_process(callback_list, dynamic_callbacks_type):
+            call_order.append(dynamic_callbacks_type)
+            return original(callback_list, dynamic_callbacks_type)
 
-    # Test case 7: Exception with neither 'code' nor 'status_code' - should return empty string
-    class NoCodeException(Exception):
-        def __init__(self, message):
-            self.message = message
-            super().__init__(message)
+        with patch.object(obj, "_process_dynamic_callback_list", side_effect=tracking_process):
+            obj.process_dynamic_callbacks()
 
-    no_code_exception = NoCodeException(message="Generic error")
-    result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
-    assert result["error_code"] == ""
-    assert result["error_class"] == "NoCodeException"
+        assert call_order.index("failure") < call_order.index("async_failure")

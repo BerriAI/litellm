@@ -68,6 +68,7 @@ from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 from litellm.litellm_core_utils.redact_messages import (
     redact_message_input_output_from_custom_logger,
     redact_message_input_output_from_logging,
+    should_redact_message_logging,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.llms.base_llm.search.transformation import SearchResponse
@@ -202,6 +203,10 @@ except Exception as e:
     EnterpriseCallbackControls = None  # type: ignore
     EnterpriseStandardLoggingPayloadSetupVAR = None
 _in_memory_loggers: List[Any] = []
+
+_STANDARD_LOGGING_METADATA_KEYS: frozenset = frozenset(
+    StandardLoggingMetadata.__annotations__.keys()
+)
 
 ### GLOBAL VARIABLES ###
 
@@ -495,13 +500,15 @@ class Logging(LiteLLMLoggingBaseClass):
 
         checks if web_search_options in kwargs or tools and sets the corresponding attribute in StandardBuiltInToolsParams
         """
+        if not kwargs or ("web_search_options" not in kwargs and "tools" not in kwargs):
+            return StandardBuiltInToolsParams()
+
+        web_search, file_search = (
+            StandardBuiltInToolCostTracking.get_built_in_tools_from_kwargs(kwargs)
+        )
         return StandardBuiltInToolsParams(
-            web_search_options=StandardBuiltInToolCostTracking._get_web_search_options(
-                kwargs or {}
-            ),
-            file_search=StandardBuiltInToolCostTracking._get_file_search_tool_call(
-                kwargs or {}
-            ),
+            web_search_options=web_search,
+            file_search=file_search,
         )
 
     def update_environment_variables(
@@ -2447,11 +2454,12 @@ class Logging(LiteLLMLoggingBaseClass):
             global_callbacks=litellm._async_success_callback,
         )
 
+        _model_call_details = self.model_call_details if hasattr(self, "model_call_details") else {}
+        global_redaction_applied = should_redact_message_logging(_model_call_details)
         result = redact_message_input_output_from_logging(
-            model_call_details=(
-                self.model_call_details if hasattr(self, "model_call_details") else {}
-            ),
+            model_call_details=_model_call_details,
             result=result,
+            should_redact=global_redaction_applied,
         )
 
         ## LOGGING HOOK ##
@@ -2476,7 +2484,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             elif isinstance(callback, CustomLogger):
                 result = redact_message_input_output_from_custom_logger(
-                    result=result, litellm_logging_obj=self, custom_logger=callback
+                    result=result,
+                    litellm_logging_obj=self,
+                    custom_logger=callback,
+                    global_redaction_applied=global_redaction_applied,
                 )
                 self.model_call_details, result = await callback.async_logging_hook(
                     kwargs=self.model_call_details,
@@ -2529,10 +2540,16 @@ class Logging(LiteLLMLoggingBaseClass):
                 if isinstance(callback, CustomLogger):  # custom logger class
                     model_call_details: Dict = self.model_call_details
                     ##################################
-                    # call redaction hook for custom logger
-                    model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
-                        model_call_details=model_call_details
-                    )
+                    # call redaction hook for custom logger (backward compat: subclasses may only accept model_call_details)
+                    try:
+                        model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=model_call_details,
+                            global_redaction_applied=global_redaction_applied,
+                        )
+                    except TypeError:
+                        model_call_details = callback.redact_standard_logging_payload_from_model_call_details(
+                            model_call_details=model_call_details,
+                        )
                     ##################################
                     if self.stream is True:
                         if "async_complete_streaming_response" in model_call_details:
@@ -4495,17 +4512,12 @@ class StandardLoggingPayloadSetup:
             user_api_key_auth_metadata=None,
         )
         if isinstance(metadata, dict):
-            # Filter the metadata dictionary to include only the specified keys
-            supported_keys = StandardLoggingMetadata.__annotations__.keys()
-            for key in supported_keys:
-                if key in metadata:
-                    clean_metadata[key] = metadata[key]  # type: ignore
+            for key in metadata.keys() & _STANDARD_LOGGING_METADATA_KEYS:
+                clean_metadata[key] = metadata[key]  # type: ignore
 
-            if metadata.get("user_api_key") is not None:
-                if is_valid_sha256_hash(str(metadata.get("user_api_key"))):
-                    clean_metadata["user_api_key_hash"] = metadata.get(
-                        "user_api_key"
-                    )  # this is the hash
+            user_api_key = metadata.get("user_api_key")
+            if user_api_key and isinstance(user_api_key, str) and is_valid_sha256_hash(user_api_key):
+                clean_metadata["user_api_key_hash"] = user_api_key
             _potential_requester_metadata = metadata.get(
                 "metadata", None
             )  # check if user passed metadata in the sdk request - e.g. metadata for langsmith logging - https://docs.litellm.ai/docs/observability/langsmith_integration#set-langsmith-fields
