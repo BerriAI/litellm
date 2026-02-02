@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams
@@ -212,11 +213,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         Uses XAI_API_KEY from environment or litellm_params.
         """
         litellm_params = litellm_params or GenericLiteLLMParams()
-        api_key = (
-            litellm_params.api_key
-            or litellm.api_key
-            or get_secret_str("XAI_API_KEY")
-        )
+        api_key = XAIModelInfo.get_api_key(litellm_params.api_key)
         
         if not api_key:
             raise ValueError(
@@ -252,4 +249,3 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         api_base = api_base.rstrip("/")
         
         return f"{api_base}/responses"
-
