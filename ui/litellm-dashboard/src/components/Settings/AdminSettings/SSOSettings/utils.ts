@@ -13,6 +13,8 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     default_role,
     group_claim,
     use_role_mappings,
+    use_team_mappings,
+    team_ids_jwt_field,
     ...rest
   } = formValues;
 
@@ -49,6 +51,13 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
         internal_user: splitTeams(internal_user_teams),
         internal_user_viewer: splitTeams(internal_viewer_teams),
       },
+    };
+  }
+
+  // Add team mappings only if use_team_mappings is checked
+  if (use_team_mappings) {
+    payload.team_mappings = {
+      team_ids_jwt_field: team_ids_jwt_field,
     };
   }
 
