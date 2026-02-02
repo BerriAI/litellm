@@ -255,9 +255,27 @@ def _override_openai_response_model(
     paths stay observable for maintainers/operators without breaking client compatibility.
 
     Errors are reserved for cases where the proxy cannot read/override the response model field.
+
+    Exception: If a fallback occurred (indicated by x-litellm-attempted-fallbacks header),
+    we should preserve the actual model that was used (the fallback model) rather than
+    overriding it with the originally requested model.
     """
     if not requested_model:
         return
+
+    # Check if a fallback occurred - if so, preserve the actual model used
+    hidden_params = getattr(response_obj, "_hidden_params", {}) or {}
+    if isinstance(hidden_params, dict):
+        fallback_headers = hidden_params.get("additional_headers", {}) or {}
+        attempted_fallbacks = fallback_headers.get("x-litellm-attempted-fallbacks", None)
+        if attempted_fallbacks is not None and attempted_fallbacks > 0:
+            # A fallback occurred - preserve the actual model that was used
+            verbose_proxy_logger.debug(
+                "%s: fallback detected (attempted_fallbacks=%d), preserving actual model used instead of overriding to requested model.",
+                log_context,
+                attempted_fallbacks,
+            )
+            return
 
     if isinstance(response_obj, dict):
         downstream_model = response_obj.get("model")
@@ -598,30 +616,20 @@ class ProxyBaseLLMRequestProcessing:
             user_api_key_dict=user_api_key_dict, data=self.data, call_type=route_type  # type: ignore
         )
 
-        # Apply hierarchical router_settings (Key > Team > Global)
-        if llm_router is not None and proxy_config is not None:
-            from litellm.proxy.proxy_server import prisma_client
-
-            router_settings = await proxy_config._get_hierarchical_router_settings(
-                user_api_key_dict=user_api_key_dict,
-                prisma_client=prisma_client,
-            )
-
-            # If router_settings found (from key, team, or global), apply them
-            # This ensures key/team settings override global settings
-            if router_settings is not None and router_settings:
-                # Get model_list from current router
-                model_list = llm_router.get_model_list()
-                if model_list is not None:
-                    # Create user_config with model_list and router_settings
-                    # This creates a per-request router with the hierarchical settings
-                    user_config = {"model_list": model_list, **router_settings}
-                    self.data["user_config"] = user_config
-
         if "messages" in self.data and self.data["messages"]:
             logging_obj.update_messages(self.data["messages"])
 
         return self.data, logging_obj
+
+    @staticmethod
+    def _get_model_id_from_response(hidden_params: dict, data: dict) -> str:
+        """Extract model_id from hidden_params with fallback to litellm_metadata."""
+        model_id = hidden_params.get("model_id", None) or ""
+        if not model_id:
+            litellm_metadata = data.get("litellm_metadata", {}) or {}
+            model_info = litellm_metadata.get("model_info", {}) or {}
+            model_id = model_info.get("id", "") or ""
+        return model_id
 
     async def base_process_llm_request(
         self,
@@ -757,13 +765,7 @@ class ProxyBaseLLMRequestProcessing:
         response = responses[1]
 
         hidden_params = getattr(response, "_hidden_params", {}) or {}
-        model_id = hidden_params.get("model_id", None) or ""
-
-        # Fallback: extract model_id from litellm_metadata if not in hidden_params
-        if not model_id:
-            litellm_metadata = self.data.get("litellm_metadata", {}) or {}
-            model_info = litellm_metadata.get("model_info", {}) or {}
-            model_id = model_info.get("id", "") or ""
+        model_id = self._get_model_id_from_response(hidden_params, self.data)
 
         cache_key, api_base, response_cost = (
             hidden_params.get("cache_key", None) or "",

@@ -397,6 +397,7 @@ class CohereEmbeddingRequest(TypedDict, total=False):
     input_type: Required[COHERE_EMBEDDING_INPUT_TYPES]
     truncate: Literal["NONE", "START", "END"]
     embedding_types: Literal["float", "int8", "uint8", "binary", "ubinary"]
+    output_dimension: int
 
 
 class CohereEmbeddingRequestWithModel(CohereEmbeddingRequest):
