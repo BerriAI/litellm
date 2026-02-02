@@ -74,7 +74,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         if messages is None:
             return data
 
-        chat_completion_compatible_request = (
+        chat_completion_compatible_request, tool_name_mapping = (
             LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
                 anthropic_message_request=cast(AnthropicMessagesRequest, data)
             )
