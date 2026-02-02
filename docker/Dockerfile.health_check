@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Copy health check script and requirements
+COPY scripts/health_check/health_check_client.py /app/health_check_client.py
+COPY scripts/health_check/health_check_requirements.txt /app/requirements.txt
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Make script executable
+RUN chmod +x /app/health_check_client.py
+
+# Set entrypoint
+ENTRYPOINT ["python", "/app/health_check_client.py"]

@@ -21,6 +21,20 @@ from litellm.vector_stores.main import search
 from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
 
 
+@pytest.fixture(autouse=True)
+def clear_client_cache():
+    """
+    Clear the HTTP client cache before each test to ensure mocks are used.
+    This prevents cached real clients from being reused across tests.
+    """
+    cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+    if cache is not None:
+        cache.flush_cache()
+    yield
+    if cache is not None:
+        cache.flush_cache()
+
+
 def test_get_credentials_for_vector_store():
     """Test that get_credentials_for_vector_store returns correct credentials"""
     # Create test vector stores
@@ -121,6 +135,9 @@ def test_add_vector_store_to_registry():
 
 def test_search_uses_registry_credentials():
     """search() should pull credentials from vector_store_registry when available"""
+    # Import the module to get the actual handler instance
+    import litellm.vector_stores.main as vector_stores_main
+    
     vector_store = LiteLLM_ManagedVectorStore(
         vector_store_id="vs1",
         custom_llm_provider="bedrock",
@@ -133,6 +150,16 @@ def test_search_uses_registry_credentials():
     try:
         logger = MagicMock()
         logger._response_cost_calculator.return_value = 0
+        
+        # Mock the search response
+        mock_search_response = {
+            "object": "list",
+            "data": [],
+            "first_id": None,
+            "last_id": None,
+            "has_more": False
+        }
+        
         with patch.object(
             registry,
             "get_credentials_for_vector_store",
@@ -140,9 +167,10 @@ def test_search_uses_registry_credentials():
         ) as mock_get_creds, patch(
             "litellm.vector_stores.main.ProviderConfigManager.get_provider_vector_stores_config",
             return_value=MagicMock(),
-        ), patch(
-            "litellm.vector_stores.main.base_llm_http_handler.vector_store_search_handler",
-            return_value={},
+        ), patch.object(
+            vector_stores_main.base_llm_http_handler,
+            "vector_store_search_handler",
+            return_value=mock_search_response,
         ) as mock_handler:
             search(vector_store_id="vs1", query="test", litellm_logging_obj=logger)
             mock_get_creds.assert_called_once_with("vs1")

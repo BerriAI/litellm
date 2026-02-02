@@ -4,7 +4,8 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { useUpdateUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUpdateUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import NotificationManager from "@/components/molecules/notifications_manager";
-import { Alert, Card, Skeleton, Space, Switch, Typography } from "antd";
+import PageVisibilitySettings from "./PageVisibilitySettings";
+import { Alert, Card, Divider, Skeleton, Space, Switch, Typography } from "antd";
 
 export default function UISettings() {
   const { accessToken } = useAuthorized();
@@ -13,8 +14,11 @@ export default function UISettings() {
 
   const schema = data?.field_schema;
   const property = schema?.properties?.disable_model_add_for_internal_users;
+  const disableTeamAdminDeleteProperty = schema?.properties?.disable_team_admin_delete_team_user;
+  const enabledPagesProperty = schema?.properties?.enabled_ui_pages_internal_users;
   const values = data?.values ?? {};
   const isDisabledForInternalUsers = Boolean(values.disable_model_add_for_internal_users);
+  const isDisabledTeamAdminDeleteTeamUser = Boolean(values.disable_team_admin_delete_team_user);
 
   const handleToggle = (checked: boolean) => {
     updateSettings(
@@ -28,6 +32,31 @@ export default function UISettings() {
         },
       },
     );
+  };
+
+  const handleToggleTeamAdminDelete = (checked: boolean) => {
+    updateSettings(
+      { disable_team_admin_delete_team_user: checked },
+      {
+        onSuccess: () => {
+          NotificationManager.success("UI settings updated successfully");
+        },
+        onError: (error) => {
+          NotificationManager.fromBackend(error);
+        },
+      },
+    );
+  };
+
+  const handleUpdatePageVisibility = (settings: { enabled_ui_pages_internal_users: string[] | null }) => {
+    updateSettings(settings, {
+      onSuccess: () => {
+        NotificationManager.success("Page visibility settings updated successfully");
+      },
+      onError: (error) => {
+        NotificationManager.fromBackend(error);
+      },
+    });
   };
 
   return (
@@ -67,6 +96,32 @@ export default function UISettings() {
               {property?.description && <Typography.Text type="secondary">{property.description}</Typography.Text>}
             </Space>
           </Space>
+
+          <Space align="start" size="middle">
+            <Switch
+              checked={isDisabledTeamAdminDeleteTeamUser}
+              disabled={isUpdating}
+              loading={isUpdating}
+              onChange={handleToggleTeamAdminDelete}
+              aria-label={disableTeamAdminDeleteProperty?.description ?? "Disable team admin delete team user"}
+            />
+            <Space direction="vertical" size={4}>
+              <Typography.Text strong>Disable team admin delete team user</Typography.Text>
+              {disableTeamAdminDeleteProperty?.description && (
+                <Typography.Text type="secondary">{disableTeamAdminDeleteProperty.description}</Typography.Text>
+              )}
+            </Space>
+          </Space>
+
+          <Divider />
+
+          {/* Page Visibility for Internal Users */}
+          <PageVisibilitySettings
+            enabledPagesInternalUsers={values.enabled_ui_pages_internal_users}
+            enabledPagesPropertyDescription={enabledPagesProperty?.description}
+            isUpdating={isUpdating}
+            onUpdate={handleUpdatePageVisibility}
+          />
         </Space>
       )}
     </Card>

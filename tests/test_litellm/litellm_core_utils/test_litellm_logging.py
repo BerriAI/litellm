@@ -197,6 +197,53 @@ async def test_datadog_logger_not_shadowed_by_llm_obs(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
+    """Ensure Logfire logger uses LOGFIRE_BASE_URL to build the OTLP HTTP endpoint (/v1/traces)."""
+
+    # Required env vars for Logfire integration
+    monkeypatch.setenv("LOGFIRE_TOKEN", "test-token")
+    monkeypatch.setenv("LOGFIRE_BASE_URL", "https://logfire-api-custom.pydantic.dev")  # no trailing slash on purpose
+
+    # Import after env vars are set (important if module-level caching exists)
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.integrations.opentelemetry import OpenTelemetry  # logger class
+
+    logging_module._in_memory_loggers.clear()
+
+    try:
+        # Instantiate via the same mechanism LiteLLM uses for callbacks=["logfire"]
+        logger = logging_module._init_custom_logger_compatible_class(
+            logging_integration="logfire",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+
+        # Sanity: we got the right logger type and it is cached
+        assert type(logger) is OpenTelemetry
+        assert any(type(cb) is OpenTelemetry for cb in logging_module._in_memory_loggers)
+
+        # Core regression check: base URL env var should influence the exporter endpoint.
+        #
+        # OpenTelemetry integration has historically stored config on the instance.
+        # We defensively check a few common attribute names to avoid brittle coupling.
+        cfg = (
+            getattr(logger, "otel_config", None)
+            or getattr(logger, "config", None)
+            or getattr(logger, "_otel_config", None)
+        )
+        assert cfg is not None, "Expected OpenTelemetry logger to keep an otel config on the instance"
+
+        endpoint = getattr(cfg, "endpoint", None) or getattr(cfg, "otlp_endpoint", None)
+        assert endpoint is not None, "Expected otel config to expose the OTLP endpoint"
+
+        assert endpoint == "https://logfire-api-custom.pydantic.dev/v1/traces"
+
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
+@pytest.mark.asyncio
 async def test_logging_result_for_bridge_calls(logging_obj):
     """
     When using a bridge, log only once from the underlying bridge call.
@@ -740,11 +787,13 @@ def test_get_masked_values():
         "presidio_ad_hoc_recognizers": None,
         "aws_bedrock_runtime_endpoint": None,
         "presidio_anonymizer_api_base": None,
+        "vertex_credentials": "{sensitive_api_key}",
     }
     masked_values = _get_masked_values(
         sensitive_object, unmasked_length=4, number_of_asterisks=4
     )
     assert masked_values["presidio_anonymizer_api_base"] is None
+    assert masked_values["vertex_credentials"] == "{s****y}"
 
 
 @pytest.mark.asyncio
@@ -1011,3 +1060,81 @@ def test_append_system_prompt_messages():
         kwargs=None, messages=messages
     )
     assert result == messages
+
+
+def test_get_error_information_error_code_priority():
+    """
+    Test get_error_information prioritizes 'code' attribute over 'status_code' attribute
+    and handles edge cases like empty strings and "None" string values.
+    """
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    # Test case 1: Exception with 'code' attribute (ProxyException style)
+    class ProxyException(Exception):
+        def __init__(self, code, message):
+            self.code = code
+            self.message = message
+            super().__init__(message)
+
+    proxy_exception = ProxyException(code="500", message="Internal Server Error")
+    result = StandardLoggingPayloadSetup.get_error_information(proxy_exception)
+    assert result["error_code"] == "500"
+    assert result["error_class"] == "ProxyException"
+
+    # Test case 2: Exception with 'status_code' attribute (LiteLLM style)
+    class LiteLLMException(Exception):
+        def __init__(self, status_code, message):
+            self.status_code = status_code
+            self.message = message
+            super().__init__(message)
+
+    litellm_exception = LiteLLMException(status_code=429, message="Rate limit exceeded")
+    result = StandardLoggingPayloadSetup.get_error_information(litellm_exception)
+    assert result["error_code"] == "429"
+    assert result["error_class"] == "LiteLLMException"
+
+    # Test case 3: Exception with both 'code' and 'status_code' - should prefer 'code'
+    class BothAttributesException(Exception):
+        def __init__(self, code, status_code, message):
+            self.code = code
+            self.status_code = status_code
+            self.message = message
+            super().__init__(message)
+
+    both_exception = BothAttributesException(
+        code="400", status_code=500, message="Bad Request"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(both_exception)
+    assert result["error_code"] == "400"  # Should prefer 'code' over 'status_code'
+
+    # Test case 4: Exception with 'code' as empty string - should fall back to 'status_code'
+    empty_code_exception = BothAttributesException(
+        code="", status_code=404, message="Not Found"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(empty_code_exception)
+    assert result["error_code"] == "404"  # Should fall back to status_code
+
+    # Test case 5: Exception with 'code' as "None" string - should fall back to 'status_code'
+    none_string_exception = BothAttributesException(
+        code="None", status_code=503, message="Service Unavailable"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(none_string_exception)
+    assert result["error_code"] == "503"  # Should fall back to status_code
+
+    # Test case 6: Exception with 'code' as None - should fall back to 'status_code'
+    none_code_exception = BothAttributesException(
+        code=None, status_code=401, message="Unauthorized"
+    )
+    result = StandardLoggingPayloadSetup.get_error_information(none_code_exception)
+    assert result["error_code"] == "401"  # Should fall back to status_code
+
+    # Test case 7: Exception with neither 'code' nor 'status_code' - should return empty string
+    class NoCodeException(Exception):
+        def __init__(self, message):
+            self.message = message
+            super().__init__(message)
+
+    no_code_exception = NoCodeException(message="Generic error")
+    result = StandardLoggingPayloadSetup.get_error_information(no_code_exception)
+    assert result["error_code"] == ""
+    assert result["error_class"] == "NoCodeException"
