@@ -22,23 +22,11 @@ Migration: 20260116142756_update_deleted_keys_teams_table_routing_settings
 
 **Cause:** This typically happens after a version rollback. The `_prisma_migrations` table still records migrations from the newer version as "applied," but the underlying database tables were modified, dropped, or never fully created.
 
-**Fix Options:**
+**How to fix:**
 
-#### Option A — `prisma db push` (recommended for non-production)
+#### Step 1 — Delete the failed migration entry and restart
 
-Syncs the Prisma schema directly to the database, bypassing migration history:
-
-```bash
-DATABASE_URL="<your_database_url>" prisma db push
-```
-
-:::warning
-`prisma db push` does not use the migration history. It is best suited for development and QA environments. Use with caution in production.
-:::
-
-#### Option B — Clean up `_prisma_migrations` table
-
-Inspect recent migrations and remove the problematic entry so it can be re-applied:
+Remove the problematic migration from the history so it can be re-applied:
 
 ```sql
 -- View recent migrations
@@ -52,19 +40,17 @@ DELETE FROM "_prisma_migrations"
 WHERE migration_name = '<failed_migration_name>';
 ```
 
-After deleting the entry, restart LiteLLM — it will attempt to re-apply the migration.
+After deleting the entry, restart LiteLLM — it will re-apply the migration on startup.
 
-#### Option C — Mark migration as rolled back
+#### Step 2 — If that doesn't work, use `prisma db push`
 
-Use the Prisma CLI to mark the migration as rolled back without touching the database:
+If deleting the migration entry and restarting doesn't resolve the issue, sync the schema directly:
 
 ```bash
-prisma migrate resolve --rolled-back <migration_name>
+DATABASE_URL="<your_database_url>" prisma db push
 ```
 
-This tells Prisma the migration was rolled back, so it will try to re-apply it on the next deploy.
-
-Reference: [Prisma migrate resolve documentation](https://pris.ly/d/migrate-resolve)
+This bypasses migration history and forces the database schema to match the Prisma schema.
 
 ---
 
@@ -72,15 +58,28 @@ Reference: [Prisma migrate resolve documentation](https://pris.ly/d/migrate-reso
 
 **Cause:** A previous migration failed (recorded with an error in `_prisma_migrations`), and Prisma refuses to apply any new migrations until the failure is resolved.
 
-**Fix:** Identify and resolve the blocking migration using [Option A, B, or C](#option-a--prisma-db-push-recommended-for-non-production) above. Then restart LiteLLM.
+**How to fix:**
 
-To find the failed migration:
+1. Find the failed migration:
 
 ```sql
 SELECT migration_name, finished_at, rolled_back_at, logs
 FROM "_prisma_migrations"
 WHERE finished_at IS NULL OR rolled_back_at IS NOT NULL
 ORDER BY started_at DESC;
+```
+
+2. Delete the failed entry and restart LiteLLM:
+
+```sql
+DELETE FROM "_prisma_migrations"
+WHERE migration_name = '<failed_migration_name>';
+```
+
+3. If that doesn't work, use `prisma db push`:
+
+```bash
+DATABASE_URL="<your_database_url>" prisma db push
 ```
 
 ---
@@ -100,35 +99,15 @@ ORDER BY started_at DESC
 LIMIT 20;
 ```
 
-2. For each migration that shouldn't be there (i.e., from the version you rolled back from), either:
-   - **Delete the entry** so it can be cleanly re-applied:
+2. For each migration that shouldn't be there (i.e., from the version you rolled back from), delete the entry:
      ```sql
      DELETE FROM "_prisma_migrations" WHERE migration_name = '<migration_name>';
-     ```
-   - **Mark it as rolled back** via the CLI:
-     ```bash
-     prisma migrate resolve --rolled-back <migration_name>
      ```
 
 3. Restart LiteLLM to re-run migrations.
 
-For non-production environments, `prisma db push` is the fastest path to a clean state.
+4. If that doesn't work, use `prisma db push`:
 
----
-
-## General Tips
-
-| Tip | Details |
-|-----|---------|
-| **Always back up first** | Before any manual migration fix, take a database backup. |
-| **`prisma migrate deploy`** | The standard way to apply migrations in production. LiteLLM runs this automatically on startup. |
-| **`prisma db push`** | Syncs schema directly — great for dev/QA, use carefully in prod. Does not update `_prisma_migrations`. |
-| **`prisma migrate resolve`** | Manually marks a migration as applied or rolled back. Useful for fixing stuck states. |
-| **Migration history table** | `_prisma_migrations` in your PostgreSQL database stores all migration state. |
-| **Version upgrades** | Prisma applies all migrations added after the last successfully applied one. |
-
-## Further Reading
-
-- [Prisma Migrate: Resolving migration issues](https://pris.ly/d/migrate-resolve)
-- [Prisma `db push` documentation](https://www.prisma.io/docs/reference/api-reference/command-reference#db-push)
-- [LiteLLM Proxy Documentation](https://docs.litellm.ai/)
+```bash
+DATABASE_URL="<your_database_url>" prisma db push
+```
