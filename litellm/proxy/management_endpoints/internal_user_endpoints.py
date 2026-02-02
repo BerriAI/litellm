@@ -14,7 +14,6 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
-from litellm._uuid import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union, cast
 
@@ -23,6 +22,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 
 import litellm
 from litellm._logging import verbose_proxy_logger
+from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
@@ -355,6 +355,7 @@ async def new_user(
     - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
     - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
     - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
+    - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
     - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
     - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.
@@ -411,6 +412,19 @@ async def new_user(
             raise HTTPException(
                 status_code=403,
                 detail="License is over limit. Please contact support@berri.ai to upgrade your license.",
+            )
+        
+        # Only proxy admins can create administrative users
+        # Check if user_api_key_dict is actually a UserAPIKeyAuth instance (not a Depends object)
+        # This can happen when the function is called directly in tests
+        if (
+            data.user_role in [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY]
+            and isinstance(user_api_key_dict, UserAPIKeyAuth)
+            and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Only proxy admins can create administrative users (proxy_admin, proxy_admin_viewer). Attempted to create user with role: {data.user_role}. Your role: {user_api_key_dict.user_role}"
             )
 
         data_json = data.json()  # type: ignore
@@ -800,7 +814,9 @@ def _update_internal_user_params(
 ) -> dict:
     non_default_values = {}
     for k, v in data_json.items():
-        if (
+        if k == "max_budget":
+            non_default_values[k] = v
+        elif (
             v is not None
             and v
             not in (
@@ -1047,6 +1063,7 @@ async def user_update(
         - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
         - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
         - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
+        - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
         - metadata: Optional[dict] - Metadata for user, store information for user. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
         - max_parallel_requests: Optional[int] - Rate limit a user based on the number of parallel requests. Raises 429 error, if user's parallel requests > x.

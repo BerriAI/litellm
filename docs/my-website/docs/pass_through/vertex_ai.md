@@ -45,7 +45,7 @@ model_list:
     litellm_params:
       model: vertex_ai/gemini-1.0-pro
       vertex_project: adroit-crow-413218
-      vertex_region: us-central1
+      vertex_location: us-central1
       vertex_credentials: /path/to/credentials.json
       use_in_pass_through: true # 👈 KEY CHANGE
 ```
@@ -57,9 +57,9 @@ model_list:
 <TabItem value="yaml" label="Set in config.yaml">
 
 ```yaml
-default_vertex_config: 
+default_vertex_config:
   vertex_project: adroit-crow-413218
-  vertex_region: us-central1
+  vertex_location: us-central1
   vertex_credentials: /path/to/credentials.json
 ```
 </TabItem>
@@ -461,3 +461,48 @@ generateContent();
 
 </TabItem>
 </Tabs>
+
+### Using Anthropic Beta Features on Vertex AI
+
+When using Anthropic models via Vertex AI passthrough (e.g., Claude on Vertex), you can enable Anthropic beta features like extended context windows.
+
+The `anthropic-beta` header is automatically forwarded to Vertex AI when calling Anthropic models.
+
+```bash
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "anthropic-beta: context-1m-2025-08-07" \
+  -d '{
+    "anthropic_version": "vertex-2023-10-16",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 500
+  }'
+```
+
+### Forwarding Custom Headers with `x-pass-` Prefix
+
+You can forward any custom header to the provider by prefixing it with `x-pass-`. The prefix is stripped before the header is sent to the provider.
+
+For example:
+- `x-pass-anthropic-beta: value` becomes `anthropic-beta: value`
+- `x-pass-custom-header: value` becomes `custom-header: value`
+
+This is useful when you need to send provider-specific headers that aren't in the default allowlist.
+
+```bash
+curl http://localhost:4000/vertex_ai/v1/projects/${PROJECT_ID}/locations/us-east5/publishers/anthropic/models/claude-3-5-sonnet:rawPredict \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-1234" \
+  -H "x-pass-anthropic-beta: context-1m-2025-08-07" \
+  -H "x-pass-custom-feature: enabled" \
+  -d '{
+    "anthropic_version": "vertex-2023-10-16",
+    "messages": [{"role": "user", "content": "Hello"}],
+    "max_tokens": 500
+  }'
+```
+
+:::info
+The `x-pass-` prefix works for all LLM pass-through endpoints, not just Vertex AI.
+:::

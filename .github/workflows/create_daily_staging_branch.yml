@@ -2,7 +2,7 @@ name: Create Daily Staging Branch
 
 on:
   schedule:
-    - cron: '0 0 * * *'  # Runs daily at midnight UTC
+    - cron: '0 0,12 * * *'  # Runs every 12 hours at midnight and noon UTC
   workflow_dispatch:  # Allow manual trigger
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           # Generate branch name with MM_DD_YYYY format
-          BRANCH_NAME="litellm_staging_$(date +'%m_%d_%Y')"
+          BRANCH_NAME="litellm_oss_staging_$(date +'%m_%d_%Y')"
           echo "Creating branch: $BRANCH_NAME"
 
           # Fetch all branches

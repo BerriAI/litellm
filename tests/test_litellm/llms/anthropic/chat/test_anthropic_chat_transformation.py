@@ -548,6 +548,59 @@ def test_map_tool_choice_dict_type_function_with_name():
     assert result["name"] == "my_tool"
 
 
+def test_map_tool_choice_dict_type_auto():
+    """
+    Test that dict {"type": "auto"} maps to Anthropic type='auto'.
+    This handles Cursor's format for tool_choice.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "auto"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "auto"
+
+
+def test_map_tool_choice_dict_type_required():
+    """
+    Test that dict {"type": "required"} maps to Anthropic type='any'.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "required"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "any"
+
+
+def test_map_tool_choice_dict_type_none():
+    """
+    Test that dict {"type": "none"} maps to Anthropic type='none'.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "none"},
+        parallel_tool_use=None,
+    )
+    assert result is not None
+    assert result["type"] == "none"
+
+
+def test_map_tool_choice_dict_type_function_without_name():
+    """
+    Test that dict {"type": "function"} without name is handled gracefully.
+    Should return None since there's no valid tool name.
+    """
+    config = AnthropicConfig()
+    result = config._map_tool_choice(
+        tool_choice={"type": "function"},
+        parallel_tool_use=None,
+    )
+    assert result is None
+
+
 def test_transform_response_with_prefix_prompt():
     import httpx
 
@@ -679,6 +732,73 @@ def test_anthropic_chat_headers_add_context_management_beta():
         optional_params={"context_management": _sample_context_management_payload()},
     )
     assert headers["anthropic-beta"] == "context-management-2025-06-27"
+
+
+def test_anthropic_beta_header_merging_with_output_format():
+    """
+    Test that anthropic-beta headers from extra_headers are merged with
+    output_format beta headers instead of being overridden.
+    
+    This is a regression test for: https://github.com/BerriAI/litellm/issues/...
+    When using response_format with a Pydantic model AND extra_headers with
+    anthropic-beta (e.g., for context-1m extension), both beta headers should
+    be present in the final request.
+    """
+    config = AnthropicConfig()
+    
+    # Simulate headers that already have the context-1m beta header from extra_headers
+    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+    
+    # Simulate output_format being set (happens when using response_format with Sonnet 4.5)
+    optional_params = {
+        "output_format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {}}
+        }
+    }
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
+    
+    # Both beta headers should be present
+    beta_value = result_headers["anthropic-beta"]
+    assert "context-1m-2025-08-07" in beta_value, \
+        f"User's context-1m beta header missing from: {beta_value}"
+    assert "structured-outputs-2025-11-13" in beta_value, \
+        f"Structured output beta header missing from: {beta_value}"
+
+
+def test_anthropic_beta_header_merging_with_multiple_features():
+    """
+    Test that multiple beta headers can be merged when using multiple features.
+    """
+    config = AnthropicConfig()
+    
+    # Start with a user-provided beta header
+    headers = {"anthropic-beta": "context-1m-2025-08-07"}
+    
+    # Use multiple features that require beta headers
+    optional_params = {
+        "output_format": {
+            "type": "json_schema",
+            "schema": {"type": "object", "properties": {}}
+        },
+        "context_management": _sample_context_management_payload(),
+        "tools": [{"type": "web_fetch_20250910", "name": "web_fetch"}]
+    }
+    
+    result_headers = config.update_headers_with_optional_anthropic_beta(
+        headers, optional_params
+    )
+    
+    beta_value = result_headers["anthropic-beta"]
+    
+    # All beta headers should be present
+    assert "context-1m-2025-08-07" in beta_value
+    assert "structured-outputs-2025-11-13" in beta_value
+    assert "context-management-2025-06-27" in beta_value
+    assert "web-fetch-2025-09-10" in beta_value
 
 
 def test_anthropic_chat_transform_request_includes_context_management():
@@ -1775,7 +1895,7 @@ def test_calculate_usage_completion_tokens_details_always_populated():
     
     # completion_tokens_details should NOT be None
     assert usage.completion_tokens_details is not None
-    assert usage.completion_tokens_details.reasoning_tokens is None
+    assert usage.completion_tokens_details.reasoning_tokens is 0
     assert usage.completion_tokens_details.text_tokens == 248
     assert usage.completion_tokens == 248
     assert usage.prompt_tokens == 37

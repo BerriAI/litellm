@@ -36,6 +36,9 @@ interface ModelGroupInfo {
   supports_vision: boolean;
   supports_function_calling: boolean;
   supported_openai_params?: string[];
+  health_status?: string;
+  health_response_time?: number;
+  health_checked_at?: string;
   [key: string]: any;
 }
 
@@ -688,6 +691,27 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
       size: 120,
     },
     {
+      header: "Health Status",
+      accessorKey: "health_status",
+      enableSorting: true,
+      cell: ({ row }) => {
+        const original = row.original;
+        const tagColor = original.health_status === "healthy" ? "green" : original.health_status === "unhealthy" ? "red" : "default";
+        const responseTimeLabel = original.health_response_time ? `Response Time: ${Number(original.health_response_time).toFixed(2)}ms` : "N/A";
+        const lastCheckedLabel = original.health_checked_at ? `Last Checked: ${new Date(original.health_checked_at).toLocaleString()}` : "N/A";
+
+        return <Tooltip title={<>
+          <div>
+            {responseTimeLabel}
+          </div>
+          <div>
+            {lastCheckedLabel}
+          </div>
+        </>}><Tag key={original.model_group} color={tagColor}><span className="capitalize">{original.health_status ?? "Unknown"}</span></Tag></Tooltip>;
+      },
+      size: 100,
+    },
+    {
       header: "Limits",
       accessorKey: "rpm",
       enableSorting: true,
@@ -938,6 +962,8 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
             proxySettings={proxySettings}
             accessToken={accessToken || null}
             isPublicPage={true}
+            isDarkMode={false}
+            toggleDarkMode={() => { }}
           />
         )}
 
@@ -1446,6 +1472,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
+                        selectedPolicies: [],
                         selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,
@@ -1467,6 +1494,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                         selectedTags: [],
                         selectedVectorStores: [],
                         selectedGuardrails: [],
+                        selectedPolicies: [],
                         selectedMCPServers: [],
                         endpointType: getEndpointType(selectedModel.mode || "chat"),
                         selectedModel: selectedModel.model_group,

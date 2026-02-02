@@ -22,6 +22,7 @@ from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
     create_pass_through_route,
     llm_passthrough_factory_proxy_route,
     milvus_proxy_route,
+    openai_proxy_route,
     vertex_discovery_proxy_route,
     vertex_proxy_route,
     vllm_proxy_route,
@@ -2189,3 +2190,178 @@ class TestMilvusProxyRoute:
             # Verify that the target URL has correct path
             create_route_args = mock_create_route.call_args[1]
             assert "/vectors/search" in create_route_args["target"]
+
+
+class TestOpenAIPassthroughRoute:
+    """
+    Test cases for OpenAI passthrough endpoint (/openai_passthrough)
+    """
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_responses_api(self):
+        """
+        Test that /openai_passthrough endpoint correctly handles Responses API calls
+        This verifies the fix for issue #18865 where /openai/v1/responses was being
+        routed to LiteLLM's native implementation instead of passthrough
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        # Mock request for Responses API
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="sk-test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={"id": "resp_123", "status": "completed"}
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            # Call the route with /v1/responses endpoint
+            result = await openai_proxy_route(
+                endpoint="v1/responses",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Verify create_pass_through_route was called with correct target
+            mock_create_route.assert_called_once()
+            call_args = mock_create_route.call_args[1]
+            
+            # Should route to OpenAI's responses API
+            assert call_args["target"] == "https://api.openai.com/v1/responses"
+            assert call_args["endpoint"] == "v1/responses"
+            
+            # Verify headers contain API key
+            assert "authorization" in call_args["custom_headers"]
+            assert "Bearer sk-test-key" in call_args["custom_headers"]["authorization"]
+            
+            # Verify result
+            assert result == {"id": "resp_123", "status": "completed"}
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_chat_completions(self):
+        """
+        Test that /openai_passthrough works for chat completions
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="sk-test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={"id": "chatcmpl-123", "choices": []}
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await openai_proxy_route(
+                endpoint="v1/chat/completions",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Verify routing
+            mock_create_route.assert_called_once()
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.openai.com/v1/chat/completions"
+            
+            # Verify result
+            assert result == {"id": "chatcmpl-123", "choices": []}
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_missing_api_key(self):
+        """
+        Test that missing OPENAI_API_KEY raises an exception
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value=None,
+        ):
+            with pytest.raises(Exception) as exc_info:
+                await openai_proxy_route(
+                    endpoint="v1/chat/completions",
+                    request=mock_request,
+                    fastapi_response=mock_response,
+                    user_api_key_dict=mock_user_api_key_dict,
+                )
+
+            assert "Required 'OPENAI_API_KEY'" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_openai_passthrough_assistants_api(self):
+        """
+        Test that /openai_passthrough works for Assistants API endpoints
+        """
+        from litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints import (
+            openai_proxy_route,
+        )
+
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_request.url = MagicMock()
+        mock_request.url.path = "/v1/assistants"
+        mock_response = MagicMock(spec=Response)
+        mock_user_api_key_dict = MagicMock()
+
+        with patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.passthrough_endpoint_router.get_credentials",
+            return_value="sk-test-key",
+        ), patch(
+            "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.create_pass_through_route"
+        ) as mock_create_route:
+            mock_endpoint_func = AsyncMock(
+                return_value={"id": "asst_123", "object": "assistant"}
+            )
+            mock_create_route.return_value = mock_endpoint_func
+
+            result = await openai_proxy_route(
+                endpoint="v1/assistants",
+                request=mock_request,
+                fastapi_response=mock_response,
+                user_api_key_dict=mock_user_api_key_dict,
+            )
+
+            # Verify routing
+            mock_create_route.assert_called_once()
+            call_args = mock_create_route.call_args[1]
+            assert call_args["target"] == "https://api.openai.com/v1/assistants"
+            
+            # Verify headers contain API key and OpenAI-Beta header
+            assert "authorization" in call_args["custom_headers"]
+            
+            # Verify result
+            assert result == {"id": "asst_123", "object": "assistant"}

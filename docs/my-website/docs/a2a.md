@@ -68,7 +68,7 @@ Follow [this guide, to add your pydantic ai agent to LiteLLM Agent Gateway](./pr
 
 ## Invoking your Agents
 
-Use the [A2A Python SDK](https://pypi.org/project/a2a/) to invoke agents through LiteLLM.
+Use the [A2A Python SDK](https://pypi.org/project/a2a-sdk) to invoke agents through LiteLLM.
 
 This example shows how to:
 1. **List available agents** - Query `/v1/agents` to see which agents your key can access
@@ -191,6 +191,120 @@ The logs show:
 <Image 
   img={require('../img/agent2.png')}
   style={{width: '100%', display: 'block', margin: '2rem auto'}}
+/>
+
+
+## Forwarding LiteLLM Context Headers
+
+When LiteLLM invokes your A2A agent, it sends special headers that enable:
+- **Trace Grouping**: All LLM calls from the same agent execution appear under one trace
+- **Agent Spend Tracking**: Costs are attributed to the specific agent
+
+| Header | Purpose |
+|--------|---------|
+| `X-LiteLLM-Trace-Id` | Links all LLM calls to the same execution flow |
+| `X-LiteLLM-Agent-Id` | Attributes spend to the correct agent |
+
+
+To enable these features, your A2A server must **forward these headers** to any LLM calls it makes back to LiteLLM.
+
+### Implementation Steps
+
+**Step 1: Extract headers from incoming A2A request**
+```python def get_litellm_headers(request) -> dict:
+    """Extract X-LiteLLM-* headers from incoming A2A request."""
+    all_headers = request.call_context.state.get('headers', {})
+    return {
+        k: v for k, v in all_headers.items() 
+        if k.lower().startswith('x-litellm-')
+    }
+```
+
+**Step 2: Forward headers to your LLM calls**
+Pass the extracted headers when making calls back to LiteLLM:
+<Tabs>
+<TabItem value="openai" label="OpenAI SDK" default>
+
+```python from openai import OpenAI
+
+headers = get_litellm_headers(request)
+
+client = OpenAI(
+    api_key="sk-your-litellm-key",
+    base_url="http://localhost:4000",
+    default_headers=headers,  # Forward headers
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello"}]
+)
+```
+</TabItem>
+
+<TabItem value="langchain" label="LangChain">
+
+```python
+from langchain_openai import ChatOpenAI
+
+headers = get_litellm_headers(request)
+
+llm = ChatOpenAI(
+    model="gpt-4o",
+    openai_api_key="sk-your-litellm-key",
+    base_url="http://localhost:4000",
+    default_headers=headers,  # Forward headers
+)
+```
+</TabItem>
+<TabItem value="litellm" label="LiteLLM SDK">
+
+```python
+import litellm
+
+headers = get_litellm_headers(request)
+
+response = litellm.completion(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello"}],
+    api_base="http://localhost:4000",
+    extra_headers=headers,  # Forward headers
+)
+```
+</TabItem>
+<TabItem value="requests" label="HTTP (requests/httpx)">
+
+```python
+import httpx
+
+headers = get_litellm_headers(request)
+headers["Authorization"] = "Bearer sk-your-litellm-key"
+
+response = httpx.post(
+    "http://localhost:4000/v1/chat/completions",
+    headers=headers,
+    json={"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello"}]}
+)
+```
+</TabItem>
+</Tabs>
+
+### Result
+
+With header forwarding enabled, you'll see:
+
+**Trace Grouping in Langfuse:**
+
+<Image
+  img={require('../img/a2a_trace_grouping.png')}
+  style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
+/>
+
+**Agent Spend Attribution:**
+
+<Image
+  img={require('../img/a2a_agent_spend.png')}
+  style={{width: '80%', display: 'block', margin: '0', borderRadius: '8px'}}
 />
 
 ## API Reference

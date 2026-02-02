@@ -129,9 +129,53 @@ class VertexAIVectorStoreOptions(TypedDict, total=False):
     import_timeout: Optional[int]  # Timeout in seconds (default: 600)
 
 
+class S3VectorsVectorStoreOptions(TypedDict, total=False):
+    """
+    AWS S3 Vectors configuration.
+
+    Example (auto-create):
+        {"custom_llm_provider": "s3_vectors", "vector_bucket_name": "my-embeddings"}
+
+    Example (use existing):
+        {"custom_llm_provider": "s3_vectors", "vector_bucket_name": "my-embeddings",
+         "index_name": "my-index"}
+
+    Example (with credentials):
+        {"custom_llm_provider": "s3_vectors", "vector_bucket_name": "my-embeddings",
+         "litellm_credential_name": "my-aws-creds"}
+
+    Auto-creation creates: S3 vector bucket and vector index (if not provided).
+    Embeddings are generated using LiteLLM's embedding API (supports any provider).
+    """
+
+    custom_llm_provider: Literal["s3_vectors"]
+    vector_bucket_name: str  # Required - S3 vector bucket name
+    index_name: Optional[str]  # Vector index name (auto-creates if not provided)
+
+    # Index configuration (for auto-creation)
+    dimension: Optional[int]  # Vector dimension (auto-detected from embedding model, or default: 1024)
+    distance_metric: Optional[Literal["cosine", "euclidean"]]  # Default: cosine
+    non_filterable_metadata_keys: Optional[List[str]]  # Keys excluded from filtering (e.g., ["source_text"])
+
+    # Credentials (loaded from litellm.credential_list if litellm_credential_name is provided)
+    litellm_credential_name: Optional[str]  # Credential name to load from litellm.credential_list
+
+    # AWS auth (uses BaseAWSLLM)
+    aws_access_key_id: Optional[str]
+    aws_secret_access_key: Optional[str]
+    aws_session_token: Optional[str]
+    aws_region_name: Optional[str]  # default: us-west-2
+    aws_role_name: Optional[str]
+    aws_session_name: Optional[str]
+    aws_profile_name: Optional[str]
+    aws_web_identity_token: Optional[str]
+    aws_sts_endpoint: Optional[str]
+    aws_external_id: Optional[str]
+
+
 # Union type for vector store options
 RAGIngestVectorStoreOptions = Union[
-    OpenAIVectorStoreOptions, BedrockVectorStoreOptions, VertexAIVectorStoreOptions
+    OpenAIVectorStoreOptions, BedrockVectorStoreOptions, VertexAIVectorStoreOptions, S3VectorsVectorStoreOptions
 ]
 
 

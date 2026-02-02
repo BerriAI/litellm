@@ -37,7 +37,9 @@ from litellm._uuid import uuid
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME
 from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
-    validate_and_normalize_mcp_server_payload,
+)
+from litellm.proxy._experimental.mcp_server.utils import (
+    validate_and_normalize_mcp_server_payload as _base_validate_and_normalize_mcp_server_payload,
 )
 
 router = APIRouter(prefix="/v1/mcp", tags=["mcp"])
@@ -56,6 +58,20 @@ except ImportError as e:
     MCP_AVAILABLE = False
 
 if MCP_AVAILABLE:
+    try:
+        from mcp.shared.tool_name_validation import (  # type: ignore
+            validate_tool_name,
+        )
+    except ImportError:
+        from pydantic import BaseModel
+
+        class ToolNameValidationResult(BaseModel):
+            is_valid: bool = True
+            warnings: list = []
+
+        def validate_tool_name(name: str) -> ToolNameValidationResult:  # type: ignore[misc]
+            return ToolNameValidationResult()
+
     from litellm.proxy._experimental.mcp_server.db import (
         create_mcp_server,
         delete_mcp_server,
@@ -64,9 +80,9 @@ if MCP_AVAILABLE:
         update_mcp_server,
     )
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        get_request_base_url,
         authorize_with_server,
         exchange_token_with_server,
+        get_request_base_url,
         register_client_with_server,
     )
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -96,6 +112,41 @@ if MCP_AVAILABLE:
     class _TemporaryMCPServerEntry:
         server: MCPServer
         expires_at: datetime
+
+    def _validate_mcp_server_name_fields(payload: Any) -> None:
+        candidates: List[tuple[str, Optional[str]]] = []
+
+        server_name = getattr(payload, "server_name", None)
+        alias = getattr(payload, "alias", None)
+
+        if server_name:
+            candidates.append(("server_name", server_name))
+        if alias:
+            candidates.append(("alias", alias))
+
+        for field_name, value in candidates:
+            if not value:
+                continue
+
+            validation_result = validate_tool_name(value)
+            if validation_result.is_valid:
+                continue
+
+            error_messages_text = (
+                f"Invalid MCP tool prefix '{value}' provided via {field_name}"
+            )
+            if validation_result.warnings:
+                error_messages_text = (
+                    error_messages_text + "\n" + "\n".join(validation_result.warnings)
+                )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": error_messages_text},
+            )
+
+    def validate_and_normalize_mcp_server_payload(payload: Any) -> None:
+        _base_validate_and_normalize_mcp_server_payload(payload)
+        _validate_mcp_server_name_fields(payload)
 
     def _is_public_registry_enabled() -> bool:
         from litellm.proxy.proxy_server import (

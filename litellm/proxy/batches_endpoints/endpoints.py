@@ -24,9 +24,7 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     _is_base64_encoded_unified_file_id,
     decode_model_from_file_id,
     encode_file_id_with_model,
-    get_batch_id_from_unified_batch_id,
     get_credentials_for_model,
-    get_model_id_from_unified_batch_id,
     get_models_from_unified_file_id,
     get_original_file_id,
     prepare_data_with_credentials,
@@ -382,25 +380,6 @@ async def retrieve_batch(
                 **data  # type: ignore
             )
             
-            # Re-encode all IDs in the response
-            if response:
-                if hasattr(response, "id") and response.id:
-                    response.id = batch_id  # Keep the encoded batch ID
-                
-                if hasattr(response, "input_file_id") and response.input_file_id:
-                    response.input_file_id = encode_file_id_with_model(
-                        file_id=response.input_file_id, model=model_from_id
-                    )
-                
-                if hasattr(response, "output_file_id") and response.output_file_id:
-                    response.output_file_id = encode_file_id_with_model(
-                        file_id=response.output_file_id, model=model_from_id
-                    )
-                
-                if hasattr(response, "error_file_id") and response.error_file_id:
-                    response.error_file_id = encode_file_id_with_model(
-                        file_id=response.error_file_id, model=model_from_id
-                    )
             
             verbose_proxy_logger.debug(
                 f"Retrieved batch using model: {model_from_id}, original_id: {original_batch_id}"
@@ -542,14 +521,26 @@ async def list_batches(
             route_type="alist_batches",
         )
 
-        model_param = (
+        # Try to use managed objects table for listing batches (returns encoded IDs)
+        managed_files_obj = proxy_logging_obj.get_proxy_hook("managed_files")
+        if managed_files_obj is not None and hasattr(managed_files_obj, "list_user_batches"):
+            verbose_proxy_logger.debug(
+                "Using managed objects table for batch listing"
+            )
+            response = await managed_files_obj.list_user_batches(
+                user_api_key_dict=user_api_key_dict,
+                limit=limit,
+                after=after,
+                provider=provider,
+                target_model_names=target_model_names,
+                llm_router=llm_router,
+            )
+        elif (model_param := (
             data.get("model")
             or request.query_params.get("model")
             or request.headers.get("x-litellm-model")
-        )
-        
-        # SCENARIO 2: Use model-based routing from header/query/body
-        if model_param:
+        )):
+            # SCENARIO 2: Use model-based routing from header/query/body
             credentials = get_credentials_for_model(
                 llm_router=llm_router,
                 model_id=model_param,
@@ -683,14 +674,30 @@ async def cancel_batch(
 
     data: Dict = {}
     try:
-        data = await _read_request_body(request=request)
-        verbose_proxy_logger.debug(
-            "Request received by LiteLLM:\n{}".format(json.dumps(data, indent=4)),
-        )
-        
         # Check for encoded batch ID with model info
         model_from_id = decode_model_from_file_id(batch_id)
+        
+        # Create CancelBatchRequest with batch_id to enable ownership checking
+        _cancel_batch_request = CancelBatchRequest(
+            batch_id=batch_id,
+        )
+        data = cast(dict, _cancel_batch_request)
+        
         unified_batch_id = _is_base64_encoded_unified_file_id(batch_id)
+
+        base_llm_response_processor = ProxyBaseLLMRequestProcessing(data=data)
+        (
+            data,
+            litellm_logging_obj,
+        ) = await base_llm_response_processor.common_processing_pre_call_logic(
+            request=request,
+            general_settings=general_settings,
+            user_api_key_dict=user_api_key_dict,
+            version=version,
+            proxy_logging_obj=proxy_logging_obj,
+            proxy_config=proxy_config,
+            route_type="acancel_batch",
+        )
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -739,17 +746,13 @@ async def cancel_batch(
                     },
                 )
 
-            model = (
-                get_model_id_from_unified_batch_id(unified_batch_id)
-                if unified_batch_id
-                else None
-            )
-
-            model_batch_id = get_batch_id_from_unified_batch_id(unified_batch_id)
-
-            data["batch_id"] = model_batch_id
-
-            response = await llm_router.acancel_batch(model=model, **data)  # type: ignore
+            # Hook has already extracted model and unwrapped batch_id into data dict
+            response = await llm_router.acancel_batch(**data)  # type: ignore
+            response._hidden_params["unified_batch_id"] = unified_batch_id
+            
+            # Ensure model_id is set for the post_call_success_hook to re-encode IDs
+            if not response._hidden_params.get("model_id") and data.get("model"):
+                response._hidden_params["model_id"] = data["model"]
         
         # SCENARIO 3: Fallback to custom_llm_provider (uses env variables)
         else:
@@ -757,11 +760,19 @@ async def cancel_batch(
             custom_llm_provider = (
                 provider or data.pop("custom_llm_provider", None) or "openai"
             )
+            # Extract batch_id from data to avoid "multiple values for keyword argument" error
+            # data was cast from CancelBatchRequest which already contains batch_id
+            data.pop("batch_id", None)
             _cancel_batch_data = CancelBatchRequest(batch_id=batch_id, **data)
             response = await litellm.acancel_batch(
                 custom_llm_provider=custom_llm_provider,  # type: ignore
                 **_cancel_batch_data,
             )
+
+        ### CALL HOOKS ### - modify outgoing data
+        response = await proxy_logging_obj.post_call_success_hook(
+            data=data, user_api_key_dict=user_api_key_dict, response=response
+        )
 
         ### ALERTING ###
         asyncio.create_task(

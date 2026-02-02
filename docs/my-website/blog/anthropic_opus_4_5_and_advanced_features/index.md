@@ -15,6 +15,7 @@ authors:
     title: "CTO, LiteLLM"
     url: https://www.linkedin.com/in/reffajnaahsi/
     image_url: https://pbs.twimg.com/profile_images/1613813310264340481/lz54oEiB_400x400.jpg
+description: "Guide to Claude Opus 4.5 and advanced features in LiteLLM: Tool Search, Programmatic Tool Calling, and Effort Parameter."
 tags: [anthropic, claude, tool search, programmatic tool calling, effort, advanced features]
 hide_table_of_contents: false
 ---

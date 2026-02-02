@@ -24,7 +24,6 @@ import {
 } from "@tremor/react";
 import React, { useEffect, useState } from "react";
 import { ActivityMetrics, processActivityData } from "../../../activity_metrics";
-import NewBadge from "../../../common_components/NewBadge";
 import { UsageExportHeader } from "../../../EntityUsageExport";
 import type { EntityType } from "../../../EntityUsageExport/types";
 import {
@@ -395,14 +394,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({ accessToken, entityType, enti
         teams={teams || []}
       />
       <TabGroup>
-        <NewBadge>
-          <TabList variant="solid" className="mt-1">
-            <Tab>Cost</Tab>
-            <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
-            <Tab>Key Activity</Tab>
-            <Tab>Endpoint Activity</Tab>
-          </TabList>
-        </NewBadge>
+        <TabList variant="solid" className="mt-1">
+          <Tab>Cost</Tab>
+          <Tab>{entityType === "agent" ? "Request / Token Consumption" : "Model Activity"}</Tab>
+          <Tab>Key Activity</Tab>
+          <Tab>Endpoint Activity</Tab>
+        </TabList>
         <TabPanels>
           <TabPanel>
             <Grid numItems={2} className="gap-2 w-full">

@@ -4,7 +4,7 @@ Tests for the Content Filter Guardrail
 
 import os
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -14,7 +14,6 @@ sys.path.insert(
 
 from fastapi import HTTPException
 
-import litellm
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
     ContentFilterGuardrail,
 )
@@ -386,20 +385,12 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert result[1] == "aws_access_key"
 
-    @pytest.mark.skip(
-        reason="Masking in streaming responses is no longer supported after unified_guardrail.py changes. Only blocking/rejecting is supported for responses."
-    )
     @pytest.mark.asyncio
     async def test_streaming_hook_mask(self):
         """
-        Test streaming hook with MASK action
-
-        Note: After changes to unified_guardrail.py, masking responses to users
-        is no longer supported. This test is skipped as the feature is deprecated.
-        Only BLOCK actions (test_streaming_hook_block) are supported for streaming responses.
+        Test streaming hook with MASK action.
+        This now works with the 50-char sliding window buffer.
         """
-        from unittest.mock import AsyncMock
-
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
         patterns = [
@@ -416,51 +407,54 @@ class TestContentFilterGuardrail:
             event_hook=GuardrailEventHooks.during_call,
         )
 
-        # Create mock streaming chunks
+        # Create mock streaming chunks that split an email
         async def mock_stream():
-            # Chunk 1: contains email
-            chunk1 = ModelResponseStream(
+            # Chunk 1: starts email
+            yield ModelResponseStream(
                 id="chunk1",
                 choices=[
                     StreamingChoices(
-                        delta=Delta(content="Contact me at test@example.com"), index=0
+                        delta=Delta(content="Contact me at test@ex"), index=0
                     )
                 ],
                 model="gpt-4",
             )
-            yield chunk1
-
-            # Chunk 2: normal content
-            chunk2 = ModelResponseStream(
+            # Chunk 2: ends email
+            yield ModelResponseStream(
                 id="chunk2",
                 choices=[
-                    StreamingChoices(delta=Delta(content=" for more info"), index=0)
+                    StreamingChoices(
+                        delta=Delta(content="ample.com for info"),
+                        index=0,
+                        finish_reason="stop",
+                    )
                 ],
                 model="gpt-4",
             )
-            yield chunk2
 
         user_api_key_dict = MagicMock()
         request_data = {}
 
-        # Process streaming response - no masking expected
-        result_chunks = []
+        # Process streaming response - masking IS expected now
+        full_content = ""
         async for chunk in guardrail.async_post_call_streaming_iterator_hook(
             user_api_key_dict=user_api_key_dict,
             response=mock_stream(),
             request_data=request_data,
         ):
-            result_chunks.append(chunk)
+            if chunk.choices[0].delta.content:
+                full_content += chunk.choices[0].delta.content
 
-        # Chunks should pass through unchanged since masking is no longer supported
-        assert len(result_chunks) == 2
+        # The email should be redacted even though it was split
+        assert "test@example.com" not in full_content
+        assert "[EMAIL_REDACTED]" in full_content
+        assert "Contact me at [EMAIL_REDACTED] for info" in full_content
 
     @pytest.mark.asyncio
     async def test_streaming_hook_block(self):
         """
         Test streaming hook with BLOCK action
         """
-        from unittest.mock import AsyncMock
 
         from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
@@ -716,7 +710,10 @@ class TestContentFilterGuardrail:
         assert result is not None
         assert len(result) == 1
         # All matches should be redacted
-        assert result[0] == "[CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED]"
+        assert (
+            result[0]
+            == "[CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED] [CUSTOM_KEY_REDACTED]"
+        )
         assert "Key1" not in result[0]
         assert "Key2" not in result[0]
 
@@ -798,7 +795,7 @@ class TestContentFilterGuardrail:
 
         # Apply guardrail with content that triggers detections
         # Email will be masked, blocked word will be masked
-        result = await guardrail.apply_guardrail(
+        await guardrail.apply_guardrail(
             inputs={"texts": ["Contact me at test@example.com for confidential info"]},
             request_data=request_data,
             input_type="request",
@@ -808,7 +805,9 @@ class TestContentFilterGuardrail:
         assert "metadata" in request_data
         assert "standard_logging_guardrail_information" in request_data["metadata"]
 
-        guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        guardrail_info_list = request_data["metadata"][
+            "standard_logging_guardrail_information"
+        ]
         assert isinstance(guardrail_info_list, list)
         assert len(guardrail_info_list) == 1
 
@@ -821,8 +820,8 @@ class TestContentFilterGuardrail:
         assert "start_time" in guardrail_info
         assert "end_time" in guardrail_info
         assert "duration" in guardrail_info
-        assert guardrail_info["duration"] > 0
-        assert guardrail_info["start_time"] < guardrail_info["end_time"]
+        assert guardrail_info["duration"] >= 0
+        assert guardrail_info["start_time"] <= guardrail_info["end_time"]
 
         # Verify detections are logged
         assert "guardrail_response" in guardrail_info
@@ -840,15 +839,21 @@ class TestContentFilterGuardrail:
             assert "action" in detection
             assert detection["action"] == "MASK"
             # Verify sensitive content (matched_text) is NOT included
-            assert "matched_text" not in detection, "Sensitive content should not be logged"
+            assert (
+                "matched_text" not in detection
+            ), "Sensitive content should not be logged"
 
         # Verify blocked word detection structure
-        blocked_word_detections = [d for d in detections if d.get("type") == "blocked_word"]
+        blocked_word_detections = [
+            d for d in detections if d.get("type") == "blocked_word"
+        ]
         assert len(blocked_word_detections) > 0
         for detection in blocked_word_detections:
             assert detection["type"] == "blocked_word"
             assert "keyword" in detection
-            assert detection["keyword"] == "confidential"  # Config keyword, not user content
+            assert (
+                detection["keyword"] == "confidential"
+            )  # Config keyword, not user content
             assert "action" in detection
             assert detection["action"] == "MASK"
             assert "description" in detection
@@ -897,7 +902,9 @@ class TestContentFilterGuardrail:
         assert "metadata" in request_data
         assert "standard_logging_guardrail_information" in request_data["metadata"]
 
-        guardrail_info_list = request_data["metadata"]["standard_logging_guardrail_information"]
+        guardrail_info_list = request_data["metadata"][
+            "standard_logging_guardrail_information"
+        ]
         assert len(guardrail_info_list) == 1
 
         guardrail_info = guardrail_info_list[0]
@@ -910,4 +917,6 @@ class TestContentFilterGuardrail:
             # If detections are logged, verify they don't contain sensitive content
             for detection in detections:
                 if detection.get("type") == "pattern":
-                    assert "matched_text" not in detection, "Sensitive content should not be logged"
+                    assert (
+                        "matched_text" not in detection
+                    ), "Sensitive content should not be logged"

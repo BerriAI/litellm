@@ -105,6 +105,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                     inputs["tools"] = tools_to_check
             if structured_messages:
                 inputs["structured_messages"] = structured_messages  # type: ignore
+            # Include model information if available
+            model = data.get("model")
+            if model:
+                inputs["model"] = model
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -150,6 +154,10 @@ class OpenAIResponsesHandler(BaseTranslation):
                 inputs["tools"] = tools_to_check
             if structured_messages:
                 inputs["structured_messages"] = structured_messages  # type: ignore
+            # Include model information if available
+            model = data.get("model")
+            if model:
+                inputs["model"] = model
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
                 request_data=data,
@@ -344,6 +352,14 @@ class OpenAIResponsesHandler(BaseTranslation):
                 inputs["images"] = images_to_check
             if tool_calls_to_check:
                 inputs["tool_calls"] = tool_calls_to_check
+            # Include model information from the response if available
+            response_model = None
+            if isinstance(response, dict):
+                response_model = response.get("model")
+            elif hasattr(response, "model"):
+                response_model = getattr(response, "model", None)
+            if response_model:
+                inputs["model"] = response_model
 
             guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                 inputs=inputs,
@@ -388,12 +404,15 @@ class OpenAIResponsesHandler(BaseTranslation):
 
             tool_calls = model_response_stream.choices[0].delta.tool_calls
             if tool_calls:
+                inputs = GenericGuardrailAPIInputs()
+                inputs["tool_calls"] = cast(
+                    List[ChatCompletionToolCallChunk], tool_calls
+                )
+                # Include model information if available
+                if hasattr(model_response_stream, "model") and model_response_stream.model:
+                    inputs["model"] = model_response_stream.model
                 _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-                    inputs={
-                        "tool_calls": cast(
-                            List[ChatCompletionToolCallChunk], tool_calls
-                        )
-                    },
+                    inputs=inputs,
                     request_data={},
                     input_type="response",
                     logging_obj=litellm_logging_obj,
@@ -417,7 +436,11 @@ class OpenAIResponsesHandler(BaseTranslation):
                 guardrail_inputs["tool_calls"] = cast(
                     List[ChatCompletionToolCallChunk], tool_calls
                 )
-            if tool_calls:
+            # Include model information from the response if available
+            response_model = final_chunk.get("response", {}).get("model")
+            if response_model:
+                guardrail_inputs["model"] = response_model
+            if tool_calls or text:
                 _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
                     inputs=guardrail_inputs,
                     request_data={},
@@ -429,8 +452,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         # tool_calls = model_response_stream.choices[0].tool_calls
         # convert openai response to model response
         string_so_far = self.get_streaming_string_so_far(responses_so_far)
+        inputs = GenericGuardrailAPIInputs(texts=[string_so_far])
+        # Try to get model from the final chunk if available
+        if isinstance(final_chunk, dict):
+            response_model = final_chunk.get("response", {}).get("model") if isinstance(final_chunk.get("response"), dict) else None
+            if response_model:
+                inputs["model"] = response_model
         _guardrailed_inputs = await guardrail_to_apply.apply_guardrail(
-            inputs={"texts": [string_so_far]},
+            inputs=inputs,
             request_data={},
             input_type="response",
             logging_obj=litellm_logging_obj,

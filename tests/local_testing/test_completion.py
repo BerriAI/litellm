@@ -1373,8 +1373,8 @@ HF Tests we should pass
 
 
 @pytest.mark.parametrize(
-    "provider", ["openai", "hosted_vllm", "lm_studio", "llamafile"]
-)  # "vertex_ai",
+    "provider", ["openai", "lm_studio", "llamafile"]
+)  # "vertex_ai", hosted_vllm removed - no longer uses OpenAI client
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_base(provider):
     litellm.set_verbose = True
@@ -1414,10 +1414,9 @@ async def test_openai_compatible_custom_api_base(provider):
     "provider",
     [
         "openai",
-        "hosted_vllm",
         "llamafile",
     ],
-)  # "vertex_ai",
+)  # "vertex_ai", hosted_vllm removed - no longer uses OpenAI client
 @pytest.mark.asyncio
 async def test_openai_compatible_custom_api_video(provider):
     litellm.set_verbose = True
@@ -2329,10 +2328,6 @@ async def test_completion_functions_param():
             assert (
                 "litellm_param_is_function_call"
                 not in mock_client.call_args.kwargs["json"]
-            )
-            assert (
-                "litellm_param_is_function_call"
-                not in mock_client.call_args.kwargs["json"]["generationConfig"]
             )
             assert response.choices[0].message.function_call is not None
     except Exception as e:

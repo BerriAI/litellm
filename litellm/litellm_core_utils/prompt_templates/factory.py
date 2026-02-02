@@ -6,7 +6,7 @@ import mimetypes
 import re
 import xml.etree.ElementTree as ET
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple, Union, cast, overload
+from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast, overload
 
 from jinja2.sandbox import ImmutableSandboxedEnvironment
 
@@ -45,7 +45,6 @@ from .common_utils import (
     infer_content_type_from_url_and_content,
     is_non_content_values_set,
     parse_tool_call_arguments,
-    unpack_defs,
 )
 from .image_handling import convert_url_to_base64
 
@@ -904,11 +903,11 @@ def convert_to_anthropic_image_obj(
             media_type=media_type,
             data=base64_data,
         )
+    except litellm.ImageFetchError:
+        raise
     except Exception as e:
-        if "Error: Unable to fetch image from URL" in str(e):
-            raise e
         raise Exception(
-            """Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{base64_image}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']."""
+            f"""Image url not in expected format. Example Expected input - "image_url": "data:image/jpeg;base64,{{base64_image}}". Supported formats - ['image/jpeg', 'image/png', 'image/gif', 'image/webp']. Error: {str(e)}"""
         )
 
 
@@ -1463,57 +1462,7 @@ def convert_to_gemini_tool_call_invoke(
         )
 
 
-def _clean_refs_for_gemini(obj: Any) -> None:
-    """
-    Recursively clean $defs, $ref, and definitions from a dict for Gemini compatibility.
-    
-    Gemini rejects:
-    - $defs sections (even after $ref has been inlined)
-    - Any remaining $ref (circular refs, external URLs)
-    
-    This function:
-    1. Removes all $defs/definitions keys
-    2. Replaces any remaining $ref with a placeholder object
-    """
-    if isinstance(obj, dict):
-        # Remove $defs and definitions at this level
-        obj.pop("$defs", None)
-        obj.pop("definitions", None)
-        
-        # Check for and handle remaining $ref (circular or external)
-        if "$ref" in obj:
-            ref_value = obj.pop("$ref")
-            # Replace with a generic object type as placeholder
-            obj["type"] = "object"
-            obj["description"] = f"(schema reference: {ref_value})"
-        
-        # Recurse into values
-        for value in obj.values():
-            _clean_refs_for_gemini(value)
-    elif isinstance(obj, list):
-        for item in obj:
-            _clean_refs_for_gemini(item)
-
-
-def _prepare_response_for_gemini(response_data: dict) -> dict:
-    """
-    Prepare a tool response dict for Gemini by inlining $ref and removing $defs.
-    
-    Gemini rejects JSON schemas with $defs/$ref in function_response content.
-    This function applies unpack_defs to inline references, then cleans up
-    any remaining $defs sections and unresolved $refs (circular or external).
-    
-    Returns a new dict (does not mutate the input).
-    """
-    import copy
-
-    result = copy.deepcopy(response_data)
-    unpack_defs(result, {})
-    _clean_refs_for_gemini(result)
-    return result
-
-
-def convert_to_gemini_tool_call_result(
+def convert_to_gemini_tool_call_result(  # noqa: PLR0915
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
     last_message_with_tool_calls: Optional[dict],
 ) -> Union[VertexPartType, List[VertexPartType]]:
@@ -1580,6 +1529,33 @@ def convert_to_gemini_tool_call_result(
                             verbose_logger.warning(
                                 f"Failed to process image in tool response: {e}"
                             )
+                elif content_type in ("file", "input_file"):
+                    # Extract file for inline_data (for tool results with PDF, audio, video, etc.)
+                    file_data = content.get("file_data", "")
+                    if not file_data:
+                        file_content = content.get("file", {})
+                        file_data = (
+                            file_content.get("file_data", "")
+                            if isinstance(file_content, dict)
+                            else file_content
+                            if isinstance(file_content, str)
+                            else ""
+                        )
+
+                    if file_data:
+                        # Convert file to base64 blob format for Gemini
+                        try:
+                            file_obj = convert_to_anthropic_image_obj(
+                                file_data, format=None
+                            )
+                            inline_data = BlobType(
+                                data=file_obj["data"],
+                                mime_type=file_obj["media_type"],
+                            )
+                        except Exception as e:
+                            verbose_logger.warning(
+                                f"Failed to process file in tool response: {e}"
+                            )
     name: Optional[str] = message.get("name", "")  # type: ignore
 
     # Recover name from last message with tool calls
@@ -1606,8 +1582,6 @@ def convert_to_gemini_tool_call_result(
     # For Computer Use, the response should contain structured data like {"url": "..."}
     response_data: dict
     try:
-        import json
-
         if content_str.strip().startswith("{") or content_str.strip().startswith("["):
             # Try to parse as JSON (for Computer Use structured responses)
             parsed = json.loads(content_str)
@@ -1620,11 +1594,6 @@ def convert_to_gemini_tool_call_result(
     except (json.JSONDecodeError, ValueError):
         # Not valid JSON, wrap in content field
         response_data = {"content": content_str}
-
-    # Gemini rejects JSON schemas with $defs/$ref in function_response content.
-    # Inline $refs and clean up for Gemini compatibility.
-    if isinstance(response_data, dict):
-        response_data = _prepare_response_for_gemini(response_data)
 
     # We can't determine from openai message format whether it's a successful or
     # error call result so default to the successful result template
@@ -1663,6 +1632,7 @@ def _sanitize_anthropic_tool_use_id(tool_use_id: str) -> str:
 
 def convert_to_anthropic_tool_result(
     message: Union[ChatCompletionToolMessage, ChatCompletionFunctionMessage],
+    force_base64: bool = False,
 ) -> AnthropicMessagesToolResultParam:
     """
     OpenAI message with a tool result looks like:
@@ -1708,13 +1678,16 @@ def convert_to_anthropic_tool_result(
         ] = []
         for content in content_list:
             if content["type"] == "text":
-                anthropic_content_list.append(
-                    AnthropicMessagesToolResultContent(
-                        type="text",
-                        text=content["text"],
-                        cache_control=content.get("cache_control", None),
-                    )
-                )
+                # Only include cache_control if explicitly set and not None
+                # to avoid sending "cache_control": null which breaks some API channels
+                text_content: AnthropicMessagesToolResultContent = {
+                    "type": "text",
+                    "text": content["text"],
+                }
+                cache_control_value = content.get("cache_control")
+                if cache_control_value is not None:
+                    text_content["cache_control"] = cache_control_value
+                anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
                 format = (
                     content["image_url"].get("format")
@@ -1722,13 +1695,13 @@ def convert_to_anthropic_tool_result(
                     else None
                 )
                 _anthropic_image_param = create_anthropic_image_param(
-                    content["image_url"], format=format
+                    content["image_url"], format=format, is_bedrock_invoke=force_base64
                 )
                 _anthropic_image_param = add_cache_control_to_content(
                     anthropic_content_element=_anthropic_image_param,
                     original_content_element=content,
                 )
-                anthropic_content_list.append(_anthropic_image_param)
+                anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: Optional[AnthropicMessagesToolResultParam] = None
@@ -2084,6 +2057,12 @@ def anthropic_messages_pt(  # noqa: PLR0915
         else:
             messages.append(DEFAULT_USER_CONTINUE_MESSAGE_TYPED)
 
+    # Bedrock invoke models have format: invoke/...
+    # Vertex AI Anthropic also doesn't support URL sources for images
+    is_bedrock_invoke = model.lower().startswith("invoke/")
+    is_vertex_ai = llm_provider.startswith("vertex_ai") if llm_provider else False
+    force_base64 = is_bedrock_invoke or is_vertex_ai
+
     msg_i = 0
     while msg_i < len(messages):
         user_content: List[AnthropicMessagesUserMessageValues] = []
@@ -2193,13 +2172,18 @@ def anthropic_messages_pt(  # noqa: PLR0915
             ):
                 # OpenAI's tool message content will always be a string
                 user_content.append(
-                    convert_to_anthropic_tool_result(user_message_types_block)
+                    convert_to_anthropic_tool_result(
+                        user_message_types_block, force_base64=force_base64
+                    )
                 )
 
             msg_i += 1
 
         if user_content:
             new_messages.append({"role": "user", "content": user_content})
+
+        # Track unique tool IDs in this merge block to avoid duplication
+        unique_tool_ids: Set[str] = set()
 
         assistant_content: List[AnthropicMessagesAssistantMessageValues] = []
         ## MERGE CONSECUTIVE ASSISTANT CONTENT ##
@@ -2294,13 +2278,25 @@ def anthropic_messages_pt(  # noqa: PLR0915
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                 )
-                # AnthropicMessagesAssistantMessageValues includes AnthropicMessagesToolUseParam
-                assistant_content.extend(
-                    cast(
-                        List[AnthropicMessagesAssistantMessageValues],
-                        tool_invoke_results,
+
+                # Prevent "tool_use ids must be unique" errors by filtering duplicates
+                # This can happen when merging history that already contains the tool calls
+                for item in tool_invoke_results:
+                    # tool_use items are typically dicts, but handle objects just in case
+                    item_id = (
+                        item.get("id")
+                        if isinstance(item, dict)
+                        else getattr(item, "id", None)
                     )
-                )
+
+                    if item_id:
+                        if item_id in unique_tool_ids:
+                            continue
+                        unique_tool_ids.add(item_id)
+
+                    assistant_content.append(
+                        cast(AnthropicMessagesAssistantMessageValues, item)
+                    )
 
             assistant_function_call = assistant_content_block.get("function_call")
 
@@ -4399,6 +4395,32 @@ def add_cache_point_tool_block(tool: dict) -> Optional[BedrockToolBlock]:
     return None
 
 
+def _is_bedrock_tool_block(tool: dict) -> bool:
+    """
+    Check if a tool is already a BedrockToolBlock.
+    
+    BedrockToolBlock has one of: systemTool, toolSpec, or cachePoint.
+    This is used to detect tools that are already in Bedrock format
+    (e.g., systemTool for Nova grounding) vs OpenAI-style function tools
+    that need transformation.
+    
+    Args:
+        tool: The tool dict to check
+        
+    Returns:
+        True if the tool is already a BedrockToolBlock, False otherwise
+        
+    Examples:
+        >>> _is_bedrock_tool_block({"systemTool": {"name": "nova_grounding"}})
+        True
+        >>> _is_bedrock_tool_block({"type": "function", "function": {...}})
+        False
+    """
+    return isinstance(tool, dict) and (
+        "systemTool" in tool or "toolSpec" in tool or "cachePoint" in tool
+    )
+
+
 def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     """
     OpenAI tools looks like:
@@ -4424,7 +4446,7 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
     ]
     """
     """
-    Bedrock toolConfig looks like: 
+    Bedrock toolConfig looks like:
     "tools": [
         {
             "toolSpec": {
@@ -4452,6 +4474,13 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
     tool_block_list: List[BedrockToolBlock] = []
     for tool in tools:
+        # Check if tool is already a BedrockToolBlock (e.g., systemTool for Nova grounding)
+        if _is_bedrock_tool_block(tool):
+            # Already a BedrockToolBlock, pass it through
+            tool_block_list.append(tool)  # type: ignore
+            continue
+
+        # Handle regular OpenAI-style function tools
         parameters = tool.get("function", {}).get(
             "parameters", {"type": "object", "properties": {}}
         )
@@ -4468,9 +4497,10 @@ def _bedrock_tools_pt(tools: List) -> List[BedrockToolBlock]:
 
         defs = parameters.pop("$defs", {})
         defs_copy = copy.deepcopy(defs)
-        # flatten the defs
-        for _, value in defs_copy.items():
-            unpack_defs(value, defs_copy)
+        # Expand $ref references in parameters using the definitions
+        # Note: We don't pre-flatten defs as that causes exponential memory growth
+        # with circular references (see issue #19098). unpack_defs handles nested
+        # refs recursively and correctly detects/skips circular references.
         unpack_defs(parameters, defs_copy)
         tool_input_schema = BedrockToolInputSchemaBlock(
             json=BedrockToolJsonSchemaBlock(

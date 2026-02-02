@@ -8,6 +8,7 @@ from litellm._logging import verbose_logger
 from litellm.proxy._experimental.mcp_server.ui_session_utils import (
     build_effective_auth_contexts,
 )
+from litellm.proxy._experimental.mcp_server.utils import merge_mcp_headers
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.types.mcp import MCPAuth
@@ -438,16 +439,22 @@ if MCP_AVAILABLE:
                 command=request.command,
                 args=request.args,
                 env=request.env,
+                static_headers=request.static_headers,
             )
 
             stdio_env = global_mcp_server_manager._build_stdio_env(
                 server_model, raw_headers
             )
 
+            merged_headers = merge_mcp_headers(
+                extra_headers=oauth2_headers,
+                static_headers=request.static_headers,
+            )
+
             client = global_mcp_server_manager._create_mcp_client(
                 server=server_model,
                 mcp_auth_header=mcp_auth_header,
-                extra_headers=oauth2_headers,
+                extra_headers=merged_headers,
                 stdio_env=stdio_env,
             )
 

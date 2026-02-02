@@ -175,3 +175,29 @@ class TestXAIChat(BaseLLMChatTest):
     def test_tool_call_no_arguments(self, tool_call_no_arguments):
         """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
         pass
+
+    def test_web_search(self):
+        """Web search is only supported for Grok 4 family models"""
+        from litellm.utils import supports_web_search
+
+        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+        litellm.model_cost = litellm.get_model_cost_map(url="")
+
+        litellm._turn_on_debug()
+
+        # Use grok-4-1-fast which supports web search
+        model = "xai/grok-4-1-fast"
+
+        if not supports_web_search(model, None):
+            pytest.skip("Model does not support web search")
+
+        response = completion(
+            model=model,
+            messages=[
+                {"role": "user", "content": "What's the weather like in Boston today?"}
+            ],
+            web_search_options={},
+            max_tokens=100,
+        )
+
+        assert response is not None

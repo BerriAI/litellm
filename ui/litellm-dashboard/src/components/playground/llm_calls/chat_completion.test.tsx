@@ -95,7 +95,8 @@ describe("chat_completion", () => {
       undefined, // traceId
       undefined, // vector_store_ids
       undefined, // guardrails
-      undefined, // selectedMCPTools
+      undefined, // policies
+      undefined, // selectedMCPServers
       undefined, // onImageGenerated
       undefined, // onSearchResults
       0.7, // temperature
@@ -157,6 +158,7 @@ describe("chat_completion", () => {
       undefined, // traceId
       undefined, // vector_store_ids
       undefined, // guardrails
+      undefined, // policies
       selectedMCPServers,
       undefined, // onImageGenerated
       undefined, // onSearchResults

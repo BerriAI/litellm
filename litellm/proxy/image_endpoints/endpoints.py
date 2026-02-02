@@ -244,8 +244,10 @@ async def image_edit_api(
     if mask is None and mask_array is not None:
         mask = mask_array
 
-    if image is None:
-        raise HTTPException(status_code=422, detail="Field required: image")
+    # if image is None:
+    #     raise HTTPException(status_code=422, detail="Field required: image")
+    # Note: Image is optional for some models (e.g., Bedrock Stability style-transfer)
+    # The validation will be done at the model level if image is truly required
 
     from litellm.proxy.proxy_server import (
         _read_request_body,
@@ -272,6 +274,10 @@ async def image_edit_api(
         data["image"] = image_files
     if mask_files:
         data["mask"] = mask_files
+    
+    # Ensure prompt exists in data (default to None for models that don't require it)
+    if "prompt" not in data:
+        data["prompt"] = None
 
     data["model"] = (
         model

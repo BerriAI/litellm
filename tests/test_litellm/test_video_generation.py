@@ -204,7 +204,7 @@ class TestVideoGeneration:
         """Test video generation cost calculation."""
         import json
         import os
-        
+
         # Try to load the local model cost map, skip if not found
         cost_map_path = "model_prices_and_context_window.json"
         if not os.path.exists(cost_map_path):
@@ -294,39 +294,47 @@ class TestVideoGeneration:
             with patch.object(config, 'transform_video_create_request') as mock_transform:
                 mock_transform.return_value = ({"model": "sora-2", "prompt": "test"}, [], "https://api.openai.com/v1/videos")
                 
-                mock_response = MagicMock()
-                mock_response.json.return_value = {
-                    "id": "video_123",
-                    "object": "video",
-                    "status": "queued",
-                    "created_at": 1712697600,
-                    "model": "sora-2"
-                }
-                mock_response.status_code = 200
-                
-                mock_client = MagicMock()
-                mock_client.post.return_value = mock_response
-                
-                with patch(
-                    "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
-                    return_value=mock_client,
-                ):
-                    handler.video_generation_handler(
-                        model="sora-2",
-                        prompt="test prompt",
-                        video_generation_provider_config=config,
-                        video_generation_optional_request_params={},
-                        custom_llm_provider="openai",
-                        litellm_params={"api_key": "deployment-api-key", "api_base": "https://api.openai.com/v1"},
-                        logging_obj=MagicMock(),
-                        timeout=5.0,
-                        api_key=None,  # Function parameter is None
-                        _is_async=False,
-                    )
-                
-                # Verify validate_environment was called with api_key from litellm_params
-                mock_validate.assert_called_once()
-                call_args = mock_validate.call_args
+                # Mock the transform_video_create_response to avoid needing a real response
+                with patch.object(config, 'transform_video_create_response') as mock_transform_response:
+                    mock_video_object = MagicMock()
+                    mock_video_object.id = "video_123"
+                    mock_video_object.object = "video"
+                    mock_video_object.status = "queued"
+                    mock_transform_response.return_value = mock_video_object
+                    
+                    mock_response = MagicMock()
+                    mock_response.json.return_value = {
+                        "id": "video_123",
+                        "object": "video",
+                        "status": "queued",
+                        "created_at": 1712697600,
+                        "model": "sora-2"
+                    }
+                    mock_response.status_code = 200
+                    
+                    mock_client = MagicMock()
+                    mock_client.post.return_value = mock_response
+                    
+                    with patch(
+                        "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client",
+                        return_value=mock_client,
+                    ):
+                        result = handler.video_generation_handler(
+                            model="sora-2",
+                            prompt="test prompt",
+                            video_generation_provider_config=config,
+                            video_generation_optional_request_params={},
+                            custom_llm_provider="openai",
+                            litellm_params={"api_key": "deployment-api-key", "api_base": "https://api.openai.com/v1"},
+                            logging_obj=MagicMock(),
+                            timeout=5.0,
+                            api_key=None,  # Function parameter is None
+                            _is_async=False,
+                        )
+                    
+                    # Verify validate_environment was called with api_key from litellm_params
+                    mock_validate.assert_called_once()
+                    call_args = mock_validate.call_args
                 assert call_args.kwargs["api_key"] == "deployment-api-key"
 
     def test_video_generation_url_generation(self):
@@ -824,7 +832,7 @@ def test_video_content_handler_uses_get_for_openai():
 def test_video_content_respects_api_base_and_api_key_from_kwargs():
     """Test that video_content respects api_base and api_key from kwargs (simulating database entry)."""
     from litellm.videos.main import video_content
-    
+
     # Mock the handler to capture litellm_params
     captured_litellm_params = None
     
@@ -916,10 +924,16 @@ class TestVideoEndpointsProxyLitellmParams:
         """Create a test client with a proxy config that includes Vertex AI model with litellm_params."""
         import asyncio
         import tempfile
+
         import yaml
         from fastapi import FastAPI
         from fastapi.testclient import TestClient
-        from litellm.proxy.proxy_server import cleanup_router_config_variables, router, initialize
+
+        from litellm.proxy.proxy_server import (
+            cleanup_router_config_variables,
+            initialize,
+            router,
+        )
         from litellm.proxy.video_endpoints.endpoints import router as video_router
 
         # Clean up any existing router config

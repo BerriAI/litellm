@@ -137,6 +137,9 @@ def test_default_api_base():
             # Get the API base for the given provider
             if provider == "github_copilot":
                 continue
+            # Skip chatgpt as it requires OAuth authentication
+            if provider == "chatgpt":
+                continue
             # Skip ragflow as it requires specific model format: ragflow/chat/{id}/{model} or ragflow/agent/{id}/{model}
             if provider == "ragflow":
                 continue

@@ -205,6 +205,11 @@ _in_memory_loggers: List[Any] = []
 
 ### GLOBAL VARIABLES ###
 
+# Cache custom pricing keys as frozenset for O(1) lookups instead of looping through 49 keys
+_CUSTOM_PRICING_KEYS: frozenset = frozenset(
+    CustomPricingLiteLLMParams.model_fields.keys()
+)
+
 sentry_sdk_instance = None
 capture_exception = None
 add_breadcrumb = None
@@ -325,12 +330,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 messages = new_messages
 
         self.model = model
-        self.messages = copy.deepcopy(messages)
+        self.messages = copy.deepcopy(messages) if messages is not None else None
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
         self.litellm_call_id = litellm_call_id
-        self.litellm_trace_id: str = litellm_trace_id or str(uuid.uuid4())
+        self.litellm_trace_id: str = (
+            litellm_trace_id if litellm_trace_id else str(uuid.uuid4())
+        )
         self.function_id = function_id
         self.streaming_chunks: List[Any] = []  # for generating complete stream response
         self.sync_streaming_chunks: List[
@@ -539,10 +546,11 @@ class Logging(LiteLLMLoggingBaseClass):
         if "stream_options" in additional_params:
             self.stream_options = additional_params["stream_options"]
         ## check if custom pricing set ##
-        custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
-        for key in custom_pricing_keys:
-            if litellm_params.get(key) is not None:
-                self.custom_pricing = True
+        if any(
+            litellm_params.get(key) is not None
+            for key in _CUSTOM_PRICING_KEYS & litellm_params.keys()
+        ):
+            self.custom_pricing = True
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
@@ -1289,6 +1297,7 @@ class Logging(LiteLLMLoggingBaseClass):
         output_cost: float,
         total_cost: float,
         cost_for_built_in_tools_cost_usd_dollar: float,
+        additional_costs: Optional[dict] = None,
         original_cost: Optional[float] = None,
         discount_percent: Optional[float] = None,
         discount_amount: Optional[float] = None,
@@ -1304,6 +1313,7 @@ class Logging(LiteLLMLoggingBaseClass):
             output_cost: Cost of output/completion tokens
             cost_for_built_in_tools_cost_usd_dollar: Cost of built-in tools
             total_cost: Total cost of request
+            additional_costs: Free-form additional costs dict (e.g., {"azure_model_router_flat_cost": 0.00014})
             original_cost: Cost before discount
             discount_percent: Discount percentage (0.05 = 5%)
             discount_amount: Discount amount in USD
@@ -1318,6 +1328,10 @@ class Logging(LiteLLMLoggingBaseClass):
             total_cost=total_cost,
             tool_usage_cost=cost_for_built_in_tools_cost_usd_dollar,
         )
+
+        # Store additional costs if provided (free-form dict for extensibility)
+        if additional_costs and isinstance(additional_costs, dict) and len(additional_costs) > 0:
+            self.cost_breakdown["additional_costs"] = additional_costs
 
         # Store discount information if provided
         if original_cost is not None:
@@ -1624,25 +1638,25 @@ class Logging(LiteLLMLoggingBaseClass):
                     result.usage
                 )
             )
-            setattr(
-                result,
-                "usage",
-                (
-                    transformed_usage.model_dump()
-                    if hasattr(transformed_usage, "model_dump")
-                    else dict(transformed_usage)
-                ),
-            )
+            setattr(result, "usage", transformed_usage)
             if (
                 standard_logging_payload := self.model_call_details.get(
                     "standard_logging_object"
                 )
             ) is not None:
-                standard_logging_payload["response"] = (
+                response_dict = (
                     result.model_dump()
                     if hasattr(result, "model_dump")
                     else dict(result)
                 )
+                # Ensure usage is properly included with transformed chat format
+                if transformed_usage is not None:
+                    response_dict["usage"] = (
+                        transformed_usage.model_dump()
+                        if hasattr(transformed_usage, "model_dump")
+                        else dict(transformed_usage)
+                    )
+                standard_logging_payload["response"] = response_dict
         elif isinstance(result, TranscriptionResponse):
             from litellm.litellm_core_utils.llm_cost_calc.usage_object_transformation import (
                 TranscriptionUsageObjectTransformation,
@@ -1897,6 +1911,14 @@ class Logging(LiteLLMLoggingBaseClass):
                     status="success",
                     standard_built_in_tools_params=self.standard_built_in_tools_params,
                 )
+                if (
+                    standard_logging_payload := self.model_call_details.get(
+                        "standard_logging_object"
+                    )
+                ) is not None:
+                    # Only emit for sync requests (async_success_handler handles async)
+                    if is_sync_request:
+                        emit_standard_logging_payload(standard_logging_payload)
             callbacks = self.get_combined_callback_list(
                 dynamic_success_callbacks=self.dynamic_success_callbacks,
                 global_callbacks=litellm.success_callback,
@@ -2190,10 +2212,7 @@ class Logging(LiteLLMLoggingBaseClass):
                                 print_verbose=print_verbose,
                             )
 
-                    if (
-                        callback == "openmeter"
-                        and is_sync_request
-                    ):
+                    if callback == "openmeter" and is_sync_request:
                         global openMeterLogger
                         if openMeterLogger is None:
                             print_verbose("Instantiates openmeter client")
@@ -2323,18 +2342,28 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_cost = kwargs.get("batch_cost", None)
             batch_usage = kwargs.get("batch_usage", None)
             batch_models = kwargs.get("batch_models", None)
-            if all([batch_cost, batch_usage, batch_models]) is not None:
+            has_explicit_batch_data = all(
+                x is not None for x in (batch_cost, batch_usage, batch_models)
+            )
+
+            should_compute_batch_data = (
+                not is_base64_unified_file_id
+                or not has_explicit_batch_data
+                and result.status == "completed"
+            )
+            if has_explicit_batch_data:
                 result._hidden_params["response_cost"] = batch_cost
                 result._hidden_params["batch_models"] = batch_models
                 result.usage = batch_usage
 
-            elif not is_base64_unified_file_id:  # only run for non-unified file ids
+            elif should_compute_batch_data:
                 (
                     response_cost,
                     batch_usage,
                     batch_models,
                 ) = await _handle_completed_batch(
-                    batch=result, custom_llm_provider=self.custom_llm_provider
+                    batch=result,
+                    custom_llm_provider=self.custom_llm_provider,
                 )
 
                 result._hidden_params["response_cost"] = response_cost
@@ -2405,6 +2434,14 @@ class Logging(LiteLLMLoggingBaseClass):
                 status="success",
                 standard_built_in_tools_params=self.standard_built_in_tools_params,
             )
+
+            # print standard logging payload
+            if (
+                standard_logging_payload := self.model_call_details.get(
+                    "standard_logging_object"
+                )
+            ) is not None:
+                emit_standard_logging_payload(standard_logging_payload)
         callbacks = self.get_combined_callback_list(
             dynamic_success_callbacks=self.dynamic_async_success_callbacks,
             global_callbacks=litellm._async_success_callback,
@@ -2799,8 +2836,7 @@ class Logging(LiteLLMLoggingBaseClass):
                             callback_func=callback,
                         )
                     if (
-                        isinstance(callback, CustomLogger)
-                        and is_sync_request
+                        isinstance(callback, CustomLogger) and is_sync_request
                     ):  # custom logger class
                         callback.log_failure_event(
                             start_time=start_time,
@@ -3292,6 +3328,7 @@ def _get_masked_values(
         "token",
         "key",
         "secret",
+        "vertex_credentials",
     ]
     return {
         k: (
@@ -3744,9 +3781,12 @@ def _init_custom_logger_compatible_class(  # noqa: PLR0915
                 OpenTelemetryConfig,
             )
 
+            logfire_base_url = os.getenv(
+                "LOGFIRE_BASE_URL", "https://logfire-api.pydantic.dev"
+            )
             otel_config = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint="https://logfire-api.pydantic.dev/v1/traces",
+                endpoint=f"{logfire_base_url.rstrip('/')}/v1/traces",
                 headers=f"Authorization={os.getenv('LOGFIRE_TOKEN')}",
             )
             for callback in _in_memory_loggers:
@@ -4241,15 +4281,21 @@ def use_custom_pricing_for_model(litellm_params: Optional[dict]) -> bool:
     if litellm_params is None:
         return False
 
+    # Check litellm_params using set intersection (only check keys that exist in both)
+    matching_keys = _CUSTOM_PRICING_KEYS & litellm_params.keys()
+    for key in matching_keys:
+        if litellm_params.get(key) is not None:
+            return True
+
+    # Check model_info
     metadata: dict = litellm_params.get("metadata", {}) or {}
     model_info: dict = metadata.get("model_info", {}) or {}
 
-    custom_pricing_keys = CustomPricingLiteLLMParams.model_fields.keys()
-    for key in custom_pricing_keys:
-        if litellm_params.get(key, None) is not None:
-            return True
-        elif model_info.get(key, None) is not None:
-            return True
+    if model_info:
+        matching_keys = _CUSTOM_PRICING_KEYS & model_info.keys()
+        for key in matching_keys:
+            if model_info.get(key) is not None:
+                return True
 
     return False
 
@@ -4339,6 +4385,44 @@ class StandardLoggingPayloadSetup:
         return messages
 
     @staticmethod
+    def merge_litellm_metadata(litellm_params: dict) -> dict:
+        """
+        Merge both litellm_metadata and metadata from litellm_params.
+
+        litellm_metadata contains model-related fields, metadata contains user API key fields.
+        We need both for complete standard logging payload.
+
+        Args:
+            litellm_params: Dictionary containing metadata and litellm_metadata
+
+        Returns:
+            dict: Merged metadata with user API key fields taking precedence
+        """
+        merged_metadata: dict = {}
+
+        # Start with metadata (user API key fields) - but skip non-serializable objects
+        if litellm_params.get("metadata") and isinstance(
+            litellm_params.get("metadata"), dict
+        ):
+            for key, value in litellm_params["metadata"].items():
+                # Skip non-serializable objects like UserAPIKeyAuth
+                if key == "user_api_key_auth":
+                    continue
+                merged_metadata[key] = value
+
+        # Then merge litellm_metadata (model-related fields) - this will NOT overwrite existing keys
+        if litellm_params.get("litellm_metadata") and isinstance(
+            litellm_params.get("litellm_metadata"), dict
+        ):
+            for key, value in litellm_params["litellm_metadata"].items():
+                if (
+                    key not in merged_metadata
+                ):  # Don't overwrite existing keys from metadata
+                    merged_metadata[key] = value
+
+        return merged_metadata
+
+    @staticmethod
     def get_standard_logging_metadata(
         metadata: Optional[Dict[str, Any]],
         litellm_params: Optional[dict] = None,
@@ -4399,6 +4483,7 @@ class StandardLoggingPayloadSetup:
             user_api_key_request_route=None,
             spend_logs_metadata=None,
             requester_ip_address=None,
+            user_agent=None,
             requester_metadata=None,
             prompt_management_metadata=prompt_management_metadata,
             applied_guardrails=applied_guardrails,
@@ -4456,7 +4541,7 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_usage_from_response_obj(
-        response_obj: Optional[Union[dict, BaseModel]], combined_usage_object: Optional[Usage] = None
+        response_obj: Optional[dict], combined_usage_object: Optional[Usage] = None
     ) -> Usage:
         ## BASE CASE ##
         if combined_usage_object is not None:
@@ -4468,32 +4553,31 @@ class StandardLoggingPayloadSetup:
                 total_tokens=0,
             )
 
-        usage = _safe_extract_usage_from_obj(response_obj)
-        
-        if usage is None:
+        usage = response_obj.get("usage", None) or {}
+        if usage is None or (
+            not isinstance(usage, dict) and not isinstance(usage, Usage)
+        ):
             return Usage(
                 prompt_tokens=0,
                 completion_tokens=0,
                 total_tokens=0,
             )
-        
-        if isinstance(usage, Usage):
+        elif isinstance(usage, Usage):
             return usage
-        
-        transformed_usage = _try_transform_response_api_usage(usage)
-        if transformed_usage is not None:
-            return transformed_usage
-        
-        if isinstance(usage, dict):
-            created_usage = _try_create_usage_from_dict(usage)
-            if created_usage is not None:
-                return created_usage
-        
-        return Usage(
-            prompt_tokens=0,
-            completion_tokens=0,
-            total_tokens=0,
-        )
+        elif isinstance(usage, ResponseAPIUsage):
+            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                usage
+            )
+        elif isinstance(usage, dict):
+            if ResponseAPILoggingUtils._is_response_api_usage(usage):
+                return (
+                    ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(
+                        usage
+                    )
+                )
+            return Usage(**usage)
+
+        raise ValueError(f"usage is required, got={usage} of type {type(usage)}")
 
     @staticmethod
     def get_model_cost_information(
@@ -4534,18 +4618,13 @@ class StandardLoggingPayloadSetup:
 
     @staticmethod
     def get_final_response_obj(
-        response_obj: Union[dict, BaseModel], init_response_obj: Union[Any, BaseModel, dict], kwargs: dict
+        response_obj: dict, init_response_obj: Union[Any, BaseModel, dict], kwargs: dict
     ) -> Optional[Union[dict, str, list]]:
         """
         Get final response object after redacting the message input/output from logging
         """
         if response_obj:
-            if isinstance(response_obj, BaseModel):
-                final_response_obj: Optional[Union[dict, str, list]] = _safe_model_dump(
-                    response_obj, default={}
-                )
-            else:
-                final_response_obj = response_obj
+            final_response_obj: Optional[Union[dict, str, list]] = response_obj
         elif isinstance(init_response_obj, list) or isinstance(init_response_obj, str):
             final_response_obj = init_response_obj
         else:
@@ -4559,7 +4638,7 @@ class StandardLoggingPayloadSetup:
         if modified_final_response_obj is not None and isinstance(
             modified_final_response_obj, BaseModel
         ):
-            final_response_obj = _safe_model_dump(modified_final_response_obj, default={})
+            final_response_obj = modified_final_response_obj.model_dump()
         else:
             final_response_obj = modified_final_response_obj
 
@@ -4617,7 +4696,10 @@ class StandardLoggingPayloadSetup:
     @staticmethod
     def strip_trailing_slash(api_base: Optional[str]) -> Optional[str]:
         if api_base:
-            return api_base.rstrip("/")
+            if api_base.endswith("//"):
+                return api_base.rstrip("/")
+            if api_base[-1] == "/":
+                return api_base[:-1]
         return api_base
 
     @staticmethod
@@ -4686,7 +4768,14 @@ class StandardLoggingPayloadSetup:
     ) -> StandardLoggingPayloadErrorInformation:
         from litellm.constants import MAXIMUM_TRACEBACK_LINES_TO_LOG
 
-        error_status: str = str(getattr(original_exception, "status_code", ""))
+        # Check for 'code' first (used by ProxyException), then fall back to 'status_code' (used by LiteLLM exceptions)
+        # Ensure error_code is always a string for Prisma Python JSON field compatibility
+        error_code_attr = getattr(original_exception, "code", None)
+        if error_code_attr is not None and str(error_code_attr) not in ("", "None"):
+            error_status: str = str(error_code_attr)
+        else:
+            status_code_attr = getattr(original_exception, "status_code", None)
+            error_status = str(status_code_attr) if status_code_attr is not None else ""
         error_class: str = (
             str(original_exception.__class__.__name__) if original_exception else ""
         )
@@ -4788,7 +4877,9 @@ class StandardLoggingPayloadSetup:
         """
         Extract additional header tags for spend tracking based on config.
         """
-        extra_headers: List[str] = getattr(litellm, "extra_spend_tag_headers", None) or []
+        extra_headers: List[str] = (
+            getattr(litellm, "extra_spend_tag_headers", None) or []
+        )
         if not extra_headers:
             return None
 
@@ -4828,125 +4919,6 @@ class StandardLoggingPayloadSetup:
         if additional_header_tags is not None:
             request_tags.extend(additional_header_tags)
         return request_tags
-
-
-def _safe_model_dump(
-    obj: BaseModel, default: Optional[Union[dict, str, list]] = None
-) -> Union[dict, str, list]:
-    """
-    Safely call model_dump() on a BaseModel with fallback strategies.
-    
-    Args:
-        obj: BaseModel instance to dump
-        default: Default value to return if all strategies fail
-        
-    Returns:
-        Dict representation of the BaseModel, or fallback value
-    """
-    if default is None:
-        default = {}
-    
-    try:
-        return obj.model_dump()
-    except (AttributeError, TypeError) as e:
-        verbose_logger.debug(
-            f"Error calling model_dump() on BaseModel: {e}, type: {type(obj)}"
-        )
-        try:
-            if hasattr(obj, "__dict__"):
-                return obj.__dict__
-            else:
-                return str(obj)
-        except Exception:
-            return default
-
-
-def _safe_get_attribute(
-    obj: Union[dict, BaseModel, Any], attr_name: str, default: Any = None
-) -> Any:
-    """
-    Safely get an attribute from a dict or BaseModel object.
-    
-    Args:
-        obj: Object to get attribute from (dict, BaseModel, or any object)
-        attr_name: Name of the attribute to get
-        default: Default value to return if attribute doesn't exist
-        
-    Returns:
-        Attribute value or default
-    """
-    try:
-        if isinstance(obj, dict):
-            return obj.get(attr_name, default)
-        else:
-            return getattr(obj, attr_name, default)
-    except (AttributeError, TypeError) as e:
-        verbose_logger.debug(
-            f"Error getting attribute '{attr_name}' from object: {e}, type: {type(obj)}"
-        )
-        return default
-
-
-def _safe_extract_usage_from_obj(
-    response_obj: Union[dict, BaseModel, Any]
-) -> Optional[Union[dict, Usage, Any]]:
-    """
-    Safely extract usage from response_obj (dict or BaseModel).
-    
-    Args:
-        response_obj: Response object (dict, BaseModel, or any object)
-        
-    Returns:
-        Usage object, dict, or None
-    """
-    return _safe_get_attribute(response_obj, "usage", None)
-
-
-def _try_transform_response_api_usage(usage: Any) -> Optional[Usage]:
-    """
-    Try to transform ResponseAPIUsage to Usage object.
-    
-    Args:
-        usage: Usage object (dict, ResponseAPIUsage, or other)
-        
-    Returns:
-        Transformed Usage object, or None if transformation fails
-    """
-    try:
-        if ResponseAPILoggingUtils._is_response_api_usage(usage):
-            return ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(usage)
-    except (AttributeError, TypeError, KeyError) as e:
-        verbose_logger.debug(
-            f"Error checking/transforming ResponseAPIUsage: {e}, type: {type(usage)}"
-        )
-    return None
-
-
-def _try_create_usage_from_dict(usage: dict) -> Optional[Usage]:
-    """
-    Try to create Usage object from dict.
-    
-    Args:
-        usage: Dict containing usage information
-        
-    Returns:
-        Usage object, or None if creation fails
-    """
-    try:
-        return Usage(**usage)
-    except (TypeError, ValueError) as e:
-        # Avoid logging full dict contents, which may include sensitive data
-        try:
-            usage_keys = list(usage.keys())
-        except Exception:
-            usage_keys = None
-        verbose_logger.debug(
-            "Error creating Usage from dict: %s, usage keys: %s, usage type: %s",
-            e,
-            usage_keys,
-            type(usage),
-        )
-        return None
 
 
 def _get_status_fields(
@@ -4998,21 +4970,17 @@ def _get_status_fields(
 def _extract_response_obj_and_hidden_params(
     init_response_obj: Union[Any, BaseModel, dict],
     original_exception: Optional[Exception],
-) -> Tuple[Union[dict, BaseModel], Optional[dict]]:
-
+) -> Tuple[dict, Optional[dict]]:
     """Extract response_obj and hidden_params from init_response_obj."""
     hidden_params: Optional[dict] = None
     if init_response_obj is None:
-        response_obj: Union[dict, BaseModel] = {}
+        response_obj = {}
     elif isinstance(init_response_obj, BaseModel):
-        response_obj = init_response_obj
-        hidden_params = _safe_get_attribute(init_response_obj, "_hidden_params", None)
+        response_obj = init_response_obj.model_dump()
+        hidden_params = getattr(init_response_obj, "_hidden_params", None)
     elif isinstance(init_response_obj, dict):
         response_obj = init_response_obj
     else:
-        verbose_logger.debug(
-            f"Unknown init_response_obj type: {type(init_response_obj)}, defaulting to empty dict"
-        )
         response_obj = {}
 
     if original_exception is not None and hidden_params is None:
@@ -5059,10 +5027,9 @@ def get_standard_logging_object_payload(
         litellm_params = kwargs.get("litellm_params", {}) or {}
         proxy_server_request = litellm_params.get("proxy_server_request") or {}
 
-        metadata: dict = (
-            litellm_params.get("litellm_metadata")
-            or litellm_params.get("metadata", None)
-            or {}
+        # Merge both litellm_metadata and metadata to get complete metadata
+        metadata: dict = StandardLoggingPayloadSetup.merge_litellm_metadata(
+            litellm_params
         )
 
         completion_start_time = kwargs.get("completion_start_time", end_time)
@@ -5075,10 +5042,7 @@ def get_standard_logging_object_payload(
             ),
         )
 
-        # Preserve falsy values (0, "", False) if they exist in response_obj
-        id = _safe_get_attribute(response_obj, "id", None)
-        if id is None:
-            id = kwargs.get("litellm_call_id")
+        id = response_obj.get("id", kwargs.get("litellm_call_id"))
 
         _model_id = metadata.get("model_info", {}).get("id", "")
         _model_group = metadata.get("model_group", "")
@@ -5216,6 +5180,7 @@ def get_standard_logging_object_payload(
             model_group=_model_group,
             model_id=_model_id,
             requester_ip_address=clean_metadata.get("requester_ip_address", None),
+            user_agent=clean_metadata.get("user_agent", None),
             messages=StandardLoggingPayloadSetup.append_system_prompt_messages(
                 kwargs=kwargs, messages=kwargs.get("messages")
             ),
@@ -5236,7 +5201,8 @@ def get_standard_logging_object_payload(
             standard_built_in_tools_params=standard_built_in_tools_params,
         )
 
-        emit_standard_logging_payload(payload)
+        # emit_standard_logging_payload(payload) - Moved to success_handler to prevent double emitting
+
         return payload
     except Exception as e:
         verbose_logger.exception(
@@ -5280,6 +5246,7 @@ def get_standard_logging_metadata(
         user_api_key_team_alias=None,
         spend_logs_metadata=None,
         requester_ip_address=None,
+        user_agent=None,
         requester_metadata=None,
         user_api_key_end_user_id=None,
         prompt_management_metadata=None,

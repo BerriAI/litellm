@@ -516,7 +516,9 @@ class CustomGuardrail(CustomLogger):
         from litellm.types.utils import GuardrailMode
 
         # Use event_type if provided, otherwise fall back to self.event_hook
-        guardrail_mode: Union[GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]]
+        guardrail_mode: Union[
+            GuardrailEventHooks, GuardrailMode, List[GuardrailEventHooks]
+        ]
         if event_type is not None:
             guardrail_mode = event_type
         elif isinstance(self.event_hook, Mode):
@@ -524,11 +526,21 @@ class CustomGuardrail(CustomLogger):
         else:
             guardrail_mode = self.event_hook  # type: ignore[assignment]
 
+        from litellm.litellm_core_utils.core_helpers import (
+            filter_exceptions_from_params,
+        )
+
+        # Sanitize the response to ensure it's JSON serializable and free of circular refs
+        # This prevents RecursionErrors in downstream loggers (Langfuse, Datadog, etc.)
+        clean_guardrail_response = filter_exceptions_from_params(
+            guardrail_json_response
+        )
+
         slg = StandardLoggingGuardrailInformation(
             guardrail_name=self.guardrail_name,
             guardrail_provider=guardrail_provider,
             guardrail_mode=guardrail_mode,
-            guardrail_response=guardrail_json_response,
+            guardrail_response=clean_guardrail_response,
             guardrail_status=guardrail_status,
             start_time=start_time,
             end_time=end_time,

@@ -14,7 +14,7 @@ import { extractLoggingSettings, formatMetadataForDisplay, stripTagsFromMetadata
 import { KeyResponse } from "../key_team_helpers/key_list";
 import LoggingSettingsView from "../logging_settings_view";
 import NotificationManager from "../molecules/notifications_manager";
-import { keyDeleteCall, keyUpdateCall } from "../networking";
+import { keyDeleteCall, keyUpdateCall, getPolicyInfoWithGuardrails } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
 import { RegenerateKeyModal } from "../organisms/regenerate_key_modal";
 import { parseErrorMessage } from "../shared/errorUtils";
@@ -60,6 +60,8 @@ export default function KeyInfoView({
   const [currentKeyData, setCurrentKeyData] = useState<KeyResponse | undefined>(keyData);
   const [lastRegeneratedAt, setLastRegeneratedAt] = useState<Date | null>(null);
   const [isRecentlyRegenerated, setIsRecentlyRegenerated] = useState(false);
+  const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
 
   // Update local state when keyData prop changes (but don't reset to undefined)
   useEffect(() => {
@@ -67,6 +69,40 @@ export default function KeyInfoView({
       setCurrentKeyData(keyData);
     }
   }, [keyData]);
+
+  // Fetch resolved guardrails for all policies
+  useEffect(() => {
+    const fetchPolicyGuardrails = async () => {
+      const policies = currentKeyData?.metadata?.policies;
+      if (!accessToken || !policies || !Array.isArray(policies) || policies.length === 0) {
+        return;
+      }
+
+      setLoadingPolicies(true);
+      const guardrailsMap: Record<string, string[]> = {};
+
+      try {
+        await Promise.all(
+          policies.map(async (policyName: string) => {
+            try {
+              const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
+              guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
+            } catch (error) {
+              console.error(`Failed to fetch guardrails for policy ${policyName}:`, error);
+              guardrailsMap[policyName] = [];
+            }
+          })
+        );
+        setPolicyGuardrails(guardrailsMap);
+      } catch (error) {
+        console.error("Failed to fetch policy guardrails:", error);
+      } finally {
+        setLoadingPolicies(false);
+      }
+    };
+
+    fetchPolicyGuardrails();
+  }, [accessToken, currentKeyData?.metadata?.policies]);
 
   // Reset recent regeneration indicator after 5 seconds
   useEffect(() => {
@@ -304,7 +340,7 @@ export default function KeyInfoView({
     isProxyAdminRole(userRole || "") ||
     (teamsData &&
       isUserTeamAdminForSingleTeam(
-        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0],
+        teamsData?.filter((team) => team.team_id === currentKeyData.team_id)[0]?.members_with_roles,
         userID || "",
       )) ||
     (userID === currentKeyData.user_id && userRole !== "Internal Viewer");
@@ -482,6 +518,57 @@ export default function KeyInfoView({
                   variant="inline"
                   accessToken={accessToken}
                 />
+              </Card>
+
+              <Card>
+                <Text className="font-medium mb-3">Guardrails</Text>
+                {Array.isArray(currentKeyData.metadata?.guardrails) && currentKeyData.metadata.guardrails.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {currentKeyData.metadata.guardrails.map((guardrail: string, index: number) => (
+                      <Badge key={index} color="blue">
+                        {guardrail}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No guardrails configured</Text>
+                )}
+                {typeof currentKeyData.metadata?.disable_global_guardrails === "boolean" &&
+                  currentKeyData.metadata.disable_global_guardrails === true && (
+                    <div className="mt-3 pt-3 border-t border-gray-200">
+                      <Badge color="yellow">Global Guardrails Disabled</Badge>
+                    </div>
+                  )}
+              </Card>
+
+              <Card>
+                <Text className="font-medium mb-3">Policies</Text>
+                {Array.isArray(currentKeyData.metadata?.policies) && currentKeyData.metadata.policies.length > 0 ? (
+                  <div className="space-y-4">
+                    {currentKeyData.metadata.policies.map((policy: string, index: number) => (
+                      <div key={index} className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge color="purple">{policy}</Badge>
+                          {loadingPolicies && <Text className="text-xs text-gray-400">Loading guardrails...</Text>}
+                        </div>
+                        {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
+                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
+                            <Text className="text-xs text-gray-500 mb-1">Resolved Guardrails:</Text>
+                            <div className="flex flex-wrap gap-1">
+                              {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
+                                <Badge key={gIndex} color="blue" size="xs">
+                                  {guardrail}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No policies configured</Text>
+                )}
               </Card>
 
               <LoggingSettingsView

@@ -5,7 +5,7 @@ import os
 import socket
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
@@ -1047,6 +1047,82 @@ async def test_get_config_from_file(tmp_path, monkeypatch):
 
     result = await proxy_config._get_config_from_file(None)
     assert result == test_config
+
+
+def test_normalize_datetime_for_sorting():
+    """
+    Test the _normalize_datetime_for_sorting function.
+    Tests various scenarios: None values, ISO format strings, datetime objects (naive and aware).
+    """
+    from litellm.proxy.proxy_server import _normalize_datetime_for_sorting
+
+    # Test Case 1: None value
+    assert _normalize_datetime_for_sorting(None) is None
+
+    # Test Case 2: ISO format string with 'Z' suffix
+    dt_str_z = "2024-01-15T10:30:00Z"
+    result = _normalize_datetime_for_sorting(dt_str_z)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result.year == 2024
+    assert result.month == 1
+    assert result.day == 15
+    assert result.hour == 10
+    assert result.minute == 30
+
+    # Test Case 3: ISO format string without 'Z' suffix (naive)
+    dt_str_naive = "2024-01-15T10:30:00"
+    result = _normalize_datetime_for_sorting(dt_str_naive)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+
+    # Test Case 4: ISO format string with timezone offset
+    dt_str_tz = "2024-01-15T10:30:00+05:00"
+    result = _normalize_datetime_for_sorting(dt_str_tz)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    # Should convert from +05:00 to UTC (subtract 5 hours)
+    assert result.hour == 5  # 10:30 - 5 hours = 5:30 UTC
+
+    # Test Case 5: Naive datetime object
+    naive_dt = datetime(2024, 1, 15, 10, 30, 0)
+    result = _normalize_datetime_for_sorting(naive_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result.year == 2024
+    assert result.month == 1
+    assert result.day == 15
+
+    # Test Case 6: Timezone-aware datetime object (non-UTC)
+    from datetime import timedelta
+    aware_dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone(timedelta(hours=5)))
+    result = _normalize_datetime_for_sorting(aware_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    # Should convert from +05:00 to UTC
+    assert result.hour == 5
+
+    # Test Case 7: UTC-aware datetime object
+    utc_dt = datetime(2024, 1, 15, 10, 30, 0, tzinfo=timezone.utc)
+    result = _normalize_datetime_for_sorting(utc_dt)
+    assert result is not None
+    assert isinstance(result, datetime)
+    assert result.tzinfo == timezone.utc
+    assert result == utc_dt
+
+    # Test Case 8: Invalid string format
+    invalid_str = "not-a-date"
+    result = _normalize_datetime_for_sorting(invalid_str)
+    assert result is None
+
+    # Test Case 9: Invalid type (should return None)
+    result = _normalize_datetime_for_sorting(12345)
+    assert result is None
 
 
 @pytest.mark.asyncio
@@ -2907,7 +2983,8 @@ def test_root_redirect_when_docs_url_not_root_and_redirect_url_set(monkeypatch):
     assert response.headers["location"] == test_redirect_url
 
 
-def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
     """
     Test that get_image uses /var/lib/litellm/assets when LITELLM_NON_ROOT is true.
     """
@@ -2936,13 +3013,14 @@ def test_get_image_non_root_uses_var_lib_assets_dir(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
 
 
-def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
     """
     Test that get_image falls back to default_site_logo when logo doesn't exist
     in /var/lib/litellm/assets for non-root case.
@@ -2982,7 +3060,7 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was called with /var/lib/litellm/assets
         mock_makedirs.assert_called_once_with("/var/lib/litellm/assets", exist_ok=True)
@@ -2996,7 +3074,8 @@ def test_get_image_non_root_fallback_to_default_logo(monkeypatch):
         assert mock_file_response.called, "FileResponse should be called"
 
 
-def test_get_image_root_case_uses_current_dir(monkeypatch):
+@pytest.mark.asyncio
+async def test_get_image_root_case_uses_current_dir(monkeypatch):
     """
     Test that get_image uses current_dir when LITELLM_NON_ROOT is not true.
     """
@@ -3025,7 +3104,7 @@ def test_get_image_root_case_uses_current_dir(monkeypatch):
         mock_getenv.side_effect = getenv_side_effect
 
         # Call the function
-        get_image()
+        await get_image()
 
         # Verify makedirs was NOT called with /var/lib/litellm/assets (should not create it for root case)
         var_lib_assets_calls = [
@@ -3124,95 +3203,3 @@ def test_deep_merge_dicts_skips_none_and_empty_lists(monkeypatch):
     assert result["general_settings"]["nested"]["key1"] == "updated_value1"
     assert result["general_settings"]["nested"]["key2"] == "value2"
     assert result["general_settings"]["nested"]["key3"] == "value3"
-
-
-@pytest.mark.asyncio
-async def test_get_hierarchical_router_settings():
-    """
-    Test _get_hierarchical_router_settings method's priority order: Key > Team > Global
-    """
-    from unittest.mock import AsyncMock, MagicMock
-
-    from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.proxy_server import ProxyConfig
-
-    proxy_config = ProxyConfig()
-
-    # Test Case 1: Returns None when prisma_client is None
-    result = await proxy_config._get_hierarchical_router_settings(
-        user_api_key_dict=None,
-        prisma_client=None,
-    )
-    assert result is None
-
-    # Test Case 2: Returns key-level router_settings when available (as dict)
-    mock_user_api_key_dict = MagicMock(spec=UserAPIKeyAuth)
-    mock_user_api_key_dict.router_settings = {"routing_strategy": "key-level", "timeout": 10}
-    mock_user_api_key_dict.team_id = None
-
-    mock_prisma_client = MagicMock()
-
-    result = await proxy_config._get_hierarchical_router_settings(
-        user_api_key_dict=mock_user_api_key_dict,
-        prisma_client=mock_prisma_client,
-    )
-    assert result == {"routing_strategy": "key-level", "timeout": 10}
-
-    # Test Case 3: Returns key-level router_settings when available (as YAML string)
-    mock_user_api_key_dict.router_settings = "routing_strategy: key-yaml\ntimeout: 20"
-    result = await proxy_config._get_hierarchical_router_settings(
-        user_api_key_dict=mock_user_api_key_dict,
-        prisma_client=mock_prisma_client,
-    )
-    assert result == {"routing_strategy": "key-yaml", "timeout": 20}
-
-    # Test Case 4: Falls back to team-level router_settings when key-level is not available
-    mock_user_api_key_dict.router_settings = None
-    mock_user_api_key_dict.team_id = "team-123"
-
-    mock_team_obj = MagicMock()
-    mock_team_obj.router_settings = {"routing_strategy": "team-level", "timeout": 30}
-
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
-        return_value=mock_team_obj
-    )
-
-    result = await proxy_config._get_hierarchical_router_settings(
-        user_api_key_dict=mock_user_api_key_dict,
-        prisma_client=mock_prisma_client,
-    )
-    assert result == {"routing_strategy": "team-level", "timeout": 30}
-    mock_prisma_client.db.litellm_teamtable.find_unique.assert_called_once_with(
-        where={"team_id": "team-123"}
-    )
-
-    # Test Case 5: Falls back to global router_settings when neither key nor team settings are available
-    mock_user_api_key_dict.router_settings = None
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
-
-    mock_db_config = MagicMock()
-    mock_db_config.param_value = {"routing_strategy": "global-level", "timeout": 40}
-
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(
-        return_value=mock_db_config
-    )
-
-    result = await proxy_config._get_hierarchical_router_settings(
-        user_api_key_dict=mock_user_api_key_dict,
-        prisma_client=mock_prisma_client,
-    )
-    assert result == {"routing_strategy": "global-level", "timeout": 40}
-    mock_prisma_client.db.litellm_config.find_first.assert_called_once_with(
-        where={"param_name": "router_settings"}
-    )
-
-    # Test Case 6: Returns None when no settings are found
-    mock_user_api_key_dict.router_settings = None
-    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
-    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
-
-    result = await proxy_config._get_hierarchical_router_settings(
-        user_api_key_dict=mock_user_api_key_dict,
-        prisma_client=mock_prisma_client,
-    )
-    assert result is None

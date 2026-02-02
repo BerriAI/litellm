@@ -50,8 +50,32 @@ from litellm.types.proxy.guardrails.guardrail_hooks.litellm_content_filter impor
     ContentFilterDetection,
     PatternDetection,
 )
+from .patterns import PATTERN_EXTRA_CONFIG, get_compiled_pattern
 
-from .patterns import get_compiled_pattern
+MAX_KEYWORD_VALUE_GAP_WORDS = 1
+GAP_WORD_TOKENIZER = re.compile(r"\b\w+\b")
+
+
+WORD_NUMBER_MAP = {
+    "zero": "0",
+    "oh": "0",
+    "one": "1",
+    "two": "2",
+    "three": "3",
+    "four": "4",
+    "five": "5",
+    "six": "6",
+    "seven": "7",
+    "eight": "8",
+    "nine": "9",
+}
+
+WORD_NUMBER_TOKEN_REGEX = "|".join(WORD_NUMBER_MAP.keys())
+WORD_NUMBER_SEQUENCE_PATTERN = re.compile(
+    rf"(?<![A-Za-z])(?:{WORD_NUMBER_TOKEN_REGEX})(?:[\s\-]+(?:{WORD_NUMBER_TOKEN_REGEX}))+(?![A-Za-z])",
+    re.IGNORECASE,
+)
+WORD_NUMBER_TOKEN_FINDER = re.compile(rf"(?:{WORD_NUMBER_TOKEN_REGEX})", re.IGNORECASE)
 
 
 # Helper data structure for category-based detection
@@ -144,9 +168,9 @@ class ContentFilterGuardrail(CustomGuardrail):
         self.image_model = image_model
         # Store loaded categories
         self.loaded_categories: Dict[str, CategoryConfig] = {}
-        self.category_keywords: Dict[str, Tuple[str, str, ContentFilterAction]] = (
-            {}
-        )  # keyword -> (category, severity, action)
+        self.category_keywords: Dict[
+            str, Tuple[str, str, ContentFilterAction]
+        ] = {}  # keyword -> (category, severity, action)
 
         # Load categories if provided
         if categories:
@@ -170,9 +194,18 @@ class ContentFilterGuardrail(CustomGuardrail):
                     normalized_blocked_words.append(word)
 
         # Compile regex patterns
-        self.compiled_patterns: List[Tuple[Pattern, str, ContentFilterAction]] = []
+        self.compiled_patterns: List[Dict[str, Any]] = []
         for pattern_config in normalized_patterns:
             self._add_pattern(pattern_config)
+
+        # Warn if using during_call with MASK action (unstable)
+        if self.event_hook == GuardrailEventHooks.during_call and any(
+            p["action"] == ContentFilterAction.MASK for p in self.compiled_patterns
+        ):
+            verbose_proxy_logger.warning(
+                f"ContentFilterGuardrail '{self.guardrail_name}': 'during_call' mode with 'MASK' action is unstable due to race conditions. "
+                "Use 'pre_call' mode for reliable request masking."
+            )
 
         # Load blocked words - always initialize as dict
         self.blocked_words: Dict[str, Tuple[ContentFilterAction, Optional[str]]] = {}
@@ -323,11 +356,13 @@ class ContentFilterGuardrail(CustomGuardrail):
             pattern_config: ContentFilterPattern configuration
         """
         try:
+            extra_config: Dict[str, Any] = {}
             if pattern_config.pattern_type == "prebuilt":
                 if not pattern_config.pattern_name:
                     raise ValueError("pattern_name is required for prebuilt patterns")
                 compiled = get_compiled_pattern(pattern_config.pattern_name)
                 pattern_name = pattern_config.pattern_name
+                extra_config = PATTERN_EXTRA_CONFIG.get(pattern_name, {}) or {}
             elif pattern_config.pattern_type == "regex":
                 if not pattern_config.pattern:
                     raise ValueError("pattern is required for regex patterns")
@@ -336,8 +371,20 @@ class ContentFilterGuardrail(CustomGuardrail):
             else:
                 raise ValueError(f"Unknown pattern_type: {pattern_config.pattern_type}")
 
+            keyword_regex: Optional[Pattern] = None
+            if extra_config.get("keyword_pattern"):
+                keyword_regex = re.compile(
+                    extra_config["keyword_pattern"], re.IGNORECASE
+                )
+
             self.compiled_patterns.append(
-                (compiled, pattern_name, pattern_config.action)
+                {
+                    "regex": compiled,
+                    "pattern_name": pattern_name,
+                    "action": pattern_config.action,
+                    "keyword_regex": keyword_regex,
+                    "allow_word_numbers": bool(extra_config.get("allow_word_numbers")),
+                }
             )
             verbose_proxy_logger.debug(
                 f"Added pattern: {pattern_name} with action {pattern_config.action}"
@@ -395,6 +442,130 @@ class ContentFilterGuardrail(CustomGuardrail):
         except Exception as e:
             raise Exception(f"Error loading blocked words file {file_path}: {str(e)}")
 
+    def _find_pattern_spans(
+        self, text: str, pattern_entry: Dict[str, Any]
+    ) -> List[Tuple[int, int]]:
+        """Return all match spans for a pattern, applying contextual rules if required."""
+
+        regex: Pattern = pattern_entry["regex"]
+        keyword_regex: Optional[Pattern] = pattern_entry.get("keyword_regex")
+        allow_word_numbers: bool = pattern_entry.get("allow_word_numbers", False)
+
+        keyword_matches: Optional[List[re.Match]] = None
+        if keyword_regex is not None:
+            keyword_matches = list(keyword_regex.finditer(text))
+            if not keyword_matches:
+                return []
+
+        match_spans: List[Tuple[int, int]] = []
+
+        for match in regex.finditer(text):
+            if keyword_matches is not None and not self._match_near_keyword(
+                match.start(), match.end(), keyword_matches, text
+            ):
+                continue
+            match_spans.append((match.start(), match.end()))
+
+        if allow_word_numbers:
+            for word_match in WORD_NUMBER_SEQUENCE_PATTERN.finditer(text):
+                digits = self._convert_word_number_sequence(word_match.group())
+                if not digits:
+                    continue
+                if not regex.fullmatch(digits):
+                    continue
+                if keyword_matches is not None and not self._match_near_keyword(
+                    word_match.start(), word_match.end(), keyword_matches, text
+                ):
+                    continue
+                match_spans.append((word_match.start(), word_match.end()))
+
+        return self._merge_spans(match_spans)
+
+    def _match_near_keyword(
+        self,
+        value_start: int,
+        value_end: int,
+        keyword_matches: List[re.Match],
+        text: str,
+    ) -> bool:
+        """Check if a value is separated from a keyword by an allowed gap."""
+
+        for keyword_match in keyword_matches:
+            keyword_start = keyword_match.start()
+            keyword_end = keyword_match.end()
+
+            if value_start >= keyword_end:
+                gap_text = text[keyword_end:value_start]
+            elif keyword_start >= value_end:
+                gap_text = text[value_end:keyword_start]
+            else:
+                return True  # overlapping
+
+            if self._gap_text_allowed(gap_text):
+                return True
+        return False
+
+    def _gap_text_allowed(self, gap_text: str) -> bool:
+        """Return True if the gap between keyword and value meets word-count rules."""
+
+        if not gap_text.strip():
+            return True
+        if any(char.isdigit() for char in gap_text):
+            return False
+
+        words = GAP_WORD_TOKENIZER.findall(gap_text)
+        return len(words) <= MAX_KEYWORD_VALUE_GAP_WORDS
+
+    def _merge_spans(self, spans: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """Merge overlapping spans to avoid double-masking."""
+
+        if not spans:
+            return []
+
+        spans.sort(key=lambda item: item[0])
+        merged: List[Tuple[int, int]] = [spans[0]]
+
+        for start, end in spans[1:]:
+            last_start, last_end = merged[-1]
+            if start <= last_end:
+                merged[-1] = (last_start, max(last_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _mask_spans(
+        self, text: str, spans: List[Tuple[int, int]], redaction: str
+    ) -> str:
+        """Apply masking for the provided spans using the given redaction tag."""
+
+        if not spans:
+            return text
+
+        result_parts: List[str] = []
+        previous_end = 0
+        for start, end in spans:
+            result_parts.append(text[previous_end:start])
+            result_parts.append(redaction)
+            previous_end = end
+        result_parts.append(text[previous_end:])
+        return "".join(result_parts)
+
+    def _convert_word_number_sequence(self, sequence: str) -> Optional[str]:
+        """Convert a spelled-out digit sequence (e.g., 'One-Two') into digits."""
+
+        tokens = WORD_NUMBER_TOKEN_FINDER.findall(sequence)
+        if not tokens:
+            return None
+
+        digits: List[str] = []
+        for token in tokens:
+            digit = WORD_NUMBER_MAP.get(token.lower())
+            if digit is None:
+                return None
+            digits.append(digit)
+
+        return "".join(digits) if digits else None
+
     def _check_patterns(
         self, text: str
     ) -> Optional[Tuple[str, str, ContentFilterAction]]:
@@ -407,10 +578,13 @@ class ContentFilterGuardrail(CustomGuardrail):
         Returns:
             Tuple of (matched_text, pattern_name, action) if match found, None otherwise
         """
-        for compiled_pattern, pattern_name, action in self.compiled_patterns:
-            match = compiled_pattern.search(text)
-            if match:
-                matched_text = match.group(0)
+        for pattern_entry in self.compiled_patterns:
+            spans = self._find_pattern_spans(text, pattern_entry)
+            if spans:
+                start, end = spans[0]
+                matched_text = text[start:end]
+                pattern_name = pattern_entry["pattern_name"]
+                action = pattern_entry["action"]
                 verbose_proxy_logger.debug(
                     f"Pattern '{pattern_name}' matched: {matched_text[:20]}..."
                 )
@@ -582,11 +756,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                 )
 
         # Check regex patterns - process ALL patterns, not just first match
-        for compiled_pattern, pattern_name, action in self.compiled_patterns:
-            match = compiled_pattern.search(text)
-            if not match:
+        for pattern_entry in self.compiled_patterns:
+            spans = self._find_pattern_spans(text, pattern_entry)
+            if not spans:
                 continue
 
+            pattern_name = pattern_entry["pattern_name"]
+            action = pattern_entry["action"]
             if detections is not None:
                 # Don't log matched_text to avoid exposing sensitive content (emails, credit cards, etc.)
                 pattern_detection: PatternDetection = {
@@ -604,11 +780,10 @@ class ContentFilterGuardrail(CustomGuardrail):
                     detail={"error": error_msg, "pattern": pattern_name},
                 )
             elif action == ContentFilterAction.MASK:
-                # Replace ALL matches of this pattern with redaction tag
                 redaction_tag = self.pattern_redaction_format.format(
                     pattern_name=pattern_name.upper()
                 )
-                text = compiled_pattern.sub(redaction_tag, text)
+                text = self._mask_spans(text, spans, redaction_tag)
                 verbose_proxy_logger.info(
                     f"Masked all {pattern_name} matches in content"
                 )
@@ -739,11 +914,15 @@ class ContentFilterGuardrail(CustomGuardrail):
                 elif isinstance(e.detail, str):
                     e.detail = e.detail + " (Image description): " + description
                 else:
-                    e.detail = "Content blocked: Image description detected" + description
+                    e.detail = (
+                        "Content blocked: Image description detected" + description
+                    )
                 raise e
 
     def _count_masked_entities(
-        self, detections: List[ContentFilterDetection], masked_entity_count: Dict[str, int]
+        self,
+        detections: List[ContentFilterDetection],
+        masked_entity_count: Dict[str, int],
     ) -> None:
         """
         Count masked entities by type from detections.
@@ -798,9 +977,11 @@ class ContentFilterGuardrail(CustomGuardrail):
             dict(detection) for detection in detections
         ]
         if status != "success":
-            guardrail_json_response = exception_str if exception_str else [
-                dict(detection) for detection in detections
-            ]
+            guardrail_json_response = (
+                exception_str
+                if exception_str
+                else [dict(detection) for detection in detections]
+            )
 
         self.add_standard_logging_guardrail_information_to_request_data(
             guardrail_provider=self.guardrail_provider,
@@ -900,90 +1081,84 @@ class ContentFilterGuardrail(CustomGuardrail):
         Process streaming response chunks and check for blocked content.
 
         For BLOCK action: Raises HTTPException immediately when blocked content is detected.
-        For MASK action: Content passes through (masking streaming responses is not supported).
+        For MASK action: Content is buffered to handle patterns split across chunks.
         """
+        accumulated_full_text = ""
+        yielded_masked_text_len = 0
+        buffer_size = 50  # Increased buffer to catch patterns split across many chunks
 
-        # Accumulate content as we iterate through chunks
-        accumulated_content = ""
+        verbose_proxy_logger.info(
+            f"ContentFilterGuardrail: Starting robust streaming masking for model {request_data.get('model')}"
+        )
 
         async for item in response:
-            # Accumulate content from this chunk before checking
             if isinstance(item, ModelResponseStream) and item.choices:
+                delta_content = ""
+                is_final = False
                 for choice in item.choices:
                     if hasattr(choice, "delta") and choice.delta:
                         content = getattr(choice.delta, "content", None)
                         if content and isinstance(content, str):
-                            accumulated_content += content
+                            delta_content += content
+                    if getattr(choice, "finish_reason", None):
+                        is_final = True
 
-                # Check accumulated content for blocked patterns/keywords after processing all choices
-                # Only check for BLOCK actions, not MASK (masking streaming is not supported)
-                if accumulated_content:
-                    try:
-                        # Check patterns
-                        pattern_match = self._check_patterns(accumulated_content)
-                        if pattern_match:
-                            matched_text, pattern_name, action = pattern_match
-                            if action == ContentFilterAction.BLOCK:
-                                error_msg = f"Content blocked: {pattern_name} pattern detected"
-                                verbose_proxy_logger.warning(error_msg)
-                                raise HTTPException(
-                                    status_code=403,
-                                    detail={"error": error_msg, "pattern": pattern_name},
-                                )
+                accumulated_full_text += delta_content
 
-                        # Check blocked words
-                        blocked_word_match = self._check_blocked_words(accumulated_content)
-                        if blocked_word_match:
-                            keyword, action, description = blocked_word_match
-                            if action == ContentFilterAction.BLOCK:
-                                error_msg = f"Content blocked: keyword '{keyword}' detected"
-                                if description:
-                                    error_msg += f" ({description})"
-                                verbose_proxy_logger.warning(error_msg)
-                                raise HTTPException(
-                                    status_code=403,
-                                    detail={
-                                        "error": error_msg,
-                                        "keyword": keyword,
-                                        "description": description,
-                                    },
-                                )
+                # Check for blocking or apply masking
+                # Add a space at the end if it's the final chunk to trigger word boundaries (\b)
+                text_to_check = accumulated_full_text
+                if is_final:
+                    text_to_check += " "
 
-                        # Check category keywords
-                        all_exceptions = []
-                        for category in self.loaded_categories.values():
-                            all_exceptions.extend(category.exceptions)
-                        category_match = self._check_category_keywords(
-                            accumulated_content, all_exceptions
-                        )
-                        if category_match:
-                            keyword, category_name, severity, action = category_match
-                            if action == ContentFilterAction.BLOCK:
-                                error_msg = (
-                                    f"Content blocked: {category_name} category keyword '{keyword}' detected "
-                                    f"(severity: {severity})"
-                                )
-                                verbose_proxy_logger.warning(error_msg)
-                                raise HTTPException(
-                                    status_code=403,
-                                    detail={
-                                        "error": error_msg,
-                                        "category": category_name,
-                                        "keyword": keyword,
-                                        "severity": severity,
-                                    },
-                                )
-                    except HTTPException:
-                        # Re-raise HTTPException (blocked content detected)
-                        raise
-                    except Exception as e:
-                        # Log other exceptions but don't block the stream
-                        verbose_proxy_logger.warning(
-                            f"Error checking content filter in streaming: {e}"
-                        )
+                try:
+                    masked_text = self._filter_single_text(text_to_check)
+                    if is_final and masked_text.endswith(" "):
+                        masked_text = masked_text[:-1]
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    verbose_proxy_logger.error(
+                        f"ContentFilterGuardrail: Error in masking: {e}"
+                    )
+                    masked_text = text_to_check  # Fallback to current text
 
-            # Yield the chunk (only if no exception was raised above)
-            yield item
+                # Determine how much can be safely yielded
+                if is_final:
+                    safe_to_yield_len = len(masked_text)
+                else:
+                    safe_to_yield_len = max(0, len(masked_text) - buffer_size)
+
+                if safe_to_yield_len > yielded_masked_text_len:
+                    new_masked_content = masked_text[
+                        yielded_masked_text_len:safe_to_yield_len
+                    ]
+                    # Modify the chunk to contain only the new masked content
+                    if (
+                        item.choices
+                        and hasattr(item.choices[0], "delta")
+                        and item.choices[0].delta
+                    ):
+                        item.choices[0].delta.content = new_masked_content
+                        yielded_masked_text_len = safe_to_yield_len
+                        yield item
+                else:
+                    # Hold content by yielding empty content chunk (keeps metadata/structure)
+                    if (
+                        item.choices
+                        and hasattr(item.choices[0], "delta")
+                        and item.choices[0].delta
+                    ):
+                        item.choices[0].delta.content = ""
+                    yield item
+            else:
+                # Not a ModelResponseStream or no choices - yield as is
+                yield item
+
+        # Any remaining content (should have been handled by is_final, but just in case)
+        if yielded_masked_text_len < len(accumulated_full_text):
+            # We already reached the end of the generator
+            pass
 
     @staticmethod
     def get_config_model():

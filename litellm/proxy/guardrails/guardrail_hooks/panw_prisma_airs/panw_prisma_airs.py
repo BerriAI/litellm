@@ -62,6 +62,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         app_name: Optional[str] = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
+        violation_message_template: Optional[str] = None,
         **kwargs,
     ):
         """Initialize PANW Prisma AIRS guardrail handler."""
@@ -77,6 +78,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             default_on=default_on,
             mask_request_content=_mask_request_content,
             mask_response_content=_mask_response_content,
+            violation_message_template=violation_message_template,
             **kwargs,
         )
 
@@ -489,7 +491,18 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         detection_key = "response_detected" if is_response else "prompt_detected"
 
         category = scan_result.get("category", "unknown")
-        error_msg = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
+        default_msg = f"{action_type} blocked by PANW Prisma AI Security policy (Category: {category})"
+
+        # Use custom violation message template if configured
+        error_msg = self.render_violation_message(
+            default=default_msg,
+            context={
+                "guardrail_name": self.guardrail_name,
+                "category": category,
+                "action_type": action_type,
+                "default_message": default_msg,
+            },
+        )
 
         error_detail = {
             "error": {

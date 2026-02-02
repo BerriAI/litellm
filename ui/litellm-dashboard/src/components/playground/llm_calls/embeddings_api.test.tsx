@@ -3,6 +3,7 @@ import { makeOpenAIEmbeddingsRequest } from "./embeddings_api";
 
 vi.mock("@/components/networking", () => ({
   getProxyBaseUrl: vi.fn(() => "https://example.com"),
+  getGlobalLitellmHeaderName: vi.fn(() => "Authorization"),
 }));
 
 describe("embeddings_api", () => {

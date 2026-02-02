@@ -1,6 +1,9 @@
+import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import UserSearchModal from "@/components/common_components/user_search_modal";
 import {
   getGuardrailsList,
+  getPoliciesList,
+  getPolicyInfoWithGuardrails,
   Member,
   Organization,
   organizationInfoCall,
@@ -12,6 +15,7 @@ import {
 } from "@/components/networking";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { mapEmptyStringToNull } from "@/utils/keyUpdateUtils";
+import { isProxyAdminRole } from "@/utils/roles";
 import { InfoCircleOutlined } from "@ant-design/icons";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import {
@@ -34,11 +38,13 @@ import React, { useEffect, useMemo, useState } from "react";
 import { copyToClipboard as utilCopyToClipboard } from "../../utils/dataUtils";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
+import DurationSelect from "../common_components/DurationSelect";
 import PassThroughRoutesSelector from "../common_components/PassThroughRoutesSelector";
-import { getModelDisplayName, unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
+import { unfurlWildcardModelsInList } from "../key_team_helpers/fetch_available_models_team_key";
 import LoggingSettingsView from "../logging_settings_view";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "../mcp_server_management/MCPToolPermissions";
+import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
 import { fetchMCPAccessGroups } from "../networking";
 import ObjectPermissionsView from "../object_permissions_view";
@@ -48,7 +54,6 @@ import EditLoggingSettings from "./EditLoggingSettings";
 import MemberModal from "./EditMembership";
 import MemberPermissions from "./member_permissions";
 import TeamMembersComponent from "./team_member_view";
-import DurationSelect from "../common_components/DurationSelect";
 
 export interface TeamMembership {
   user_id: string;
@@ -91,6 +96,8 @@ export interface TeamData {
       model_aliases: Record<string, string>;
     } | null;
     created_at: string;
+    guardrails?: string[];
+    policies?: string[];
     object_permission?: {
       object_permission_id: string;
       mcp_servers: string[];
@@ -168,13 +175,15 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [mcpAccessGroupsLoaded, setMcpAccessGroupsLoaded] = useState(false);
   const [copiedStates, setCopiedStates] = useState<Record<string, boolean>>({});
   const [guardrailsList, setGuardrailsList] = useState<string[]>([]);
+  const [policiesList, setPoliciesList] = useState<string[]>([]);
+  const [policyGuardrails, setPolicyGuardrails] = useState<Record<string, string[]>>({});
+  const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<Member | null>(null);
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isTeamSaving, setIsTeamSaving] = useState(false);
   const [organization, setOrganization] = useState<Organization | null>(null);
-
-  console.log("userModels in team info", userModels);
+  const { userRole } = useAuthorized();
 
   const canEditTeam = is_team_admin || is_proxy_admin;
 
@@ -245,8 +254,53 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
       }
     };
 
+    const fetchPolicies = async () => {
+      try {
+        if (!accessToken) return;
+        const response = await getPoliciesList(accessToken);
+        const policyNames = response.policies.map((p: { policy_name: string }) => p.policy_name);
+        setPoliciesList(policyNames);
+      } catch (error) {
+        console.error("Failed to fetch policies:", error);
+      }
+    };
+
     fetchGuardrails();
+    fetchPolicies();
   }, [accessToken]);
+
+  // Fetch resolved guardrails for all policies
+  useEffect(() => {
+    const fetchPolicyGuardrails = async () => {
+      if (!accessToken || !teamData?.team_info?.policies || teamData.team_info.policies.length === 0) {
+        return;
+      }
+
+      setLoadingPolicies(true);
+      const guardrailsMap: Record<string, string[]> = {};
+
+      try {
+        await Promise.all(
+          teamData.team_info.policies.map(async (policyName: string) => {
+            try {
+              const policyInfo = await getPolicyInfoWithGuardrails(accessToken, policyName);
+              guardrailsMap[policyName] = policyInfo.resolved_guardrails || [];
+            } catch (error) {
+              console.error(`Failed to fetch guardrails for policy ${policyName}:`, error);
+              guardrailsMap[policyName] = [];
+            }
+          })
+        );
+        setPolicyGuardrails(guardrailsMap);
+      } catch (error) {
+        console.error("Failed to fetch policy guardrails:", error);
+      } finally {
+        setLoadingPolicies(false);
+      }
+    };
+
+    fetchPolicyGuardrails();
+  }, [accessToken, teamData?.team_info?.policies]);
 
   const handleMemberCreate = async (values: any) => {
     try {
@@ -410,6 +464,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
           logging: values.logging_settings || [],
           ...(secretManagerSettings !== undefined ? { secret_manager_settings: secretManagerSettings } : {}),
         },
+        policies: values.policies || [],
         organization_id: values.organization_id,
       };
 
@@ -601,6 +656,56 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 accessToken={accessToken}
               />
 
+              <Card>
+                <Text className="font-semibold text-gray-900 mb-3">Guardrails</Text>
+                {info.guardrails && info.guardrails.length > 0 ? (
+                  <div className="flex flex-wrap gap-2">
+                    {info.guardrails.map((guardrail: string, index: number) => (
+                      <Badge key={index} color="blue">
+                        {guardrail}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No guardrails configured</Text>
+                )}
+                {info.metadata?.disable_global_guardrails && (
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <Badge color="yellow">Global Guardrails Disabled</Badge>
+                  </div>
+                )}
+              </Card>
+
+              <Card>
+                <Text className="font-semibold text-gray-900 mb-3">Policies</Text>
+                {info.policies && info.policies.length > 0 ? (
+                  <div className="space-y-4">
+                    {info.policies.map((policy: string, index: number) => (
+                      <div key={index} className="space-y-2">
+                        <div className="flex items-center gap-2">
+                          <Badge color="purple">{policy}</Badge>
+                          {loadingPolicies && <Text className="text-xs text-gray-400">Loading guardrails...</Text>}
+                        </div>
+                        {!loadingPolicies && policyGuardrails[policy] && policyGuardrails[policy].length > 0 && (
+                          <div className="ml-4 pl-3 border-l-2 border-gray-200">
+                            <Text className="text-xs text-gray-500 mb-1">Resolved Guardrails:</Text>
+                            <div className="flex flex-wrap gap-1">
+                              {policyGuardrails[policy].map((guardrail: string, gIndex: number) => (
+                                <Badge key={gIndex} color="blue" size="xs">
+                                  {guardrail}
+                                </Badge>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <Text className="text-gray-500">No policies configured</Text>
+                )}
+              </Card>
+
               <LoggingSettingsView
                 loggingConfigs={info.metadata?.logging || []}
                 disabledCallbacks={[]}
@@ -655,6 +760,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     team_member_budget: info.team_member_budget_table?.max_budget,
                     team_member_budget_duration: info.team_member_budget_table?.budget_duration,
                     guardrails: info.metadata?.guardrails || [],
+                    policies: info.policies || [],
                     disable_global_guardrails: info.metadata?.disable_global_guardrails || false,
                     metadata: info.metadata
                       ? JSON.stringify(
@@ -696,47 +802,19 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     name="models"
                     rules={[{ required: true, message: "Please select at least one model" }]}
                   >
-                    <Select mode="multiple" placeholder="Select models">
-                      {(() => {
-                        let shouldShowAllProxyModels = false;
-
-                        if (organization) {
-                          // Team is in an organization
-                          if (organization.models.length === 0 || organization.models.includes("all-proxy-models")) {
-                            // Organization has empty array [] or "all-proxy-models"
-                            shouldShowAllProxyModels = true;
-                          }
-                          // Otherwise (organization has specific models), don't show "all-proxy-models"
-                        } else {
-                          // Team is not in an organization
-                          shouldShowAllProxyModels = is_proxy_admin || userModels.includes("all-proxy-models");
-                        }
-
-                        return shouldShowAllProxyModels ? (
-                          <Select.Option key="all-proxy-models" value="all-proxy-models">
-                            All Proxy Models
-                          </Select.Option>
-                        ) : null;
-                      })()}
-                      {(() => {
-                        // Show "no-default-models" option if:
-                        // 1. Team is not in an organization, OR
-                        // 2. Team is in an organization and organization's models include "no-default-models"
-                        const shouldShowNoDefaultModels =
-                          !organization || organization.models.includes("no-default-models");
-
-                        return shouldShowNoDefaultModels ? (
-                          <Select.Option key="no-default-models" value="no-default-models">
-                            No Default Models
-                          </Select.Option>
-                        ) : null;
-                      })()}
-                      {Array.from(new Set(modelsToPick)).map((model, idx) => (
-                        <Select.Option key={idx} value={model}>
-                          {getModelDisplayName(model)}
-                        </Select.Option>
-                      ))}
-                    </Select>
+                    <ModelSelect
+                      value={form.getFieldValue("models") || []}
+                      onChange={(values) => form.setFieldValue("models", values)}
+                      teamID={teamId}
+                      organizationID={teamData?.team_info?.organization_id || undefined}
+                      options={{
+                        includeSpecialOptions: true,
+                        includeUserModels: !teamData?.team_info?.organization_id,
+                        showAllProxyModelsOverride: isProxyAdminRole(userRole) && !teamData?.team_info?.organization_id,
+                      }}
+                      context="team"
+                      dataTestId="models-select"
+                    />
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
@@ -838,6 +916,32 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     help="Bypass global guardrails for this team"
                   >
                     <Switch checkedChildren="Yes" unCheckedChildren="No" />
+                  </Form.Item>
+
+                  <Form.Item
+                    label={
+                      <span>
+                        Policies{" "}
+                        <Tooltip title="Apply policies to this team to control guardrails and other settings">
+                          <a
+                            href="https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <InfoCircleOutlined style={{ marginLeft: "4px" }} />
+                          </a>
+                        </Tooltip>
+                      </span>
+                    }
+                    name="policies"
+                    help="Select existing policies or enter new ones"
+                  >
+                    <Select
+                      mode="tags"
+                      placeholder="Select or enter policies"
+                      options={policiesList.map((name) => ({ value: name, label: name }))}
+                    />
                   </Form.Item>
 
                   <Form.Item label="Vector Stores" name="vector_stores" aria-label="Vector Stores">

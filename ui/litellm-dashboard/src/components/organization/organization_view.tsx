@@ -1,4 +1,6 @@
+import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { formatNumberWithCommas, copyToClipboard as utilCopyToClipboard } from "@/utils/dataUtils";
+import { createTeamAliasMap } from "@/utils/teamUtils";
 import { ArrowLeftIcon, PencilAltIcon, TrashIcon } from "@heroicons/react/outline";
 import {
   Badge,
@@ -23,10 +25,10 @@ import {
 } from "@tremor/react";
 import { Button, Form, Input, Select } from "antd";
 import { CheckIcon, CopyIcon } from "lucide-react";
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import UserSearchModal from "../common_components/user_search_modal";
-import { getModelDisplayName } from "../key_team_helpers/fetch_available_models_team_key";
 import MCPServerSelector from "../mcp_server_management/MCPServerSelector";
+import { ModelSelect } from "../ModelSelect/ModelSelect";
 import NotificationsManager from "../molecules/notifications_manager";
 import {
   Member,
@@ -41,8 +43,6 @@ import ObjectPermissionsView from "../object_permissions_view";
 import NumericalInput from "../shared/numerical_input";
 import MemberModal from "../team/EditMembership";
 import VectorStoreSelector from "../vector_store_management/VectorStoreSelector";
-import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { createTeamAliasMap } from "@/utils/teamUtils";
 
 interface OrganizationInfoProps {
   organizationId: string;
@@ -239,11 +239,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
               size="small"
               icon={copiedStates["org-id"] ? <CheckIcon size={12} /> : <CopyIcon size={12} />}
               onClick={() => copyToClipboard(orgData.organization_id, "org-id")}
-              className={`left-2 z-10 transition-all duration-200 ${
-                copiedStates["org-id"]
-                  ? "text-green-600 bg-green-50 border-green-200"
-                  : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
-              }`}
+              className={`left-2 z-10 transition-all duration-200 ${copiedStates["org-id"]
+                ? "text-green-600 bg-green-50 border-green-200"
+                : "text-gray-500 hover:text-gray-700 hover:bg-gray-100"
+                }`}
             />
           </div>
         </div>
@@ -452,16 +451,15 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                   </Form.Item>
 
                   <Form.Item label="Models" name="models">
-                    <Select mode="multiple" placeholder="Select models">
-                      <Select.Option key="all-proxy-models" value="all-proxy-models">
-                        All Proxy Models
-                      </Select.Option>
-                      {userModels.map((model) => (
-                        <Select.Option key={model} value={model}>
-                          {getModelDisplayName(model)}
-                        </Select.Option>
-                      ))}
-                    </Select>
+                    <ModelSelect
+                      value={form.getFieldValue("models")}
+                      onChange={(values) => form.setFieldValue("models", values)}
+                      context="organization"
+                      options={{
+                        includeSpecialOptions: true,
+                        showAllProxyModelsOverride: true,
+                      }}
+                    />
                   </Form.Item>
 
                   <Form.Item label="Max Budget (USD)" name="max_budget">
