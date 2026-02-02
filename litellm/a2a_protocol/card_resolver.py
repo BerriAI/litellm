@@ -36,13 +36,18 @@ class LiteLLMA2ACardResolver(_A2AResolverBase):  # type: ignore[misc]
     break LiteLLM imports when `a2a` is absent.
     """
 
-    def __init__(self, *args: Any, **kwargs: Any):
+    def __init__(
+        self,
+        httpx_client: Any,
+        base_url: str,
+        agent_card_path: str = AGENT_CARD_WELL_KNOWN_PATH,
+    ) -> None:
         if _A2ACardResolver is None:
             raise ImportError(
                 "The optional 'a2a' dependency is required for A2A agent card "
                 "resolution. Install it to use A2A features."
             )
-        super().__init__(*args, **kwargs)
+        super().__init__(httpx_client, base_url, agent_card_path)
 
     async def get_agent_card(
         self,
@@ -68,7 +73,7 @@ class LiteLLMA2ACardResolver(_A2AResolverBase):  # type: ignore[misc]
             PREV_AGENT_CARD_WELL_KNOWN_PATH,
         ]
 
-        last_error = None
+        last_error: Optional[BaseException] = None
         for path in paths:
             try:
                 verbose_logger.debug(
@@ -85,9 +90,6 @@ class LiteLLMA2ACardResolver(_A2AResolverBase):  # type: ignore[misc]
                 last_error = e
                 continue
 
-        if last_error is not None:
-            raise last_error
-
-        raise Exception(
+        raise RuntimeError(
             f"Failed to fetch agent card from {self.base_url}. Tried paths: {', '.join(paths)}"
-        )
+        ) from last_error

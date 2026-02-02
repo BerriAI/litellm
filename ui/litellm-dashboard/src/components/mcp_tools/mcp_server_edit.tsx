@@ -460,7 +460,8 @@ const MCPServerEdit: React.FC<MCPServerEditProps> = ({
         mcpServer.server_name ||
         mcpServer.url ||
         restValues.alias ||
-        mcpServer.alias;
+        mcpServer.alias ||
+        "unknown";
 
       const payload: Record<string, any> = {
         ...restValues,

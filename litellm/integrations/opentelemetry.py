@@ -1008,7 +1008,6 @@ class OpenTelemetry(CustomLogger):
         # TODO: Refactor to use the proper OTEL Logs API instead of directly creating SDK LogRecords
 
         from opentelemetry._logs import SeverityNumber, get_logger, get_logger_provider
-        from typing import TYPE_CHECKING
 
         # MyPy should prefer the OTEL >=1.39.0 typing location.
         # At runtime, keep a backwards-compatible fallback.
@@ -1021,7 +1020,7 @@ class OpenTelemetry(CustomLogger):
                 from opentelemetry.sdk._logs._internal import (
                     LogRecord as SdkLogRecord,
                 )
-            except Exception:
+            except ImportError:
                 from opentelemetry.sdk._logs import (  # type: ignore[attr-defined]
                     LogRecord as SdkLogRecord,
                 )
@@ -1054,8 +1053,6 @@ class OpenTelemetry(CustomLogger):
 
             # OTEL SDK >= 1.39.0 LogRecord no longer accepts `resource`.
             try:
-                from typing import Any, cast
-
                 sdk_log_record_ctor = cast(Any, SdkLogRecord)
                 return sdk_log_record_ctor(resource=resource, **common_kwargs)
             except TypeError:
