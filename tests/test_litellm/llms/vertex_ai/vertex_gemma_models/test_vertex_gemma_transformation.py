@@ -5,11 +5,16 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 """
 
 import json
-from unittest.mock import AsyncMock, Mock, patch
+import sys
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 
+# Skip entire module if vertexai is not installed
+pytest.importorskip("vertexai", reason="google-cloud-aiplatform not installed")
+
 import litellm
+
 
 @pytest.fixture(autouse=True)
 def _reset_litellm_http_client_cache():

@@ -12,6 +12,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+# Skip entire module if a2a SDK is not installed
+pytest.importorskip("a2a", reason="a2a-sdk not installed")
+
 
 class TestA2AStreamingTransformation:
     """Test the A2A streaming transformation creates proper events."""

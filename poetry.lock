@@ -719,7 +719,7 @@ files = [
     {file = "cffi-2.0.0-cp39-cp39-win_amd64.whl", hash = "sha256:b882b3df248017dba09d6b16defe9b5c407fe32fc7c65a9c69798e6175601be9"},
     {file = "cffi-2.0.0.tar.gz", hash = "sha256:44d1b5909021139fe36001ae048dbdde8214afa20200eda0f64c068cac5d5529"},
 ]
-markers = {main = "(platform_python_implementation != \"PyPy\" or extra == \"proxy\") and (python_version >= \"3.10\" or extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\") and (extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\")", dev = "platform_python_implementation != \"PyPy\"", proxy-dev = "platform_python_implementation != \"PyPy\""}
+markers = {main = "(extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\" or python_version >= \"3.10\") and (extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\") and (platform_python_implementation != \"PyPy\" or extra == \"proxy\")", dev = "platform_python_implementation != \"PyPy\"", proxy-dev = "platform_python_implementation != \"PyPy\""}
 
 [package.dependencies]
 pycparser = {version = "*", markers = "implementation_name != \"PyPy\""}
@@ -903,7 +903,7 @@ files = [
     {file = "colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6"},
     {file = "colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44"},
 ]
-markers = {main = "platform_system == \"Windows\" or sys_platform == \"win32\" and python_version < \"3.14\" and (extra == \"utils\" or extra == \"semantic-router\") or sys_platform == \"win32\" and extra == \"utils\" or python_version < \"3.14\" and extra == \"semantic-router\"", dev = "platform_system == \"Windows\" or sys_platform == \"win32\"", proxy-dev = "platform_system == \"Windows\""}
+markers = {main = "platform_system == \"Windows\" or sys_platform == \"win32\" and python_version < \"3.14\" and (extra == \"utils\" or extra == \"semantic-router\") or sys_platform == \"win32\" and extra == \"utils\" or python_version <= \"3.13\" and extra == \"semantic-router\"", dev = "platform_system == \"Windows\" or sys_platform == \"win32\"", proxy-dev = "platform_system == \"Windows\""}
 
 [[package]]
 name = "coloredlogs"
@@ -1396,7 +1396,7 @@ description = "Parse Python docstrings in reST, Google and Numpydoc format"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"google\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "docstring_parser-0.17.0-py3-none-any.whl", hash = "sha256:cf2569abd23dce8099b300f9b4fa8191e9582dda731fd533daf54c4551658708"},
     {file = "docstring_parser-0.17.0.tar.gz", hash = "sha256:583de4a309722b3315439bb31d64ba3eebada841f2e2cee23b99df001434c912"},
@@ -2071,7 +2071,7 @@ description = "Google API client core library"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "python_version < \"3.14\" and (extra == \"extra-proxy\" or extra == \"google\") or python_version == \"3.9\" and (extra == \"google\" or extra == \"extra-proxy\")"
+markers = "(extra == \"extra-proxy\" or extra == \"google\") and python_version < \"3.14\""
 files = [
     {file = "google_api_core-2.29.0-py3-none-any.whl", hash = "sha256:d30bc60980daa36e314b5d5a3e5958b0200cb44ca8fa1be2b614e932b75a3ea9"},
     {file = "google_api_core-2.29.0.tar.gz", hash = "sha256:84181be0f8e6b04006df75ddfe728f24489f0af57c96a529ff7cf45bc28797f7"},
@@ -2108,7 +2108,7 @@ description = "Google Authentication Library"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "(extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\") and python_version >= \"3.10\" or extra == \"google\" or extra == \"extra-proxy\""
+markers = "(extra == \"mlflow\" or extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "google_auth-2.48.0-py3-none-any.whl", hash = "sha256:2e2a537873d449434252a9632c28bfc268b0adb1e53f9fb62afc5333a975903f"},
     {file = "google_auth-2.48.0.tar.gz", hash = "sha256:4f7e706b0cd3208a3d940a19a822c37a476ddba5450156c3e6624a71f7c841ce"},
@@ -2138,7 +2138,7 @@ description = "Vertex AI API client library"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"google\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "google_cloud_aiplatform-1.135.0-py2.py3-none-any.whl", hash = "sha256:32b53ee61b3f51b14e21dc98fa9d9021c5db171cf7a407bd71abd3da46f5a6a4"},
     {file = "google_cloud_aiplatform-1.135.0.tar.gz", hash = "sha256:1e42fc4c38147066ad05d93cb9208201514d359fb2a64663333cea2d1ec9ab42"},
@@ -2200,7 +2200,7 @@ description = "Google BigQuery API client library"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"google\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "google_cloud_bigquery-3.40.0-py3-none-any.whl", hash = "sha256:0469bcf9e3dad3cab65b67cce98180c8c0aacf3253d47f0f8e976f299b49b5ab"},
     {file = "google_cloud_bigquery-3.40.0.tar.gz", hash = "sha256:b3ccb11caf0029f15b29569518f667553fe08f6f1459b959020c83fbbd8f2e68"},
@@ -2234,7 +2234,7 @@ description = "Google Cloud API client core library"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"google\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "google_cloud_core-2.5.0-py3-none-any.whl", hash = "sha256:67d977b41ae6c7211ee830c7912e41003ea8194bff15ae7d72fd6f51e57acabc"},
     {file = "google_cloud_core-2.5.0.tar.gz", hash = "sha256:7c1b7ef5c92311717bd05301aa1a91ffbc565673d3b0b4163a52d8413a186963"},
@@ -2301,7 +2301,7 @@ description = "Google Cloud Resource Manager API client library"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"google\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "google_cloud_resource_manager-1.16.0-py3-none-any.whl", hash = "sha256:fb9a2ad2b5053c508e1c407ac31abfd1a22e91c32876c1892830724195819a28"},
     {file = "google_cloud_resource_manager-1.16.0.tar.gz", hash = "sha256:cc938f87cc36c2672f062b1e541650629e0d954c405a4dac35ceedee70c267c3"},
@@ -2328,7 +2328,7 @@ description = "Google Cloud Storage API client library"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"google\" and python_version >= \"3.14\""
+markers = "(extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.14\""
 files = [
     {file = "google_cloud_storage-3.4.1-py3-none-any.whl", hash = "sha256:972764cc0392aa097be8f49a5354e22eb47c3f62370067fb1571ffff4a1c1189"},
     {file = "google_cloud_storage-3.4.1.tar.gz", hash = "sha256:6f041a297e23a4b485fad8c305a7a6e6831855c208bcbe74d00332a909f82268"},
@@ -2353,7 +2353,7 @@ description = "Google Cloud Storage API client library"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"google\" and python_version < \"3.14\""
+markers = "(extra == \"extra-proxy\" or extra == \"google\") and python_version < \"3.14\""
 files = [
     {file = "google_cloud_storage-3.8.0-py3-none-any.whl", hash = "sha256:78cfeae7cac2ca9441d0d0271c2eb4ebfa21aa4c6944dd0ccac0389e81d955a7"},
     {file = "google_cloud_storage-3.8.0.tar.gz", hash = "sha256:cc67952dce84ebc9d44970e24647a58260630b7b64d72360cedaf422d6727f28"},
@@ -2379,7 +2379,7 @@ description = "A python wrapper of the C library 'Google CRC32C'"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"google\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "google_crc32c-1.8.0-cp310-cp310-macosx_12_0_arm64.whl", hash = "sha256:0470b8c3d73b5f4e3300165498e4cf25221c7eb37f1159e221d1825b6df8a7ff"},
     {file = "google_crc32c-1.8.0-cp310-cp310-macosx_12_0_x86_64.whl", hash = "sha256:119fcd90c57c89f30040b47c211acee231b25a45d225e3225294386f5d258288"},
@@ -2423,7 +2423,7 @@ description = "GenAI Python SDK"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"google\" and python_version == \"3.9\""
+markers = "python_version == \"3.9\" and (extra == \"extra-proxy\" or extra == \"google\")"
 files = [
     {file = "google_genai-1.47.0-py3-none-any.whl", hash = "sha256:e3851237556cbdec96007d8028b4b1f2425cdc5c099a8dc36b72a57e42821b60"},
     {file = "google_genai-1.47.0.tar.gz", hash = "sha256:ecece00d0a04e6739ea76cc8dad82ec9593d9380aaabef078990e60574e5bf59"},
@@ -2450,7 +2450,7 @@ description = "GenAI Python SDK"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "python_version >= \"3.10\" and extra == \"google\""
+markers = "python_version >= \"3.10\" and (extra == \"extra-proxy\" or extra == \"google\")"
 files = [
     {file = "google_genai-1.60.0-py3-none-any.whl", hash = "sha256:967338378ffecebec19a8ed90cf8797b26818bacbefd7846a9280beb1099f7f3"},
     {file = "google_genai-1.60.0.tar.gz", hash = "sha256:9768061775fddfaecfefb0d6d7a6cabefb3952ebd246cd5f65247151c07d33d1"},
@@ -2479,7 +2479,7 @@ description = "Utilities for Google Media Downloads and Resumable Uploads"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"google\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "google_resumable_media-2.8.0-py3-none-any.whl", hash = "sha256:dd14a116af303845a8d932ddae161a26e86cc229645bc98b39f026f9b1717582"},
     {file = "google_resumable_media-2.8.0.tar.gz", hash = "sha256:f1157ed8b46994d60a1bc432544db62352043113684d4e030ee02e77ebe9a1ae"},
@@ -2571,7 +2571,7 @@ description = "Lightweight in-process concurrent programming"
 optional = true
 python-versions = ">=3.10"
 groups = ["main"]
-markers = "python_version >= \"3.10\" and extra == \"mlflow\" and (platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\")"
+markers = "python_version >= \"3.10\" and (platform_machine == \"aarch64\" or platform_machine == \"ppc64le\" or platform_machine == \"x86_64\" or platform_machine == \"amd64\" or platform_machine == \"AMD64\" or platform_machine == \"win32\" or platform_machine == \"WIN32\") and extra == \"mlflow\""
 files = [
     {file = "greenlet-3.3.1-cp310-cp310-macosx_11_0_universal2.whl", hash = "sha256:04bee4775f40ecefcdaa9d115ab44736cd4b9c5fba733575bfe9379419582e13"},
     {file = "greenlet-3.3.1-cp310-cp310-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:50e1457f4fed12a50e427988a07f0f9df53cf0ee8da23fab16e6732c2ec909d4"},
@@ -2753,7 +2753,7 @@ description = "WSGI HTTP Server for UNIX"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "(python_version < \"3.14\" or extra == \"mlflow\" or extra == \"proxy\") and (platform_system != \"Windows\" or extra == \"proxy\") and (extra == \"proxy\" or extra == \"mlflow\") and (python_version >= \"3.10\" or extra == \"proxy\")"
+markers = "(python_version <= \"3.13\" or extra == \"mlflow\" or extra == \"proxy\") and (platform_system != \"Windows\" or extra == \"proxy\") and (extra == \"proxy\" or extra == \"mlflow\") and (python_version >= \"3.10\" or extra == \"proxy\")"
 files = [
     {file = "gunicorn-23.0.0-py3-none-any.whl", hash = "sha256:ec400d38950de4dfd418cff8328b2c8faed0edb0d517d3394e457c317908ca4d"},
     {file = "gunicorn-23.0.0.tar.gz", hash = "sha256:f014447a0101dc57e294f6c18ca6b40227a4c90e9bdb586042628030cba004ec"},
@@ -3926,8 +3926,8 @@ files = [
 numpy = [
     {version = ">1.20"},
     {version = ">=1.23.3", markers = "python_version >= \"3.11\""},
-    {version = ">=1.21.2", markers = "python_version >= \"3.10\""},
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
+    {version = ">=1.21.2", markers = "python_version >= \"3.10\""},
 ]
 
 [package.extras]
@@ -4345,7 +4345,7 @@ description = "Fundamental package for array computing in Python"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "(extra == \"extra-proxy\" or extra == \"semantic-router\" or python_version >= \"3.10\") and (extra == \"extra-proxy\" or extra == \"semantic-router\" or extra == \"mlflow\") and python_version < \"3.12\""
+markers = "python_version < \"3.12\" and (extra == \"extra-proxy\" or extra == \"semantic-router\" or python_version >= \"3.10\") and (extra == \"extra-proxy\" or extra == \"semantic-router\" or extra == \"mlflow\")"
 files = [
     {file = "numpy-1.26.4-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:9ff0f4f29c51e2803569d7a51c2304de5554655a60c5d776e35b4a41413830d0"},
     {file = "numpy-1.26.4-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:2e4ee3380d6de9c9ec04745830fd9e2eccb3e6cf790d39d7b98ffd19b0dd754a"},
@@ -4962,8 +4962,8 @@ files = [
 [package.dependencies]
 numpy = [
     {version = ">=1.23.2", markers = "python_version == \"3.11\""},
-    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
     {version = ">=1.26.0", markers = "python_version >= \"3.12\""},
+    {version = ">=1.22.4", markers = "python_version < \"3.11\""},
 ]
 python-dateutil = ">=2.8.2"
 pytz = ">=2020.1"
@@ -5451,7 +5451,7 @@ description = "Beautiful, Pythonic protocol buffers"
 optional = true
 python-versions = ">=3.7"
 groups = ["main"]
-markers = "extra == \"google\" or extra == \"extra-proxy\""
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "proto_plus-1.27.0-py3-none-any.whl", hash = "sha256:1baa7f81cf0f8acb8bc1f6d085008ba4171eaf669629d1b6d1673b21ed1c0a82"},
     {file = "proto_plus-1.27.0.tar.gz", hash = "sha256:873af56dd0d7e91836aee871e5799e1c6f1bda86ac9a983e0bb9f0c266a568c4"},
@@ -5483,7 +5483,7 @@ files = [
     {file = "protobuf-5.29.5-py3-none-any.whl", hash = "sha256:6cf42630262c59b2d8de33954443d94b746c952b01434fc58a417fdbd2e84bd5"},
     {file = "protobuf-5.29.5.tar.gz", hash = "sha256:bc1463bafd4b0929216c35f437a8e28731a2b7fe3d98bb77a600efced5a15c84"},
 ]
-markers = {main = "(extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\") and python_version >= \"3.10\" or extra == \"google\" or extra == \"extra-proxy\""}
+markers = {main = "(extra == \"mlflow\" or extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"extra-proxy\" or extra == \"google\""}
 
 [[package]]
 name = "pyarrow"
@@ -5553,7 +5553,7 @@ description = "Pure-Python implementation of ASN.1 types and DER/BER/CER codecs 
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "(extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\") and python_version >= \"3.10\" or extra == \"google\" or extra == \"extra-proxy\""
+markers = "(extra == \"mlflow\" or extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "pyasn1-0.6.2-py3-none-any.whl", hash = "sha256:1eb26d860996a18e9b6ed05e7aae0e9fc21619fcee6af91cca9bad4fbea224bf"},
     {file = "pyasn1-0.6.2.tar.gz", hash = "sha256:9b59a2b25ba7e4f8197db7686c09fb33e658b98339fadb826e9512629017833b"},
@@ -5566,7 +5566,7 @@ description = "A collection of ASN.1-based protocols modules"
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "(extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\") and python_version >= \"3.10\" or extra == \"google\" or extra == \"extra-proxy\""
+markers = "(extra == \"mlflow\" or extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "pyasn1_modules-0.4.2-py3-none-any.whl", hash = "sha256:29253a9207ce32b64c3ac6600edc75368f98473906e8fd1043bd6b5b1de2c14a"},
     {file = "pyasn1_modules-0.4.2.tar.gz", hash = "sha256:677091de870a80aae844b1ca6134f54652fa2c8c5a52aa396440ac3106e941e6"},
@@ -5598,7 +5598,7 @@ files = [
     {file = "pycparser-2.23-py3-none-any.whl", hash = "sha256:e5c6e8d3fbad53479cab09ac03729e0a9faf2bee3db8208a550daf5af81a5934"},
     {file = "pycparser-2.23.tar.gz", hash = "sha256:78816d4f24add8f10a06d6f05b4d424ad9e96cfebf68a4ddc99c65c0720d00c2"},
 ]
-markers = {main = "python_version == \"3.9\" and (platform_python_implementation != \"PyPy\" or extra == \"proxy\") and implementation_name != \"PyPy\" and (extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\")", dev = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\" and python_version == \"3.9\"", proxy-dev = "python_version == \"3.9\" and platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""}
+markers = {main = "(extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\") and (platform_python_implementation != \"PyPy\" or extra == \"proxy\") and implementation_name != \"PyPy\" and python_version == \"3.9\"", dev = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\" and python_version == \"3.9\"", proxy-dev = "python_version == \"3.9\" and platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""}
 
 [[package]]
 name = "pycparser"
@@ -5611,7 +5611,7 @@ files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
 ]
-markers = {main = "python_version >= \"3.10\" and (platform_python_implementation != \"PyPy\" or extra == \"proxy\") and implementation_name != \"PyPy\" and (extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\")", dev = "python_version >= \"3.10\" and platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\"", proxy-dev = "python_version >= \"3.10\" and platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""}
+markers = {main = "python_version >= \"3.10\" and (platform_python_implementation != \"PyPy\" or extra == \"proxy\") and (extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\") and implementation_name != \"PyPy\"", dev = "python_version >= \"3.10\" and implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\"", proxy-dev = "python_version >= \"3.10\" and implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\""}
 
 [[package]]
 name = "pydantic"
@@ -5911,7 +5911,7 @@ description = "A python implementation of GNU readline."
 optional = true
 python-versions = ">=3.8"
 groups = ["main"]
-markers = "extra == \"extra-proxy\" and sys_platform == \"win32\" and python_version < \"3.14\""
+markers = "sys_platform == \"win32\" and extra == \"extra-proxy\" and python_version < \"3.14\""
 files = [
     {file = "pyreadline3-3.5.4-py3-none-any.whl", hash = "sha256:eaf8e6cc3c49bcccf145fc6067ba8643d1df34d604a1ec0eccbf7a18e6d3fae6"},
     {file = "pyreadline3-3.5.4.tar.gz", hash = "sha256:8d57d53039a1c75adba8e50dd3d992b28143480816187ea5efbd5c78e6c885b7"},
@@ -6005,7 +6005,7 @@ description = "Extensions to the standard Python datetime module"
 optional = true
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
 groups = ["main"]
-markers = "(extra == \"mlflow\" or extra == \"proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"proxy\" or extra == \"google\""
+markers = "(extra == \"mlflow\" or extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3"},
     {file = "python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427"},
@@ -6078,7 +6078,7 @@ description = "Python for Window Extensions"
 optional = true
 python-versions = "*"
 groups = ["main"]
-markers = "python_version >= \"3.10\" and (extra == \"proxy\" or extra == \"mlflow\") and sys_platform == \"win32\""
+markers = "python_version >= \"3.10\" and sys_platform == \"win32\" and (extra == \"proxy\" or extra == \"mlflow\")"
 files = [
     {file = "pywin32-311-cp310-cp310-win32.whl", hash = "sha256:d03ff496d2a0cd4a5893504789d4a15399133fe82517455e78bad62efbb7f0a3"},
     {file = "pywin32-311-cp310-cp310-win_amd64.whl", hash = "sha256:797c2772017851984b97180b0bebe4b620bb86328e8a884bb626156295a63b3b"},
@@ -6896,7 +6896,7 @@ description = "Pure-Python RSA implementation"
 optional = true
 python-versions = "<4,>=3.6"
 groups = ["main"]
-markers = "(extra == \"extra-proxy\" or extra == \"google\" or extra == \"mlflow\") and python_version >= \"3.10\" or extra == \"google\" or extra == \"extra-proxy\""
+markers = "(extra == \"mlflow\" or extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "rsa-4.9.1-py3-none-any.whl", hash = "sha256:68635866661c6836b8d39430f97a996acbd61bfa49406748ea243539fe239762"},
     {file = "rsa-4.9.1.tar.gz", hash = "sha256:e7bdbfdb5497da4c07dfd35530e1a902659db6ff241e39d9953cad06ebd0ae75"},
@@ -7279,7 +7279,7 @@ description = "Python 2 and 3 compatibility utilities"
 optional = true
 python-versions = "!=3.0.*,!=3.1.*,!=3.2.*,>=2.7"
 groups = ["main"]
-markers = "(extra == \"mlflow\" or extra == \"proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"proxy\" or extra == \"google\""
+markers = "(extra == \"mlflow\" or extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\") and python_version >= \"3.10\" or extra == \"proxy\" or extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274"},
     {file = "six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81"},
@@ -7835,7 +7835,7 @@ description = "Retry code until it succeeds"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "(extra == \"google\" or extra == \"extra-proxy\") and (python_version < \"3.14\" or extra == \"google\")"
+markers = "extra == \"extra-proxy\" or extra == \"google\""
 files = [
     {file = "tenacity-9.1.2-py3-none-any.whl", hash = "sha256:f77bf36710d8b73a50b2dd155c97b870017ad21afe6ab300326b0371b3b05138"},
     {file = "tenacity-9.1.2.tar.gz", hash = "sha256:1169d376c297e7de388d18b4481760d478b0e99a777cad3a9c86e556f4b697cb"},
@@ -8402,7 +8402,7 @@ description = "Waitress WSGI server"
 optional = true
 python-versions = ">=3.9.0"
 groups = ["main"]
-markers = "python_version >= \"3.10\" and extra == \"mlflow\" and platform_system == \"Windows\""
+markers = "python_version >= \"3.10\" and platform_system == \"Windows\" and extra == \"mlflow\""
 files = [
     {file = "waitress-3.0.2-py3-none-any.whl", hash = "sha256:c56d67fd6e87c2ee598b76abdd4e96cfad1f24cacdea5078d382b1f9d7b5ed2e"},
     {file = "waitress-3.0.2.tar.gz", hash = "sha256:682aaaf2af0c44ada4abfb70ded36393f0e307f4ab9456a215ce0020baefc31f"},
@@ -8432,7 +8432,7 @@ description = "An implementation of the WebSocket Protocol (RFC 6455 & 7692)"
 optional = true
 python-versions = ">=3.9"
 groups = ["main"]
-markers = "extra == \"google\" or extra == \"proxy\""
+markers = "extra == \"extra-proxy\" or extra == \"google\" or extra == \"proxy\""
 files = [
     {file = "websockets-15.0.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:d63efaa0cd96cf0c5fe4d581521d9fa87744540d4bc999ae6e08595a1014b45b"},
     {file = "websockets-15.0.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:ac60e3b188ec7574cb761b08d50fcedf9d77f1530352db4eef1707fe9dee7205"},
@@ -8814,7 +8814,7 @@ type = ["pytest-mypy"]
 
 [extras]
 caching = ["diskcache"]
-extra-proxy = ["a2a-sdk", "azure-identity", "azure-keyvault-secrets", "google-cloud-iam", "google-cloud-kms", "prisma", "redisvl", "resend"]
+extra-proxy = ["a2a-sdk", "azure-identity", "azure-keyvault-secrets", "google-cloud-aiplatform", "google-cloud-iam", "google-cloud-kms", "google-genai", "prisma", "redisvl", "resend"]
 google = ["google-cloud-aiplatform"]
 grpc = ["grpcio", "grpcio"]
 mlflow = ["mlflow"]
@@ -8825,4 +8825,4 @@ utils = ["numpydoc"]
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.9,<4.0"
-content-hash = "19a339dd5b4c21a06f7b725361a2e2692c05c56fa47e71513c5712dbdec7f61d"
+content-hash = "5cc4c8624ed7d40dc5e986daf17dc49c02195b4602516811861bd7184d5bba00"

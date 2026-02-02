@@ -2,6 +2,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+# Skip entire module if google.genai is not installed
+pytest.importorskip("google.genai", reason="google-genai not installed")
+
 from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
 
 

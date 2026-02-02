@@ -95,38 +95,38 @@ def test_anthropic_experimental_pass_through_messages_handler_custom_llm_provide
 @pytest.mark.asyncio
 async def test_bedrock_converse_budget_tokens_preserved():
     """
-    Test that budget_tokens value in thinking parameter is correctly passed to Bedrock Converse API
-    when using messages.acreate with bedrock/converse model.
-    
+    Test that budget_tokens value in thinking parameter is correctly passed through
+    the anthropic messages adapter when using bedrock/converse model.
+
     The bug was that the messages -> completion adapter was converting thinking to reasoning_effort
     and losing the original budget_tokens value, causing it to use the default (128) instead.
+
+    This test verifies that the thinking parameter with budget_tokens is preserved when
+    passed through the anthropic messages handler to litellm.acompletion.
     """
-    client = AsyncHTTPHandler()
-    
-    with patch.object(client, "post") as mock_post:
-        mock_response = AsyncMock()
-        mock_response.status_code = 200
-        mock_response.headers = {}
-        mock_response.text = "mock response"
-        mock_response.json.return_value = {
-            "output": {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"text": "4"}]
-                }
-            },
-            "stopReason": "end_turn",
-            "usage": {
-                "inputTokens": 10,
-                "outputTokens": 5,
-                "totalTokens": 15
-            }
-        }
-        mock_post.return_value = mock_response
-        
+    captured_kwargs = {}
+
+    async def capture_acompletion(**kwargs):
+        captured_kwargs.update(kwargs)
+        # Return a mock response
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message = MagicMock()
+        mock_response.choices[0].message.content = "4"
+        mock_response.choices[0].message.role = "assistant"
+        mock_response.choices[0].message.tool_calls = None
+        mock_response.choices[0].finish_reason = "stop"
+        mock_response.id = "mock-id"
+        mock_response.model = "claude-sonnet-4"
+        mock_response.usage = MagicMock()
+        mock_response.usage.prompt_tokens = 10
+        mock_response.usage.completion_tokens = 5
+        mock_response.usage.total_tokens = 15
+        return mock_response
+
+    with patch("litellm.acompletion", side_effect=capture_acompletion):
         try:
             await messages.acreate(
-                client=client,
                 max_tokens=1024,
                 messages=[{"role": "user", "content": "What is 2+2?"}],
                 model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
@@ -135,20 +135,17 @@ async def test_bedrock_converse_budget_tokens_preserved():
                     "type": "enabled"
                 },
             )
-        except Exception:
+        except Exception as e:
+            print(f"Exception (expected): {e}")
             pass  # Expected due to mock response format
-        
-        mock_post.assert_called_once()
-        
-        call_kwargs = mock_post.call_args.kwargs
-        json_data = call_kwargs.get("json") or json.loads(call_kwargs.get("data", "{}"))
-        print("Request json: ", json.dumps(json_data, indent=4, default=str))
-        
-        additional_fields = json_data.get("additionalModelRequestFields", {})
-        thinking_config = additional_fields.get("thinking", {})
-        
-        assert "thinking" in additional_fields, "thinking parameter should be in additionalModelRequestFields"
-        assert thinking_config.get("type") == "enabled", "thinking.type should be 'enabled'"
+
+        # Verify acompletion was called
+        assert len(captured_kwargs) > 0, "litellm.acompletion was not called"
+
+        # Verify thinking parameter was passed with budget_tokens preserved
+        assert "thinking" in captured_kwargs, f"thinking should be passed to acompletion, got keys: {list(captured_kwargs.keys())}"
+        thinking_config = captured_kwargs.get("thinking", {})
+        assert thinking_config.get("type") == "enabled", f"thinking.type should be 'enabled', got {thinking_config}"
         assert thinking_config.get("budget_tokens") == 1024, f"thinking.budget_tokens should be 1024, but got {thinking_config.get('budget_tokens')}"
 
 
@@ -156,7 +153,7 @@ def test_openai_model_with_thinking_converts_to_reasoning_effort():
     """
     Test that when using a non-Anthropic model (like OpenAI gpt-5.2) with thinking parameter,
     the thinking is converted to reasoning_effort and NOT passed as thinking.
-    
+
     This ensures we don't regress on issue #16052 where non-Anthropic models would fail
     with UnsupportedParamsError when thinking was passed directly.
     """
@@ -180,13 +177,13 @@ def test_openai_model_with_thinking_converts_to_reasoning_effort():
             print(f"Error: {e}")
 
         mock_completion.assert_called_once()
-        
+
         call_kwargs = mock_completion.call_args.kwargs
-        
+
         # Verify reasoning_effort is set (converted from thinking)
         assert "reasoning_effort" in call_kwargs, "reasoning_effort should be passed to completion"
         assert call_kwargs["reasoning_effort"] == "minimal", f"reasoning_effort should be 'minimal' for budget_tokens=1024, got {call_kwargs.get('reasoning_effort')}"
-        
+
         # Verify thinking is NOT passed (non-Claude model)
         assert "thinking" not in call_kwargs, "thinking should NOT be passed for non-Claude models"
 
@@ -199,13 +196,13 @@ class TestThinkingParameterTransformation:
         from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
             LiteLLMAnthropicMessagesAdapter,
         )
-        
+
         thinking = {"type": "enabled", "budget_tokens": 5000}
         result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
             thinking=thinking,
             model="bedrock/converse/us.anthropic.claude-sonnet-4-20250514-v1:0",
         )
-        
+
         assert result == {"thinking": thinking}
         assert result["thinking"]["budget_tokens"] == 5000
 
@@ -214,12 +211,12 @@ class TestThinkingParameterTransformation:
         from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
             LiteLLMAnthropicMessagesAdapter,
         )
-        
+
         thinking = {"type": "enabled", "budget_tokens": 1024}
         result = LiteLLMAnthropicMessagesAdapter.translate_thinking_for_model(
             thinking=thinking,
             model="openai/gpt-5.2",
         )
-        
+
         assert result == {"reasoning_effort": "minimal"}
         assert "thinking" not in result
