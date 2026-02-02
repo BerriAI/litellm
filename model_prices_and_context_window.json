@@ -6729,13 +6729,13 @@
         "supports_tool_choice": true
     },
     "cerebras/gpt-oss-120b": {
-        "input_cost_per_token": 2.5e-07,
+        "input_cost_per_token": 3.5e-07,
         "litellm_provider": "cerebras",
         "max_input_tokens": 131072,
         "max_output_tokens": 32768,
         "max_tokens": 32768,
         "mode": "chat",
-        "output_cost_per_token": 6.9e-07,
+        "output_cost_per_token": 7.5e-07,
         "source": "https://www.cerebras.ai/blog/openai-gpt-oss-120b-runs-fastest-on-cerebras",
         "supports_function_calling": true,
         "supports_parallel_function_calling": true,
@@ -6753,6 +6753,7 @@
         "output_cost_per_token": 8e-07,
         "source": "https://inference-docs.cerebras.ai/support/pricing",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_tool_choice": true
     },
     "cerebras/zai-glm-4.6": {
