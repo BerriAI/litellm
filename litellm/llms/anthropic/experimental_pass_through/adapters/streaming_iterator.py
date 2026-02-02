@@ -409,10 +409,17 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         )
 
         # Restore original tool name if it was truncated for OpenAI's 64-char limit
-        if block_type == "tool_use" and content_block_start.get("name"):
-            truncated_name = content_block_start.get("name", "")
-            original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
-            content_block_start["name"] = original_name
+        if block_type == "tool_use":
+            # Type narrowing: content_block_start is ToolUseBlock when block_type is "tool_use"
+            from typing import cast
+            from litellm.types.llms.anthropic import ToolUseBlock
+            
+            tool_block = cast(ToolUseBlock, content_block_start)
+            
+            if tool_block.get("name"):
+                truncated_name = tool_block["name"]
+                original_name = self.tool_name_mapping.get(truncated_name, truncated_name)
+                tool_block["name"] = original_name
 
         if block_type != self.current_content_block_type:
             self.current_content_block_type = block_type
@@ -421,9 +428,14 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         # For parallel tool calls, we'll necessarily have a new content block
         # if we get a function name since it signals a new tool call
-        if block_type == "tool_use" and content_block_start.get("name"):
-            self.current_content_block_type = block_type
-            self.current_content_block_start = content_block_start
-            return True
+        if block_type == "tool_use":
+            from typing import cast
+            from litellm.types.llms.anthropic import ToolUseBlock
+            
+            tool_block = cast(ToolUseBlock, content_block_start)
+            if tool_block.get("name"):
+                self.current_content_block_type = block_type
+                self.current_content_block_start = content_block_start
+                return True
 
         return False

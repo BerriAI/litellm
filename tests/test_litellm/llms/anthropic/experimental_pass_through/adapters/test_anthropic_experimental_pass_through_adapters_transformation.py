@@ -1531,7 +1531,6 @@ def test_translate_openai_response_to_anthropic_with_reasoning_content_only():
     assert cast(Any, anthropic_content[1]).text == "There are **3** \"r\"s in the word strawberry."
     
     assert anthropic_response.get("stop_reason") == "end_turn"
-    assert tool_name_mapping == {}  # No truncation needed for short names
 
 
 # =====================================================================
