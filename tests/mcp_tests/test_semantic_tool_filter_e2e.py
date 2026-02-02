@@ -9,7 +9,6 @@ from unittest.mock import Mock
 import pytest
 
 sys.path.insert(0, os.path.abspath("../.."))
-import json
 
 from mcp.types import Tool as MCPTool
 
@@ -68,7 +67,8 @@ async def test_e2e_semantic_filter():
         call_type="completion",
     )
 
-    print("final result tools: ", json.dumps(result["tools"], indent=4))
-    
     # Single assertion: hook filtered tools
-    assert result and len(result["tools"]) < len(tools)
+    assert result and len(result["tools"]) < len(tools), f"Expected filtered tools, got {len(result['tools'])} tools (original: {len(tools)})"
+    
+    print(f"✅ E2E test passed: Filtering reduced tools from {len(tools)} to {len(result['tools'])}")
+    print(f"   Filtered tools: {[t.name for t in result['tools']]}")
