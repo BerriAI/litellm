@@ -40,6 +40,10 @@ USAGE EXAMPLES:
    python benchmark_proxy_vs_provider.py --runs 3 --requests 500 --max-concurrent 50
    # 3 runs, 500 requests each, max 50 concurrent
 
+8. RPS (Requests Per Second) Mode:
+   python benchmark_proxy_vs_provider.py --rps-control 1000 --requests 5000
+   # Cap at 1000 requests started per second; no concurrency limit; still runs --requests total
+
 REQUIRED ENVIRONMENT VARIABLES:
   - LITELLM_PROXY_URL: Full URL to LiteLLM proxy chat completions endpoint
   - PROVIDER_URL: Full URL to direct provider chat completions endpoint
@@ -237,6 +241,27 @@ async def make_request_with_semaphore(
         return await make_request(session, url, headers, payload, timeout)
 
 
+async def make_request_with_rps_limit(
+    session: aiohttp.ClientSession,
+    rps_queue: asyncio.Queue,
+    url: str,
+    headers: Dict[str, str],
+    payload: Dict[str, Any],
+    timeout: aiohttp.ClientTimeout,
+) -> RequestStats:
+    """Make a request after acquiring a token from the RPS rate limiter (no concurrency cap)."""
+    await rps_queue.get()
+    return await make_request(session, url, headers, payload, timeout)
+
+
+async def _rps_refill_task(rps: int, queue: asyncio.Queue) -> None:
+    """Background task that refills the rate-limit queue with rps tokens every second."""
+    while True:
+        await asyncio.sleep(1)
+        for _ in range(rps):
+            await queue.put(1)
+
+
 async def benchmark_endpoint(
     url: str,
     headers: Dict[str, str],
@@ -245,9 +270,10 @@ async def benchmark_endpoint(
     timeout_seconds: int = 60,
     warmup: bool = True,
     max_concurrent: Optional[int] = None,
+    rps_control: Optional[int] = None,
 ) -> BenchmarkResults:
     """Benchmark an endpoint with parallel requests
-    
+
     Args:
         url: Endpoint URL to benchmark
         headers: HTTP headers
@@ -255,30 +281,36 @@ async def benchmark_endpoint(
         num_requests: Total number of requests to make
         timeout_seconds: Request timeout
         warmup: Whether to perform warm-up requests
-        max_concurrent: Maximum concurrent requests (None = unlimited, all at once)
+        max_concurrent: Maximum concurrent requests (None = unlimited). Ignored when rps_control is set.
+        rps_control: Max requests per second (rate limit start of requests). No concurrency cap when set.
     """
     print(f"\nStarting benchmark for {url}")
-    
+
     if warmup:
         print(f"   Warming up with 5 requests...")
         await warmup_endpoint(url, headers, payload, num_warmup=5, timeout_seconds=timeout_seconds)
-    
-    if max_concurrent:
+
+    if rps_control:
+        print(f"   Making {num_requests} requests with RPS limit {rps_control} (no concurrency cap)...")
+    elif max_concurrent:
         print(f"   Making {num_requests} requests with max {max_concurrent} concurrent...")
     else:
         print(f"   Making {num_requests} requests in parallel (unlimited concurrency)...")
-    
+
     results = BenchmarkResults(total_requests=num_requests)
     timeout = aiohttp.ClientTimeout(total=timeout_seconds)
-    
-    # Set connector limits based on concurrency
-    if max_concurrent:
+
+    # Set connector limits: RPS mode allows many in-flight requests, concurrency mode caps them
+    if rps_control:
+        connector_limit = 200
+        connector_limit_per_host = 100
+    elif max_concurrent:
         connector_limit = min(max_concurrent * 2, 200)  # Allow some headroom
         connector_limit_per_host = max_concurrent
     else:
         connector_limit = 200
         connector_limit_per_host = 100
-    
+
     # Use optimized connector for connection pooling and reuse
     connector = TCPConnector(
         limit=connector_limit,
@@ -287,28 +319,49 @@ async def benchmark_endpoint(
         force_close=False,  # Reuse connections for better performance
         enable_cleanup_closed=True,  # Clean up closed connections
     )
-    
+
     # Use time.perf_counter() for higher precision
     start_time = time.perf_counter()
-    
+
     async with aiohttp.ClientSession(connector=connector) as session:
-        if max_concurrent:
+        if rps_control:
+            # RPS mode: rate-limit how many requests *start* per second; no concurrency cap
+            rps_queue: asyncio.Queue = asyncio.Queue(maxsize=rps_control)
+            refill_task = asyncio.create_task(_rps_refill_task(rps_control, rps_queue))
+            try:
+                # Pre-fill for first second so we can start immediately
+                for _ in range(rps_control):
+                    try:
+                        rps_queue.put_nowait(1)
+                    except asyncio.QueueFull:
+                        break
+                tasks = [
+                    make_request_with_rps_limit(session, rps_queue, url, headers, payload, timeout)
+                    for _ in range(num_requests)
+                ]
+                request_stats = await asyncio.gather(*tasks)
+            finally:
+                refill_task.cancel()
+                try:
+                    await refill_task
+                except asyncio.CancelledError:
+                    pass
+        elif max_concurrent:
             # Use semaphore to limit concurrency
             semaphore = asyncio.Semaphore(max_concurrent)
             tasks = [
                 make_request_with_semaphore(session, semaphore, url, headers, payload, timeout)
                 for _ in range(num_requests)
             ]
+            request_stats = await asyncio.gather(*tasks)
         else:
             # Create all tasks at once for maximum parallelism
             tasks = [
                 make_request(session, url, headers, payload, timeout)
                 for _ in range(num_requests)
             ]
-        
-        # Execute all requests (with concurrency limit if specified)
-        request_stats = await asyncio.gather(*tasks)
-    
+            request_stats = await asyncio.gather(*tasks)
+
     results.total_time = time.perf_counter() - start_time
     
     # Aggregate results
@@ -525,6 +578,9 @@ Examples:
   
   # 8. Skip warmup (not recommended - may affect first request accuracy)
   python scripts/benchmark_proxy_vs_provider.py --no-warmup
+
+  # 9. RPS mode: cap at 1000 requests per second (no concurrency cap)
+  python scripts/benchmark_proxy_vs_provider.py --rps-control 1000 --requests 5000
         """
     )
     parser.add_argument(
@@ -560,9 +616,16 @@ Examples:
         type=int,
         default=None,
         help="Maximum concurrent requests (default: unlimited - all at once). "
-             "Useful for realistic load testing (e.g., --max-concurrent 100)",
+             "Useful for realistic load testing (e.g., --max-concurrent 100). Ignored when --rps-control is set.",
     )
-    
+    parser.add_argument(
+        "--rps-control",
+        type=int,
+        default=None,
+        metavar="RPS",
+        help="Max requests per second (rate limit). No concurrency cap; use with --requests (e.g., --rps-control 1000 --requests 5000).",
+    )
+
     args = parser.parse_args()
     
     # Configuration from environment variables
@@ -602,7 +665,7 @@ Examples:
     
     # Payload (same for both)
     payload = {
-        "model": "db-openai-endpoint",  # For proxy
+        "model": "gpt-4o",  # For proxy
         "messages": [
             {
                 "role": "user",
@@ -630,13 +693,16 @@ Examples:
     print(f"  Provider API Key: {'Set' if PROVIDER_API_KEY else 'Not set (may cause auth errors)'}")
     print(f"  Requests:     {num_requests}")
     print(f"  Runs:         {args.runs}")
-    print(f"  Max Concurrent: {args.max_concurrent if args.max_concurrent else 'Unlimited (all at once)'}")
+    if args.rps_control:
+        print(f"  RPS Control:  {args.rps_control} (max requests/sec, no concurrency cap)")
+    else:
+        print(f"  Max Concurrent: {args.max_concurrent if args.max_concurrent else 'Unlimited (all at once)'}")
     print(f"  Timeout:      {timeout_seconds}s")
     print(f"  Warmup:       {'Enabled' if not args.no_warmup else 'Disabled (not recommended)'}")
     print(f"  Mode:         {'Parallel (may affect results)' if args.parallel else 'Sequential (recommended)'}")
-    
-    if not args.max_concurrent:
-        print(f"\nTip: Use --max-concurrent 100 for more realistic load testing")
+
+    if not args.max_concurrent and not args.rps_control:
+        print(f"\nTip: Use --max-concurrent 100 for concurrency limit or --rps-control 1000 for RPS limit")
         print(f"   (prevents overwhelming the server with all requests at once)")
     
     if args.parallel:
@@ -679,6 +745,7 @@ Examples:
                     timeout_seconds,
                     warmup=warmup_enabled and run_num == 1,  # Only warmup on first run
                     max_concurrent=args.max_concurrent,
+                    rps_control=args.rps_control,
                 ),
                 benchmark_endpoint(
                     PROVIDER_URL,
@@ -688,6 +755,7 @@ Examples:
                     timeout_seconds,
                     warmup=warmup_enabled and run_num == 1,  # Only warmup on first run
                     max_concurrent=args.max_concurrent,
+                    rps_control=args.rps_control,
                 ),
             )
         else:
@@ -703,12 +771,13 @@ Examples:
                 timeout_seconds,
                 warmup=warmup_enabled and run_num == 1,  # Only warmup on first run
                 max_concurrent=args.max_concurrent,
+                rps_control=args.rps_control,
             )
-            
+
             if run_num < args.runs or args.runs == 1:
                 print(f"\nWaiting 3 seconds before starting provider benchmark...")
                 await asyncio.sleep(3)  # Longer pause to ensure clean separation
-            
+
             provider_results = await benchmark_endpoint(
                 PROVIDER_URL,
                 provider_headers,
@@ -717,6 +786,7 @@ Examples:
                 timeout_seconds,
                 warmup=warmup_enabled and run_num == 1,  # Only warmup on first run
                 max_concurrent=args.max_concurrent,
+                rps_control=args.rps_control,
             )
         
         all_proxy_results.append(proxy_results)
