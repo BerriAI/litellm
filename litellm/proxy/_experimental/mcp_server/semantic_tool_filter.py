@@ -201,18 +201,11 @@ class SemanticMCPToolFilter:
             ]
             
             # Reorder based on semantic router's ordering
-            ordered_filtered = []
-            for name in matched_names:
-                for tool in filtered:
-                    if tool.name == name:
-                        ordered_filtered.append(tool)
-                        break
-            
-            verbose_logger.info(
-                f"Semantic filter: {len(available_tools)} -> {len(ordered_filtered)} tools. "
-                f"Top matches: {matched_names[:3]}"
-            )
-            
+            name_to_tool = {tool.name: tool for tool in filtered}
+            ordered_filtered = [
+                name_to_tool[name] for name in matched_names
+                if name in name_to_tool
+            ]
             return ordered_filtered if ordered_filtered else available_tools
             
         except Exception as e:
