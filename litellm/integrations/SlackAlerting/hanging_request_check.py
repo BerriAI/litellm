@@ -54,9 +54,15 @@ class AlertingHangingRequestCheck:
         plus a small buffer to avoid edge-case scheduling jitter.
         """
 
-        alerting_threshold_seconds = float(self.slack_alerting_object.alerting_threshold)
+        alerting_threshold_seconds = float(
+            self.slack_alerting_object.alerting_threshold
+        )
         return int(
-            math.ceil(alerting_threshold_seconds + (alerting_threshold_seconds / 2) + HANGING_ALERT_BUFFER_TIME_SECONDS)
+            math.ceil(
+                alerting_threshold_seconds
+                + (alerting_threshold_seconds / 2)
+                + HANGING_ALERT_BUFFER_TIME_SECONDS
+            )
         )
 
     async def add_request_to_hanging_request_check(
@@ -76,18 +82,43 @@ class AlertingHangingRequestCheck:
         model = request_data.get("model", "")
         api_base: Optional[str] = None
 
-        if request_data.get("deployment", None) is not None and isinstance(request_data["deployment"], dict):
+        # Best-effort API base resolution.
+        # In some proxy paths, `deployment` may be absent and `litellm_params` contains
+        # the routing params used to compute api_base.
+        if request_data.get("deployment", None) is not None and isinstance(
+            request_data["deployment"], dict
+        ):
             api_base = litellm.get_api_base(
                 model=model,
                 optional_params=request_data["deployment"].get("litellm_params", {}),
             )
+        elif isinstance(request_data.get("litellm_params"), dict):
+            api_base = litellm.get_api_base(
+                model=model,
+                optional_params=request_data.get("litellm_params", {}),
+            )
+        elif isinstance(request_data.get("api_base"), str):
+            api_base = request_data.get("api_base")
+
+        alerting_metadata = request_metadata.get("alerting_metadata")
+        if not isinstance(alerting_metadata, dict):
+            alerting_metadata = None
+
+        model_info = request_metadata.get("model_info")
+        deployment_id: Optional[str] = None
+        if isinstance(model_info, dict) and isinstance(model_info.get("id"), str):
+            deployment_id = model_info.get("id")
 
         hanging_request_data = HangingRequestData(
             request_id=request_id,
             model=model,
             api_base=api_base,
+            organization_id=request_metadata.get("user_api_key_org_id"),
+            team_id=request_metadata.get("user_api_key_team_id"),
+            deployment_id=deployment_id,
             key_alias=request_metadata.get("user_api_key_alias", ""),
             team_alias=request_metadata.get("user_api_key_team_alias", ""),
+            alerting_metadata=alerting_metadata,
         )
 
         await self.hanging_request_cache.async_set_cache(
@@ -116,20 +147,26 @@ class AlertingHangingRequestCheck:
         )
 
         hanging_request_ttl_seconds = self._hanging_request_cache_ttl_seconds()
-        alerting_threshold_seconds = float(self.slack_alerting_object.alerting_threshold)
+        alerting_threshold_seconds = float(
+            self.slack_alerting_object.alerting_threshold
+        )
 
         for request_id in hanging_requests:
-            hanging_request_data: Optional[HangingRequestData] = await self.hanging_request_cache.async_get_cache(
-                key=request_id,
+            hanging_request_data: Optional[HangingRequestData] = (
+                await self.hanging_request_cache.async_get_cache(
+                    key=request_id,
+                )
             )
 
             if hanging_request_data is None:
                 continue
 
-            request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                key="request_status:{}".format(hanging_request_data.request_id),
-                litellm_parent_otel_span=None,
-                local_only=True,
+            request_status = (
+                await proxy_logging_obj.internal_usage_cache.async_get_cache(
+                    key="request_status:{}".format(hanging_request_data.request_id),
+                    litellm_parent_otel_span=None,
+                    local_only=True,
+                )
             )
             # this means the request status was either success or fail
             # and is not hanging
@@ -154,10 +191,12 @@ class AlertingHangingRequestCheck:
 
             # Reduce completion-race false positives: request may complete between the
             # first status check above and the Slack send below.
-            request_status = await proxy_logging_obj.internal_usage_cache.async_get_cache(
-                key="request_status:{}".format(hanging_request_data.request_id),
-                litellm_parent_otel_span=None,
-                local_only=True,
+            request_status = (
+                await proxy_logging_obj.internal_usage_cache.async_get_cache(
+                    key="request_status:{}".format(hanging_request_data.request_id),
+                    litellm_parent_otel_span=None,
+                    local_only=True,
+                )
             )
             if request_status is not None:
                 self.hanging_request_cache._remove_key(
@@ -168,7 +207,11 @@ class AlertingHangingRequestCheck:
             ################
             # Send the Alert on Slack
             ################
-            await self.send_hanging_request_alert(hanging_request_data=hanging_request_data)
+            await self.send_hanging_request_alert(
+                hanging_request_data=hanging_request_data,
+                elapsed_seconds=time_since_start,
+                threshold_seconds=alerting_threshold_seconds,
+            )
 
             # Mark as alerted to avoid repeated messages for the same request_id.
             hanging_request_data.alert_sent = True
@@ -198,6 +241,8 @@ class AlertingHangingRequestCheck:
     async def send_hanging_request_alert(
         self,
         hanging_request_data: HangingRequestData,
+        elapsed_seconds: Optional[float] = None,
+        threshold_seconds: Optional[float] = None,
     ):
         """
         Send a hanging request alert
@@ -207,8 +252,24 @@ class AlertingHangingRequestCheck:
         ################
         # Send the Alert on Slack
         ################
-        request_info = f"""Request Model: `{hanging_request_data.model}`
+        elapsed_str = (
+            f"{round(elapsed_seconds, 2)}s"
+            if isinstance(elapsed_seconds, (int, float))
+            else "unknown"
+        )
+        threshold_str = (
+            f"{round(threshold_seconds, 2)}s"
+            if isinstance(threshold_seconds, (int, float))
+            else "unknown"
+        )
+
+        request_info = f"""Request ID: `{hanging_request_data.request_id}`
+Request Model: `{hanging_request_data.model}`
+Elapsed: `{elapsed_str}` (threshold: `{threshold_str}`)
 API Base: `{hanging_request_data.api_base}`
+Deployment ID: `{hanging_request_data.deployment_id}`
+Organization ID: `{hanging_request_data.organization_id}`
+Team ID: `{hanging_request_data.team_id}`
 Key Alias: `{hanging_request_data.key_alias}`
 Team Alias: `{hanging_request_data.team_alias}`"""
 
