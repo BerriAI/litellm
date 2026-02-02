@@ -13,7 +13,7 @@ Set model list, `api_base`, `api_key`, `temperature` & proxy server settings (`m
 | `general_settings`   | Server settings, example setting `master_key: sk-my_special_key` |
 | `environment_variables`   | Environment Variables example, `REDIS_HOST`, `REDIS_PORT` |
 
-**Complete List:** Full details of all config.yaml entries see the [config settings](./config-settings) page.
+**Complete List:** Full details of all config.yaml entries see the [config settings](./config_settings) page.
 
 **API definitions:** Check the Swagger UI docs on `<your-proxy-url>/#/config.yaml` (e.g. http://0.0.0.0:4000/#/config.yaml), for comprehensive LiteLLM API documentation.
 
