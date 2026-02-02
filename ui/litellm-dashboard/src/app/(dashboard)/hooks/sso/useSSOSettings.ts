@@ -41,7 +41,7 @@ export interface RoleMappings {
 }
 
 export interface TeamMappings {
-  team_id_jwt_field: string;
+  team_ids_jwt_field: string;
 }
 
 export interface SSOSettingsResponse {

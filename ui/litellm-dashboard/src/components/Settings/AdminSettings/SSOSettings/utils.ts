@@ -23,7 +23,9 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
   };
 
   // Add role mappings only if use_role_mappings is checked AND provider supports role mappings
-  if (use_role_mappings) {
+  const provider = rest.sso_provider;
+  const supportsRoleMappings = provider === "okta" || provider === "generic";
+  if (use_role_mappings && supportsRoleMappings) {
     // Helper function to split comma-separated string into array
     const splitTeams = (teams: string | undefined): string[] => {
       if (!teams || teams.trim() === "") return [];
@@ -54,8 +56,9 @@ export const processSSOSettingsPayload = (formValues: Record<string, any>): Reco
     };
   }
 
-  // Add team mappings only if use_team_mappings is checked
-  if (use_team_mappings) {
+  // Add team mappings only if use_team_mappings is checked AND provider supports team mappings
+  const supportsTeamMappings = provider === "okta" || provider === "generic";
+  if (use_team_mappings && supportsTeamMappings) {
     payload.team_mappings = {
       team_ids_jwt_field: team_ids_jwt_field,
     };
