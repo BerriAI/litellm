@@ -1042,6 +1042,7 @@ const sidebars = {
       type: "category",
       label: "Issue Reporting",
       items: [
+        "troubleshoot/prisma_migrations",
         "troubleshoot/cpu_issues",
         "troubleshoot/memory_issues",
         "troubleshoot/spend_queue_warnings",
