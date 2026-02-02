@@ -1435,3 +1435,27 @@ def test_gemini_image_size_limit_exceeded():
     error_message = str(excinfo.value)
     assert "Image size" in error_message
     assert "exceeds maximum allowed size" in error_message
+
+
+def test_gemini_openai_web_search_tool_to_google_search():
+    """
+    Test that OpenAI-style web_search tools are transformed to Gemini's googleSearch.
+
+    When passing {"type": "web_search"} or {"type": "web_search_preview"} to Gemini,
+    these should be transformed to googleSearch, not silently ignored.
+    """
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    v = VertexGeminiConfig()
+
+    # Test web_search transformation
+    tools = v._map_function(value=[{"type": "web_search"}], optional_params={})
+    assert len(tools) == 1
+    assert "googleSearch" in tools[0]
+
+    # Test web_search_preview transformation
+    tools = v._map_function(value=[{"type": "web_search_preview"}], optional_params={})
+    assert len(tools) == 1
+    assert "googleSearch" in tools[0]
