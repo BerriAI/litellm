@@ -1615,7 +1615,7 @@ class TestStreamingIDConsistency:
         mock_stream_wrapper.logging_obj._response_cost_calculator = Mock(return_value=0.001)
         chunk_list = [chunk_with_initial_text, chunk_continuation]
 
-        def next_chunk():
+        def next_chunk(*_args, **_kwargs):
             if not chunk_list:
                 raise StopIteration
             return chunk_list.pop(0)
